@@ -179,6 +179,12 @@ class ChangePasswordRequest(BaseModel):
     password: str = Field(min_length=1, max_length=512)
 
 
+class BeginTotpRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=512)
+    """Re-enrolment replaces a bearer credential, so it proves the current
+    password first, exactly as a password change does."""
+
+
 class ConfirmTotpRequest(BaseModel):
     code: str = Field(min_length=6, max_length=8)
 

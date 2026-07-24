@@ -1,9 +1,9 @@
 """Redeeming a link. Every route here is unauthenticated by design.
 
 The token *is* the credential, so these run before any session exists. They
-are still protected by the CSRF middleware and by the country filter, and
-every failure returns the same error, so the endpoints cannot be used to
-enumerate which links were ever issued.
+are still fronted by the perimeter middleware — the trusted-proxy check and
+the country filter — and by CSRF, and every failure returns the same error,
+so the endpoints cannot be used to enumerate which links were ever issued.
 
 The token arrives in the query string on the two GETs, which is a deliberate
 compromise: the alternative is a POST the browser cannot make from a link

@@ -26,6 +26,7 @@ from app.infrastructure.admin_composition import (
 from app.infrastructure.config import get_settings
 from app.interfaces.http.errors import install_error_handlers
 from app.interfaces.http.middleware.csrf import CsrfMiddleware
+from app.interfaces.http.middleware.geo_middleware import GeoFilterMiddleware
 from app.interfaces.http.middleware.identity import (
     current_actor,
     current_session,
@@ -68,10 +69,15 @@ def create_app() -> FastAPI:
         lifespan=admin_lifespan,
     )
 
-    # Starlette runs middleware in reverse order of registration, so the CSRF
-    # check registered first runs innermost. Header stripping must be outermost
-    # and is therefore registered last: a `Tailscale-*` header has to be gone
-    # before anything else in this process can look at the request.
+    # Starlette runs middleware in reverse order of registration, so the last
+    # registered runs outermost. The order that matters:
+    #
+    #   StripTailscaleHeaders (outermost) — a forged identity header must be
+    #     gone before anything else in this process can look at the request.
+    #   GeoFilter — rejects a caller outside the allowed countries, and (via
+    #     resolve_client_ip) one that did not arrive through the proxy, before
+    #     a handler or the CSRF cookie logic runs.
+    #   Csrf (innermost) — needs the request to have survived the perimeter.
     app.add_middleware(
         CsrfMiddleware,
         cookie_name=settings.effective_csrf_cookie,
@@ -79,6 +85,7 @@ def create_app() -> FastAPI:
         secure=settings.cookie_secure,
         max_age_seconds=settings.session_absolute_ttl_seconds,
     )
+    app.add_middleware(GeoFilterMiddleware, auth_mode=settings.auth_mode)
     app.add_middleware(StripTailscaleHeadersMiddleware)
 
     install_error_handlers(app, envelope="admin", auth_mode=settings.auth_mode)

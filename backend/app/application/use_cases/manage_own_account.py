@@ -19,6 +19,7 @@ from app.domain.entities.actor import Actor
 from app.domain.entities.user import User
 from app.domain.exceptions import (
     InvalidCredentialsError,
+    NoLocalCredentialsError,
     NotAuthenticatedError,
     WeakPasswordError,
 )
@@ -70,19 +71,7 @@ class ManageOwnAccount:
     ) -> None:
         user = await self._require_self(actor)
 
-        current_hash = user.password_hash
-        if current_hash is None:
-            # A tailnet-only account has no password to change. It reaches this
-            # only through the public entrance, which it cannot authenticate
-            # against, so this is defence against a wiring mistake rather than
-            # a reachable state.
-            raise InvalidCredentialsError(detail=f"user {user.id} has no local password")
-
-        if not await self._hasher.verify(current_password, current_hash):
-            await self._audit.record(
-                actor, "user.password_changed", target=user.id, outcome="denied"
-            )
-            raise InvalidCredentialsError(detail=f"wrong current password user={user.id}")
+        await self._verify_current_password(actor, user, current_password)
 
         if current_password == new_password:
             # Checked here rather than left to the strength estimator, which
@@ -99,15 +88,24 @@ class ManageOwnAccount:
         await self._sessions.invalidate_others(user.id, session_id, self._clock.now())
         await self._audit.record(actor, "user.password_changed", target=user.id)
 
-    async def begin_totp_reenrolment(self, actor: Actor) -> Enrolment:
+    async def begin_totp_reenrolment(self, actor: Actor, *, current_password: str) -> Enrolment:
         """Issue a new secret without touching the working one.
 
-        The candidate is held in the cache for minutes, not written to the user
-        row, so abandoning the flow leaves the existing authenticator intact.
-        Writing it to the row first would break the second factor for anyone
-        who opened this screen and closed it again.
+        **Requires the current password.** Replacing the second factor is
+        replacing a bearer credential (security.md 5.3), so it must prove the
+        first, exactly as `change_password` does. Without this step-up, anyone
+        holding a hijacked session — a stolen cookie, an unlocked browser —
+        could silently swap the authenticator and walk away with a fresh set
+        of recovery codes.
+
+        The candidate is held in the cache for minutes, not written to the
+        user row, so abandoning the flow leaves the existing authenticator
+        intact. Writing it to the row first would break the second factor for
+        anyone who opened this screen and closed it again.
         """
         user = await self._require_self(actor)
+        await self._verify_current_password(actor, user, current_password)
+
         secret = self._totp.generate_secret()
         await self._pending.put(user.id, secret)
 
@@ -159,3 +157,27 @@ class ManageOwnAccount:
             # the correct client behaviour is to sign out, not to retry.
             raise NotAuthenticatedError(detail=f"no usable user for actor {actor.id}")
         return user
+
+    async def _verify_current_password(
+        self, actor: Actor, user: User, current_password: str
+    ) -> None:
+        """Proves the caller holds the current password, and refuses a
+        password-less account cleanly.
+
+        A tailnet-only account (the bootstrapped first administrator is one)
+        has no password and no local second factor to replace. Reaching the
+        TOTP write for it would set `totp_secret` with `password_hash` still
+        NULL, violating the users check constraint and surfacing as a 500 for
+        the most privileged account on the instance. Refused here with a 4xx
+        instead. Bound to a local so the narrowing survives without an
+        `assert`, which python -O would strip.
+        """
+        current_hash = user.password_hash
+        if current_hash is None:
+            raise NoLocalCredentialsError(detail=f"user {user.id} has no local password")
+
+        if not await self._hasher.verify(current_password, current_hash):
+            await self._audit.record(
+                actor, "user.password_verified", target=user.id, outcome="denied"
+            )
+            raise InvalidCredentialsError(detail=f"wrong current password user={user.id}")

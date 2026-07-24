@@ -75,6 +75,11 @@ class Harness:
             issuer="Test",
         )
 
+    def pending_is_empty(self) -> bool:
+        """No candidate secret was parked. A failed step-up must not leave one
+        behind for a later confirm to pick up."""
+        return self.cache._live(f"totp_enrol:{ACTOR.id}") is None
+
 
 def make_user(**overrides: object) -> User:
     defaults: dict[str, object] = {
@@ -106,7 +111,7 @@ async def test_a_wrong_current_password_is_refused_and_audited(harness: Harness)
             new_password=NEW_PASSWORD,
         )
 
-    assert ("user.password_changed", "u1", "denied") in harness.audit.entries
+    assert ("user.password_verified", "u1", "denied") in harness.audit.entries
 
 
 async def test_changing_a_password_ends_every_other_session(harness: Harness) -> None:
@@ -157,9 +162,19 @@ async def test_beginning_a_reenrolment_leaves_the_working_secret_alone(
 ) -> None:
     """Opening the screen and closing it again must not break the
     authenticator someone is still using."""
-    await harness.accounts.begin_totp_reenrolment(ACTOR)
+    await harness.accounts.begin_totp_reenrolment(ACTOR, current_password=CURRENT_PASSWORD)
 
     assert harness.users.rows["u1"].totp_secret == f"enc:{SECRET}"
+
+
+async def test_reenrolment_requires_the_current_password(harness: Harness) -> None:
+    """Replacing the second factor is replacing a bearer credential. Without
+    this a hijacked session could swap the authenticator and mint fresh
+    recovery codes with no proof of the current one."""
+    with pytest.raises(InvalidCredentialsError):
+        await harness.accounts.begin_totp_reenrolment(ACTOR, current_password="wrong")  # noqa: S106
+
+    assert harness.pending_is_empty()
 
 
 async def test_confirming_swaps_the_secret_and_replaces_the_recovery_codes(
@@ -171,7 +186,9 @@ async def test_confirming_swaps_the_secret_and_replaces_the_recovery_codes(
     await harness.invitations.save_recovery_codes(
         [RecoveryCode(id="old-1", user_id="u1", code_hash="stale")]
     )
-    enrolment = await harness.accounts.begin_totp_reenrolment(ACTOR)
+    enrolment = await harness.accounts.begin_totp_reenrolment(
+        ACTOR, current_password=CURRENT_PASSWORD
+    )
 
     codes = await harness.accounts.confirm_totp_reenrolment(
         ACTOR, session_id=SESSION_ID, code=pyotp.TOTP(enrolment.secret).now()
@@ -188,7 +205,9 @@ async def test_confirming_without_beginning_is_refused(harness: Harness) -> None
 
 
 async def test_reenrolment_also_ends_other_sessions(harness: Harness) -> None:
-    enrolment = await harness.accounts.begin_totp_reenrolment(ACTOR)
+    enrolment = await harness.accounts.begin_totp_reenrolment(
+        ACTOR, current_password=CURRENT_PASSWORD
+    )
 
     await harness.accounts.confirm_totp_reenrolment(
         ACTOR, session_id=SESSION_ID, code=pyotp.TOTP(enrolment.secret).now()
