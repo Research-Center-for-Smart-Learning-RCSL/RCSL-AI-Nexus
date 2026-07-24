@@ -10,6 +10,7 @@ Everything between the socket and the port boundary is real.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
@@ -28,7 +29,7 @@ from app.adapters.persistence.repositories import (
     PostgresRoutingPolicyRepository,
     PostgresUserRepository,
 )
-from app.adapters.persistence.sqlalchemy_models import Base, UsageRecordRow
+from app.adapters.persistence.sqlalchemy_models import UsageRecordRow
 from app.domain.entities.actor import Role
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.chat import CompletionChunk, Message
@@ -38,6 +39,7 @@ from app.domain.entities.routing_policy import Requirement, RoutingCandidate, Ro
 from app.domain.entities.user import User
 from app.domain.services.api_key_service import ApiKeyService
 from app.infrastructure.config import get_settings
+from tests.integration.conftest import reset_schema
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -71,10 +73,12 @@ class StubRuntime:
 async def _seed(plaintext_holder: dict) -> None:
     """Create the minimum a request needs: a user, a key, a node, a model,
     and a policy that routes the `chat` capability at it."""
+    # Alembic's env.py drives migrations with `asyncio.run`, which cannot be
+    # called from inside a running loop, so the rebuild happens on a worker
+    # thread. Building the schema from the ORM instead would leave the
+    # migrations untested, which is what this replaced.
+    await asyncio.to_thread(reset_schema, TEST_DATABASE_URL or "")
     engine = create_async_engine(TEST_DATABASE_URL or "")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:

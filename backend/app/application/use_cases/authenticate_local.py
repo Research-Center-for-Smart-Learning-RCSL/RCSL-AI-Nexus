@@ -72,18 +72,15 @@ class AuthenticateLocal:
         if user is None or user.totp_secret is None:
             raise TotpRequiredError()
 
-        # Raises InvalidTotpError on a bad code or on replay of a counter at
-        # or below the last accepted one.
+        # Raises InvalidTotpError on a bad code or on one outside the window.
         counter = self._totp.verify(user.totp_secret, code, user.totp_last_counter)
 
-        if user.totp_last_counter is not None and counter <= user.totp_last_counter:
+        # The replay check is the UPDATE, not a comparison here. Two requests
+        # carrying the same code would both read the same prior counter, both
+        # pass a Python check, and both be admitted; only one can win a
+        # conditional write. This is what makes a code observed in a phishing
+        # proxy useless for a second login inside its window.
+        if not await self._users.advance_totp_counter(user.id, counter):
             raise InvalidTotpError(detail=f"replayed counter={counter} user={user.id}")
 
-        await self._users.save(replace_counter(user, counter))
         return user
-
-
-def replace_counter(user: User, counter: int) -> User:
-    from dataclasses import replace
-
-    return replace(user, totp_last_counter=counter)
