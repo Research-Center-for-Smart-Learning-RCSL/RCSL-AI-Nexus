@@ -248,6 +248,22 @@ The topology is deliberately reversible:
 - Adding a second compute node leaves the entrance unchanged; only the gateway's routing targets grow.
 - Dropping the dependency on the proxy host means disabling the public admin entrance; the tailnet entrance is unaffected.
 
+## 8.1 Source Availability Obligation
+
+The project is licensed under AGPL-3.0, whose section 13 treats network
+interaction as distribution. Both public hostnames in section 2 are exactly
+the trigger: anyone reaching `ai.nexus.rcsl.online` or
+`api.nexus.rcsl.online` is entitled to the source of the version being run,
+including local modifications.
+
+This is an operational obligation, not a one-time licensing formality, so it
+belongs in the deployment runbook:
+
+- Keep the deployed revision published, and link to it from the management UI
+  footer rather than fielding requests individually.
+- Tag or otherwise identify what is actually running, so the offered source
+  corresponds to the deployed build rather than to whatever is on `main`.
+
 ## 9. Build, Deploy, and Upgrade
 
 **Images are built on the Mac Studio.** The development machine is Windows on x86 and the target is arm64, so `docker compose build` runs on the target host. This avoids operating a registry and cross-platform builds for a single-node deployment. If a second node is added later, publishing arm64 images to GHCR becomes worthwhile.

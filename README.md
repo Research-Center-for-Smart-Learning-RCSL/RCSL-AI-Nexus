@@ -70,3 +70,24 @@ string comparison.
 [`docs/architecture/security.md`](./docs/architecture/security.md) section 14
 is a pre-launch checklist. Section 15 records the risks that were accepted
 deliberately, and what should trigger reconsidering them.
+
+## License
+
+Copyright (C) 2026 Research Center for Smart Learning (RCSL), National Taiwan
+Normal University, and contributors.
+
+Licensed under the **GNU Affero General Public License v3.0**. See
+[`LICENSE`](./LICENSE) for the full text.
+
+One clause deserves attention because this project's architecture triggers it
+directly. AGPL section 13 treats **network interaction as distribution**: where
+the GPL obliges you to release source only when you hand someone a copy, the
+AGPL obliges you to offer source to anyone who merely uses your modified
+version over a network.
+
+This platform exposes both a public inference API and a public management UI,
+which is precisely the scenario that clause was written for. In practice, if
+you deploy a modified version, everyone reaching those endpoints is entitled to
+the corresponding source. The straightforward way to satisfy that is to publish
+your fork and link to it from the running instance rather than treating it as
+something to handle on request.
