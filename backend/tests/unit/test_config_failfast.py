@@ -8,6 +8,8 @@ keys correctly.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -18,7 +20,34 @@ REAL_SECRETS = {
     "totp_encryption_key": "real-totp-key",
     "session_signing_key": "real-session-key",
     "proxy_shared_secret": "real-proxy-secret",
+    "database_url": "postgresql+asyncpg://nexus:real@db:5432/nexus",
+    "cache_backend": "redis",
 }
+
+# Settings reads ambient environment, so without this a developer's shell
+# decides whether these pass. That is how CACHE_BACKEND=memory exported for an
+# integration run made the production cases fail.
+_AMBIENT = (
+    "ENV",
+    "AUTH_MODE",
+    "CACHE_BACKEND",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "API_KEY_PEPPER",
+    "TOTP_ENCRYPTION_KEY",
+    "SESSION_SIGNING_KEY",
+    "PROXY_SHARED_SECRET",
+    "ALLOWED_COUNTRIES",
+    "EXPOSE_OPENAPI",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_env(monkeypatch):
+    for name in _AMBIENT:
+        monkeypatch.delenv(name, raising=False)
+    # The repository's own .env would be read otherwise, for the same reason.
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])
 
 
 def test_dev_auth_mode_is_rejected_in_production() -> None:
@@ -50,3 +79,44 @@ def test_placeholder_secrets_are_fine_in_development() -> None:
 def test_allowed_countries_parsing() -> None:
     settings = Settings(allowed_countries=" tw , au ")
     assert settings.allowed_country_set == frozenset({"TW", "AU"})
+
+
+def test_in_memory_cache_is_rejected_in_production() -> None:
+    """Per-process counting would look like a rate limit without being one."""
+    with pytest.raises(ValidationError, match="CACHE_BACKEND=memory"):
+        Settings(
+            **{
+                **REAL_SECRETS,
+                "env": "production",
+                "auth_mode": "tailnet",
+                "cache_backend": "memory",
+            }
+        )
+
+
+def test_a_placeholder_hidden_inside_a_url_is_caught() -> None:
+    """The database password sits inside a connection string rather than
+    standing alone, which is why it escaped the original check."""
+    with pytest.raises(ValidationError, match="database_url"):
+        Settings(
+            **{
+                **REAL_SECRETS,
+                "env": "production",
+                "auth_mode": "tailnet",
+                "database_url": "postgresql+asyncpg://nexus:dev-postgres-not-for-production@db/nexus",
+            }
+        )
+
+
+def test_the_schema_is_not_exposed_unless_explicitly_asked_for() -> None:
+    """Gating on `not is_production` meant a deployment that filled in the
+    secrets and left ENV at its default served its full internal schema."""
+    assert Settings().expose_openapi is False
+    assert Settings(expose_openapi_flag=True).expose_openapi is True
+    assert (
+        Settings(
+            **{**REAL_SECRETS, "env": "production", "auth_mode": "tailnet"},
+            expose_openapi_flag=True,
+        ).expose_openapi
+        is False
+    ), "production wins over the flag"

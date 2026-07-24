@@ -30,10 +30,12 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         secrets_dir=_secrets_dir,
         extra="ignore",
+        populate_by_name=True,
     )
 
     env: Environment = "development"
     auth_mode: AuthMode = "dev"
+    expose_openapi_flag: bool = Field(default=False, alias="EXPOSE_OPENAPI")
 
     tailnet_ip: str = "127.0.0.1"
     proxy_hostname: str = "api.nexus.rcsl.online"
@@ -79,6 +81,18 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.env == "production"
+
+    @property
+    def expose_openapi(self) -> bool:
+        """Schema and Swagger UI on the gateway.
+
+        Gated on an explicit opt-in rather than on `not is_production`. The
+        default `ENV` is `development`, and `.env.example` ships it, so a
+        deployment that filled in the secrets and left the top of the file
+        alone was serving its full internal schema publicly. Requiring a
+        deliberate `EXPOSE_OPENAPI=true` means forgetting fails closed.
+        """
+        return self.expose_openapi_flag and not self.is_production
 
     @model_validator(mode="after")
     def _refuse_dev_auth_in_production(self) -> Settings:

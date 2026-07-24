@@ -109,6 +109,7 @@ async def authenticate_api_key(
     # below. Making this conditional on `key.allowed_cidrs` reads as an obvious
     # optimisation and would stop the proxy-secret check running at all.
     client_ip = resolve_client_ip(request)
+    request.app.state.geo_filter.assert_allowed(client_ip)
     _assert_source_allowed(key, client_ip)
 
     await _assert_within_rate_limit(key, cache)

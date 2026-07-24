@@ -162,6 +162,7 @@ def build_route_chat_request(
         authz=request.app.state.authz,
         clock=SystemClock(),
         max_tokens_ceiling=settings.max_tokens_ceiling,
+        max_context_chars=settings.max_context_length * 4,
     )
 
 

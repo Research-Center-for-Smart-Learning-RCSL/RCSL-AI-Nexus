@@ -24,6 +24,7 @@ from app.infrastructure.di import (
     build_runtimes,
 )
 from app.interfaces.http.errors import install_error_handlers
+from app.interfaces.http.middleware.geo_filter import build_geo_filter
 from app.interfaces.http.routers import chat, health
 
 
@@ -38,9 +39,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.api_key_service = build_api_key_service(settings)
     app.state.authz = build_authorization()
     app.state.cache = build_cache(settings)
+    # Built at startup so a missing GeoLite2 database in production stops the
+    # service here rather than silently disabling a documented control.
+    app.state.geo_filter = build_geo_filter(settings)
     try:
         yield
     finally:
+        app.state.geo_filter.close()
         await app.state.cache.close()
         await dispose_engine()
 
@@ -52,8 +57,8 @@ def create_app() -> FastAPI:
         title="RCSL AI Nexus Gateway",
         # Schema endpoints are disabled in production: the public API is
         # documented separately rather than by exposing internal shapes.
-        docs_url=None if settings.is_production else "/docs",
-        openapi_url=None if settings.is_production else "/openapi.json",
+        docs_url="/docs" if settings.expose_openapi else None,
+        openapi_url="/openapi.json" if settings.expose_openapi else None,
         debug=False,
         lifespan=lifespan,
     )

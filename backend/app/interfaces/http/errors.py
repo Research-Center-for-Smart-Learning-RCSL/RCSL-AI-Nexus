@@ -17,6 +17,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.domain.exceptions import (
+    ContextTooLongError,
     CountryNotAllowedError,
     DomainError,
     InsufficientMemoryError,
@@ -45,6 +46,7 @@ STATUS_MAP: dict[type[DomainError], int] = {
     ModelStateConflictError: 409,
     InsufficientMemoryError: 409,
     InvalidModelReferenceError: 400,
+    ContextTooLongError: 413,
     QuotaExceededError: 429,
     RateLimitedError: 429,
     CountryNotAllowedError: 403,

@@ -28,7 +28,7 @@ from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.chat import CompletionChunk, Message
 from app.domain.entities.model import RuntimeKind
 from app.domain.entities.usage import UsageRecord
-from app.domain.exceptions import NoAvailableModelError
+from app.domain.exceptions import ContextTooLongError, NoAvailableModelError
 from app.domain.ports.infrastructure_ports import ConcurrencyLimiterPort
 from app.domain.ports.model_runtime_port import ModelRuntimePort
 from app.domain.ports.repositories import (
@@ -59,6 +59,7 @@ class RouteChatRequest:
         authz: AuthorizationPort,
         clock: Clock,
         max_tokens_ceiling: int,
+        max_context_chars: int = 4 * 32768,
     ) -> None:
         self._policies = policies
         self._models = models
@@ -70,6 +71,10 @@ class RouteChatRequest:
         self._authz = authz
         self._clock = clock
         self._max_tokens_ceiling = max_tokens_ceiling
+        self._max_context_chars = max_context_chars
+        """Characters, not tokens: counting tokens would mean loading the
+        model's tokeniser here, and a rough bound applied before any work
+        starts is worth more than an exact one applied later."""
 
     async def execute(
         self,
@@ -79,6 +84,16 @@ class RouteChatRequest:
         max_tokens: int | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         self._authz.require(actor, self.required_scope)
+
+        # A ceiling on input as well as output. Context cost grows faster than
+        # linearly on unified memory, so a single enormous prompt is a
+        # hardware problem in the same way an unbounded generation is, and it
+        # arrives before any token has been produced.
+        total_chars = sum(len(m.content) for m in messages)
+        if total_chars > self._max_context_chars:
+            raise ContextTooLongError(
+                detail=f"{total_chars} characters exceeds the configured limit"
+            )
 
         # The concurrency slot is taken before any database work. Doing the
         # routing reads first would pin a connection for the whole generation,
