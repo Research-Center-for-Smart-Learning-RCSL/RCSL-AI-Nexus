@@ -1,0 +1,174 @@
+"""Ollama runtime adapter.
+
+Talks to an Ollama running natively on the macOS host, reached through
+`host.docker.internal`, because containers on macOS cannot use the GPU. See
+docs/ARCHITECTURE.md section 0.1.
+
+Everything goes over the HTTP API. Nothing here builds a shell command, and
+every reference passes `parse_model_ref` first.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import AsyncIterator, Sequence
+
+import httpx
+
+from app.adapters.runtime.validation import assert_valid_model_ref
+from app.domain.entities.chat import CompletionChunk, Message
+from app.domain.entities.model import PullProgress
+from app.domain.exceptions import DomainError, ModelNotFoundError, NoAvailableModelError
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_KEEP_ALIVE = "10m"
+
+
+class OllamaAdapter:
+    def __init__(self, base_url: str, request_timeout_seconds: int = 300) -> None:
+        self._base_url = base_url.rstrip("/")
+        # Generation legitimately takes minutes, so the read timeout is long,
+        # but a host that is simply not there must fail fast rather than
+        # holding a concurrency slot for the full request timeout.
+        self._timeout = httpx.Timeout(
+            connect=5.0, read=float(request_timeout_seconds), write=30.0, pool=5.0
+        )
+
+    # --- inference -------------------------------------------------------
+
+    async def generate(
+        self, ref: str, messages: Sequence[Message]
+    ) -> AsyncIterator[CompletionChunk]:
+        """Stream a completion.
+
+        An async generator, so it is declared without `async def` in the port
+        and called without await. The `finally` inside the `async with` is
+        what closes the upstream request when a client disconnects; without
+        it Ollama keeps generating for someone who has already gone.
+        """
+        assert_valid_model_ref(ref)
+        payload = {
+            "model": ref,
+            "messages": [{"role": m.role.value, "content": m.content} for m in messages],
+            "stream": True,
+        }
+
+        counted = 0
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
+            async with client.stream("POST", "/api/chat", json=payload) as response:
+                await self._raise_for_status(response, ref)
+
+                async for line in response.aiter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        logger.warning("ollama emitted a non-JSON line, ignoring")
+                        continue
+
+                    if event.get("error"):
+                        raise NoAvailableModelError(detail=f"ollama: {event['error']}")
+
+                    delta = (event.get("message") or {}).get("content", "")
+
+                    if event.get("done"):
+                        # Ollama reports the authoritative token count only at
+                        # the end. Chunks were counted as one apiece so that a
+                        # disconnect still bills something sensible, so emit
+                        # the difference here rather than the whole figure,
+                        # which would otherwise be counted twice.
+                        eval_count = int(event.get("eval_count") or 0)
+                        correction = max(eval_count - counted, 0)
+                        yield CompletionChunk(
+                            delta=delta,
+                            finish_reason=event.get("done_reason") or "stop",
+                            token_count=correction,
+                        )
+                        return
+
+                    if delta:
+                        counted += 1
+                        yield CompletionChunk(delta=delta, token_count=1)
+
+    # --- model lifecycle -------------------------------------------------
+
+    async def pull(self, ref: str) -> AsyncIterator[PullProgress]:
+        """Stream download progress.
+
+        Also an async generator: Ollama's pull endpoint answers with a stream
+        of NDJSON progress objects, so a plain POST would report no progress
+        and give no reliable completion signal.
+        """
+        assert_valid_model_ref(ref)
+
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
+            async with client.stream(
+                "POST", "/api/pull", json={"model": ref, "stream": True}
+            ) as response:
+                await self._raise_for_status(response, ref)
+
+                async for line in response.aiter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    if event.get("error"):
+                        raise DomainError(detail=f"ollama pull failed: {event['error']}")
+
+                    yield PullProgress(
+                        status=event.get("status", ""),
+                        completed_bytes=event.get("completed"),
+                        total_bytes=event.get("total"),
+                    )
+
+    async def load(self, ref: str) -> None:
+        """Warm a model into memory.
+
+        An empty prompt with a keep_alive is Ollama's documented way to load
+        without generating anything.
+        """
+        assert_valid_model_ref(ref)
+        await self._post("/api/generate", {"model": ref, "keep_alive": DEFAULT_KEEP_ALIVE}, ref)
+
+    async def unload(self, ref: str) -> None:
+        """Evict immediately. `keep_alive: 0` is the documented signal."""
+        assert_valid_model_ref(ref)
+        await self._post("/api/generate", {"model": ref, "keep_alive": 0}, ref)
+
+    async def health(self) -> bool:
+        try:
+            async with httpx.AsyncClient(
+                base_url=self._base_url, timeout=httpx.Timeout(5.0)
+            ) as client:
+                response = await client.get("/api/tags")
+                return response.status_code == 200
+        except httpx.HTTPError:
+            return False
+
+    # --- internals -------------------------------------------------------
+
+    async def _post(self, path: str, payload: dict, ref: str) -> None:
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
+            response = await client.post(path, json=payload)
+            if response.status_code == 404:
+                raise ModelNotFoundError(detail=f"{ref} is not present on this runtime")
+            if response.status_code >= 400:
+                raise NoAvailableModelError(detail=f"ollama {path} returned {response.status_code}")
+
+    async def _raise_for_status(self, response: httpx.Response, ref: str) -> None:
+        if response.status_code < 400:
+            return
+        # The body has to be read before it can be inspected on a streamed
+        # response, and it goes to the log rather than to the caller: it can
+        # name models and paths that a public caller should not learn about.
+        await response.aread()
+        detail = f"ollama returned {response.status_code} for {ref}: {response.text[:500]}"
+        if response.status_code == 404:
+            raise ModelNotFoundError(detail=detail)
+        raise NoAvailableModelError(detail=detail)
