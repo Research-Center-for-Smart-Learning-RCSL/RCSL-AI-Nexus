@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
 from typing import Protocol
 
 from app.domain.entities.chat import CompletionChunk, Message
@@ -17,7 +17,7 @@ class ModelRuntimePort(Protocol):
 
     def generate(
         self, ref: str, messages: Sequence[Message], max_tokens: int | None = None
-    ) -> AsyncIterator[CompletionChunk]:
+    ) -> AsyncGenerator[CompletionChunk, None]:
         """Stream completion chunks. Implementations are async generators.
 
         Declared with `def`, not `async def`. An async generator function is
@@ -26,14 +26,35 @@ class ModelRuntimePort(Protocol):
         no implementation does, and any caller written against that signature
         raises at runtime. This distinction is silent until it breaks, so it
         is spelled out rather than left to convention.
+
+        `AsyncGenerator` rather than `AsyncIterator`, because every consumer
+        wraps this in `aclosing()` and only the former promises `aclose()`.
+        That promise is the streaming contract: without it a disconnected
+        client leaves the runtime generating and the concurrency slot held.
         """
         ...
 
-    def pull(self, ref: str) -> AsyncIterator[PullProgress]:
+    def pull(self, ref: str) -> AsyncGenerator[PullProgress, None]:
         """Stream download progress. Also an async generator: Ollama's pull
         endpoint returns a stream of NDJSON progress objects, not a single
         response, so a plain POST would report no progress and give no
         reliable completion signal."""
+        ...
+
+    def validate_ref(self, ref: str) -> None:
+        """Raise `InvalidModelReferenceError` if this runtime cannot accept it.
+
+        On the port rather than as a shared helper, because what a reference
+        *is* differs by runtime: Ollama takes `namespace/name:tag` from a
+        small set of registries, while MLX takes a HuggingFace repository id
+        and vLLM will take a path. A single grammar would have to be the union
+        of all of them, which is no grammar at all.
+
+        Called at registration as well as inside every adapter method. The
+        adapter's check protects the runtime call; this one stops a reference
+        that can never work from being stored, where it would fail much later
+        as a download that cannot start.
+        """
         ...
 
     async def load(self, ref: str) -> None: ...

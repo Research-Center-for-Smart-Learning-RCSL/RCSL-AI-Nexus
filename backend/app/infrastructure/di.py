@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.audit.postgres_audit import PostgresAudit
 from app.adapters.authz.role_authorization import RoleAuthorization
+from app.adapters.cache.job_progress import CacheJobProgress
 from app.adapters.cache.redis_adapter import InMemoryCache, RedisCache
 from app.adapters.crypto.argon2_hasher import Argon2Hasher
 from app.adapters.crypto.pyotp_totp import PyotpTotp
@@ -37,9 +38,15 @@ from app.adapters.session.session_store import SessionStore
 from app.application.use_cases.accept_invitation import AcceptInvitation
 from app.application.use_cases.authenticate_local import AuthenticateLocal
 from app.application.use_cases.bootstrap_first_admin import BootstrapFirstAdmin
+from app.application.use_cases.download_model import DownloadModel
 from app.application.use_cases.issue_invitation import IssueInvitation
+from app.application.use_cases.manage_api_keys import ManageApiKeys
+from app.application.use_cases.manage_models import ManageModels
 from app.application.use_cases.manage_own_account import ManageOwnAccount
+from app.application.use_cases.manage_routing_policies import ManageRoutingPolicies
+from app.application.use_cases.manage_users import ManageUsers
 from app.application.use_cases.pending_enrolment import PendingEnrolment
+from app.application.use_cases.read_dashboard import ReadDashboard
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.domain.entities.model import RuntimeKind
 from app.domain.ports.infrastructure_ports import CachePort
@@ -134,6 +141,10 @@ def build_session_store(settings: Settings, cache: CachePort) -> SessionStore:
         absolute_ttl=settings.session_absolute_ttl_seconds,
         idle_ttl=settings.session_idle_ttl_seconds,
     )
+
+
+def build_job_progress(cache: CachePort) -> CacheJobProgress:
+    return CacheJobProgress(cache)
 
 
 def build_audit() -> PostgresAudit:
@@ -332,6 +343,75 @@ def build_pending_enrolment(request: Request, settings: Settings) -> PendingEnro
         request.app.state.cache,
         request.app.state.secret_box,
         ttl_seconds=settings.totp_enrolment_ttl_seconds,
+    )
+
+
+def build_manage_models(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> ManageModels:
+    return ManageModels(
+        models=PostgresModelRepository(session),
+        nodes=PostgresNodeRepository(session),
+        policies=PostgresRoutingPolicyRepository(session),
+        runtimes=request.app.state.runtimes,
+        budget=MemoryBudgetService(),
+        authz=request.app.state.authz,
+        audit=request.app.state.audit,
+    )
+
+
+def build_download_model(request: Request, session: SessionDep) -> DownloadModel:
+    return DownloadModel(
+        models=PostgresModelRepository(session),
+        runtimes=request.app.state.runtimes,
+        jobs=request.app.state.jobs,
+        authz=request.app.state.authz,
+        audit=request.app.state.audit,
+    )
+
+
+def build_manage_api_keys(request: Request, session: SessionDep) -> ManageApiKeys:
+    return ManageApiKeys(
+        keys=PostgresApiKeyRepository(session),
+        users=PostgresUserRepository(session),
+        usage=PostgresUsageRepository(session),
+        service=request.app.state.api_key_service,
+        authz=request.app.state.authz,
+        audit=request.app.state.audit,
+        clock=SystemClock(),
+    )
+
+
+def build_manage_users(request: Request, session: SessionDep) -> ManageUsers:
+    return ManageUsers(
+        users=PostgresUserRepository(session),
+        keys=PostgresApiKeyRepository(session),
+        invitations=PostgresInvitationRepository(session),
+        sessions=request.app.state.sessions,
+        authz=request.app.state.authz,
+        audit=request.app.state.audit,
+        clock=SystemClock(),
+    )
+
+
+def build_manage_routing_policies(request: Request, session: SessionDep) -> ManageRoutingPolicies:
+    return ManageRoutingPolicies(
+        policies=PostgresRoutingPolicyRepository(session),
+        models=PostgresModelRepository(session),
+        authz=request.app.state.authz,
+        audit=request.app.state.audit,
+    )
+
+
+def build_read_dashboard(request: Request, session: SessionDep) -> ReadDashboard:
+    return ReadDashboard(
+        models=PostgresModelRepository(session),
+        nodes=PostgresNodeRepository(session),
+        keys=PostgresApiKeyRepository(session),
+        users=PostgresUserRepository(session),
+        usage=PostgresUsageRepository(session),
+        authz=request.app.state.authz,
+        clock=SystemClock(),
     )
 
 

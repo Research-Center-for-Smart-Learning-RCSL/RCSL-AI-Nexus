@@ -164,13 +164,14 @@ def api_key_to_domain(row: ApiKeyRow) -> ApiKey:
         rate_limit_rpm=row.rate_limit_rpm,
         quota_tokens_per_day=row.quota_tokens_per_day,
         expires_at=row.expires_at,
+        created_at=row.created_at,
         revoked_at=row.revoked_at,
         debug_logging_until=row.debug_logging_until,
     )
 
 
 def api_key_to_row(key: ApiKey) -> ApiKeyRow:
-    return ApiKeyRow(
+    row = ApiKeyRow(
         id=key.id,
         key_id=key.key_id,
         digest=key.digest,
@@ -184,6 +185,12 @@ def api_key_to_row(key: ApiKey) -> ApiKeyRow:
         revoked_at=key.revoked_at,
         debug_logging_until=key.debug_logging_until,
     )
+    if key.created_at is not None:
+        # Left unset when the entity has never been persisted, so the column's
+        # server default applies rather than a value computed in the process
+        # that happens to be issuing the key.
+        row.created_at = key.created_at
+    return row
 
 
 # --- User ----------------------------------------------------------------

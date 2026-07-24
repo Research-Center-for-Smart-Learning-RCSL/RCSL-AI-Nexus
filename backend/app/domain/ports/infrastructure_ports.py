@@ -23,7 +23,16 @@ class JobStatus:
     state: str
     """queued | running | succeeded | failed"""
 
+    target: str | None = None
+    """What the job is acting on. The model id, for a download."""
+
     progress: float | None = None
+    """0 to 1, or None while the runtime has not reported a total. Ollama
+    sends manifest and verification stages with no byte counts at all, so a
+    progress bar that assumed a number here would sit at zero and then jump."""
+
+    completed_bytes: int | None = None
+    total_bytes: int | None = None
     message: str | None = None
 
 

@@ -39,6 +39,20 @@ class ChatCompletionRequest(BaseModel):
     )
 
 
+class AdminChatRequest(BaseModel):
+    """The management UI's shape, which is not the OpenAI one.
+
+    It names `capability` rather than `model`, because there is no
+    compatibility obligation here and the field's meaning was always the
+    capability: the gateway keeps the OpenAI spelling so third-party client
+    libraries work, and this endpoint has no such caller to accommodate.
+    """
+
+    capability: str = Field(min_length=1, max_length=64)
+    messages: list[ChatMessageIn] = Field(min_length=1)
+    max_tokens: int | None = Field(default=None, gt=0)
+
+
 class Delta(BaseModel):
     content: str | None = None
     role: str | None = None

@@ -1,15 +1,14 @@
-"""User accounts, as far as the authentication work needs them.
-
-**Partial on purpose.** Creating an account, listing accounts, and issuing the
-two kinds of link are here because they are the other half of the invitation
-and reset flows: without them nobody can reach the public entrance at all.
-Role changes, disabling, and deletion belong with the rest of the admin API
-and are not implemented yet; `docs/ROADMAP.md` carries what is outstanding.
+"""User accounts.
 
 Authorization is not enforced here. Each use case declares the scope it
 requires and checks it, so a second caller reaching the same use case from
 somewhere else cannot skip the check by not knowing about it.
 See docs/architecture/backend.md section 7.
+
+`PATCH` carries `disabled` alongside the editable fields because the frontend
+sends one form. It routes to a different use-case method, since disabling has
+consequences a rename does not: every live session for that account ends
+immediately rather than at its own expiry.
 """
 
 from __future__ import annotations
@@ -17,20 +16,20 @@ from __future__ import annotations
 from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 
-from app.adapters.persistence.repositories import PostgresUserRepository
 from app.application.use_cases.issue_invitation import IssuedInvitation, IssueInvitation
-from app.domain.entities.actor import Actor, Scope
+from app.application.use_cases.manage_users import ManageUsers
+from app.domain.entities.actor import Actor
 from app.domain.entities.invitation import InvitationPurpose
-from app.domain.exceptions import NotAuthorizedError
 from app.infrastructure.config import Settings, get_settings
-from app.infrastructure.di import build_issue_invitation, get_user_repository
+from app.infrastructure.di import build_issue_invitation, build_manage_users
 from app.interfaces.http.middleware.identity import current_actor
 from app.interfaces.http.schemas.admin_schemas import (
     CreateUserRequest,
     CreateUserResponse,
     InvitationResponse,
+    UpdateUserRequest,
     UserResponse,
 )
 
@@ -43,11 +42,9 @@ RESET_PATH = "/reset-password"
 @router.get("")
 async def list_users(
     actor: Annotated[Actor, Depends(current_actor)],
-    users: Annotated[PostgresUserRepository, Depends(get_user_repository)],
-    settings: Annotated[Settings, Depends(get_settings)],
+    users: Annotated[ManageUsers, Depends(build_manage_users)],
 ) -> list[UserResponse]:
-    _require(actor, Scope.USER_READ)
-    return [UserResponse.of(user) for user in await users.list_all()]
+    return [UserResponse.of(user) for user in await users.list_all(actor)]
 
 
 @router.post("", status_code=201)
@@ -97,15 +94,31 @@ async def issue_password_reset(
     return _invitation_response(issued, settings)
 
 
-def _require(actor: Actor, scope: Scope) -> None:
-    """The listing has no use case of its own yet.
+@router.patch("/{user_id}")
+async def update_user(
+    user_id: str,
+    payload: UpdateUserRequest,
+    actor: Annotated[Actor, Depends(current_actor)],
+    users: Annotated[ManageUsers, Depends(build_manage_users)],
+) -> UserResponse:
+    user = await users.update(actor, user_id, display_name=payload.display_name, role=payload.role)
+    if payload.disabled is not None:
+        user = await users.set_disabled(actor, user_id, disabled=payload.disabled)
+    return UserResponse.of(user)
 
-    Written as an explicit check rather than omitted, so that adding the use
-    case later moves this check rather than introducing one that was never
-    there.
-    """
-    if not actor.has(scope):
-        raise NotAuthorizedError(detail=f"{actor.display} lacks {scope.value}")
+
+@router.delete("/{user_id}", status_code=204)
+async def delete_user(
+    user_id: str,
+    actor: Annotated[Actor, Depends(current_actor)],
+    users: Annotated[ManageUsers, Depends(build_manage_users)],
+) -> Response:
+    """Removes the account and everything holding a foreign key to it, so
+    their API keys stop working at the same moment. Usage and audit rows keep
+    the id as a plain column and survive, which is what makes the trail worth
+    having."""
+    await users.delete(actor, user_id)
+    return Response(status_code=204)
 
 
 def _invitation_response(issued: IssuedInvitation, settings: Settings) -> InvitationResponse:

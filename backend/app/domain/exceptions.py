@@ -51,6 +51,19 @@ class InsufficientMemoryError(DomainError):
         self.available_gb = available_gb
 
 
+class NodeNotFoundError(DomainError):
+    code = "node_not_found"
+    public_message = "The requested node does not exist."
+
+
+class RuntimeUnavailableError(DomainError):
+    code = "runtime_unavailable"
+    public_message = "This deployment has no adapter for that runtime."
+    # Caught at registration rather than at first use. A model bound to a
+    # runtime nothing implements is a row that can never be downloaded or
+    # loaded, and the failure would otherwise surface as a KeyError much later.
+
+
 class InvalidModelReferenceError(DomainError):
     code = "invalid_model_reference"
     public_message = "The model reference is not valid."
@@ -90,6 +103,11 @@ class CountryNotAllowedError(DomainError):
 class UntrustedProxyError(DomainError):
     code = "untrusted_proxy"
     public_message = "Request did not arrive through the expected path."
+
+
+class InvalidCidrError(DomainError):
+    code = "invalid_cidr"
+    public_message = "One of the address ranges is not valid."
 
 
 class InvalidNodeAddressError(DomainError):
@@ -149,6 +167,20 @@ class UserAlreadyExistsError(DomainError):
     public_message = "An account with that login already exists."
     # Unlike the login errors above, this one may name the situation: the only
     # caller is an authenticated administrator who can already list every user.
+
+
+class UserNotFoundError(DomainError):
+    code = "user_not_found"
+    public_message = "That account does not exist."
+    # Only ever raised for an authenticated administrator, who can already list
+    # every account, so naming the situation reveals nothing.
+
+
+class LastAdministratorError(DomainError):
+    code = "last_administrator"
+    public_message = "This is the only administrator left."
+    # Removing or demoting them leaves an instance nobody can manage, and the
+    # bootstrap setting does not come back: it is inert once any user exists.
 
 
 class TotpEnrolmentExpiredError(DomainError):

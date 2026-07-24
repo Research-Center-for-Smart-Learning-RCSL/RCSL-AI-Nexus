@@ -27,6 +27,7 @@ from app.adapters.persistence.sqlalchemy_models import (
     UsageRecordRow,
     UserRow,
 )
+from app.domain.entities.actor import Role
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.invitation import Invitation, InvitationPurpose, RecoveryCode
 from app.domain.entities.model import Model, ModelState
@@ -86,6 +87,9 @@ class PostgresModelRepository(_Base):
             update(ModelRow).where(ModelRow.id == model_id).values(state=state.value)
         )
 
+    async def delete(self, model_id: str) -> None:
+        await self._session.execute(delete(ModelRow).where(ModelRow.id == model_id))
+
 
 class PostgresRoutingPolicyRepository(_Base):
     async def get(self, capability: str) -> RoutingPolicy | None:
@@ -99,6 +103,11 @@ class PostgresRoutingPolicyRepository(_Base):
     async def save(self, policy: RoutingPolicy) -> None:
         await self._session.merge(m.routing_policy_to_row(policy))
 
+    async def delete(self, capability: str) -> None:
+        await self._session.execute(
+            delete(RoutingPolicyRow).where(RoutingPolicyRow.capability == capability)
+        )
+
 
 class PostgresApiKeyRepository(_Base):
     async def get_by_key_id(self, key_id: str) -> ApiKey | None:
@@ -111,8 +120,17 @@ class PostgresApiKeyRepository(_Base):
         ).all()
         return [m.api_key_to_domain(r) for r in rows]
 
+    async def list_all(self) -> list[ApiKey]:
+        rows = (
+            await self._session.scalars(select(ApiKeyRow).order_by(ApiKeyRow.created_at.desc()))
+        ).all()
+        return [m.api_key_to_domain(r) for r in rows]
+
     async def save(self, key: ApiKey) -> None:
         await self._session.merge(m.api_key_to_row(key))
+
+    async def delete_for_owner(self, owner_id: str) -> None:
+        await self._session.execute(delete(ApiKeyRow).where(ApiKeyRow.owner_id == owner_id))
 
     async def revoke(self, key_id: str, at: datetime) -> None:
         # Only the first revocation writes a timestamp. Without the guard a
@@ -222,6 +240,22 @@ class PostgresUserRepository(_Base):
             update(UserRow).where(UserRow.id == user_id).values(disabled_at=at)
         )
 
+    async def delete(self, user_id: str) -> None:
+        await self._session.execute(delete(UserRow).where(UserRow.id == user_id))
+
+    async def count_admins(self) -> int:
+        """Counts enabled administrators only. A disabled one cannot sign in,
+        so treating them as cover for the last-admin guard would leave an
+        instance nobody can manage."""
+        return int(
+            await self._session.scalar(
+                select(func.count())
+                .select_from(UserRow)
+                .where(UserRow.role == Role.ADMIN.value, UserRow.disabled_at.is_(None))
+            )
+            or 0
+        )
+
 
 class PostgresInvitationRepository(_Base):
     async def get_by_token_hash(self, token_hash: str) -> Invitation | None:
@@ -278,6 +312,12 @@ class PostgresInvitationRepository(_Base):
             delete(RecoveryCodeRow).where(RecoveryCodeRow.user_id == user_id)
         )
 
+    async def delete_for_user(self, user_id: str) -> None:
+        await self._session.execute(
+            delete(RecoveryCodeRow).where(RecoveryCodeRow.user_id == user_id)
+        )
+        await self._session.execute(delete(InvitationRow).where(InvitationRow.user_id == user_id))
+
     async def consume_recovery_code(self, code_id: str, at: datetime) -> bool:
         """Same atomic claim, and the same reason to check it. A recovery code
         bypasses the second factor, so a code that can be redeemed twice is
@@ -303,3 +343,30 @@ class PostgresUsageRepository(_Base):
             )
         )
         return int(total or 0)
+
+    async def last_used_by_key(self) -> dict[str, datetime]:
+        """One aggregate for every key, not one query per key.
+
+        `api_keys` has no `last_used_at` column on purpose: writing it would
+        mean the gateway updating that table on every request, and the account
+        split in security.md section 6 exists precisely so a compromised
+        gateway cannot write there. The same fact is already in this table,
+        under the index `ix_usage_key_at`.
+        """
+        rows = await self._session.execute(
+            select(UsageRecordRow.api_key_id, func.max(UsageRecordRow.at))
+            .where(UsageRecordRow.api_key_id.is_not(None))
+            .group_by(UsageRecordRow.api_key_id)
+        )
+        return {key_id: at for key_id, at in rows if key_id is not None}
+
+    async def totals_since(self, since: datetime) -> tuple[int, int]:
+        row = (
+            await self._session.execute(
+                select(
+                    func.count(),
+                    func.coalesce(func.sum(UsageRecordRow.tokens), 0),
+                ).where(UsageRecordRow.at >= since)
+            )
+        ).one()
+        return int(row[0] or 0), int(row[1] or 0)
