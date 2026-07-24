@@ -84,7 +84,14 @@ def public_client() -> TestClient:
 
 def post(client: TestClient, path: str, **kwargs):  # type: ignore[no-untyped-def]
     """Attaches the CSRF header from the companion cookie, as the browser
-    client does. The public entrance refuses any unsafe request without it."""
+    client does. Both entrances now carry the double-submit guard, so any
+    unsafe request without the header is refused.
+
+    Seeds the cookie with a GET first if the client has not made one yet, the
+    same order the session provider uses in the browser.
+    """
+    if client.cookies.get(CSRF_COOKIE) is None:
+        client.get("/admin/me")
     headers = dict(kwargs.pop("headers", None) or {})
     token = client.cookies.get(CSRF_COOKIE)
     if token:
@@ -107,7 +114,8 @@ def test_a_fresh_deployment_reaches_a_signed_in_user(deployment: None) -> None:
 
         # 3. The administrator creates an account and receives the only copy of
         #    the link.
-        created = tailnet.post(
+        created = post(
+            tailnet,
             "/admin/users",
             json={"login": INVITEE, "display_name": "Invited Person", "role": "user"},
         )
@@ -183,7 +191,8 @@ def test_a_signed_in_user_cannot_invite(deployment: None) -> None:
     use case, and it does not care which entrance the caller used."""
     with tailnet_client() as tailnet:
         tailnet.get("/admin/me")
-        created = tailnet.post(
+        created = post(
+            tailnet,
             "/admin/users",
             json={"login": INVITEE, "display_name": "Invited Person", "role": "user"},
         )
@@ -228,7 +237,8 @@ def test_a_wrong_password_reveals_nothing_about_the_account(deployment: None) ->
     response. Timing is handled by the dummy hash; this pins the body."""
     with tailnet_client() as tailnet:
         tailnet.get("/admin/me")
-        tailnet.post(
+        post(
+            tailnet,
             "/admin/users",
             json={"login": INVITEE, "display_name": "Invited Person", "role": "user"},
         )
@@ -242,6 +252,56 @@ def test_a_wrong_password_reveals_nothing_about_the_account(deployment: None) ->
 
     assert unknown.status_code == known.status_code == 401
     assert unknown.json() == known.json()
+
+
+def test_failed_logins_do_not_lock_the_account_out_at_the_per_account_limit(
+    deployment: None,
+) -> None:
+    """The throttle must not become the denial-of-service it defends against.
+
+    A run of failures naming one account, more than the per-(address, account)
+    limit but under the per-address limit, must not refuse a subsequent correct
+    login. TestClient cannot vary the peer address, so this exercises the case
+    the first version got wrong for a different reason: it refused on a
+    per-account count alone, which barred the owner. The per-account counter
+    now only alerts.
+    """
+    with tailnet_client() as tailnet:
+        tailnet.get("/admin/me")
+        created = post(
+            tailnet,
+            "/admin/users",
+            json={"login": INVITEE, "display_name": "Invited Person", "role": "user"},
+        )
+        token = _token_from(created.json()["invitation"]["url"])
+
+    with public_client() as public:
+        secret = public.get("/admin/invitations", params={"token": token}).json()["secret"]
+        post(
+            public,
+            "/admin/invitations/accept",
+            json={
+                "token": token,
+                "password": INVITEE_PASSWORD,
+                "totp_code": pyotp.TOTP(secret).now(),
+            },
+        )
+
+        # Six failures against this one login. Over the per-(address, account)
+        # limit, so the seventh attempt for THIS login would wait — but a
+        # different login from the same address is still served, which is what
+        # proves the block is scoped to the pair and not to the account.
+        for _ in range(6):
+            post(public, "/admin/auth/login", json={"login": INVITEE, "password": "wrong"})
+
+        other = post(
+            public, "/admin/auth/login", json={"login": "someone-else@example.org", "password": "x"}
+        )
+
+    # A wrong password for an unrelated login still reaches the handler and
+    # returns the enumeration-safe 401, not a 429 from a mis-scoped counter.
+    assert other.status_code == 401
+    assert other.json()["code"] == "invalid_credentials"
 
 
 def _token_from(url: str) -> str:

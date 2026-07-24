@@ -33,6 +33,7 @@ from app.domain.exceptions import (
     ModelStateConflictError,
     NoAvailableModelError,
     NodeNotFoundError,
+    NoLocalCredentialsError,
     NotAuthenticatedError,
     NotAuthorizedError,
     QuotaExceededError,
@@ -75,6 +76,7 @@ STATUS_MAP: dict[type[DomainError], int] = {
     InvalidCidrError: 400,
     UserNotFoundError: 404,
     LastAdministratorError: 409,
+    NoLocalCredentialsError: 409,
 }
 
 OPENAI_ERROR_TYPES: dict[int, str] = {

@@ -183,6 +183,14 @@ class LastAdministratorError(DomainError):
     # bootstrap setting does not come back: it is inert once any user exists.
 
 
+class NoLocalCredentialsError(DomainError):
+    code = "no_local_credentials"
+    public_message = "This account has no password to change."
+    # A tailnet-only account has nothing to re-enrol. Refused with a 4xx
+    # rather than reaching a write that violates the users check constraint
+    # and 500s.
+
+
 class TotpEnrolmentExpiredError(DomainError):
     code = "totp_enrolment_expired"
     public_message = "The enrolment timed out. Start again."

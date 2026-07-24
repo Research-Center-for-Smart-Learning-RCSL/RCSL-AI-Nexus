@@ -24,6 +24,7 @@ from app.infrastructure.di import build_manage_own_account, get_user_repository
 from app.interfaces.http.middleware.identity import current_actor, current_session
 from app.interfaces.http.qr import provisioning_qr_response
 from app.interfaces.http.schemas.admin_schemas import (
+    BeginTotpRequest,
     ChangePasswordRequest,
     ConfirmTotpRequest,
     EnrolmentResponse,
@@ -80,10 +81,13 @@ async def change_password(
 
 @router.post("/totp")
 async def begin_totp_reenrolment(
+    payload: BeginTotpRequest,
     actor: Annotated[Actor, Depends(current_actor)],
     accounts: Annotated[ManageOwnAccount, Depends(build_manage_own_account)],
 ) -> EnrolmentResponse:
-    enrolment = await accounts.begin_totp_reenrolment(actor)
+    enrolment = await accounts.begin_totp_reenrolment(
+        actor, current_password=payload.current_password
+    )
     return EnrolmentResponse(
         provisioning_uri=enrolment.provisioning_uri,
         secret=enrolment.secret,

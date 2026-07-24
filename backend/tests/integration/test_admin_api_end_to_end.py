@@ -58,7 +58,14 @@ def admin() -> Iterator[TestClient]:
     from app.infrastructure.main_admin_tailnet import create_app
 
     with TestClient(create_app()) as client:
-        client.get("/admin/me")  # claims the administrator account
+        # Claims the administrator account, and seeds the CSRF companion
+        # cookie: the tailnet entrance now carries the double-submit guard,
+        # because `tailscale serve` attaches the identity header to any request
+        # a hostile page can provoke. `COOKIE_SECURE=false` above drops the
+        # `__Host-` prefix, so the cookie is `nexus_csrf` and travels over the
+        # test client's http transport.
+        client.get("/admin/me")
+        client.headers["X-CSRF-Token"] = client.cookies["nexus_csrf"]
         yield client
 
     os.environ.clear()

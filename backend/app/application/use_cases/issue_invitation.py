@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.entities.invitation import Invitation, InvitationPurpose
 from app.domain.entities.user import User
-from app.domain.exceptions import UserAlreadyExistsError
+from app.domain.exceptions import UserAlreadyExistsError, UserNotFoundError
 from app.domain.ports.repositories import InvitationRepositoryPort, UserRepositoryPort
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
 from app.domain.services.token_service import TokenService
@@ -113,6 +113,14 @@ class IssueInvitation:
         self._authz.require(actor, Scope.USER_WRITE)
         user = await self._require_user(user_id)
 
+        if not user.can_use_public_entrance:
+            # A reset only replaces the password, and consuming the link writes
+            # `password_hash` while `totp_secret` stays NULL — which violates
+            # the users check constraint and 500s at consume time. An account
+            # that never completed onboarding has nothing to reset; the remedy
+            # is a fresh onboarding link, so that is what is required.
+            raise UserNotFoundError(detail=f"user {user.id} has not completed onboarding")
+
         issued = await self._issue(user, InvitationPurpose.PASSWORD_RESET)
         await self._audit.record(actor, "user.password_reset_issued", target=user.id)
         return issued
@@ -120,10 +128,7 @@ class IssueInvitation:
     async def _require_user(self, user_id: str) -> User:
         user = await self._users.get(user_id)
         if user is None:
-            # Same error an unauthorized caller receives, so an administrator
-            # of a future multi-tenant deployment cannot probe for ids outside
-            # their own tenant by reading the difference.
-            raise UserAlreadyExistsError(detail=f"no user {user_id}")
+            raise UserNotFoundError(detail=f"no user {user_id}")
         return user
 
     async def _issue(self, user: User, purpose: InvitationPurpose) -> IssuedInvitation:

@@ -34,6 +34,7 @@ from app.infrastructure.di import (
     build_token_service,
     build_totp,
 )
+from app.interfaces.http.middleware.geo_filter import build_geo_filter
 from app.interfaces.http.routers import (
     admin_chat,
     api_keys,
@@ -76,6 +77,9 @@ async def admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.concurrency = build_concurrency_limiter(settings)
     app.state.api_key_service = build_api_key_service(settings)
     app.state.jobs = build_job_progress(app.state.cache)
+    # Built at startup so a missing GeoLite2 database in production stops the
+    # service here rather than silently disabling a documented control.
+    app.state.geo_filter = build_geo_filter(settings)
 
     # Nothing is written here. The one row no endpoint creates, the compute
     # node, is provisioned by the `migrate` service; see
@@ -84,6 +88,7 @@ async def admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        app.state.geo_filter.close()
         await app.state.cache.close()
         await dispose_engine()
 
