@@ -1,10 +1,17 @@
 """Database engine and session lifecycle.
 
-Each service supplies its own `DATABASE_URL`, which is how the least-privilege
-split from docs/architecture/security.md section 6 is realised: the gateway
-connects as a read-only account, the admin entrances as a read-write one, and
-the migration job as a third with DDL rights. Nothing in the application layer
-knows or cares which it got; the grants do the enforcing.
+`DATABASE_URL` is per service, which is the hook the least-privilege split in
+docs/architecture/security.md section 6 would use.
+
+**That split is not implemented.** Compose gives every backend service the
+same `env_file`, so the gateway, both admin entrances and the migration job
+all connect as one account with DDL rights. This comment previously described
+the split in the present tense, which is worse than silence: it reads as
+documentation of a shipped control and stops anyone looking for the risk.
+
+Implementing it means three roles with grants, three URLs, and a note that the
+gateway does need INSERT on `usage_records` even though it must not write
+`api_keys`, `routing_policies`, or `users`.
 """
 
 from __future__ import annotations

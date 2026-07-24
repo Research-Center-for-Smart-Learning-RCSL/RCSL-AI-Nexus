@@ -14,6 +14,22 @@ A concrete payoff specific to this project: the gateway and the two admin entran
 
 ## 2. Folder Structure
 
+**This is the target layout, not the current one.** Two deliberate departures
+have already happened and are worth stating rather than leaving as apparent
+drift: the individually named port files are consolidated into `repositories.py`,
+`security_ports.py` and `infrastructure_ports.py`, and the per-entity
+`postgres_*_repository.py` files into a single `repositories.py`. The protocols
+and classes all exist under those names; only the file granularity differs.
+
+Everything under `application/use_cases/` other than `route_chat_request.py`
+and `authenticate_local.py` is unwritten, as is every router except `chat.py`
+and `health.py`. See [security.md](./security.md) §13.0 for the checked state.
+
+Present and not listed below: `app/shared/clock.py` (injected time, so expiry
+behaviour is testable), `domain/entities/chat.py` (`Message`,
+`CompletionChunk`), `domain/services/api_key_service.py`, and
+`adapters/persistence/mappers.py`.
+
 ```
 backend/
   alembic/
@@ -178,17 +194,21 @@ That docstring exists because the distinction is a common and silent error. `asy
 
 Ports the domain defines, and what implements them:
 
-| Port | Phase 1 adapter |
-|---|---|
-| `ModelRuntimePort` | `OllamaAdapter` |
-| `ModelRepositoryPort`, `NodeRepositoryPort`, `RoutingPolicyRepositoryPort` | Postgres |
-| `ApiKeyRepositoryPort`, `UserRepositoryPort`, `InvitationRepositoryPort`, `UsageRepositoryPort` | Postgres |
-| `PasswordHasherPort` | `Argon2Hasher` |
-| `TotpPort` | `PyotpTotp` |
-| `AuthorizationPort` | `RoleAuthorization` |
-| `AuditPort` | `PostgresAudit` |
-| `CachePort`, `JobProgressPort` | Redis |
-| `KnowledgeRepositoryPort`, `MetricsPort` | Phase 2 |
+| Port | Phase 1 adapter | Built |
+|---|---|---|
+| `ModelRuntimePort` | `OllamaAdapter` | yes |
+| `ModelRepositoryPort`, `NodeRepositoryPort`, `RoutingPolicyRepositoryPort` | Postgres | yes |
+| `ApiKeyRepositoryPort`, `UserRepositoryPort`, `InvitationRepositoryPort`, `UsageRepositoryPort` | Postgres | yes |
+| `AuthorizationPort` | `RoleAuthorization` | yes |
+| `CachePort` | `RedisCache`, `InMemoryCache` | yes |
+| `PasswordHasherPort` | `Argon2Hasher` | **no adapter** |
+| `TotpPort` | `PyotpTotp` | **no adapter** |
+| `AuditPort` | `PostgresAudit` | **no adapter, no call sites** |
+| `JobProgressPort` | Redis | **no adapter** |
+| `KnowledgeRepositoryPort`, `MetricsPort` | Phase 2 | correctly absent |
+
+A port with no adapter is not neutral: `AuditPort` and the `audit_log` table
+both exist, which reads as an audit trail that is in fact never written.
 
 ## 4. Domain Services
 
@@ -369,7 +389,12 @@ Both `/healthz` and `/readyz` are mounted on every application, and both bypass 
 | Endpoint | Checks | Response |
 |---|---|---|
 | `GET /healthz` | Nothing. The process is running | `200 {"status":"ok"}` |
-| `GET /readyz` | Database, Redis, and for the gateway the runtime | `200` or `503` with per-dependency booleans |
+| `GET /readyz` | Database, cache, and for the gateway the runtime, concurrently and each bounded by a timeout | `200` or `503` with per-dependency booleans |
+
+`/readyz` returned hardcoded booleans for a while and could never produce a
+503, so anything gating a rollout on it was gating on a constant. The timeout
+matters for the same reason: a probe that hangs is worse than one that fails,
+because the orchestrator waits instead of acting.
 
 Neither response includes a version string, model list, or hostname. `/readyz` reveals which dependencies are down, which is mildly useful to an attacker, so on the gateway it is published only on the tailnet-bound port.
 
@@ -377,7 +402,9 @@ Neither response includes a version string, model list, or hostname. `/readyz` r
 
 The development machine is Windows. It has no `tailscale serve`, no openresty, and no GeoLite2 database. Taken literally, the middleware described above rejects every request, so the application would be unrunnable locally. The local credential flow itself depends on nothing external and does run locally under `AUTH_MODE=local`.
 
-`AUTH_MODE=dev` bypasses the entrance-specific middleware and injects a fixed admin `Actor`. It also disables the geo filter and the trusted-proxy check.
+`AUTH_MODE=dev` disables the trusted-proxy check and resolves the caller to the peer address, which is what lets the stack run without a proxy in front of it. It is read in exactly one place, `middleware/client_ip.py`.
+
+It does **not** inject a fixed admin `Actor`, contrary to an earlier version of this paragraph; there is no such injection anywhere, and the gateway still requires a real API key in development. That will need building alongside the admin entrances, and the fail-fast below is what keeps it from mattering in production.
 
 **This is a production-fatal setting.** `infrastructure/config.py` fails fast at startup if `AUTH_MODE=dev` and `ENV=production` are both set. The check is a startup assertion rather than a runtime branch, so a misconfigured deployment refuses to boot instead of silently serving an open admin API. [security.md](./security.md) §14 carries a matching pre-launch check.
 

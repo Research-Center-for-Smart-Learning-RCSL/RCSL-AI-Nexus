@@ -181,19 +181,25 @@ Multi-tenancy (a `Tenant` entity, `users.tenant_id`, `api_keys.tenant_id`, and e
 
 Frontend pages correspond to backend resources. Phase annotations show what actually exists when.
 
-| Module | Backend resource | Phase |
-|---|---|---|
-| Dashboard | `/admin/dashboard` | 1 (static data), 2 (real metrics) |
-| Model Management | `/admin/models` | 1 |
-| Routing Policy | `/admin/routing-policies` | 1 (API), 2 (UI editor) |
-| API Keys | `/admin/api-keys` | 1 |
-| Users and roles | `/admin/users`, `/admin/me` | 1 |
-| Chat | `/admin/chat` | 1 |
-| Node management | `/admin/nodes` | 2 |
-| Logs | `/admin/logs` | 2 |
-| Usage analytics | `/admin/usage` | 2 |
-| Knowledge base | `/admin/knowledge` | 2 |
-| Prompt templates | `/admin/prompt-templates` | 2 |
+**None of the admin API exists yet.** Both admin applications currently mount
+only `/healthz` and `/readyz`; the frontend for these modules is written and
+calls endpoints that return 404. The Phase column is a plan, not a status.
+
+| Module | Backend resource | Phase | Built |
+|---|---|---|---|
+| Dashboard | `/admin/dashboard` | 1 (static data), 2 (real metrics) | frontend only |
+| Model Management | `/admin/models` | 1 | frontend only |
+| Routing Policy | `/admin/routing-policies` | 1 (API), 2 (UI editor) | no |
+| API Keys | `/admin/api-keys` | 1 | frontend only |
+| Users and roles | `/admin/users`, `/admin/me` | 1 | frontend only |
+| Chat | `/admin/chat` | 1 | frontend only |
+| Node management | `/admin/nodes` | 2 | no |
+| Logs | `/admin/logs` | 2 | no |
+| Usage analytics | `/admin/usage` | 2 | no |
+| Knowledge base | `/admin/knowledge` | 2 | no |
+| Prompt templates | `/admin/prompt-templates` | 2 | no |
+
+The inference path (`/v1/chat/completions`) is complete and tested end to end.
 
 The chat interface lives on the admin API rather than calling the public gateway. It reuses the same `RouteChatRequest` use case but authorizes by user identity instead of an API key, so operators do not need to mint a key for themselves and admin traffic is not subject to the public geo and CIDR restrictions. The same resource guardrails still apply. See [security.md](./architecture/security.md) §5.2.
 

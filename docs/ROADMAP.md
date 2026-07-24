@@ -14,6 +14,23 @@ Mirrors the layering in [ARCHITECTURE.md](./ARCHITECTURE.md), breaking the three
 
 Goal: one capability (`chat`) can be configured through the admin UI and actually served by the gateway. Architecture detail in [backend.md](./architecture/backend.md), [frontend.md](./architecture/frontend.md), [security.md](./architecture/security.md), and [deployment.md](./architecture/deployment.md).
 
+### Where Phase 1 actually stands
+
+The inference half is done; the management half is not. `security.md` §13.0
+carries the checked control-by-control state.
+
+| Area | State |
+|---|---|
+| `/v1/chat/completions`, streaming and not | Complete, tested end to end against a real Postgres |
+| Routing, registry, keys, usage: persistence | Complete, migrations tested |
+| Ollama adapter, reference validation | Complete |
+| Gateway security: scopes, quota, rate limit, CIDR, geo, guardrails | Complete |
+| **The entire admin API** | **Not started.** Both admin apps mount only health endpoints |
+| Local accounts, TOTP, sessions, CSRF, bootstrap | Ports and tables only; no adapters, no routers |
+| Audit logging | Port and table only; no adapter, no call sites |
+| Database account split, Docker secrets in Compose | Not started |
+| Frontend | Written against the admin API above, so it is currently calling endpoints that 404. No test runner |
+
 ### Backend: hexagonal skeleton
 
 - [ ] Five layers: `domain` / `application` / `adapters` / `interfaces` / `infrastructure`

@@ -116,6 +116,12 @@ Role gating in the UI is a usability affordance, not a security control. Every a
 
 ## 4. Type Safety: Types Generated From the Backend
 
+**Not wired.** `src/lib/generated/` holds only a `.gitkeep`, there is no
+`sync-types` script in `package.json`, and nothing imports from it. Runtime
+zod parsing is the only type safety today, and it cannot catch drift the way
+generated types would. The section below is the intent; it also cannot be
+completed until the admin API exists to generate from.
+
 Eleven modules mean eleven sets of request and response shapes. Hand-maintained types drift, so they are generated:
 
 ```bash
@@ -157,6 +163,13 @@ This is the same supply-chain caveat as [security.md](./security.md) §10: copy-
 Model output and, in Phase 2, knowledge base excerpts are untrusted input. Markdown rendering must sanitise (for example `rehype-sanitize`), and raw HTML passthrough stays disabled. Streaming makes this easy to get wrong, because sanitising partial markdown as it arrives can produce different output than sanitising the completed document. Sanitise the accumulated buffer on each render rather than sanitising individual deltas.
 
 ## 9. Testing
+
+**There is no frontend test runner yet.** No Vitest, no Storybook, no
+Playwright. The frontend is currently checked by the TypeScript compiler and
+ESLint only, which is how an open redirect, an unreachable frame schema, and a
+comparison between a UUID and an email address all shipped at once. Closing
+this is the highest-value frontend work outstanding; the plan below is
+unchanged.
 
 - **Storybook plus Vitest** for `components/ui` and `components/composed`. The composed layer is reused across eleven modules, so a break there is expensive; stories cover loading, empty, error, and large-dataset states.
 - **Vitest with Testing Library** for `features/*/hooks`, mocking the API client.
