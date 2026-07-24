@@ -6,6 +6,24 @@ them across seven files would mostly duplicate imports.
 None of these commit. `session_scope` in infrastructure/db.py owns the
 transaction, so a use case touching several repositories either lands entirely
 or not at all.
+
+**Every `save` flushes, and that is load-bearing rather than tidiness.** These
+ORM models declare foreign key columns but no `relationship()`, so
+SQLAlchemy's unit of work has no dependency graph to order a flush by; with
+`autoflush=False` — which production uses deliberately — it falls back to
+alphabetical order by table name, which puts `api_keys`, `invitations`,
+`models` and `recovery_codes` *before* the `users` and `nodes` rows they
+reference. Writing a parent and a child in one transaction therefore failed on
+the foreign key. Flushing at each write makes the order the caller's order.
+
+It also means a constraint violation is raised where the call was made rather
+than at commit, which in FastAPI happens *after* the response has been sent
+and has nowhere left to report. And it is what lets a use case read back a
+row it has just written to pick up a server-assigned default.
+
+`UsageRepository.record` is the deliberate exception: it has no foreign key,
+and it sits on the streaming hot path where an extra round trip per request
+is not worth buying nothing.
 """
 
 from __future__ import annotations
@@ -53,6 +71,7 @@ class PostgresNodeRepository(_Base):
 
     async def save(self, node: Node) -> None:
         await self._session.merge(m.node_to_row(node))
+        await self._session.flush()
 
 
 class PostgresModelRepository(_Base):
@@ -81,6 +100,7 @@ class PostgresModelRepository(_Base):
 
     async def save(self, model: Model) -> None:
         await self._session.merge(m.model_to_row(model))
+        await self._session.flush()
 
     async def set_state(self, model_id: str, state: ModelState) -> None:
         await self._session.execute(
@@ -102,6 +122,7 @@ class PostgresRoutingPolicyRepository(_Base):
 
     async def save(self, policy: RoutingPolicy) -> None:
         await self._session.merge(m.routing_policy_to_row(policy))
+        await self._session.flush()
 
     async def delete(self, capability: str) -> None:
         await self._session.execute(
@@ -128,6 +149,7 @@ class PostgresApiKeyRepository(_Base):
 
     async def save(self, key: ApiKey) -> None:
         await self._session.merge(m.api_key_to_row(key))
+        await self._session.flush()
 
     async def delete_for_owner(self, owner_id: str) -> None:
         await self._session.execute(delete(ApiKeyRow).where(ApiKeyRow.owner_id == owner_id))
@@ -178,15 +200,7 @@ class PostgresUserRepository(_Base):
         For the two fields where a concurrent writer is realistic, use the
         conditional updates below instead of this.
 
-        **The flush is required, not tidiness.** `users` is the foreign key
-        target for invitations, recovery codes, API keys and usage, and these
-        models declare foreign key columns but no `relationship()`, so
-        SQLAlchemy's unit of work has no dependency graph to order a flush by.
-        With `autoflush=False` — which production uses deliberately — creating
-        an account and its invitation in one transaction emitted the invitation
-        INSERT first and failed on the constraint. Flushing here is still
-        inside the caller's transaction, so nothing about the all-or-nothing
-        guarantee changes.
+        Flushes, for the reason given in the module docstring.
         """
         await self._session.merge(m.user_to_row(user))
         await self._session.flush()
@@ -266,6 +280,7 @@ class PostgresInvitationRepository(_Base):
 
     async def save(self, invitation: Invitation) -> None:
         await self._session.merge(m.invitation_to_row(invitation))
+        await self._session.flush()
 
     async def consume(self, invitation_id: str, at: datetime) -> bool:
         """Claim the invitation. Returns False if someone else already did.
@@ -298,6 +313,7 @@ class PostgresInvitationRepository(_Base):
 
     async def save_recovery_codes(self, codes: list[RecoveryCode]) -> None:
         self._session.add_all([m.recovery_code_to_row(c) for c in codes])
+        await self._session.flush()
 
     async def list_recovery_codes(self, user_id: str) -> list[RecoveryCode]:
         rows = (

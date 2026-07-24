@@ -34,7 +34,6 @@ from app.infrastructure.di import (
     build_token_service,
     build_totp,
 )
-from app.infrastructure.local_node import ensure_local_node
 from app.interfaces.http.routers import (
     admin_chat,
     api_keys,
@@ -78,9 +77,9 @@ async def admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.api_key_service = build_api_key_service(settings)
     app.state.jobs = build_job_progress(app.state.cache)
 
-    # The model registry needs a node to attach models to, and Phase 1 has no
-    # endpoint that creates one: see infrastructure/local_node.py.
-    await ensure_local_node(settings)
+    # Nothing is written here. The one row no endpoint creates, the compute
+    # node, is provisioned by the `migrate` service; see
+    # infrastructure/provision.py for why startup is the wrong place for it.
 
     try:
         yield
@@ -89,13 +88,33 @@ async def admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
         await dispose_engine()
 
 
+ADMIN_PREFIX = "/admin"
+"""Every management route lives under this, and the reason is the Next.js
+rewrite: `frontend/next.config.js` forwards `/admin/:path*` to
+`${ADMIN_API_URL}/admin/:path*`, **keeping** the prefix, and
+`api-client.ts` prepends `/admin` to every path. Mounting at the root meant
+the browser asked for `/admin/me` and got a 404 from a service whose route
+was `/me`, so nothing in the UI worked at all.
+
+The tests missed it because they call the ASGI app directly. `test_route_
+prefix.py` now pins the contract rather than the handlers.
+
+Health is deliberately outside it: `/healthz` and `/readyz` are probed by
+Compose and by the reverse proxy, neither of which goes through the rewrite.
+"""
+
+
 def mount_admin_routers(app: FastAPI) -> None:
     app.include_router(health.router)
-    app.include_router(me.router)
-    app.include_router(users.router)
-    app.include_router(invitations.router)
-    app.include_router(models.router)
-    app.include_router(api_keys.router)
-    app.include_router(routing_policies.router)
-    app.include_router(dashboard.router)
-    app.include_router(admin_chat.router)
+
+    for router in (
+        me.router,
+        users.router,
+        invitations.router,
+        models.router,
+        api_keys.router,
+        routing_policies.router,
+        dashboard.router,
+        admin_chat.router,
+    ):
+        app.include_router(router, prefix=ADMIN_PREFIX)

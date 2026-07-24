@@ -42,7 +42,7 @@ def _production_like_settings(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_tailnet_entrance_refuses_a_request_with_no_identity_header() -> None:
     with TestClient(create_tailnet()) as client:
-        response = client.get("/me")
+        response = client.get("/admin/me")
 
     assert response.status_code == 401
     assert response.json()["code"] == "not_authenticated"
@@ -54,14 +54,14 @@ def test_a_401_tells_the_frontend_which_entrance_it_reached() -> None:
     that 401s. Without this it has to guess at the moment it most needs to be
     right."""
     with TestClient(create_tailnet()) as client:
-        response = client.get("/me")
+        response = client.get("/admin/me")
 
     assert response.json()["auth_mode"] == "tailnet"
 
 
 def test_public_entrance_refuses_a_request_with_no_session_cookie() -> None:
     with TestClient(create_public()) as client:
-        response = client.get("/me")
+        response = client.get("/admin/me")
 
     assert response.status_code == 401
 
@@ -72,14 +72,16 @@ def test_the_public_entrance_mounts_the_login_routes_and_the_tailnet_one_does_no
     to require."""
     with TestClient(create_tailnet()) as client:
         assert (
-            client.post("/auth/login", json={"login": "a@b.c", "password": "x"}).status_code == 404
+            client.post("/admin/auth/login", json={"login": "a@b.c", "password": "x"}).status_code
+            == 404
         )
 
     # On the public entrance the route exists; CSRF is what refuses it here.
     with TestClient(create_public()) as client:
-        client.get("/me")
+        client.get("/admin/me")
         assert (
-            client.post("/auth/login", json={"login": "a@b.c", "password": "x"}).status_code == 403
+            client.post("/admin/auth/login", json={"login": "a@b.c", "password": "x"}).status_code
+            == 403
         )
 
 
@@ -87,8 +89,8 @@ def test_an_unsafe_request_without_a_csrf_header_is_refused() -> None:
     with TestClient(create_public()) as client:
         # The GET seeds the companion cookie, exactly as the session provider's
         # first call does in the browser.
-        client.get("/me")
-        response = client.post("/auth/login", json={"login": "a@b.c", "password": "x"})
+        client.get("/admin/me")
+        response = client.post("/admin/auth/login", json={"login": "a@b.c", "password": "x"})
 
     assert response.status_code == 403
     assert response.json()["code"] == "csrf_failed"
@@ -96,9 +98,9 @@ def test_an_unsafe_request_without_a_csrf_header_is_refused() -> None:
 
 def test_a_mismatched_csrf_header_is_refused() -> None:
     with TestClient(create_public()) as client:
-        client.get("/me")
+        client.get("/admin/me")
         response = client.post(
-            "/auth/login",
+            "/admin/auth/login",
             json={"login": "a@b.c", "password": "x"},
             headers={CSRF_HEADER: "not-the-cookie-value"},
         )
@@ -110,7 +112,7 @@ def test_the_first_response_issues_a_csrf_cookie_readable_by_scripts() -> None:
     """Not HttpOnly, deliberately: the client has to echo it in a header, and
     that is the entire mechanism. It grants nothing on its own."""
     with TestClient(create_public()) as client:
-        response = client.get("/me")
+        response = client.get("/admin/me")
 
     header = response.headers.get("set-cookie", "")
     assert CSRF_COOKIE in header
@@ -121,7 +123,7 @@ def test_csrf_is_not_installed_on_the_tailnet_entrance() -> None:
     """It has no ambient credential to protect: identity arrives in a header
     that no cross-origin page can cause to be added."""
     with TestClient(create_tailnet()) as client:
-        response = client.get("/me")
+        response = client.get("/admin/me")
 
     assert CSRF_COOKIE not in response.headers.get("set-cookie", "")
 
@@ -133,9 +135,9 @@ def test_an_application_that_installs_no_resolver_refuses_rather_than_defaults()
     app = FastAPI()
     install_error_handlers(app, envelope="admin")
 
-    @app.get("/whoami")
+    @app.get("/admin/whoami")
     async def whoami(actor: Annotated[Actor, Depends(current_actor)]) -> dict[str, str]:
         return {"id": actor.id}
 
     with pytest.raises(NotImplementedError):
-        TestClient(app, raise_server_exceptions=True).get("/whoami")
+        TestClient(app, raise_server_exceptions=True).get("/admin/whoami")

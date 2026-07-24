@@ -23,7 +23,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from ipaddress import IPv4Network, IPv6Network, ip_network
 
 from app.domain.entities.actor import Actor, Scope
@@ -66,6 +66,8 @@ class ManageApiKeys:
         authz: AuthorizationPort,
         audit: AuditPort,
         clock: Clock,
+        *,
+        max_lifetime_days: int = 365,
     ) -> None:
         self._keys = keys
         self._users = users
@@ -74,6 +76,23 @@ class ManageApiKeys:
         self._authz = authz
         self._audit = audit
         self._clock = clock
+        self._max_lifetime = timedelta(days=max_lifetime_days)
+
+    def _assert_expiry_sane(self, expires_at: datetime) -> None:
+        """Bounded at both ends.
+
+        A date already past produces a key that is dead on arrival and reads
+        as a platform fault. A date far enough ahead defeats the field's only
+        purpose: expiry is here to force rotation, and `9999-12-31` satisfied
+        "in the future" while rotating nothing.
+        """
+        now = self._clock.now()
+        if expires_at <= now:
+            raise ModelStateConflictError(detail=f"expiry {expires_at} is not in the future")
+        if expires_at > now + self._max_lifetime:
+            raise ModelStateConflictError(
+                detail=f"expiry {expires_at} is beyond the {self._max_lifetime.days} day maximum"
+            )
 
     async def list_visible(self, actor: Actor) -> tuple[list[ApiKey], dict[str, datetime]]:
         """Returns the keys and, separately, when each was last used.
@@ -111,9 +130,7 @@ class ManageApiKeys:
             # than a 500 from the database.
             raise UserNotFoundError(detail=f"no owner {owner_id}")
 
-        now = self._clock.now()
-        if expires_at <= now:
-            raise ModelStateConflictError(detail=f"expiry {expires_at} is not in the future")
+        self._assert_expiry_sane(expires_at)
 
         unknown = sorted(set(scopes) - KNOWN_CAPABILITIES)
         if unknown:
@@ -133,13 +150,21 @@ class ManageApiKeys:
             quota_tokens_per_day=quota_tokens_per_day,
         )
         await self._keys.save(key)
+
+        # Read back, because `created_at` is assigned by the database and the
+        # in-memory entity carries None for it. The response model allows
+        # None, but the frontend's schema does not, so returning the unsaved
+        # entity made the parse throw *after* the key existed — destroying the
+        # plaintext, which has no second copy anywhere.
+        stored = await self._keys.get_by_key_id(key.key_id) or key
+
         await self._audit.record(
             actor,
             "api_key.issued",
             target=key.key_id,
             detail={"name": key.name, "owner": owner_id},
         )
-        return IssuedApiKey(key=key, plaintext=issued.plaintext)
+        return IssuedApiKey(key=stored, plaintext=issued.plaintext)
 
     async def update(
         self,
@@ -161,8 +186,8 @@ class ManageApiKeys:
             # in a list and is not. Reissue instead.
             raise ModelStateConflictError(detail=f"key {key_id} is revoked")
 
-        if expires_at is not None and expires_at <= self._clock.now():
-            raise ModelStateConflictError(detail=f"expiry {expires_at} is not in the future")
+        if expires_at is not None:
+            self._assert_expiry_sane(expires_at)
 
         if scopes is not None:
             unknown = sorted(set(scopes) - KNOWN_CAPABILITIES)

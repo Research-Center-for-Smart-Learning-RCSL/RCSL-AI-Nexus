@@ -18,7 +18,11 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
-from app.infrastructure.admin_composition import admin_lifespan, mount_admin_routers
+from app.infrastructure.admin_composition import (
+    ADMIN_PREFIX,
+    admin_lifespan,
+    mount_admin_routers,
+)
 from app.infrastructure.config import get_settings
 from app.interfaces.http.errors import install_error_handlers
 from app.interfaces.http.middleware.csrf import CsrfMiddleware
@@ -80,7 +84,7 @@ def create_app() -> FastAPI:
     install_error_handlers(app, envelope="admin", auth_mode=settings.auth_mode)
     mount_admin_routers(app)
     # Only this entrance mounts the credential flow. See the tailnet module.
-    app.include_router(auth.router)
+    app.include_router(auth.router, prefix=ADMIN_PREFIX)
 
     app.dependency_overrides[current_actor] = resolve_session_actor
     app.dependency_overrides[current_session] = session_from_request

@@ -76,6 +76,11 @@ class IssueInvitation:
             role=role,
         )
         await self._users.save(user)
+        # Read back for `created_at`, which the database assigns. Returning
+        # the unsaved entity made the frontend's parse throw after the account
+        # existed, taking the invitation link with it — and that link is the
+        # only copy, since only its hash is stored.
+        user = await self._users.get(user.id) or user
 
         issued = await self._issue(user, InvitationPurpose.ONBOARD)
         await self._audit.record(

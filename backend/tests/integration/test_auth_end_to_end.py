@@ -95,7 +95,7 @@ def post(client: TestClient, path: str, **kwargs):  # type: ignore[no-untyped-de
 def test_a_fresh_deployment_reaches_a_signed_in_user(deployment: None) -> None:
     with tailnet_client() as tailnet:
         # 1. The first request on the tailnet claims the administrator account.
-        me = tailnet.get("/me")
+        me = tailnet.get("/admin/me")
         assert me.status_code == 200, me.text
         assert me.json()["login"] == BOOTSTRAP_LOGIN
         assert me.json()["role"] == "admin"
@@ -103,12 +103,12 @@ def test_a_fresh_deployment_reaches_a_signed_in_user(deployment: None) -> None:
         assert me.json()["session_expires_at"] is None
 
         # 2. Bootstrap is inert afterwards, so the setting never needs removing.
-        assert tailnet.get("/me").json()["id"] == me.json()["id"]
+        assert tailnet.get("/admin/me").json()["id"] == me.json()["id"]
 
         # 3. The administrator creates an account and receives the only copy of
         #    the link.
         created = tailnet.post(
-            "/users",
+            "/admin/users",
             json={"login": INVITEE, "display_name": "Invited Person", "role": "user"},
         )
         assert created.status_code == 201, created.text
@@ -117,14 +117,14 @@ def test_a_fresh_deployment_reaches_a_signed_in_user(deployment: None) -> None:
 
     with public_client() as public:
         # 4. The recipient opens it on the public entrance, unauthenticated.
-        public.get("/me")  # seeds the CSRF companion cookie, as the UI's first call does
-        enrolment = public.get("/invitations", params={"token": token})
+        public.get("/admin/me")  # seeds the CSRF companion cookie, as the UI's first call does
+        enrolment = public.get("/admin/invitations", params={"token": token})
         assert enrolment.status_code == 200, enrolment.text
         secret = enrolment.json()["secret"]
         assert enrolment.json()["login"] == INVITEE
 
         # The QR is rendered here, never by a third party: the URI is the secret.
-        qr = public.get("/invitations/totp-qr", params={"token": token})
+        qr = public.get("/admin/invitations/totp-qr", params={"token": token})
         assert qr.status_code == 200
         assert qr.headers["content-type"] == "image/png"
         assert qr.headers["cache-control"] == "no-store, private"
@@ -132,7 +132,7 @@ def test_a_fresh_deployment_reaches_a_signed_in_user(deployment: None) -> None:
         # 5. They choose a password and prove the authenticator works.
         accepted = post(
             public,
-            "/invitations/accept",
+            "/admin/invitations/accept",
             json={
                 "token": token,
                 "password": INVITEE_PASSWORD,
@@ -143,20 +143,20 @@ def test_a_fresh_deployment_reaches_a_signed_in_user(deployment: None) -> None:
         assert len(accepted.json()["recovery_codes"]) == 10
 
         # 6. The link is spent.
-        assert public.get("/invitations", params={"token": token}).status_code == 400
+        assert public.get("/admin/invitations", params={"token": token}).status_code == 400
 
         # 7. Password first, which yields a challenge and no session.
         challenge = post(
-            public, "/auth/login", json={"login": INVITEE, "password": INVITEE_PASSWORD}
+            public, "/admin/auth/login", json={"login": INVITEE, "password": INVITEE_PASSWORD}
         )
         assert challenge.status_code == 200, challenge.text
         assert challenge.json()["next"] == "totp"
-        assert public.get("/me").status_code == 401
+        assert public.get("/admin/me").status_code == 401
 
         # 8. The second factor issues the session.
         signed_in = post(
             public,
-            "/auth/login/totp",
+            "/admin/auth/login/totp",
             json={
                 "challenge": challenge.json()["challenge"],
                 # A different step from the enrolment code above, whose counter
@@ -167,34 +167,34 @@ def test_a_fresh_deployment_reaches_a_signed_in_user(deployment: None) -> None:
         )
         assert signed_in.status_code == 204, signed_in.text
 
-        who = public.get("/me")
+        who = public.get("/admin/me")
         assert who.status_code == 200, who.text
         assert who.json()["login"] == INVITEE
         assert who.json()["role"] == "user"
         assert who.json()["session_expires_at"] is not None
 
         # 9. Signing out ends it.
-        assert post(public, "/auth/logout").status_code == 204
-        assert public.get("/me").status_code == 401
+        assert post(public, "/admin/auth/logout").status_code == 204
+        assert public.get("/admin/me").status_code == 401
 
 
 def test_a_signed_in_user_cannot_invite(deployment: None) -> None:
     """Role gating in the UI is an affordance. The check that matters is in the
     use case, and it does not care which entrance the caller used."""
     with tailnet_client() as tailnet:
-        tailnet.get("/me")
+        tailnet.get("/admin/me")
         created = tailnet.post(
-            "/users",
+            "/admin/users",
             json={"login": INVITEE, "display_name": "Invited Person", "role": "user"},
         )
         token = _token_from(created.json()["invitation"]["url"])
 
     with public_client() as public:
-        public.get("/me")
-        secret = public.get("/invitations", params={"token": token}).json()["secret"]
+        public.get("/admin/me")
+        secret = public.get("/admin/invitations", params={"token": token}).json()["secret"]
         post(
             public,
-            "/invitations/accept",
+            "/admin/invitations/accept",
             json={
                 "token": token,
                 "password": INVITEE_PASSWORD,
@@ -202,11 +202,11 @@ def test_a_signed_in_user_cannot_invite(deployment: None) -> None:
             },
         )
         challenge = post(
-            public, "/auth/login", json={"login": INVITEE, "password": INVITEE_PASSWORD}
+            public, "/admin/auth/login", json={"login": INVITEE, "password": INVITEE_PASSWORD}
         )
         post(
             public,
-            "/auth/login/totp",
+            "/admin/auth/login/totp",
             json={
                 "challenge": challenge.json()["challenge"],
                 "code": pyotp.TOTP(secret).at(_next_step()),
@@ -215,7 +215,7 @@ def test_a_signed_in_user_cannot_invite(deployment: None) -> None:
 
         refused = post(
             public,
-            "/users",
+            "/admin/users",
             json={"login": "third@example.org", "display_name": "Third", "role": "admin"},
         )
 
@@ -227,16 +227,18 @@ def test_a_wrong_password_reveals_nothing_about_the_account(deployment: None) ->
     """An unknown login and a real account with the wrong password must be one
     response. Timing is handled by the dummy hash; this pins the body."""
     with tailnet_client() as tailnet:
-        tailnet.get("/me")
+        tailnet.get("/admin/me")
         tailnet.post(
-            "/users",
+            "/admin/users",
             json={"login": INVITEE, "display_name": "Invited Person", "role": "user"},
         )
 
     with public_client() as public:
-        public.get("/me")
-        unknown = post(public, "/auth/login", json={"login": "nobody@example.org", "password": "x"})
-        known = post(public, "/auth/login", json={"login": INVITEE, "password": "x"})
+        public.get("/admin/me")
+        unknown = post(
+            public, "/admin/auth/login", json={"login": "nobody@example.org", "password": "x"}
+        )
+        known = post(public, "/admin/auth/login", json={"login": INVITEE, "password": "x"})
 
     assert unknown.status_code == known.status_code == 401
     assert unknown.json() == known.json()
