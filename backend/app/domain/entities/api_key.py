@@ -27,6 +27,12 @@ class ApiKey:
     name: str
     owner_id: str
 
+    expires_at: datetime
+    """No default and NOT NULL in the schema. Optionality here previously meant
+    a key with no expiry was treated as never expiring, so the mandatory
+    rotation the design relies on could be bypassed by one direct write.
+    Placed among the required fields so that omitting it is a type error."""
+
     scopes: frozenset[str] = field(default_factory=frozenset)
     allowed_cidrs: tuple[IPv4Network | IPv6Network, ...] = ()
     """Empty means unrestricted. Defends against key leakage specifically:
@@ -35,13 +41,10 @@ class ApiKey:
     rate_limit_rpm: int = 60
     quota_tokens_per_day: int | None = None
 
-    expires_at: datetime | None = None
-    """Required in practice; the create use case refuses a null expiry."""
-
     revoked_at: datetime | None = None
     debug_logging_until: datetime | None = None
 
     def is_active(self, now: datetime) -> bool:
         if self.revoked_at is not None:
             return False
-        return not (self.expires_at is not None and self.expires_at <= now)
+        return self.expires_at > now

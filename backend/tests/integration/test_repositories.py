@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 from ipaddress import ip_network
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.adapters.persistence.repositories import (
@@ -31,7 +32,6 @@ from app.adapters.persistence.repositories import (
     PostgresUsageRepository,
     PostgresUserRepository,
 )
-from app.adapters.persistence.sqlalchemy_models import Base
 from app.domain.entities.actor import Role
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.invitation import Invitation, InvitationPurpose
@@ -47,12 +47,11 @@ pytestmark = pytest.mark.skipif(not TEST_DATABASE_URL, reason="TEST_DATABASE_URL
 
 
 @pytest.fixture
-async def session():
-    engine = create_async_engine(TEST_DATABASE_URL or "", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
+async def session(database_url):
+    """Schema built by Alembic (see conftest), and session parameters matching
+    production, so what passes here reflects what will happen there."""
+    engine = create_async_engine(database_url, echo=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
     async with factory() as s:
         yield s
         await s.rollback()
@@ -98,6 +97,7 @@ async def test_node_round_trip(session) -> None:
 
 async def test_model_round_trip_and_alias_lookup(session) -> None:
     await PostgresNodeRepository(session).save(_node())
+    await session.flush()
     repo = PostgresModelRepository(session)
     await repo.save(_model())
     await session.flush()
@@ -113,6 +113,7 @@ async def test_model_round_trip_and_alias_lookup(session) -> None:
 async def test_list_loaded_filters_by_state_and_node(session) -> None:
     await PostgresNodeRepository(session).save(_node())
     await PostgresNodeRepository(session).save(_node("n2"))
+    await session.flush()
     repo = PostgresModelRepository(session)
 
     loaded = _model("loaded-here", "n1")
@@ -161,6 +162,7 @@ async def test_api_key_cidrs_round_trip(session) -> None:
     await PostgresUserRepository(session).save(
         User(id="u1", login="a@example.com", display_name="A", role=Role.ADMIN)
     )
+    await session.flush()  # parent first; autoflush is off, as in production
     repo = PostgresApiKeyRepository(session)
     expires = datetime.now(UTC) + timedelta(days=90)
     key = ApiKey(
@@ -205,6 +207,7 @@ async def test_issuing_a_new_link_invalidates_the_previous_one(session) -> None:
     await PostgresUserRepository(session).save(
         User(id="u1", login="a@example.com", display_name="A", role=Role.USER)
     )
+    await session.flush()
     repo = PostgresInvitationRepository(session)
     expires = datetime.now(UTC) + timedelta(hours=72)
 
@@ -222,6 +225,78 @@ async def test_issuing_a_new_link_invalidates_the_previous_one(session) -> None:
     await session.flush()
 
     assert await repo.get_by_token_hash("hash-one") is None
+
+
+async def test_consuming_a_link_twice_reports_the_second_as_a_loss(session) -> None:
+    """The atomic claim is meaningless unless its result is checked.
+
+    Two requests reaching the same link both find `consumed_at IS NULL` and
+    both call consume; only one updates a row. Discarding the rowcount left
+    both believing they had claimed it, which is exactly the interception case
+    the single-use rule exists for.
+    """
+    await PostgresUserRepository(session).save(
+        User(id="u1", login="a@example.com", display_name="A", role=Role.USER)
+    )
+    await session.flush()
+    repo = PostgresInvitationRepository(session)
+    invitation = Invitation(
+        id=str(uuid.uuid4()),
+        user_id="u1",
+        token_hash="hash-race",  # noqa: S106  (a stand-in digest)
+        purpose=InvitationPurpose.ONBOARD,
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    await repo.save(invitation)
+    await session.flush()
+
+    assert await repo.consume(invitation.id, datetime.now(UTC)) is True
+    assert await repo.consume(invitation.id, datetime.now(UTC)) is False
+
+
+async def test_a_totp_counter_cannot_be_replayed(session) -> None:
+    """Replay prevention has to happen in the UPDATE.
+
+    Comparing against a counter read earlier and writing it back lets two
+    requests carrying the same code both pass, which is how a code observed in
+    a phishing proxy stays usable inside its window.
+    """
+    repo = PostgresUserRepository(session)
+    await repo.save(
+        User(
+            id="u1",
+            login="a@example.com",
+            display_name="A",
+            role=Role.USER,
+            password_hash="argon2-hash",  # noqa: S106
+            totp_secret="secret",  # noqa: S106
+        )
+    )
+    await session.flush()
+
+    assert await repo.advance_totp_counter("u1", 100) is True
+    assert await repo.advance_totp_counter("u1", 100) is False, "same counter replayed"
+    assert await repo.advance_totp_counter("u1", 99) is False, "older counter accepted"
+    assert await repo.advance_totp_counter("u1", 101) is True
+
+
+async def test_the_schema_refuses_a_password_without_a_second_factor(session) -> None:
+    """ "An account never exists in a password-only state" was a Python
+    property, so a direct write could produce the state the design calls
+    impossible. It is a check constraint now."""
+    repo = PostgresUserRepository(session)
+    await repo.save(
+        User(
+            id="u1",
+            login="a@example.com",
+            display_name="A",
+            role=Role.USER,
+            password_hash="argon2-hash",  # noqa: S106
+            totp_secret=None,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await session.flush()
 
 
 async def test_usage_totals_only_count_the_named_key(session) -> None:

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.persistence import mappers as m
@@ -114,8 +114,14 @@ class PostgresApiKeyRepository(_Base):
         await self._session.merge(m.api_key_to_row(key))
 
     async def revoke(self, key_id: str, at: datetime) -> None:
+        # Only the first revocation writes a timestamp. Without the guard a
+        # repeated call moves the recorded time forward, so "when was this
+        # revoked" answers with the most recent attempt rather than the moment
+        # it stopped working.
         await self._session.execute(
-            update(ApiKeyRow).where(ApiKeyRow.key_id == key_id).values(revoked_at=at)
+            update(ApiKeyRow)
+            .where(ApiKeyRow.key_id == key_id, ApiKeyRow.revoked_at.is_(None))
+            .values(revoked_at=at)
         )
 
 
@@ -142,7 +148,43 @@ class PostgresUserRepository(_Base):
         return int(await self._session.scalar(select(func.count()).select_from(UserRow)) or 0)
 
     async def save(self, user: User) -> None:
+        """Full-row upsert. The caller must pass a complete entity.
+
+        `merge` copies every column present on the object, and the mapper sets
+        all of them, including the Nones. So saving a partially built User
+        blanks whatever it omitted: a `password_hash` of None overwrites a real
+        hash, and the victim then cannot sign in and gets an error
+        indistinguishable from a wrong password. Read, `replace`, save.
+
+        For the two fields where a concurrent writer is realistic, use the
+        conditional updates below instead of this.
+        """
         await self._session.merge(m.user_to_row(user))
+
+    async def advance_totp_counter(self, user_id: str, counter: int) -> bool:
+        """Claim a TOTP counter, or return False if it is not newer.
+
+        Replay prevention cannot be a Python comparison against a value read
+        earlier and then written back with `merge`: two requests carrying the
+        same code both read the old counter, both pass the check, and both get
+        a session. The comparison has to happen in the UPDATE.
+        """
+        result = await self._session.execute(
+            update(UserRow)
+            .where(
+                UserRow.id == user_id,
+                or_(UserRow.totp_last_counter.is_(None), UserRow.totp_last_counter < counter),
+            )
+            .values(totp_last_counter=counter)
+        )
+        return result.rowcount == 1
+
+    async def set_disabled(self, user_id: str, at: datetime | None) -> None:
+        """Targeted update, so disabling an account cannot be undone by a
+        login that read the row a moment earlier and saved it back whole."""
+        await self._session.execute(
+            update(UserRow).where(UserRow.id == user_id).values(disabled_at=at)
+        )
 
 
 class PostgresInvitationRepository(_Base):
@@ -155,12 +197,20 @@ class PostgresInvitationRepository(_Base):
     async def save(self, invitation: Invitation) -> None:
         await self._session.merge(m.invitation_to_row(invitation))
 
-    async def consume(self, invitation_id: str, at: datetime) -> None:
-        await self._session.execute(
+    async def consume(self, invitation_id: str, at: datetime) -> bool:
+        """Claim the invitation. Returns False if someone else already did.
+
+        The `WHERE consumed_at IS NULL` makes the claim atomic, but the result
+        has to be inspected for that to mean anything. Discarding it left both
+        racers believing they had consumed the link, which is exactly the
+        interception scenario the single-use rule exists for.
+        """
+        result = await self._session.execute(
             update(InvitationRow)
             .where(InvitationRow.id == invitation_id, InvitationRow.consumed_at.is_(None))
             .values(consumed_at=at)
         )
+        return result.rowcount == 1
 
     async def invalidate_outstanding(self, user_id: str, purpose: InvitationPurpose) -> None:
         """Issuing a new link kills any earlier one.
@@ -187,12 +237,16 @@ class PostgresInvitationRepository(_Base):
         ).all()
         return [m.recovery_code_to_domain(r) for r in rows]
 
-    async def consume_recovery_code(self, code_id: str, at: datetime) -> None:
-        await self._session.execute(
+    async def consume_recovery_code(self, code_id: str, at: datetime) -> bool:
+        """Same atomic claim, and the same reason to check it. A recovery code
+        bypasses the second factor, so a code that can be redeemed twice is
+        worse than an invitation that can."""
+        result = await self._session.execute(
             update(RecoveryCodeRow)
             .where(RecoveryCodeRow.id == code_id, RecoveryCodeRow.used_at.is_(None))
             .values(used_at=at)
         )
+        return result.rowcount == 1
 
 
 class PostgresUsageRepository(_Base):

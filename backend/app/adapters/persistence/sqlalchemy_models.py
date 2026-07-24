@@ -14,6 +14,7 @@ from datetime import datetime
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -92,6 +93,17 @@ class UserRow(Base):
     )
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    __table_args__ = (
+        # "An account never exists in a password-only state" was enforced only
+        # by a Python property, so a direct write or a half-finished invitation
+        # could produce the state the design says is impossible. Enforced here
+        # instead, where a second writer cannot get around it.
+        CheckConstraint(
+            "(password_hash IS NULL) = (totp_secret IS NULL)",
+            name="ck_users_password_implies_totp",
+        ),
+    )
+
 
 class InvitationRow(Base):
     __tablename__ = "invitations"
@@ -105,12 +117,14 @@ class InvitationRow(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    __table_args__ = (Index("ix_invitations_user_purpose", "user_id", "purpose"),)
+
 
 class RecoveryCodeRow(Base):
     __tablename__ = "recovery_codes"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"))
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
     code_hash: Mapped[str] = mapped_column(String(128))
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -132,7 +146,12 @@ class ApiKeyRow(Base):
     rate_limit_rpm: Mapped[int] = mapped_column(Integer, default=60)
     quota_tokens_per_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    """NOT NULL, because `is_active` reads a null expiry as "never expires".
+    The docs call expiry mandatory and the entity comment claimed a use case
+    enforced it; a nullable column meant one direct insert or import produced a
+    permanently valid key with rotation bypassed."""
+
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     debug_logging_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -144,13 +163,25 @@ class UsageRecordRow(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     actor_id: Mapped[str] = mapped_column(String(36), index=True)
-    api_key_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+
+    api_key_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    """Holds `ApiKey.key_id`, the public handle, not the row's UUID. Chosen so
+    the record survives the key being deleted, which is also why there is no
+    foreign key. Sized for a 16-character handle rather than a UUID; the
+    previous width made the ambiguity easy to miss."""
+
     capability: Mapped[str] = mapped_column(String(64))
     model_alias: Mapped[str] = mapped_column(String(128))
     tokens: Mapped[int] = mapped_column(Integer)
     latency_ms: Mapped[int] = mapped_column(Integer)
     completed: Mapped[bool] = mapped_column(Boolean)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+    __table_args__ = (
+        # The quota reads by key over a time window, so the composite is what
+        # that query actually needs.
+        Index("ix_usage_key_at", "api_key_id", "at"),
+    )
 
 
 class AuditLogRow(Base):
