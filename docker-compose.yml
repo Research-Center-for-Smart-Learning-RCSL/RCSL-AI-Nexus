@@ -32,9 +32,33 @@ x-backend: &backend
     migrate:
       condition: service_completed_successfully
 
+# The invariant these networks exist to hold: the gateway shares no network
+# with either admin entrance. The tailnet entrance trusts `Tailscale-User-Login`
+# outright, so any container that can reach it by service name can forge an
+# administrator. Socket binding isolates the host-published port, not the Docker
+# service name, so a compromised gateway on a shared network could `curl
+# http://admin-tailnet:8001` with a forged header. The data plane and the
+# control plane therefore get separate database segments; postgres and redis are
+# the only members of both, and they initiate no connections, so a shared
+# datastore is not a shared path. See docs/architecture/security.md sections 1,
+# 3.2, 5.1.
 networks:
-  app:
-  data:
+  # The gateway's own two networks. `gateway-egress` is non-internal so it can
+  # reach the host runtime through host.docker.internal; nothing else is on it.
+  gateway-egress:
+  gateway-data:
+    internal: true
+
+  # One control network per entrance, each carrying a frontend and its admin
+  # API and nothing else. Separate so a compromised public frontend cannot
+  # reach the tailnet entrance and forge a header. Non-internal because the
+  # admin entrances reach the host runtime for /admin/chat.
+  control-tailnet:
+  control-public:
+
+  # The control plane's database segment. Both admin entrances are the same
+  # trust tier (§1), so they share it; the gateway is not on it.
+  admin-data:
     internal: true
 
 volumes:
@@ -58,7 +82,7 @@ services:
       - -c
       - "alembic upgrade head && python -m app.infrastructure.provision"
     env_file: [.env]
-    networks: [data]
+    networks: [admin-data]
     restart: "no"
     depends_on:
       postgres:
@@ -78,7 +102,9 @@ services:
       # Reachable only from the tailnet, and the Tailscale ACL narrows that
       # further to the proxy host alone.
       - "${TAILNET_IP:?set TAILNET_IP in .env; an empty value publishes on 0.0.0.0}:8000:8000"
-    networks: [app, data]
+    # Deliberately not on any control network. The data plane reaches only the
+    # database and the host runtime; it has no path to an admin entrance.
+    networks: [gateway-egress, gateway-data]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
       interval: 30s
@@ -98,7 +124,7 @@ services:
       - "8001"
     ports:
       - "127.0.0.1:8001:8001"
-    networks: [app, data]
+    networks: [control-tailnet, admin-data]
 
   # --- control plane, public entrance -------------------------------------
   # A separate service, not a second port on the one above: the two trust
@@ -114,7 +140,7 @@ services:
       - "8002"
     ports:
       - "${TAILNET_IP:?set TAILNET_IP in .env; an empty value publishes on 0.0.0.0}:8002:8002"
-    networks: [app, data]
+    networks: [control-public, admin-data]
 
   # --- frontends ----------------------------------------------------------
   # One image, one instance per entrance, differing only in which admin API
@@ -128,7 +154,7 @@ services:
       ADMIN_API_URL: http://admin-tailnet:8001
     ports:
       - "127.0.0.1:3000:3000"
-    networks: [app]
+    networks: [control-tailnet]
     depends_on: [admin-tailnet]
 
   frontend-public:
@@ -139,7 +165,7 @@ services:
       ADMIN_API_URL: http://admin-public:8002
     ports:
       - "${TAILNET_IP:?set TAILNET_IP in .env; an empty value publishes on 0.0.0.0}:3001:3000"
-    networks: [app]
+    networks: [control-public]
     depends_on: [admin-public]
 
   # --- data tier ----------------------------------------------------------
@@ -153,7 +179,10 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-nexus}
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    networks: [data]
+    # On both database segments. It accepts connections; it never opens one, so
+    # being reachable from the gateway and from the admin plane does not make
+    # those two reachable to each other.
+    networks: [gateway-data, admin-data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nexus}"]
       interval: 10s
@@ -164,11 +193,13 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     # Redis ships with no password at all. Even on an internal network this
-    # is set, because a compromised gateway sits on that network legitimately.
+    # is set, because the gateway sits on redis's network legitimately (for
+    # rate-limit counters), and a compromised gateway is the case the password
+    # defends against.
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
-    networks: [data]
+    networks: [gateway-data, admin-data]
     healthcheck:
       test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s

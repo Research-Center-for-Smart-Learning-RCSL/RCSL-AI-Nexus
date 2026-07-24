@@ -17,6 +17,30 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-25
 
+### Closed the network exposure the review left standing
+
+The sharpest finding, recorded as accepted risk §15.5, is now fixed rather than
+carried. The gateway and the tailnet admin entrance shared the `app` Compose
+network, and the tailnet entrance trusts `Tailscale-User-Login` outright, so a
+compromised gateway could reach `admin-tailnet:8001` by service name and forge
+an administrator. Socket binding, the design's stated isolation, protects the
+host-published port but not the Docker service name.
+
+The single `app` network is split so the gateway shares none with either admin
+entrance. The data plane gets `gateway-data` (internal, for postgres and redis)
+and `gateway-egress` (for the host runtime); the control plane gets `admin-data`
+and a per-entrance control network carrying the frontend and its admin API.
+postgres and redis are the only members of both database segments, which is
+safe because they accept connections and never open one — a shared datastore is
+not a shared path. The same split also stops the internet-facing public frontend
+from reaching the tailnet entrance.
+
+The invariant is not a comment but something `docker compose config` can be
+asked: the intersection of the gateway's networks with each admin entrance's is
+empty. What remains open is the deeper §6 defence, per-service database
+credentials, so a compromised gateway cannot read or write the control plane's
+tables; the forged-header path specifically is gone.
+
 ### Five adversarial reviews, and the twenty-eight defects they found
 
 The admin API was attacked by five independent reviews, each on one surface:

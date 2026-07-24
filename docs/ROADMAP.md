@@ -98,7 +98,7 @@ carries the checked control-by-control state.
 
 Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 
-The single most important open item is [security.md](./architecture/security.md) §15.5: the gateway shares a Docker network with the tailnet admin entrance and can forge an administrator identity to it. Close it by segmenting the control plane onto its own network or by implementing the §6 service-to-service credential, before public exposure.
+[security.md](./architecture/security.md) §15.5 (the gateway forging an administrator identity to the tailnet entrance over a shared Docker network) is now closed: the data plane and control plane are on separate networks and share nothing. The remaining control-plane hardening item is the §6 per-service database credential split, still not implemented.
 
 - [x] Public admin entrance strips every `Tailscale-*` header unconditionally
 - [x] Tailscale ACL including `tag:ntnu-proxy`, so members cannot bypass the proxy

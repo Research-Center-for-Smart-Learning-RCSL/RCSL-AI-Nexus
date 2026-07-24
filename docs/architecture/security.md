@@ -98,33 +98,66 @@ If this is revisited, the migration path is in [deployment.md](./deployment.md) 
 
 ### 3.2 Network Segmentation
 
+**The invariant: the gateway shares no network with either admin entrance.** The
+tailnet entrance trusts `Tailscale-User-Login` outright, so any container that
+can reach it by service name can forge an administrator. Socket binding isolates
+the host-published port, not the Docker service name, so if the gateway and the
+tailnet entrance shared a network a compromised gateway could `curl
+http://admin-tailnet:8001` with a forged header and take the control plane. The
+data plane and the control plane therefore have separate database segments.
+
 ```yaml
 networks:
-  app:               # application containers
-  data:
-    internal: true   # no outbound connectivity at all
+  gateway-egress:        # non-internal; the gateway's route to the host runtime
+  gateway-data:
+    internal: true       # gateway <-> postgres/redis, no internet
+  control-tailnet:       # non-internal; frontend-tailnet <-> admin-tailnet + host
+  control-public:        # non-internal; frontend-public <-> admin-public + host
+  admin-data:
+    internal: true       # both admin entrances <-> postgres/redis, no internet
 ```
 
-| Service | app | data | Host publish |
-|---|---|---|---|
-| gateway | yes | yes | `100.x.x.x:8000` (tailnet only) |
-| admin-tailnet | yes | yes | `127.0.0.1:8001` |
-| admin-public | yes | yes | `100.x.x.x:8002` (tailnet only) |
-| frontend-tailnet | yes | no | `127.0.0.1:3000` |
-| frontend-public | yes | no | `100.x.x.x:3001` (tailnet only) |
-| postgres, redis | no | yes | none |
-| qdrant, minio (Phase 2) | no | yes | none |
-| prometheus (Phase 2) | yes | no | none |
-| grafana (Phase 2) | yes | no | `127.0.0.1:3002` |
-| migrate (one-shot) | no | yes | none |
+| Service | Networks | Host publish |
+|---|---|---|
+| gateway | gateway-egress, gateway-data | `100.x.x.x:8000` (tailnet only) |
+| admin-tailnet | control-tailnet, admin-data | `127.0.0.1:8001` |
+| admin-public | control-public, admin-data | `100.x.x.x:8002` (tailnet only) |
+| frontend-tailnet | control-tailnet | `127.0.0.1:3000` |
+| frontend-public | control-public | `100.x.x.x:3001` (tailnet only) |
+| postgres, redis | gateway-data, admin-data | none |
+| migrate (one-shot) | admin-data | none |
 
-**Model runtimes do not appear here.** Ollama and MLX run natively on the macOS host bound to `127.0.0.1`; containers reach them through `host.docker.internal`. See §7.1 for how they are hardened without container primitives.
+What this buys, service by service: the **gateway** touches only the database
+and the host runtime, and has no path to any admin entrance. **frontend-public**,
+which faces the internet through openresty, is on `control-public` only and so
+cannot reach `admin-tailnet` either. The two admin entrances share `admin-data`
+because they are the same trust tier (§1); a compromise of one is already a
+control-plane compromise, so reaching the other over that segment is not an
+escalation across the boundary that matters.
 
-An earlier draft also defined an `edge` network described as "the only segment that touches external traffic". That was wrong: Docker's published ports are unrelated to which Compose network a service joins, so network membership never controlled external reachability. The network has been removed to avoid implying protection that did not exist.
+**postgres and redis are the only members of both database segments, and that
+is safe** because they accept connections and never open one. A shared datastore
+is not a shared path: the gateway reaching postgres does not let it reach an
+admin entrance through postgres.
 
-`internal: true` on `data` is a genuine control but a narrow one. It stops the database tier from reaching the internet; it does nothing about a compromised gateway, which legitimately sits on that network. §6 addresses that with per-service credentials and least privilege.
+**Model runtimes do not appear here.** Ollama and MLX run natively on the macOS
+host bound to `127.0.0.1`; containers reach them through `host.docker.internal`,
+which needs a non-internal network — `gateway-egress` for the gateway, the two
+`control-*` networks for the admin entrances. The database segments stay
+`internal: true`, so postgres and redis have no route off the machine.
 
-**The gateway shares the `app` network with `admin-tailnet`, and that is a live exposure.** The tailnet entrance binds `0.0.0.0` inside its container and trusts `Tailscale-User-Login` outright, so a process with code execution in the gateway container can reach `http://admin-tailnet:8001` over the bridge and forge an administrator identity, without a tailnet or a session. §5.1's "isolation by socket binding" holds for the host-published port (`127.0.0.1:8001`) but not for the Docker service name. An adversarial review surfaced this once the tailnet entrance became a full API rather than health-only. It is recorded as an accepted risk in §15.5 with the conditions that should trigger closing it (segmenting the control plane onto its own network the gateway cannot join, or requiring a service-to-service credential per §6); the standing mitigation is that a gateway compromise is already the §2 worst case and every §6 credential is meant to contain it.
+An earlier draft defined a single `app` network shared by every application
+container. That is what §15.5 recorded as a live exposure: the gateway and the
+tailnet entrance sat on it together. The split above closes it. (An even earlier
+draft had an `edge` network described as "the only segment that touches external
+traffic"; that was always wrong, since Docker's published ports are unrelated to
+Compose network membership, and it was removed.)
+
+`internal: true` on the database segments is a genuine control but a narrow one.
+It stops the database tier from reaching the internet; it does nothing about a
+compromised gateway, which legitimately sits on `gateway-data` for its rate-limit
+counters and usage records. §6 addresses that with per-service credentials and
+least privilege.
 
 ### 3.3 Rule: No Port May Be Published on `0.0.0.0`
 
@@ -690,6 +723,7 @@ looking for the risk. The state below is checked against the code.
 | Transient model states reconciled at deploy, so a crash leaves no dead-end row | `infrastructure/provision.py` |
 | Targeted key and user updates that cannot revert a concurrent revoke or disable | `adapters/persistence/repositories.py` |
 | `user` role limited to chat, own keys, own usage; no registry or node read | `adapters/authz/role_authorization.py` |
+| Data plane and control plane on separate Docker networks; the gateway can reach no admin entrance | `docker-compose.yml` §3.2 |
 
 **Not implemented, and nothing in the repository arranges it**
 
@@ -836,12 +870,10 @@ Recorded explicitly so they are not later mistaken for oversights, with the cond
 
 **Why accepted.** The domain is maintained by someone else and the wildcard predates this project. Worth raising with its administrator, and worth requesting explicit A records for the two hostnames this project uses rather than relying on wildcard synthesis.
 
-### 15.5 The Gateway Can Reach the Tailnet Admin Entrance Over the Docker Bridge
+### 15.5 The Gateway Reaching the Tailnet Admin Entrance — Resolved
 
-**Situation.** `gateway` and `admin-tailnet` share the `app` Compose network (§3.2). The tailnet entrance binds `0.0.0.0` inside its container and trusts `Tailscale-User-Login` outright, so a process with code execution in the gateway can `curl http://admin-tailnet:8001/...` with a forged identity header and obtain administrator access, with no tailnet and no session. Socket binding isolates the host-published port, not the Docker service name.
+**What it was.** `gateway` and `admin-tailnet` shared the `app` Compose network. The tailnet entrance binds `0.0.0.0` inside its container and trusts `Tailscale-User-Login` outright, so a process with code execution in the gateway could `curl http://admin-tailnet:8001/...` with a forged identity header and obtain administrator access, with no tailnet and no session. Socket binding isolates the host-published port, not the Docker service name. An adversarial review surfaced it once the tailnet entrance grew from health-only into a full API.
 
-**Why accepted for now.** A gateway compromise is already the §2 worst case, and the §6 credential split (not yet implemented) is the control meant to contain it. The exposure was surfaced by an adversarial review once the tailnet entrance grew from health-only into a full API; it is recorded rather than silently carried.
+**How it was closed.** The single `app` network was split so that the gateway shares no network with either admin entrance (§3.2). The data plane has its own database segment (`gateway-data`) and its own host-egress network (`gateway-egress`); the control plane has `admin-data` and a per-entrance control network. postgres and redis are dual-homed across the two database segments, which is safe because they accept connections and never open one. The invariant is verifiable from `docker compose config`: the intersection of the gateway's networks with each admin entrance's is empty. As a bonus of the same change, `frontend-public` — which faces the internet — can no longer reach `admin-tailnet` either.
 
-**Mitigation, standing.** Nothing in the gateway process imports an admin router, so isolation does not depend on a path rule. The reachable damage is bounded by whatever the admin API can do, which is the whole control plane.
-
-**Reconsider — and close — when** the control plane can be moved onto its own Compose network that the gateway does not join, or when §6's service-to-service authentication lands, at which point the forged header alone is not enough. Either removes the exposure entirely; until then it is the most important open item before public exposure.
+**Residual.** None from this vector. The deeper defence against a compromised gateway, the §6 per-service database credential split, is still not implemented and remains the outstanding control-plane hardening item, but the forged-header path specifically is gone.
