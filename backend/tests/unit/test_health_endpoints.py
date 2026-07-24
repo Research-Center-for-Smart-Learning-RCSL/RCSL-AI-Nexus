@@ -44,8 +44,14 @@ def test_readyz_reports_failure_when_a_dependency_is_unreachable(monkeypatch) ->
     monkeypatch.setenv("CACHE_BACKEND", "memory")
     get_settings.cache_clear()
 
-    with TestClient(create_gateway()) as client:
-        response = client.get("/readyz")
+    try:
+        with TestClient(create_gateway()) as client:
+            response = client.get("/readyz")
+    finally:
+        # monkeypatch restores the variables but not the cached Settings built
+        # from them. Leaving that in place pointed every later test in the
+        # process at an unreachable database.
+        get_settings.cache_clear()
 
     assert response.status_code == 503
     body = response.json()

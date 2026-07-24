@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.persistence import mappers as m
@@ -158,8 +159,43 @@ class PostgresUserRepository(_Base):
 
         For the two fields where a concurrent writer is realistic, use the
         conditional updates below instead of this.
+
+        **The flush is required, not tidiness.** `users` is the foreign key
+        target for invitations, recovery codes, API keys and usage, and these
+        models declare foreign key columns but no `relationship()`, so
+        SQLAlchemy's unit of work has no dependency graph to order a flush by.
+        With `autoflush=False` — which production uses deliberately — creating
+        an account and its invitation in one transaction emitted the invitation
+        INSERT first and failed on the constraint. Flushing here is still
+        inside the caller's transaction, so nothing about the all-or-nothing
+        guarantee changes.
         """
         await self._session.merge(m.user_to_row(user))
+        await self._session.flush()
+
+    async def insert_if_absent(self, user: User) -> User:
+        """Atomic claim on a login, for the first-admin bootstrap.
+
+        `ON CONFLICT DO NOTHING` rather than a read-then-write: a browser's
+        first page load fires several requests concurrently, every one of them
+        sees an empty `users` table, and every one of them tries to create the
+        same account. Postgres blocks the losers on the conflicting key until
+        the winner commits, so the SELECT below then sees the committed row.
+        """
+        stmt = (
+            pg_insert(UserRow)
+            .values(**m.user_to_row_values(user))
+            .on_conflict_do_nothing(index_elements=[UserRow.login])
+        )
+        await self._session.execute(stmt)
+
+        row = await self._session.scalar(select(UserRow).where(UserRow.login == user.login))
+        if row is None:
+            # Only reachable if the row was deleted between the insert and the
+            # read. Raising beats returning the entity that was not persisted,
+            # which would hand the caller an id no foreign key can reference.
+            raise RuntimeError(f"user {user.login} vanished during bootstrap insert")
+        return m.user_to_domain(row)
 
     async def advance_totp_counter(self, user_id: str, counter: int) -> bool:
         """Claim a TOTP counter, or return False if it is not newer.
@@ -236,6 +272,11 @@ class PostgresInvitationRepository(_Base):
             )
         ).all()
         return [m.recovery_code_to_domain(r) for r in rows]
+
+    async def delete_recovery_codes(self, user_id: str) -> None:
+        await self._session.execute(
+            delete(RecoveryCodeRow).where(RecoveryCodeRow.user_id == user_id)
+        )
 
     async def consume_recovery_code(self, code_id: str, at: datetime) -> bool:
         """Same atomic claim, and the same reason to check it. A recovery code

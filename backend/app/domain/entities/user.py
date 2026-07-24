@@ -33,6 +33,14 @@ class User:
     which is what stops a code observed in a phishing proxy from being reused
     inside its 30 second window."""
 
+    created_at: datetime | None = None
+    """Set by the repository on first write and read back afterwards.
+
+    `None` means "not persisted yet", which is why it is not required at
+    construction: the use case that creates a user should not have to invent a
+    value the database is about to assign.
+    """
+
     debug_logging_until: datetime | None = None
     disabled_at: datetime | None = None
 

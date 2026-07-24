@@ -25,31 +25,37 @@ carries the checked control-by-control state.
 | Routing, registry, keys, usage: persistence | Complete, migrations tested |
 | Ollama adapter, reference validation | Complete |
 | Gateway security: scopes, quota, rate limit, CIDR, geo, guardrails | Complete |
-| **The entire admin API** | **Not started.** Both admin apps mount only health endpoints |
-| Local accounts, TOTP, sessions, CSRF, bootstrap | Ports and tables only; no adapters, no routers |
-| Audit logging | Port and table only; no adapter, no call sites |
+| Local accounts, TOTP, sessions, CSRF, bootstrap | Complete, tested from a fresh deployment to a signed-in user |
+| Both admin entrances: identity resolution, `/me` | Complete. Each installs its own resolver; neither can default to the other's |
+| Invitation and password reset flows, both ends | Complete |
+| Audit logging | Adapter written and called by the authentication flows. Nothing else is audited, because nothing else exists |
+| **The rest of the admin API** | **Not started.** Models, routing policies, API keys, jobs, dashboard, `/admin/chat`. `/users` has listing and link issuing only |
 | Database account split, Docker secrets in Compose | Not started |
-| Frontend | Written against the admin API above, so it is currently calling endpoints that 404. No test runner |
+| Frontend | Sign-in, invitation acceptance and password reset now reach a real backend. Everything else still calls endpoints that 404. No test runner |
 
 ### Backend: hexagonal skeleton
 
 - [x] Five layers: `domain` / `application` / `adapters` / `interfaces` / `infrastructure`
 - [x] `domain/entities`: `Model`, `Node`, `Capability`, `RoutingPolicy`, `ApiKey`, `User`, `Actor`, `UsageRecord`
-- [ ] `domain/services`: `RoutingService` (structured requirement matching, **never expression evaluation**), `UsageService`, `MemoryBudgetService`
+- [x] `domain/services`: `RoutingService` (structured requirement matching, **never expression evaluation**), `MemoryBudgetService`, `ApiKeyService`, `TokenService`, `LoginThrottle`
 - [x] `domain/ports`: runtime, repositories (model, node, policy, api key, user, usage), authorization, audit, cache, job progress
 - [x] `domain/exceptions.py`: `DomainError` hierarchy with `code` and `public_message`
 - [x] `adapters/runtime/ollama_adapter.py` plus `validation.py` for model reference parsing
 - [x] `adapters/persistence/`: Postgres implementations, ORM models kept separate from entities
-- [ ] `adapters/authz`, `adapters/audit`, `adapters/cache`
-- [ ] `application/use_cases`: `RouteChatRequest`, `RegisterModel`, `DownloadModel`, `LoadModel`, `UnloadModel`, `CreateApiKey`, `RevokeApiKey`, `SetUserRole`, `InviteUser`, `AcceptInvitation`, `AuthenticateLocal`, `ChangePassword`, `IssuePasswordReset`, `BootstrapFirstAdmin`
+- [x] `adapters/authz`, `adapters/audit`, `adapters/cache`, `adapters/crypto`, `adapters/session`
+- [x] `application/use_cases`: `RouteChatRequest`, `AuthenticateLocal`, `AcceptInvitation`, `IssueInvitation`, `ManageOwnAccount`, `BootstrapFirstAdmin`
+- [ ] `application/use_cases`: `RegisterModel`, `DownloadModel`, `LoadModel`, `UnloadModel`, `CreateApiKey`, `RevokeApiKey`, `SetUserRole`
 - [x] `interfaces/http/errors.py`: single exception handler, OpenAI envelope on the gateway, plain shape on admin
-- [ ] Routers: `chat`, `admin_chat`, `models`, `routing_policies`, `api_keys`, `users`, `auth`, `jobs`, `dashboard`, `health`
-- [ ] **Three ASGI entry points**: `main_gateway`, `main_admin_tailnet`, `main_admin_public`
+- [x] Routers: `chat`, `auth`, `me`, `invitations`, `health`; `users` partially (list and link issuing)
+- [ ] Routers: `admin_chat`, `models`, `routing_policies`, `api_keys`, `jobs`, `dashboard`, and the rest of `users`
+- [x] **Three ASGI entry points**: `main_gateway`, `main_admin_tailnet`, `main_admin_public`, each installing its own identity resolver
 - [x] Streaming contract implemented as specified: concurrency slot spans the generator, `aclosing()` at every consumer, cancellation propagates to the adapter, usage recorded in `finally`
+- [x] `interfaces/http/middleware/identity.py`: per-entrance identity resolution, installed by dependency override so an entrance that chooses neither fails closed
 - [x] `infrastructure/di.py` composition root, Ollama only
 - [x] `infrastructure/config.py` with `secrets_dir`, and a startup assertion that `AUTH_MODE=dev` cannot run under `ENV=production`
 - [x] Alembic migrations: `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `invitations`, `recovery_codes`, `usage_records`, `audit_log`
-- [ ] `tests/unit`: routing selection, streaming lifecycle (slot release on disconnect), dev-mode fail-fast, header stripping
+- [x] `tests/unit`: routing selection, streaming lifecycle (slot release on disconnect), dev-mode fail-fast, header stripping, login rules, session invalidation, TOTP replay, password policy, entrance wiring
+- [x] `tests/integration`: repository invariants, and a fresh deployment through bootstrap, invitation, enrolment and login
 
 ### Frontend
 
@@ -95,17 +101,18 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 - [x] Country filter on **both** the gateway and the public admin entrance
 - [x] Per-key CIDR allowlists
 - [x] API keys: HMAC with pepper, random `key_id` lookup, scopes, mandatory expiry, immediate revocation
-- [ ] Local accounts: argon2id, zxcvbn strength check, no user enumeration, escalating rate limits rather than hard lockout
-- [ ] TOTP mandatory at enrolment, with counter replay prevention and single-use recovery codes
-- [ ] Invitation and reset links: single use, hashed at rest, expiring; the platform never transmits a password
-- [ ] Server-side sessions in Redis, `__Host-` cookies, id rotation on login, invalidation on password change, CSRF double-submit
-- [ ] First-admin bootstrap, tailnet entrance only, inert once users exist
+- [x] Local accounts: argon2id, zxcvbn strength check, no user enumeration, escalating rate limits rather than hard lockout
+- [x] TOTP mandatory at enrolment, with counter replay prevention and single-use recovery codes
+- [x] Invitation and reset links: single use, hashed at rest, expiring; the platform never transmits a password
+- [x] Server-side sessions in Redis, `__Host-` cookies, id rotation on login, invalidation on password change, CSRF double-submit
+- [x] First-admin bootstrap, tailnet entrance only, inert once users exist
 - [ ] Separate database accounts; gateway cannot write `api_keys` or `users`
 - [ ] Default credentials replaced: Redis, Qdrant, MinIO, Grafana, Postgres
 - [x] Model reference validation; no shell string construction anywhere
 - [ ] Host runtime hardening: service account, `127.0.0.1` binding, directory ownership
 - [ ] **Resource guardrails: concurrency cap, `max_tokens`, timeout, cancel on disconnect.** With no edge protection these are the only defence
-- [ ] `AuditPort` plus auditing for key issuance and revocation, model download and load, and bootstrap
+- [x] `AuditPort` adapter, and auditing for bootstrap, invitation, reset and credential changes
+- [ ] Auditing for key issuance and revocation and for model download and load, which arrives with those endpoints
 - [x] gitleaks pre-commit hook
 
 ## Phase 2: Full Management Functionality

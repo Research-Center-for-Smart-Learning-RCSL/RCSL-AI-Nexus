@@ -109,7 +109,17 @@ export function AcceptInvitationForm({ token }: { token: string }) {
           autoComplete="new-password"
         />
 
-        <TotpEnrolment enrolment={invitation.data} qrEndpoint="/admin/auth/totp-qr" />
+        {/*
+          The token has to be on this URL. Nobody is signed in yet, so the
+          endpoint has no session to identify the enrolment from, and an
+          <img> cannot carry a request body. It is the same single-use token
+          already in the address bar, and the endpoint returns the secret this
+          form is displaying rather than issuing a second one.
+        */}
+        <TotpEnrolment
+          enrolment={invitation.data}
+          qrEndpoint={`/admin/invitations/totp-qr?token=${encodeURIComponent(token)}`}
+        />
 
         <FormField
           control={form.control}

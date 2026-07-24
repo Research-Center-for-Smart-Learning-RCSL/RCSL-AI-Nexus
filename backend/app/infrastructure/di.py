@@ -16,8 +16,13 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.adapters.audit.postgres_audit import PostgresAudit
 from app.adapters.authz.role_authorization import RoleAuthorization
 from app.adapters.cache.redis_adapter import InMemoryCache, RedisCache
+from app.adapters.crypto.argon2_hasher import Argon2Hasher
+from app.adapters.crypto.pyotp_totp import PyotpTotp
+from app.adapters.crypto.secret_box import FernetSecretBox
+from app.adapters.crypto.zxcvbn_policy import ZxcvbnPasswordPolicy
 from app.adapters.persistence.repositories import (
     PostgresApiKeyRepository,
     PostgresInvitationRepository,
@@ -28,17 +33,26 @@ from app.adapters.persistence.repositories import (
     PostgresUserRepository,
 )
 from app.adapters.runtime.ollama_adapter import OllamaAdapter
+from app.adapters.session.session_store import SessionStore
+from app.application.use_cases.accept_invitation import AcceptInvitation
+from app.application.use_cases.authenticate_local import AuthenticateLocal
+from app.application.use_cases.bootstrap_first_admin import BootstrapFirstAdmin
+from app.application.use_cases.issue_invitation import IssueInvitation
+from app.application.use_cases.manage_own_account import ManageOwnAccount
+from app.application.use_cases.pending_enrolment import PendingEnrolment
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.domain.entities.model import RuntimeKind
 from app.domain.ports.infrastructure_ports import CachePort
 from app.domain.ports.model_runtime_port import ModelRuntimePort
 from app.domain.ports.security_ports import AuthorizationPort
 from app.domain.services.api_key_service import ApiKeyService
+from app.domain.services.login_throttle import LoginThrottle
 from app.domain.services.memory_budget_service import MemoryBudgetService
 from app.domain.services.routing_service import RoutingService
+from app.domain.services.token_service import TokenService
 from app.infrastructure.concurrency import SemaphoreConcurrencyLimiter
 from app.infrastructure.config import Settings, get_settings
-from app.infrastructure.db import session_scope
+from app.infrastructure.db import get_session_factory, session_scope
 from app.shared.clock import SystemClock
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -87,6 +101,48 @@ def build_cache(settings: Settings) -> CachePort:
 
 def build_authorization() -> AuthorizationPort:
     return RoleAuthorization()
+
+
+def build_password_hasher() -> Argon2Hasher:
+    """A singleton, because it owns the concurrency limiter that bounds how
+    much memory unauthenticated login attempts can occupy at once. One per
+    request would make that bound meaningless."""
+    return Argon2Hasher()
+
+
+def build_totp() -> PyotpTotp:
+    return PyotpTotp()
+
+
+def build_secret_box(settings: Settings) -> FernetSecretBox:
+    return FernetSecretBox(settings.totp_encryption_key)
+
+
+def build_password_policy() -> ZxcvbnPasswordPolicy:
+    """A singleton so zxcvbn's frequency dictionary is loaded once per process
+    rather than on the request that happens to be setting a password."""
+    return ZxcvbnPasswordPolicy()
+
+
+def build_token_service() -> TokenService:
+    return TokenService()
+
+
+def build_session_store(settings: Settings, cache: CachePort) -> SessionStore:
+    return SessionStore(
+        cache,
+        absolute_ttl=settings.session_absolute_ttl_seconds,
+        idle_ttl=settings.session_idle_ttl_seconds,
+    )
+
+
+def build_audit() -> PostgresAudit:
+    """Given the session *factory*, not a session.
+
+    Audit rows are written in their own transaction so a failed request still
+    records its failure; see adapters/audit/postgres_audit.py.
+    """
+    return PostgresAudit(get_session_factory(), SystemClock())
 
 
 # --- per-request dependencies --------------------------------------------
@@ -168,3 +224,131 @@ def build_route_chat_request(
 
 RouteChatRequestDep = Annotated[RouteChatRequest, Depends(build_route_chat_request)]
 MemoryBudgetDep = Annotated[MemoryBudgetService, Depends(MemoryBudgetService)]
+
+
+# --- identity and account management -------------------------------------
+#
+# All of these hang off `app.state`, which is populated in each entrance's
+# lifespan. Reading from there rather than constructing per request is what
+# keeps the argon2 concurrency bound and the zxcvbn dictionary load to one
+# instance per process.
+
+
+def get_authorization(request: Request) -> AuthorizationPort:
+    return request.app.state.authz  # type: ignore[no-any-return]
+
+
+def get_session_store(request: Request) -> SessionStore:
+    return request.app.state.sessions  # type: ignore[no-any-return]
+
+
+def get_audit(request: Request) -> PostgresAudit:
+    return request.app.state.audit  # type: ignore[no-any-return]
+
+
+def get_password_hasher(request: Request) -> Argon2Hasher:
+    return request.app.state.hasher  # type: ignore[no-any-return]
+
+
+def get_totp(request: Request) -> PyotpTotp:
+    return request.app.state.totp  # type: ignore[no-any-return]
+
+
+def get_secret_box(request: Request) -> FernetSecretBox:
+    return request.app.state.secret_box  # type: ignore[no-any-return]
+
+
+def get_password_policy(request: Request) -> ZxcvbnPasswordPolicy:
+    return request.app.state.password_policy  # type: ignore[no-any-return]
+
+
+def get_token_service(request: Request) -> TokenService:
+    return request.app.state.tokens  # type: ignore[no-any-return]
+
+
+def build_login_throttle(request: Request) -> LoginThrottle:
+    return LoginThrottle(request.app.state.cache)
+
+
+def build_bootstrap_first_admin(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> BootstrapFirstAdmin:
+    return BootstrapFirstAdmin(
+        users=PostgresUserRepository(session),
+        audit=request.app.state.audit,
+        authz=request.app.state.authz,
+        bootstrap_login=settings.bootstrap_admin_login,
+    )
+
+
+def build_authenticate_local(request: Request, session: SessionDep) -> AuthenticateLocal:
+    return AuthenticateLocal(
+        users=PostgresUserRepository(session),
+        hasher=request.app.state.hasher,
+        totp=request.app.state.totp,
+        invitations=PostgresInvitationRepository(session),
+        tokens=request.app.state.tokens,
+        throttle=LoginThrottle(request.app.state.cache),
+        secret_box=request.app.state.secret_box,
+        clock=SystemClock(),
+    )
+
+
+def build_issue_invitation(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> IssueInvitation:
+    return IssueInvitation(
+        users=PostgresUserRepository(session),
+        invitations=PostgresInvitationRepository(session),
+        tokens=request.app.state.tokens,
+        audit=request.app.state.audit,
+        authz=request.app.state.authz,
+        clock=SystemClock(),
+        ttl_seconds=settings.invitation_ttl_seconds,
+    )
+
+
+def build_accept_invitation(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> AcceptInvitation:
+    return AcceptInvitation(
+        users=PostgresUserRepository(session),
+        invitations=PostgresInvitationRepository(session),
+        tokens=request.app.state.tokens,
+        totp=request.app.state.totp,
+        hasher=request.app.state.hasher,
+        policy=request.app.state.password_policy,
+        secret_box=request.app.state.secret_box,
+        pending=build_pending_enrolment(request, settings),
+        sessions=request.app.state.sessions,
+        audit=request.app.state.audit,
+        clock=SystemClock(),
+        issuer=settings.totp_issuer,
+    )
+
+
+def build_pending_enrolment(request: Request, settings: Settings) -> PendingEnrolment:
+    return PendingEnrolment(
+        request.app.state.cache,
+        request.app.state.secret_box,
+        ttl_seconds=settings.totp_enrolment_ttl_seconds,
+    )
+
+
+def build_manage_own_account(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> ManageOwnAccount:
+    return ManageOwnAccount(
+        users=PostgresUserRepository(session),
+        invitations=PostgresInvitationRepository(session),
+        tokens=request.app.state.tokens,
+        totp=request.app.state.totp,
+        hasher=request.app.state.hasher,
+        policy=request.app.state.password_policy,
+        secret_box=request.app.state.secret_box,
+        pending=build_pending_enrolment(request, settings),
+        sessions=request.app.state.sessions,
+        audit=request.app.state.audit,
+        clock=SystemClock(),
+        issuer=settings.totp_issuer,
+    )
