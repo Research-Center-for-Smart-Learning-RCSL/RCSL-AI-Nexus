@@ -3,6 +3,8 @@ name = "rcsl-ai-nexus"
 version = "0.1.0"
 description = "Self-hosted LLM gateway and management platform"
 requires-python = ">=3.12"
+license = "AGPL-3.0-or-later"
+license-files = ["../LICENSE"]
 
 dependencies = [
     "fastapi>=0.115",
