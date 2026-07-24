@@ -110,6 +110,14 @@ class Settings(BaseSettings):
     max_context_length: int = 32768
     request_timeout_seconds: int = 300
 
+    api_key_max_lifetime_days: int = 365
+    """Ceiling on how far ahead a key may be set to expire.
+
+    Expiry exists to force rotation, and a mandatory field with no upper bound
+    does not: `expires_at` of the year 9999 satisfied "must be in the future"
+    and rotated nothing.
+    """
+
     api_key_pepper: str = Field(default="dev-pepper-not-for-production")
     api_key_pepper_previous: str = Field(
         default="",

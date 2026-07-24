@@ -49,7 +49,14 @@ services:
     build:
       context: ./backend
     image: rcsl-ai-nexus:latest
-    command: ["alembic", "upgrade", "head"]
+    # Provisioning runs here rather than in an application's startup, for the
+    # same reason the migration does: several containers start from one image
+    # and would race. It also keeps the applications free of any startup
+    # write, so they can be constructed without a database.
+    command:
+      - sh
+      - -c
+      - "alembic upgrade head && python -m app.infrastructure.provision"
     env_file: [.env]
     networks: [data]
     restart: "no"

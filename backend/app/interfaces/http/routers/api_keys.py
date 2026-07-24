@@ -65,9 +65,12 @@ async def create_api_key(
         scopes=payload.scopes,
         expires_at=payload.expires_at,
         rate_limit_rpm=payload.rate_limit_rpm,
-        # Zero means "no quota" on the wire, because the form has no way to
-        # express absence. The entity uses None for that.
-        quota_tokens_per_day=payload.quota_tokens_per_day or None,
+        # Passed through, not mapped. This previously turned `0` into `None`,
+        # which the gateway reads as "no quota", while the update path stored
+        # the same `0` literally and refused every request. Both values are
+        # now constrained to be positive at the schema, so neither verb has a
+        # special case and the field means one thing.
+        quota_tokens_per_day=payload.quota_tokens_per_day,
         allowed_cidrs=payload.allowed_cidrs,
     )
     return IssuedApiKeyResponse(key=ApiKeyResponse.of(issued.key), plaintext=issued.plaintext)

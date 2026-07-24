@@ -13,9 +13,10 @@ a TOTP secret, a set of recovery codes — are marked as such where they appear.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import Annotated
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import AfterValidator, BaseModel, EmailStr, Field
 
 from app.domain.entities.actor import Role
 from app.domain.entities.api_key import ApiKey
@@ -25,6 +26,26 @@ from app.domain.entities.node import Node
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.user import User
 from app.domain.ports.infrastructure_ports import JobStatus
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Read a naive value as UTC rather than rejecting it.
+
+    The expiry field is rendered as `<input type="date">`, which can only
+    produce `YYYY-MM-DD`. Pydantic parses that into a **naive** datetime, and
+    comparing one to `datetime.now(UTC)` raises `TypeError` — not a
+    `DomainError`, so it escaped the handler as a bare 500 and no API key
+    could ever be issued from the UI.
+
+    Coercing rather than rejecting, because a date with no zone is what the
+    form is able to send and "midnight UTC on that day" is what it means.
+    """
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+UtcDatetime = Annotated[datetime, AfterValidator(_as_utc)]
+"""Every datetime crossing this boundary is timezone-aware, so no comparison
+downstream has to wonder."""
 
 
 class MeResponse(BaseModel):
@@ -326,10 +347,19 @@ class CreateApiKeyRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     owner_id: str = Field(min_length=1, max_length=36)
     scopes: list[str] = Field(min_length=1)
-    rate_limit_rpm: int = Field(ge=0, le=100_000)
-    quota_tokens_per_day: int = Field(ge=0)
+    rate_limit_rpm: int = Field(ge=1, le=100_000)
+    """`ge=1`, not `ge=0`. The gateway reads `rate_limit_rpm <= 0` as **no
+    limit** (`middleware/api_key_auth.py`), so zero was a way to issue an
+    unmetered key through a form that reads as if it were tightening one. The
+    frontend already declares this positive; the backend was the looser of the
+    two."""
+
+    quota_tokens_per_day: int = Field(ge=1)
+    """Same reasoning, plus the two verbs disagreed: on create the router
+    mapped `0` to `None` (no quota at all), while on update `0` was stored
+    literally and refused every request forever. Zero is now inexpressible."""
     allowed_cidrs: list[str] = Field(default_factory=list)
-    expires_at: datetime
+    expires_at: UtcDatetime
     """Mandatory, with no "never" option, so that rotation is forced rather
     than encouraged."""
 
@@ -337,10 +367,10 @@ class CreateApiKeyRequest(BaseModel):
 class UpdateApiKeyRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
     scopes: list[str] | None = Field(default=None, min_length=1)
-    rate_limit_rpm: int | None = Field(default=None, ge=0, le=100_000)
-    quota_tokens_per_day: int | None = Field(default=None, ge=0)
+    rate_limit_rpm: int | None = Field(default=None, ge=1, le=100_000)
+    quota_tokens_per_day: int | None = Field(default=None, ge=1)
     allowed_cidrs: list[str] | None = None
-    expires_at: datetime | None = None
+    expires_at: UtcDatetime | None = None
 
 
 class IssuedApiKeyResponse(BaseModel):
