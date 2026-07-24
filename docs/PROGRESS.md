@@ -99,6 +99,31 @@ caught immediately by the disconnect test. And aligning the test sessions with
 production `autoflush=False` produced foreign key violations, because the tests
 had been relying on an implicit flush that production does not do.
 
+### Guardrails that were configured but never read
+
+Four settings existed in `config.py`, in `.env.example` and in the
+documentation, and were read by nothing.
+
+`/readyz` returned hardcoded booleans, so it could never produce a 503, and its
+test asserted only that the status was one of 200 or 503 and therefore passed
+vacuously. Anything gating a rollout on readiness was gating on a constant. It
+now probes the database, cache and runtime concurrently, each bounded by a
+timeout, because a probe that hangs is worse than one that fails: the
+orchestrator waits instead of acting.
+
+The country filter did not exist at all. `geoip2` was a dependency,
+`allowed_countries` and `geoip_db_path` were read by nothing, and
+`CountryNotAllowedError` was defined and never raised, which is worse than
+absence because a defined error implies a control. It now refuses to start in
+production when its database file is missing, rather than silently serving
+every country.
+
+`max_context_length` was likewise inert, so a prompt of any size was accepted.
+And `/docs` was gated on `not is_production`, but `ENV` defaults to development
+and `.env.example` ships it, so a deployment that filled in its secrets and
+left the top of the file alone was publishing its full internal schema.
+Exposure is now an explicit opt-in, so forgetting fails closed.
+
 ### Phase 1 backend, end to end
 
 Postgres repositories and the first migration, the Ollama adapter, and the
@@ -133,6 +158,44 @@ four services declaring `build:` while sharing one tag raced to write it,
 build context had a `.dockerignore`, so the host's `node_modules` and a Windows
 x86 `.venv` were being copied into Linux images.
 
+### Licence: AGPL-3.0
+
+Chosen to match the sibling project, Smart-MultiAgent-Platform, so code can
+move between them without a licensing question, and held by the research
+centre rather than an individual so that people moving on does not create a
+reattribution problem.
+
+Section 13 is why this is not merely administrative here. Unlike the GPL, the
+AGPL treats network interaction as distribution, and this platform exposes both
+a public inference API and a public management UI. Anyone reaching those
+endpoints is entitled to the source of the running version, which makes it an
+operational obligation: keep the deployed revision published and identifiable,
+not just ship a LICENSE file. Recorded in `deployment.md` section 8.1 for that
+reason.
+
+### The public entrance, and the risks accepted with it
+
+The original plan was Cloudflare Tunnel. It was dropped after checking two
+things rather than assuming them.
+
+`rcsl.online` is served by Gandi nameservers and the domain is actively
+receiving mail through Gandi, so moving nameservers touches mail delivery on a
+shared domain maintained by someone else. And Cloudflare's free tiers fix the
+origin response timeout at 100 seconds, which streaming survives but a long
+non-streaming completion does not.
+
+So public traffic goes through the existing openresty proxy at NTNU instead. A
+wildcard DNS record already points every subdomain there, so no DNS change is
+needed; what is needed is that the proxy host joins the tailnet and forwards
+two hostnames. Three consequences were accepted deliberately and are recorded
+in `security.md` section 15 with the conditions that should trigger revisiting
+them: inference traffic passes through a third party in plaintext, there is no
+edge WAF or DDoS protection, and the country filter is bypassable by anyone
+with a VPS in the right country.
+
+The second of those is why the resource guardrails matter more here than they
+would behind a CDN. They are not one layer of several; they are the only one.
+
 ### Architecture documents
 
 Six documents, and the decisions behind them.
@@ -147,7 +210,15 @@ the public entrance would let a forged header grant administrator access.
 Authentication moved from OIDC to invitation-only local accounts with mandatory
 TOTP, on the reasoning that the platform was already invitation-only in effect
 (the `users` table gates access, not the identity provider), so the real choice
-was who verifies the password.
+was who verifies the password. The trade is explicit: no external dependency
+and no account an administrator did not create, in exchange for owning password
+storage, reset, lockout and second-factor handling permanently. Mandatory TOTP
+is what makes that trade acceptable.
+
+A hardware constraint found while writing these, not while coding: model
+runtimes cannot run in Docker on macOS, because containers there have no GPU
+access. It contradicted the stated goal of keeping the host clean and was
+non-negotiable, so the documents changed rather than the plan.
 
 ---
 
@@ -157,14 +228,100 @@ The inference half is complete and tested. The management half does not exist:
 both admin applications mount only health endpoints, while a full frontend
 calls about thirty routes that return 404.
 
-Next, in the order I would take them:
+Nothing has run on the Mac Studio yet. Everything so far is verified on a
+Windows development machine, which means GPU inference, the tailnet entrance,
+and nginx behaviour are all unverified by construction.
 
-1. **The admin API.** The frontend is already written against it.
-2. **Local credentials, TOTP, sessions, CSRF.** Ports, entities and tables
-   exist; adapters and routers do not.
-3. **`AuditPort` adapter.** The port and the table exist with no call sites,
-   which reads as an audit trail that is never written. That state should not
-   persist.
-4. **A frontend test runner.** Three frontend defects shipped together because
-   the type checker was the only gate.
-5. **Database account split, and Docker secrets on the Compose side.**
+## What comes next
+
+### Phase 1, to finish it
+
+In this order, and the order matters for the first two.
+
+1. **Admin authentication, including the first-admin bootstrap.** Before the
+   CRUD, not after. `main_admin_tailnet` has no middleware reading
+   `Tailscale-User-Login`, `main_admin_public` has no session, and neither has
+   a path to the `users` table. Building the endpoints first would mean
+   running them against a stand-in identity and retrofitting the real thing,
+   which is exactly where authorisation gaps get left behind.
+
+   Needs: `Argon2Hasher` and `PyotpTotp` adapters, session storage on the
+   existing `CachePort`, CSRF middleware, the tailnet identity middleware, the
+   invitation and reset flows, and `BootstrapFirstAdmin`, which is currently a
+   setting read by nothing.
+
+2. **The admin API.** `/admin/me` first, because the frontend's session layer
+   blocks on it and without it the whole UI sits in a loading state. Then
+   models, users, api-keys, routing policies, and `/admin/chat` reusing
+   `RouteChatRequest` with user identity instead of an API key.
+
+3. **`AuditPort` adapter and its call sites.** The port and the `audit_log`
+   table both exist with nothing writing to them, which reads as an audit
+   trail that is never written. Every action in step 2 should be audited as it
+   is built, not swept up afterwards.
+
+4. **Model download as a background job.** The adapter's `pull()` streams
+   NDJSON progress already; what is missing is the job layer, the progress
+   endpoint, and `MemoryBudgetService` being called before a load rather than
+   sitting unused.
+
+5. **A frontend test runner.** No Vitest, no Playwright. Three frontend
+   defects shipped together because the type checker was the only gate, and
+   two of them were security defects.
+
+6. **Database account split, and Docker secrets on the Compose side.** Both
+   are documented as if they exist; `security.md` section 13.0 now says
+   plainly that they do not.
+
+### Then: deploy to the Mac Studio for the first time
+
+This is a milestone in its own right because several things can only be tested
+there, and because it needs another person.
+
+- Install Ollama natively under launchd as a dedicated service account, bound
+  to `127.0.0.1`.
+- Ask the NTNU proxy administrator for four things, listed in `ROADMAP.md`:
+  join the tailnet under `tag:ntnu-proxy`, add two nginx server blocks, issue
+  Let's Encrypt certificates, and confirm no request-body logging.
+- Work through the pre-launch checklist in `security.md` section 14. Several
+  items say to test rather than assume, and mean it: the forged
+  `Tailscale-User-Login` case, the forged `X-Forwarded-For` case, and
+  `AUTH_MODE=dev` refusing to boot under `ENV=production`.
+
+### Phase 2 and beyond
+
+Detail in `ROADMAP.md`. The parts that will need real design work rather than
+implementation:
+
+- **A second runtime adapter** (vLLM or MLX). Worth doing early even if unused,
+  because it is the only real test of whether the hexagonal layering delivered
+  what it was chosen for. If adding one requires touching a use case, the
+  abstraction failed.
+- **Multi-tenancy.** Currently single tenant, stated as such. The Phase 1
+  schema was written not to preclude it, but adding `tenant_id` touches every
+  repository and the filter has to be injected inside the adapter so a caller
+  cannot forget it.
+- **Prometheus and Grafana**, which replaces the static memory budget with
+  live metrics.
+- **A second compute node**, which is the point of the node abstraction and
+  will be the first time routing has more than one place to send anything.
+
+### Open decisions
+
+- **Whether to move `rcsl.online` to Cloudflare**, or register a separate cheap
+  domain for the data plane. Either removes the accepted risk in `security.md`
+  section 15.1, where inference traffic passes through a third-party machine in
+  plaintext. Deferred, not settled.
+- **Where the identity comes from.** No logo; the drawn one was rejected.
+- **Whether the admin API should be reachable publicly at all.** It is designed
+  for it and the entrance exists, but nothing depends on it yet, and closing it
+  would remove an entire attack surface. Worth asking again once the tailnet
+  entrance is in use and it is clear who actually cannot install Tailscale.
+
+### Standing risks to revisit
+
+`security.md` section 15 records four accepted risks with the conditions that
+should trigger reconsidering them. The one most likely to change is 15.1: if
+the platform starts handling personal or IRB-regulated data, plaintext
+inference traffic through a third-party proxy stops being acceptable and the
+Cloudflare question above becomes urgent rather than optional.
