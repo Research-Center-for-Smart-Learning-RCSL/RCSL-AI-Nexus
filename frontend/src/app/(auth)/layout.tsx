@@ -7,7 +7,7 @@
  */
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/40 p-6">
+    <div className="nexus-dot-grid flex min-h-screen items-center justify-center bg-muted/40 p-6">
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
           <h1 className="text-xl font-semibold tracking-tight">RCSL AI Nexus</h1>
