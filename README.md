@@ -24,8 +24,23 @@ Docker.
 ```bash
 cp .env.example .env          # placeholders are fine locally
 cd backend && uv sync
-uv run pytest
+uv run pytest                 # unit tests only; integration tests skip
 ```
+
+Integration tests need a database and are skipped unless `TEST_DATABASE_URL`
+is set. The variable is deliberately not `DATABASE_URL`, so running the unit
+suite can never reach a real database by accident.
+
+```bash
+docker run --rm -d --name nexus-pg-tmp -p 127.0.0.1:15432:5432 \
+  -e POSTGRES_USER=nexus -e POSTGRES_PASSWORD=devpw -e POSTGRES_DB=nexus \
+  postgres:17-alpine
+
+TEST_DATABASE_URL=postgresql+asyncpg://nexus:devpw@127.0.0.1:15432/nexus uv run pytest
+```
+
+These tests drop and recreate the schema on every run, which is why they must
+never be pointed at anything you care about.
 
 `AUTH_MODE=dev` injects a fixed admin identity and disables the country
 filter and trusted-proxy check, which is the only way the stack runs without

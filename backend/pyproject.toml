@@ -42,8 +42,11 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "S"]
-# S101: pytest relies on bare assert.
-per-file-ignores = { "tests/*" = ["S101"] }
+per-file-ignores = { "tests/*" = [
+    "S101", # pytest relies on bare assert
+], "alembic/versions/*" = [
+    "E501", # machine-generated; hand-wrapping is undone on the next autogenerate
+] }
 
 [tool.mypy]
 python_version = "3.12"
