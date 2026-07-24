@@ -140,6 +140,7 @@ class RouteChatRequest:
         produced = 0
         completed = False
         truncated = False
+        upstream_finished = False
         started = time.monotonic()
 
         try:
@@ -154,12 +155,19 @@ class RouteChatRequest:
             async with aclosing(runtime.generate(target.ref, messages, ceiling)) as upstream:
                 async for chunk in upstream:
                     produced += chunk.token_count
+                    if chunk.finish_reason:
+                        upstream_finished = True
                     yield chunk
                     if produced >= ceiling:
                         truncated = True
                         break
 
-            if truncated:
+            # Only when the upstream did not already send a terminal chunk. At
+            # the ceiling the two coincide — Ollama is told `num_predict =
+            # ceiling`, so its own done chunk arrives on the same token that
+            # trips truncation — and emitting a second terminal frame put a
+            # chunk after the terminal one on the wire for OpenAI clients.
+            if truncated and not upstream_finished:
                 # Report truncation honestly. Reporting "stop" would tell an
                 # OpenAI client the model finished, and those clients decide
                 # whether to continue a reply on exactly this field.

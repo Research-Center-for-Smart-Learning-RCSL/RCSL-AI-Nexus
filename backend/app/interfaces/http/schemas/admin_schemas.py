@@ -48,6 +48,22 @@ UtcDatetime = Annotated[datetime, AfterValidator(_as_utc)]
 downstream has to wonder."""
 
 
+def _human_role(role: Role) -> Role:
+    """Refuses the SERVICE role on a human account.
+
+    `Role` has three values, but SERVICE exists for API keys; §5.2 defines only
+    `admin` and `user` for people, whose scopes are the ones designed for a
+    person. Accepting it here would let an administrator create an account in a
+    role whose permissions were meant for a machine credential.
+    """
+    if role is Role.SERVICE:
+        raise ValueError("role must be 'admin' or 'user'")
+    return role
+
+
+HumanRole = Annotated[Role, AfterValidator(_human_role)]
+
+
 class MeResponse(BaseModel):
     id: str
     auth_mode: str
@@ -88,7 +104,7 @@ class UserResponse(BaseModel):
 class CreateUserRequest(BaseModel):
     login: EmailStr
     display_name: str = Field(min_length=1, max_length=120)
-    role: Role
+    role: HumanRole
 
 
 class InvitationResponse(BaseModel):
@@ -191,7 +207,7 @@ class ConfirmTotpRequest(BaseModel):
 
 class UpdateUserRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=120)
-    role: Role | None = None
+    role: HumanRole | None = None
     disabled: bool | None = None
 
 

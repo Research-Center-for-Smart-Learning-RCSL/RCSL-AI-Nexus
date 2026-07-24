@@ -223,6 +223,10 @@ class PostgresUserRepository(_Base):
         rows = (await self._session.scalars(select(UserRow).order_by(UserRow.login))).all()
         return [m.user_to_domain(r) for r in rows]
 
+    async def display_names(self) -> dict[str, str]:
+        rows = await self._session.execute(select(UserRow.id, UserRow.display_name))
+        return {user_id: name for user_id, name in rows}
+
     async def count(self) -> int:
         """Backs the bootstrap guard: BOOTSTRAP_ADMIN_LOGIN is inert once any
         user exists, so this must count every row, not only enabled ones."""

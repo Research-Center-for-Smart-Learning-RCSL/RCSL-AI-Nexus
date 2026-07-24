@@ -42,6 +42,16 @@ def init_engine(settings: Settings) -> AsyncEngine:
             # restarted for maintenance; recycling avoids serving a request on
             # a connection the server has already dropped.
             pool_recycle=1800,
+            # Set explicitly rather than left at the 5 + 10 default. A request
+            # holds its connection from the first query (API-key auth) until
+            # the transaction commits, which for a stream is after the whole
+            # response — and an audited action opens a second, independent
+            # connection while the first is still held. So the ceiling has to
+            # comfortably exceed the expected concurrent request count, not sit
+            # near it. Postgres 17's default `max_connections` is 100, and the
+            # three backend services share it, so this stays well under a third.
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
             echo=False,
         )
         _session_factory = async_sessionmaker(

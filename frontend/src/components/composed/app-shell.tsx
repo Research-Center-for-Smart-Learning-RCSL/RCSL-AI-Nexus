@@ -43,14 +43,27 @@ type NavItem = {
   adminOnly?: boolean;
 };
 
+// adminOnly mirrors the scopes in adapters/authz. The dashboard needs
+// usage:read_all and the model registry needs model:read, neither of which a
+// `user` holds (security.md section 5.2), so both would 403 for one. A `user`
+// sees Chat and their own API keys.
 const NAV: NavItem[] = [
-  { href: '/', label: 'Dashboard', icon: <GaugeIcon className="size-4" /> },
-  { href: '/models', label: 'Models', icon: <BoxIcon className="size-4" /> },
+  {
+    href: '/',
+    label: 'Dashboard',
+    icon: <GaugeIcon className="size-4" />,
+    adminOnly: true,
+  },
+  {
+    href: '/models',
+    label: 'Models',
+    icon: <BoxIcon className="size-4" />,
+    adminOnly: true,
+  },
   {
     href: '/api-keys',
     label: 'API keys',
     icon: <KeyIcon className="size-4" />,
-    adminOnly: true,
   },
   {
     href: '/users',
@@ -64,6 +77,11 @@ const NAV: NavItem[] = [
     icon: <MessageSquareIcon className="size-4" />,
   },
 ];
+
+function isActive(pathname: string | null, href: string): boolean {
+  if (href === '/') return pathname === '/';
+  return pathname?.startsWith(href) ?? false;
+}
 
 function SessionExpiryWarning() {
   const { msRemaining, shouldWarn } = useSessionExpiry();
@@ -91,6 +109,19 @@ export function AppShell({ children }: { children: ReactNode }) {
     const next = encodeURIComponent(pathname ?? '/');
     router.replace(`/login?next=${next}`);
   }, [shouldRedirectToLogin, pathname, router]);
+
+  // A signed-in `user` who navigates to an admin-only route directly (the
+  // dashboard is the index, so this includes just opening the app) is sent to
+  // the one screen they can use, rather than left on a page whose data 403s.
+  // The nav already hides these links; this covers the URL bar and bookmarks.
+  const onForbiddenRoute =
+    status === 'authenticated' &&
+    !isAdmin &&
+    NAV.some((item) => item.adminOnly && isActive(pathname, item.href));
+
+  useEffect(() => {
+    if (onForbiddenRoute) router.replace('/chat');
+  }, [onForbiddenRoute, router]);
 
   if (status === 'loading') {
     return (
@@ -149,10 +180,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
           <nav className="space-y-0.5">
             {visible.map((item) => {
-              const active =
-                item.href === '/'
-                  ? pathname === '/'
-                  : pathname?.startsWith(item.href);
+              const active = isActive(pathname, item.href);
               return (
                 <Link
                   key={item.href}

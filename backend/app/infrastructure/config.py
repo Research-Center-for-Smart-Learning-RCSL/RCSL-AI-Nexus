@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     """
 
     database_url: str = "postgresql+asyncpg://nexus:nexus@localhost:5432/nexus"
+    db_pool_size: int = 20
+    db_max_overflow: int = 10
+    """A request holds a connection for its whole duration, and an audited one
+    needs a second, so the pool must exceed the concurrent request count rather
+    than sit near it. 30 across three services stays under Postgres's default
+    100 max_connections. See infrastructure/db.py."""
     redis_url: str = "redis://localhost:6379/0"
     redis_password: str = ""
     cache_backend: CacheBackend = "redis"

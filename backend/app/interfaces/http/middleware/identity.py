@@ -171,5 +171,10 @@ def _assert_csrf_bound_to_session(request: Request, data: SessionData, settings:
         return
 
     presented = request.headers.get(settings.csrf_header_name, "")
-    if not compare_digest(presented, data.csrf_token):
+    # utf-8 encodings, so a non-ASCII header (Starlette decodes headers as
+    # latin-1) does not make compare_digest raise TypeError and turn a 403 into
+    # a 500. A session token is url-safe base64, hence pure ASCII.
+    if not compare_digest(
+        presented.encode("utf-8", "ignore"), data.csrf_token.encode("utf-8", "ignore")
+    ):
         raise CsrfValidationError(detail=f"header does not match session {data.session_id[:8]}")

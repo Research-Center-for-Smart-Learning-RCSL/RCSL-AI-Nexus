@@ -89,6 +89,17 @@ class UserRepositoryPort(Protocol):
     async def get_by_login(self, login: str) -> User | None: ...
     async def get_by_tailscale_login(self, login: str) -> User | None: ...
     async def list_all(self) -> list[User]: ...
+
+    async def display_names(self) -> dict[str, str]:
+        """User id to display name, and nothing else.
+
+        The API-key listing needs to label each key's owner. Loading the full
+        `User` entity for that pulls `password_hash` and `totp_secret` into a
+        handler a `user`-role caller can reach, one edit away from leaking
+        them; this reads only the two columns a label needs.
+        """
+        ...
+
     async def count(self) -> int:
         """Used by the bootstrap check: the first-admin setting is inert once
         any user exists."""

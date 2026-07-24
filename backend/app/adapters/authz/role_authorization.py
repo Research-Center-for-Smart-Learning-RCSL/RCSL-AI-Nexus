@@ -15,14 +15,16 @@ _ADMIN_SCOPES = frozenset(Scope)
 _USER_SCOPES = frozenset(
     {
         Scope.CHAT_USE,
-        Scope.MODEL_READ,
-        Scope.ROUTING_READ,
-        Scope.NODE_READ,
         Scope.API_KEY_READ_OWN,
         Scope.API_KEY_WRITE_OWN,
         Scope.USAGE_READ_OWN,
     }
 )
+"""Exactly what §5.2 grants a user: use the chat UI, manage their own API
+keys, view their own usage. The read scopes for models, routing and nodes are
+deliberately absent — they were granted before and let a `user` enumerate the
+whole registry and read the node's tailnet address, which the chat composer
+(it names a capability, not a model) never needs."""
 
 _SERVICE_SCOPES = frozenset({Scope.CHAT_USE, Scope.USAGE_READ_OWN})
 """An API key can never hold a control-plane scope, whatever its stored list
