@@ -91,7 +91,7 @@ services:
               "--host", "0.0.0.0", "--port", "8001"]
     ports:
       - "127.0.0.1:8001:8001"
-    networks: [app, data]
+    networks: [control-tailnet, admin-data]
     depends_on:
       migrate: { condition: service_completed_successfully }
 
@@ -101,10 +101,15 @@ services:
               "--host", "0.0.0.0", "--port", "8002"]
     ports:
       - "${TAILNET_IP}:8002:8002"
-    networks: [app, data]
+    networks: [control-public, admin-data]
     depends_on:
       migrate: { condition: service_completed_successfully }
 ```
+
+The network names are not incidental: the admin entrances sit on the control
+plane's segments and never on the gateway's, which is what stops a compromised
+data plane from forging an administrator identity to the tailnet entrance. See
+[security.md](./security.md) §3.2.
 
 `--host 0.0.0.0` here is correct and does not contradict [security.md](./security.md) §3.3. That rule governs the **host side** of a published port (the left of the colon). Inside a container, binding all interfaces is required for the published port to reach the process. The two are frequently conflated.
 
@@ -273,12 +278,12 @@ belongs in the deployment runbook:
 ```yaml
 migrate:
   image: rcsl-ai-nexus:latest
-  command: ["alembic", "upgrade", "head"]
-  networks: [data]
+  command: ["sh", "-c", "alembic upgrade head && python -m app.infrastructure.provision"]
+  networks: [admin-data]
   restart: "no"
 ```
 
-Every application service declares `depends_on: { migrate: { condition: service_completed_successfully } }`.
+Every application service declares `depends_on: { migrate: { condition: service_completed_successfully } }`. The `provision` step after the migration writes the single configured compute node (there is no node-registration endpoint until the SSRF guard ships; see [security.md](./security.md) §7.2) and reconciles any model left in a transient state by a crash.
 
 **Routine upgrade**
 
