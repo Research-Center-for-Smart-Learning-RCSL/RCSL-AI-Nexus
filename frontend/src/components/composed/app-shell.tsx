@@ -31,6 +31,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ErrorState } from '@/components/composed/error-state';
+import { Logo } from '@/components/composed/logo';
 import { Spinner } from '@/components/composed/spinner';
 import { useSession, useSessionExpiry } from '@/lib/session';
 import { TAILSCALE_CONNECTION_LOST } from '@/features/auth/messages';
@@ -136,6 +137,11 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex flex-1">
         <aside className="hidden w-56 shrink-0 border-r p-3 sm:block">
           <div className="mb-4 px-2">
+            {/* Stacked rather than set beside the title. The sidebar is 224px
+                wide, which leaves room for the mark at a size it survives;
+                inline next to the text it would have to shrink to about 24px,
+                where the monogram becomes an unreadable blob. */}
+            <Logo height={48} className="mb-2" />
             <p className="font-heading text-sm font-semibold">RCSL AI Nexus</p>
             <Badge variant="outline" className="mt-1">
               {authMode ?? 'unknown'}
