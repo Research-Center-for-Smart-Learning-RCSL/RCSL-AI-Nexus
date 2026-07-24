@@ -28,13 +28,28 @@ import asyncio
 import logging
 import sys
 
-from app.adapters.persistence.repositories import PostgresNodeRepository
-from app.domain.entities.model import RuntimeKind
+from app.adapters.persistence.repositories import (
+    PostgresModelRepository,
+    PostgresNodeRepository,
+)
+from app.domain.entities.model import ModelState, RuntimeKind
 from app.domain.entities.node import Node, NodeStatus
 from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.db import dispose_engine, init_engine, session_scope
 
 logger = logging.getLogger(__name__)
+
+# Where a crash mid-operation leaves a model, and where the next deploy should
+# move it. A load or unload interrupted in flight may have left the weights in
+# either state, so the conservative reading is that they are resident and a
+# `LOADING` becomes `ERROR` for an operator to retry, while an `UNLOADING`
+# becomes `LOADED` because the memory it holds must keep being counted. A
+# `DOWNLOADING` had nothing on disk to protect and becomes `ERROR`.
+TRANSIENT_RECONCILIATION = {
+    ModelState.DOWNLOADING: ModelState.ERROR,
+    ModelState.LOADING: ModelState.ERROR,
+    ModelState.UNLOADING: ModelState.LOADED,
+}
 
 
 def build_local_node(settings: Settings) -> Node:
@@ -66,6 +81,13 @@ async def provision() -> None:
             # a row by hand.
             await PostgresNodeRepository(session).save(node)
         logger.info("local_node_ready id=%s memory_gb=%s", node.id, node.total_memory_gb)
+
+        async with session_scope() as session:
+            moved = await PostgresModelRepository(session).reconcile_transient_states(
+                TRANSIENT_RECONCILIATION
+            )
+        if moved:
+            logger.warning("reconciled %s model(s) stranded in a transient state by a crash", moved)
     finally:
         await dispose_engine()
 

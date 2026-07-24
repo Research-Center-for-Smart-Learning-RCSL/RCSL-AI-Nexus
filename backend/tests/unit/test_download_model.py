@@ -15,7 +15,13 @@ from app.application.use_cases.download_model import DownloadModel
 from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.entities.model import Model, ModelState, PullProgress, ResourceProfile, RuntimeKind
 from app.domain.exceptions import ModelNotFoundError, ModelStateConflictError, NotAuthorizedError
-from tests.unit.fakes import FakeAudit, FakeJobs, FakeModels, FakeRuntime
+from tests.unit.fakes import (
+    FakeAudit,
+    FakeJobs,
+    FakeModels,
+    FakeRuntime,
+    FakeStateCommitter,
+)
 
 ADMIN = Actor(
     id="admin-1", display="admin", role=Role.ADMIN, source="tailnet", scopes=frozenset(Scope)
@@ -59,6 +65,7 @@ class Harness:
             models=self.models,
             runtimes={RuntimeKind.OLLAMA: self.runtime},
             jobs=self.jobs,
+            state_committer=FakeStateCommitter(self.models),
             authz=RoleAuthorization(),
             audit=self.audit,
         )

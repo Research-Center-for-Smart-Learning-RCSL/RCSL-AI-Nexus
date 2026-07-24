@@ -21,6 +21,7 @@ import logging
 import uuid
 from contextlib import aclosing
 
+from app.application.use_cases.manage_models import ModelStateCommitterPort
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.model import Model, ModelState, RuntimeKind
 from app.domain.exceptions import ModelNotFoundError, ModelStateConflictError
@@ -43,12 +44,17 @@ class DownloadModel:
         models: ModelRepositoryPort,
         runtimes: dict[RuntimeKind, ModelRuntimePort],
         jobs: JobProgressPort,
+        state_committer: ModelStateCommitterPort,
         authz: AuthorizationPort,
         audit: AuditPort,
     ) -> None:
         self._models = models
         self._runtimes = runtimes
         self._jobs = jobs
+        # Used by the detached `run`, which must not hold a session across the
+        # pull. `start` and `status` run in the request and keep the request
+        # session.
+        self._state = state_committer
         self._authz = authz
         self._audit = audit
 
@@ -92,8 +98,13 @@ class DownloadModel:
         is written to the job and to the model state instead. The `finally` is
         what stops a crashed pull leaving a model stuck in `downloading`
         forever, which no later operation would be willing to touch.
+
+        **No database session is held across the pull.** The read and the two
+        possible state writes each open their own short transaction, and
+        progress goes to the cache in between, so this does not pin a
+        connection idle-in-transaction for hours or hold VACUUM back.
         """
-        model = await self._models.get(model_id)
+        model = await self._state.get(model_id)
         if model is None:
             await self._fail(job_id, model_id, "The model was removed while queued.")
             return
@@ -101,7 +112,7 @@ class DownloadModel:
         runtime = self._runtimes.get(model.runtime)
         if runtime is None:
             await self._fail(job_id, model_id, "No adapter for this runtime.")
-            await self._models.set_state(model.id, ModelState.ERROR)
+            await self._state.commit(model.id, ModelState.ERROR)
             return
 
         succeeded = False
@@ -114,7 +125,7 @@ class DownloadModel:
             # readable by someone holding `model:read` on the admin API.
             await self._fail(job_id, model.id, str(exc) or "The download failed.")
         finally:
-            await self._models.set_state(
+            await self._state.commit(
                 model.id, ModelState.DOWNLOADED if succeeded else ModelState.ERROR
             )
 

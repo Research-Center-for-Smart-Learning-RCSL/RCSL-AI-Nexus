@@ -25,7 +25,14 @@ from app.domain.exceptions import (
     RuntimeUnavailableError,
 )
 from app.domain.services.memory_budget_service import MemoryBudgetService
-from tests.unit.fakes import FakeAudit, FakeModels, FakeNodes, FakePolicies, FakeRuntime
+from tests.unit.fakes import (
+    FakeAudit,
+    FakeModels,
+    FakeNodes,
+    FakePolicies,
+    FakeRuntime,
+    FakeStateCommitter,
+)
 
 ADMIN = Actor(
     id="admin-1", display="admin", role=Role.ADMIN, source="tailnet", scopes=frozenset(Scope)
@@ -83,6 +90,7 @@ class Harness:
             policies=self.policies,
             runtimes={RuntimeKind.OLLAMA: self.runtime},
             budget=MemoryBudgetService(),
+            state_committer=FakeStateCommitter(self.models),
             authz=RoleAuthorization(),
             audit=self.audit,
         )

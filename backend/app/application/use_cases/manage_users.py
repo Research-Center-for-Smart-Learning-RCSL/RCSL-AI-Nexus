@@ -82,7 +82,12 @@ class ManageUsers:
             display_name=display_name.strip() if display_name is not None else user.display_name,
             role=role if role is not None else user.role,
         )
-        await self._users.save(updated)
+        # Targeted update of only the two columns this form owns. A full-row
+        # save would write back the `disabled_at` and `totp_last_counter` it
+        # read, reverting a concurrent disable or a just-advanced TOTP counter.
+        await self._users.update_profile(
+            user.id, display_name=updated.display_name, role=updated.role.value
+        )
 
         if role is not None and role is not user.role:
             # Scopes are derived from the role at request time, so a live

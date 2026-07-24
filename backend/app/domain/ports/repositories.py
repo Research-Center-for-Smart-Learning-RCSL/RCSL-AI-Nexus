@@ -24,9 +24,27 @@ class ModelRepositoryPort(Protocol):
     async def get_by_alias(self, alias: str) -> Model | None: ...
     async def list_all(self) -> list[Model]: ...
     async def list_loaded(self, node_id: str) -> list[Model]: ...
+
+    async def list_occupying_memory(self, node_id: str) -> list[Model]:
+        """Loaded models plus those mid-load. A LOADING model already holds or
+        is about to hold its memory, so the budget must count it or two
+        concurrent loads each see room the other is taking."""
+        ...
+
     async def save(self, model: Model) -> None: ...
     async def set_state(self, model_id: str, state: ModelState) -> None: ...
     async def delete(self, model_id: str) -> None: ...
+
+    async def reconcile_transient_states(self, mapping: dict[ModelState, ModelState]) -> int:
+        """Rewrite each transient state to a terminal one, returning the count.
+
+        A `downloading`, `loading` or `unloading` row is a claim by a task, and
+        a task does not survive a restart. Left alone the row is a permanent
+        dead end: every lifecycle operation refuses a transient state, so
+        nothing but hand-edited SQL can move it. This runs at deploy to clear
+        the ones a crash stranded.
+        """
+        ...
 
 
 class NodeRepositoryPort(Protocol):
@@ -48,6 +66,16 @@ class ApiKeyRepositoryPort(Protocol):
     async def list_all(self) -> list[ApiKey]: ...
     async def save(self, key: ApiKey) -> None: ...
     async def revoke(self, key_id: str, at: datetime) -> None: ...
+
+    async def update_settings(self, key_id: str, values: dict[str, object]) -> bool:
+        """Update only the editable columns, refused if the key is revoked.
+
+        A full-row save of a read-then-modified key writes `revoked_at` back
+        from what it read, reviving a key a concurrent `revoke` had just
+        killed. This touches named columns only, requires `revoked_at IS NULL`,
+        and returns False if a revocation won the race.
+        """
+        ...
 
     async def delete_for_owner(self, owner_id: str) -> None:
         """Needed to delete a user: `api_keys.owner_id` is a foreign key, so
@@ -88,6 +116,11 @@ class UserRepositoryPort(Protocol):
         ...
 
     async def set_disabled(self, user_id: str, at: datetime | None) -> None: ...
+
+    async def update_profile(self, user_id: str, *, display_name: str, role: str) -> None:
+        """Update only display name and role, so a full-row save cannot revert
+        a concurrent disable or TOTP-counter advance."""
+        ...
 
     async def delete(self, user_id: str) -> None: ...
 
