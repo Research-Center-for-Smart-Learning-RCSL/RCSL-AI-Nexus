@@ -1,0 +1,24 @@
+# The virtualenv is platform-specific: the development machine is Windows on
+# x86 and the image is Linux, so copying it in would be actively harmful as
+# well as slow.
+.venv
+venv
+
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+
+.git
+.gitignore
+Dockerfile
+.dockerignore
+
+# Never bake configuration, let alone secrets, into an image.
+.env
+.env.*
+
+.DS_Store

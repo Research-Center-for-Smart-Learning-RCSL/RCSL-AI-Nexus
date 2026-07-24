@@ -1,0 +1,20 @@
+# Without this, the whole of node_modules and .next is uploaded as build
+# context: slow, and worse, the host's node_modules would overwrite the ones
+# installed inside the image for a different platform.
+node_modules
+.next
+out
+
+.git
+.gitignore
+Dockerfile
+.dockerignore
+
+# Never bake configuration, let alone secrets, into an image.
+.env
+.env.*
+
+npm-debug.log*
+pnpm-debug.log*
+*.tsbuildinfo
+.DS_Store

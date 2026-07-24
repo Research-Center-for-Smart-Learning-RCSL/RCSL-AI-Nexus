@@ -14,9 +14,13 @@
 
 name: rcsl-ai-nexus
 
+# Only `migrate` carries the build definition for this image, and only
+# `frontend-tailnet` for the frontend one. Declaring `build:` on every service
+# that shares a tag makes Compose build them in parallel, and they then race to
+# write the same tag ("image ... already exists"). Everything else references
+# the tag, which exists by the time it is needed because `migrate` is a
+# dependency of every backend service.
 x-backend: &backend
-  build:
-    context: ./backend
   image: rcsl-ai-nexus:latest
   restart: unless-stopped
   env_file: [.env]
@@ -121,8 +125,7 @@ services:
     depends_on: [admin-tailnet]
 
   frontend-public:
-    build:
-      context: ./frontend
+    # Built by frontend-tailnet above; see the note at the top of this file.
     image: rcsl-ai-nexus-frontend:latest
     restart: unless-stopped
     environment:
