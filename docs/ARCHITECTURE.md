@@ -142,13 +142,18 @@ A human who can sign in to the management UI. Identity arrives from one of two s
 | Field | Notes |
 |---|---|
 | `id` | Internal UUID |
+| `login` | Unique login, an email address in practice |
+| `display_name` | |
 | `tailscale_login` | Login as reported by Tailscale, nullable |
-| `oidc_issuer` + `oidc_subject` | OIDC identity, nullable. **The pair is the join key, not the email address** |
-| `email` | Display and initial binding only |
+| `password_hash` | argon2id, nullable. Absent for tailnet-only users |
+| `totp_secret` | Encrypted at rest, nullable. **Required whenever `password_hash` is set** |
+| `totp_last_counter` | Replay prevention, see [security.md](./architecture/security.md) §5.3 |
 | `role` | `admin` / `user` |
 | `debug_logging_until` | Optional timestamp, see [security.md](./architecture/security.md) §9.2 |
 
-Email is not used as the primary identity for OIDC because addresses can be reassigned, and because an unverified `email` claim is attacker-controlled. See [security.md](./architecture/security.md) §5.3.
+Accounts are **invitation only**; there is no self-registration. A user who only ever works over the tailnet needs no password at all, so both credential columns are nullable. A user who needs the public entrance is issued a single-use invitation link and sets their own password and TOTP; the platform never transmits a credential. See [security.md](./architecture/security.md) §5.3 and §5.4.
+
+Supporting tables: `invitations` (token hash, expiry, consumed timestamp) and `recovery_codes` (hashed, single use). Sessions live in Redis, not Postgres.
 
 ### 2.7 Actor
 
@@ -160,7 +165,7 @@ class Actor:
     id: str
     display: str                                  # login or key prefix, safe for logs
     role: Role                                    # admin / user / service
-    source: Literal["tailnet", "oidc", "api_key"]
+    source: Literal["tailnet", "local", "api_key"]
     scopes: frozenset[Scope]
 ```
 
@@ -206,7 +211,7 @@ The chat interface lives on the admin API rather than calling the public gateway
 
 - `gateway`: data plane, `/v1/*`, reachable from the public internet through an external reverse proxy, authenticated by API key.
 - `admin-tailnet`: control plane over the tailnet, authenticated by Tailscale identity.
-- `admin-public`: control plane over the public internet, authenticated by OIDC.
+- `admin-public`: control plane over the public internet, authenticated by an invitation-only local account with mandatory TOTP.
 - `frontend`: the Next.js application.
 
 All backend containers run from the same image and share the entire `domain/` and `application/` layers. Only the routers mounted by `interfaces/http` differ, so splitting them costs no duplicated code.
@@ -218,9 +223,9 @@ Detailed internal design:
 - [architecture/security.md](./architecture/security.md): threat model, network design, API key scheme, high-risk features, accepted risks
 - [architecture/deployment.md](./architecture/deployment.md): physical topology, entrances, nginx configuration, build and upgrade, local development
 
-## 5. Open Decisions
+## 5. Decisions
 
-- [ ] **Which OIDC provider** (Google, university account, or other). This blocks the public entrance implementation and should be settled before Phase 1 coding starts.
+No open decisions block Phase 1.
 
 Settled:
 
@@ -228,5 +233,5 @@ Settled:
 - **First capability to complete end to end**: `chat`.
 - **First runtime**: Ollama, running natively on the macOS host.
 - **Model downloads use each runtime's HTTP API, never a shell.** Where a runtime offers only a CLI, it must be invoked with an argument array and `shell=False` after validating the model reference. See [security.md](./architecture/security.md) §7.1, the highest-risk feature in the system.
-- **Authentication**: dual entrance for the admin UI (Tailscale identity on the tailnet, OIDC on the public internet); API keys for the gateway. Roles are `admin` and `user`. See [security.md](./architecture/security.md) §5.
+- **Authentication**: dual entrance for the admin UI (Tailscale identity on the tailnet; invitation-only local accounts with mandatory TOTP on the public internet); API keys for the gateway. Roles are `admin` and `user`. No external identity provider is involved, and no account exists that an administrator did not create. See [security.md](./architecture/security.md) §5.
 - **Public entrance**: the existing openresty reverse proxy at NTNU, forwarding over the tailnet, using the existing `*.rcsl.online` wildcard. See [deployment.md](./architecture/deployment.md).

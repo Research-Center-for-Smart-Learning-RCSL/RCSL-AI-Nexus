@@ -49,7 +49,7 @@ Control plane, entrance 2 (public, for people without Tailscale)
        ai.nexus.rcsl.online                                          |  /admin/* rewrite
                                                                      v
                                                                 admin-public:8002
-                                                    OIDC session; strips every Tailscale-* header
+                                          password + TOTP session; strips every Tailscale-* header
 
 Data plane
   external service --public--> openresty --tailnet--> TAILNET_IP:8000 --> gateway
@@ -65,9 +65,9 @@ This is the easiest thing in the deployment to get wrong, and the most dangerous
 The two management entrances have **entirely different trust models**:
 
 - Tailnet: `tailscale serve` injects `Tailscale-User-Login`, a trustworthy identity source.
-- Public: requests come from anyone, and identity must be proven by OIDC.
+- Public: requests come from anyone, and identity must be proven by password plus TOTP.
 
-If both shared one listening socket, **anyone on the internet could send a forged `Tailscale-User-Login: admin@example.com` and bypass OIDC entirely.**
+If both shared one listening socket, **anyone on the internet could send a forged `Tailscale-User-Login: admin@example.com` and bypass the password and TOTP entirely.**
 
 An earlier draft attempted this with a single container publishing two ports:
 
@@ -286,15 +286,16 @@ Non-secret values are environment variables; secrets are mounted files read thro
 | Variable | Example | Notes |
 |---|---|---|
 | `ENV` | `production` | `development` locally |
-| `AUTH_MODE` | `tailnet` / `oidc` / `dev` | `dev` refuses to start when `ENV=production` |
+| `AUTH_MODE` | `tailnet` / `local` / `dev` | `dev` refuses to start when `ENV=production` |
 | `TAILNET_IP` | `100.x.y.z` | Used for host-side port binding |
 | `PROXY_HOSTNAME` | `api.nexus.rcsl.online` | |
 | `DATABASE_URL` | `postgresql+asyncpg://...` | Password comes from a secret |
 | `REDIS_URL` | `redis://redis:6379/0` | |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Runtime on the host |
 | `ADMIN_API_URL` | `http://admin-tailnet:8001` | Per frontend container |
-| `OIDC_ISSUER` | provider dependent | |
-| `OIDC_CLIENT_ID` | | |
+| `SESSION_ABSOLUTE_TTL` | `12h` | Public entrance sessions |
+| `SESSION_IDLE_TTL` | `1h` | |
+| `INVITATION_TTL` | `72h` | Invitation and reset link lifetime |
 | `ALLOWED_COUNTRIES` | `TW,AU` | |
 | `GEOIP_DB_PATH` | `/data/GeoLite2-Country.mmdb` | Refreshed monthly |
 | `BOOTSTRAP_ADMIN_LOGIN` | `you@example.com` | Inert once any user exists |
@@ -310,7 +311,8 @@ Non-secret values are environment variables; secrets are mounted files read thro
 | `postgres_password_admin` | Read-write admin account |
 | `postgres_password_migrate` | DDL account |
 | `api_key_pepper` | HMAC pepper, supports two values during rotation |
-| `oidc_client_secret` | |
+| `totp_encryption_key` | Encrypts TOTP secrets at rest |
+| `session_signing_key` | |
 | `proxy_shared_secret` | Matches `X-Nexus-Proxy` in nginx |
 | `redis_password`, `qdrant_api_key`, `minio_root_password` | |
 
@@ -318,7 +320,7 @@ Non-secret values are environment variables; secrets are mounted files read thro
 
 ## 11. Local Development
 
-The Windows development machine has no `tailscale serve`, no openresty, no OIDC provider, and no GeoLite2 database. Taken literally, the middleware described here rejects every request and nothing runs locally.
+The Windows development machine has no `tailscale serve`, no openresty, and no GeoLite2 database. Taken literally, the middleware described here rejects every request and nothing runs locally.
 
 ```bash
 ENV=development
@@ -329,4 +331,6 @@ This injects a fixed admin `Actor`, and disables the country filter and the trus
 
 **`AUTH_MODE=dev` combined with `ENV=production` is a startup failure**, not a warning. A misconfigured deployment refuses to boot rather than quietly serving an unauthenticated admin API. [security.md](./security.md) §14 carries a matching pre-launch check, and it is worth testing rather than assuming.
 
-Not reproducible locally, and therefore only verifiable on the Mac Studio: GPU-backed inference, the tailnet entrance, the OIDC flow, and nginx behaviour.
+The local credential flow (invitation, password, TOTP) **is** reproducible locally, since it depends on nothing external. Run with `AUTH_MODE=local` to exercise it.
+
+Not reproducible locally, and therefore only verifiable on the Mac Studio: GPU-backed inference, the tailnet entrance, and nginx behaviour.

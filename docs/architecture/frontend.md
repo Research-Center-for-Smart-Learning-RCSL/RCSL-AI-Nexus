@@ -13,7 +13,7 @@ async rewrites() {
 }
 ```
 
-This makes every API call **same-origin**, which removes three problems at once: no CORS configuration, no third-party cookie restrictions on the OIDC session, and no separate API hostname to configure per entrance.
+This makes every API call **same-origin**, which removes three problems at once: no CORS configuration, no third-party cookie restrictions on the session cookie, and no separate API hostname to configure per entrance.
 
 Because the two admin entrances have different trust models and must stay isolated by socket binding ([security.md](./security.md) §5.1), each runs its own frontend container from the same image with a different `ADMIN_API_URL`:
 
@@ -75,14 +75,14 @@ frontend/
 
 ## 3. Authentication: One Build, Two Modes
 
-The frontend cannot assume how the user was authenticated. On the tailnet, identity arrives as a header injected by `tailscale serve` that the browser never sees; on the public entrance it is an OIDC session cookie. **In neither case does the frontend hold a token or set an `Authorization` header.**
+The frontend cannot assume how the user was authenticated. On the tailnet, identity arrives as a header injected by `tailscale serve` that the browser never sees; on the public entrance it is a server-side session cookie established by password plus TOTP. **In neither case does the frontend hold a token or set an `Authorization` header.**
 
 The entrance is discovered at runtime from a single endpoint:
 
 ```ts
 // GET /admin/me
 type Me = {
-  auth_mode: 'tailnet' | 'oidc' | 'dev'
+  auth_mode: 'tailnet' | 'local' | 'dev'
   login: string
   display_name: string
   role: 'admin' | 'user'
@@ -92,14 +92,25 @@ type Me = {
 
 The root layout fetches this once and exposes it through context. What depends on it:
 
-| Concern | `tailnet` | `oidc` |
+| Concern | `tailnet` | `local` |
 |---|---|---|
 | Sign-out button | Hidden, there is no session to end | Shown, calls `/admin/auth/logout` |
-| Response to 401 | Show "Tailscale connection lost", offer retry | Redirect to `/admin/auth/login` |
+| Response to 401 | Show "Tailscale connection lost", offer retry | Redirect to the login screen |
 | Session expiry warning | Not applicable | Warn before `session_expires_at` |
 | CSRF token | Not needed | Required on mutations, see below |
+| Change password, re-enrol TOTP | Not applicable | Available in account settings |
 
-All requests use `credentials: 'include'`. For the OIDC entrance, mutations additionally carry a CSRF token read from a non-`HttpOnly` companion cookie, matching the double-submit scheme in [security.md](./security.md) §5.3. `api-client.ts` attaches it automatically for non-GET requests so individual features cannot forget.
+All requests use `credentials: 'include'`. On the public entrance, mutations additionally carry a CSRF token read from a non-`HttpOnly` companion cookie, matching the double-submit scheme in [security.md](./security.md) §5.3. `api-client.ts` attaches it automatically for non-GET requests so individual features cannot forget.
+
+### Screens that exist only on the public entrance
+
+These live outside the authenticated layout and must render before any `/admin/me` call succeeds:
+
+- **Login**, in two steps. Password first, then TOTP on a separate screen. The error copy for a wrong password and an unknown account must be **identical**, since the backend deliberately does not distinguish them ([backend.md](./backend.md) §7); a helpful "no such user" message in the UI would undo that.
+- **Invitation acceptance**, reached from a single-use link. Sets a password and enrols TOTP in one flow, showing the QR code and then the recovery codes. Recovery codes are displayed exactly once, so the screen requires an explicit "I have saved these" confirmation before continuing.
+- **Password reset**, reached from an administrator-issued link. Same shape as invitation acceptance minus TOTP enrolment.
+
+Password strength feedback uses the same zxcvbn threshold the backend enforces, so the UI never accepts something the API will reject.
 
 Role gating in the UI is a usability affordance, not a security control. Every admin action is authorized server-side in the use case layer ([backend.md](./backend.md) §7); hiding a button never stands in for that.
 
