@@ -1,0 +1,152 @@
+# Frontend Architecture: Layered Components on shadcn/ui
+
+Extends [../ARCHITECTURE.md](../ARCHITECTURE.md). The management UI is mostly tables, forms, and a few charts across eleven modules, so this document fixes how components are layered and how data flows, letting all modules share one skeleton instead of each inventing its own.
+
+## 1. Where the Frontend Runs
+
+The Next.js application is its **own container**, not static files served by FastAPI. It sits behind each admin entrance and proxies API calls to the corresponding backend using Next.js `rewrites`:
+
+```js
+// next.config.js
+async rewrites() {
+  return [{ source: '/admin/:path*', destination: `${process.env.ADMIN_API_URL}/admin/:path*` }]
+}
+```
+
+This makes every API call **same-origin**, which removes three problems at once: no CORS configuration, no third-party cookie restrictions on the OIDC session, and no separate API hostname to configure per entrance.
+
+Because the two admin entrances have different trust models and must stay isolated by socket binding ([security.md](./security.md) §5.1), each runs its own frontend container from the same image with a different `ADMIN_API_URL`:
+
+| Container | Published on | `ADMIN_API_URL` |
+|---|---|---|
+| `frontend-tailnet` | `127.0.0.1:3000`, fronted by `tailscale serve` | `http://admin-tailnet:8001` |
+| `frontend-public` | tailnet IP `:3001`, fronted by openresty | `http://admin-public:8002` |
+
+Rendering uses React Server Components for shell and layout, with all data fetching in client components through TanStack Query. Server components do not call the admin API directly, because doing so would put the Next.js server on the authentication path and require it to forward session cookies and Tailscale headers, duplicating the trust logic the backend already owns.
+
+## 2. Component Layers
+
+```
+frontend/
+  src/
+    components/
+      ui/                     # shadcn/ui primitives, source lives in the repo
+      composed/               # cross-feature building blocks
+        data-table.tsx          # wraps TanStack Table: sort, filter, paginate, column toggle
+        stat-card.tsx
+        metric-chart.tsx
+        confirm-dialog.tsx
+        form-field.tsx
+        status-badge.tsx        # online/offline/degraded, loaded/unloading
+        stream-message.tsx      # incremental assistant output, see §6
+        empty-state.tsx
+        error-state.tsx
+
+    features/
+      models/
+        components/           # ModelTable, ModelFormDialog, DownloadProgress
+        hooks/                # useModels, useLoadModel, useDownloadJob
+        api.ts
+        schema.ts             # zod, used for both validation and inferred types
+      routing-policies/
+      api-keys/
+      users/
+      chat/
+      dashboard/
+      nodes/                  # Phase 2
+      logs/                   # Phase 2
+      usage-analytics/        # Phase 2
+      knowledge-base/         # Phase 2
+      prompt-templates/       # Phase 2
+
+    app/
+      (dashboard)/
+        models/page.tsx       # thin, assembles feature components
+        ...
+      layout.tsx              # nav, theme provider, SessionProvider (see §3)
+
+    lib/
+      api-client.ts
+      session.tsx             # auth mode context
+      generated/              # openapi-typescript output, never hand-edited
+    styles/
+      globals.css
+```
+
+## 3. Authentication: One Build, Two Modes
+
+The frontend cannot assume how the user was authenticated. On the tailnet, identity arrives as a header injected by `tailscale serve` that the browser never sees; on the public entrance it is an OIDC session cookie. **In neither case does the frontend hold a token or set an `Authorization` header.**
+
+The entrance is discovered at runtime from a single endpoint:
+
+```ts
+// GET /admin/me
+type Me = {
+  auth_mode: 'tailnet' | 'oidc' | 'dev'
+  login: string
+  display_name: string
+  role: 'admin' | 'user'
+  session_expires_at: string | null   // null on tailnet, which has no session
+}
+```
+
+The root layout fetches this once and exposes it through context. What depends on it:
+
+| Concern | `tailnet` | `oidc` |
+|---|---|---|
+| Sign-out button | Hidden, there is no session to end | Shown, calls `/admin/auth/logout` |
+| Response to 401 | Show "Tailscale connection lost", offer retry | Redirect to `/admin/auth/login` |
+| Session expiry warning | Not applicable | Warn before `session_expires_at` |
+| CSRF token | Not needed | Required on mutations, see below |
+
+All requests use `credentials: 'include'`. For the OIDC entrance, mutations additionally carry a CSRF token read from a non-`HttpOnly` companion cookie, matching the double-submit scheme in [security.md](./security.md) §5.3. `api-client.ts` attaches it automatically for non-GET requests so individual features cannot forget.
+
+Role gating in the UI is a usability affordance, not a security control. Every admin action is authorized server-side in the use case layer ([backend.md](./backend.md) §7); hiding a button never stands in for that.
+
+## 4. Type Safety: Types Generated From the Backend
+
+Eleven modules mean eleven sets of request and response shapes. Hand-maintained types drift, so they are generated:
+
+```bash
+# Admin API. Note the admin port: the gateway deliberately serves no schema.
+npx openapi-typescript http://localhost:8001/openapi.json -o src/lib/generated/admin-api.ts
+```
+
+The gateway disables `/openapi.json` and `/docs` in production ([security.md](./security.md) §4.4), and the chat UI talks to `/admin/chat` rather than the public gateway anyway, so one generated file is enough. Package this as `pnpm sync-types` and run it whenever backend schemas change; a mismatch then surfaces at compile time instead of at runtime.
+
+## 5. Data Flow
+
+**Server state** (models, nodes, policies, users) always goes through **TanStack Query**:
+
+- Polling cases such as model download progress and node health use `refetchInterval`.
+- Mutations use `useMutation` plus `invalidateQueries`, so the UI resynchronises from the server rather than maintaining a second copy of the truth.
+
+**Client-only state** (sidebar collapse, active tab) uses `useState` and `useContext`. No Zustand or Redux: nearly all meaningful state here is server state, and a global store would add indirection without removing any.
+
+**Forms** use react-hook-form with zod. `features/*/schema.ts` defines the schema once and serves both `zodResolver` validation and `z.infer` types.
+
+**Loading, empty, and error states** are handled by the shared `composed/` components rather than ad hoc per feature, so behaviour stays consistent across modules.
+
+## 6. Streaming Chat
+
+The chat UI consumes SSE from `/admin/chat` ([backend.md](./backend.md) §6). Three behaviours are easy to omit and produce bad UX:
+
+- **Abort on unmount or user cancel.** The `AbortController` signal must reach `fetch`, otherwise the backend keeps generating and holds a concurrency slot. This is the client half of the disconnect guardrail.
+- **Terminal error frames.** Because the HTTP status is already sent, a mid-stream failure arrives as an error frame, not an HTTP error. The stream reader must recognise it and surface the message rather than silently truncating.
+- **Render incrementally without re-rendering the whole thread.** `stream-message.tsx` owns the accumulating buffer so that only the active message re-renders.
+
+## 7. Charts
+
+Charts appear on the Dashboard and Usage Analytics, both Phase 2. **Verify the chart library choice before building.** Tremor was an early candidate, but its distribution model has shifted toward copy-in source in the style of shadcn/ui, so its packaging should be confirmed at implementation time. Recharts directly is the fallback.
+
+This is the same supply-chain caveat as [security.md](./security.md) §10: copy-in component libraries do not receive upstream fixes automatically.
+
+## 8. Rendering Untrusted Content
+
+Model output and, in Phase 2, knowledge base excerpts are untrusted input. Markdown rendering must sanitise (for example `rehype-sanitize`), and raw HTML passthrough stays disabled. Streaming makes this easy to get wrong, because sanitising partial markdown as it arrives can produce different output than sanitising the completed document. Sanitise the accumulated buffer on each render rather than sanitising individual deltas.
+
+## 9. Testing
+
+- **Storybook plus Vitest** for `components/ui` and `components/composed`. The composed layer is reused across eleven modules, so a break there is expensive; stories cover loading, empty, error, and large-dataset states.
+- **Vitest with Testing Library** for `features/*/hooks`, mocking the API client.
+- **Playwright** for a small set of critical paths (create an API key, edit a routing policy and confirm gateway behaviour changes, stream a chat response and cancel mid-stream). Not every module needs an end-to-end test.
