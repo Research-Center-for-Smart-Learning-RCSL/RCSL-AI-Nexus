@@ -1,0 +1,4 @@
+# openapi-typescript output lands here. Never hand-edited, never committed.
+# Regenerate with `pnpm sync-types` against the ADMIN port (8001), not the
+# gateway: the gateway deliberately serves no schema.
+# See docs/architecture/frontend.md section 4.
