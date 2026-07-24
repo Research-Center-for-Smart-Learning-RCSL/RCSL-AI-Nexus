@@ -308,11 +308,15 @@ Non-secret values are environment variables; secrets are mounted files read thro
 | `DATABASE_URL` | `postgresql+asyncpg://...` | Password comes from a secret |
 | `REDIS_URL` | `redis://redis:6379/0` | |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Runtime on the host |
-| `ADMIN_API_URL` | `http://admin-tailnet:8001` | Per frontend container |
-| `SESSION_ABSOLUTE_TTL` | `12h` | Public entrance sessions |
-| `SESSION_IDLE_TTL` | `1h` | |
-| `INVITATION_TTL` | `72h` | Invitation and reset link lifetime |
-| `ALLOWED_COUNTRIES` | `TW,AU` | |
+| `ADMIN_API_URL` | `http://admin-tailnet:8001` | Set per frontend service in Compose, not from `.env` |
+| `EXPOSE_OPENAPI` | `false` | Opt-in; ignored under `ENV=production` |
+| `CACHE_BACKEND` | `redis` | `memory` is per-process and refused in production |
+| `SESSION_ABSOLUTE_TTL_SECONDS` | `43200` | Names and units match the Settings fields |
+| `SESSION_IDLE_TTL_SECONDS` | `3600` | |
+| `INVITATION_TTL_SECONDS` | `259200` | Invitation and reset link lifetime |
+| `ALLOWED_COUNTRIES` | `TW,AU` | Empty disables the filter |
+| `MAX_CONTEXT_LENGTH` | `32768` | Bounds prompt size before generation starts |
+| `API_KEY_PEPPER_PREVIOUS` | empty | Set only during a rotation |
 | `GEOIP_DB_PATH` | `/data/GeoLite2-Country.mmdb` | Refreshed monthly |
 | `BOOTSTRAP_ADMIN_LOGIN` | `you@example.com` | Inert once any user exists |
 | `MAX_CONCURRENT_INFERENCE` | `2` | Tune to model size |
@@ -321,18 +325,28 @@ Non-secret values are environment variables; secrets are mounted files read thro
 
 **Secrets** (`/run/secrets`, never environment variables)
 
-| Secret | Purpose |
-|---|---|
-| `postgres_password_gateway` | Read-only gateway account |
-| `postgres_password_admin` | Read-write admin account |
-| `postgres_password_migrate` | DDL account |
-| `api_key_pepper` | HMAC pepper, supports two values during rotation |
-| `totp_encryption_key` | Encrypts TOTP secrets at rest |
-| `session_signing_key` | |
-| `proxy_shared_secret` | Matches `X-Nexus-Proxy` in nginx |
-| `redis_password`, `qdrant_api_key`, `minio_root_password` | |
+**Not yet wired.** `Settings` reads `/run/secrets` when the directory exists,
+but `docker-compose.yml` declares no `secrets:` block, so today every value
+arrives through `env_file`. The table is the target.
 
-`.env.example` lists every field name with no values.
+| Secret | Purpose | Settings field exists |
+|---|---|---|
+| `api_key_pepper` | HMAC pepper | yes |
+| `api_key_pepper_previous` | Accepted during a rotation | yes |
+| `totp_encryption_key` | Encrypts TOTP secrets at rest | yes, unused until TOTP is built |
+| `session_signing_key` | | yes, unused until sessions are built |
+| `proxy_shared_secret` | Matches `X-Nexus-Proxy` in nginx | yes |
+| `postgres_password_gateway` / `_admin` / `_migrate` | The §6 split | **no**, one `DATABASE_URL` today |
+| `redis_password` | | yes |
+| `qdrant_api_key`, `minio_root_password` | Phase 2 | no |
+
+Also required by `docker-compose.yml` and absent from the table above until
+now: `POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_PASSWORD` and `REDIS_PASSWORD`.
+Two of those use the fail-if-unset form, so Compose refuses to start without
+them.
+
+`.env.example` lists every field name with development placeholders, all of
+which `Settings` refuses under `ENV=production`.
 
 ## 11. Local Development
 

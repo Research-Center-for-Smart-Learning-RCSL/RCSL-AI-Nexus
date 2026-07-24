@@ -281,7 +281,7 @@ Bound metadata:
 | `owner_id` | Which team member holds it, revoked when they leave |
 | `revoked_at` | Revocation timestamp |
 
-Revocation must take effect immediately: verification results are cached in Redis with a 60-second TTL, and revoking deletes the cache entry.
+Revocation takes effect immediately, because every request re-reads the row. An earlier draft described a 60-second Redis verification cache; that was never built, and its absence is strictly safer, so it is recorded here as a deliberate non-feature rather than a gap. Adding it later would introduce a revocation window that has to be closed explicitly.
 
 ### 4.3 Resource Guardrails
 
@@ -425,7 +425,11 @@ Even on an `internal: true` network, every service requires authentication. This
 | Postgres | Password from configuration | **Separate database users per service**, see below |
 | Ollama on the host | Binds `0.0.0.0:11434` by default | Set `OLLAMA_HOST=127.0.0.1`, see §7.1 |
 
-The Postgres split is the important one. **The gateway's database account must not be able to write `api_keys`, `routing_policies`, or `users`**, only read them. A compromised public service then cannot mint itself an admin key. `admin-tailnet` and `admin-public` share a second account with write access; the migration job uses a third with DDL rights.
+The Postgres split is the important one, and it is **not implemented**. The intent: the gateway's account must not be able to write `api_keys`, `routing_policies`, or `users`, only read them, so that a compromised public service cannot mint itself an admin key. `admin-tailnet` and `admin-public` would share a second account with write access, and the migration job a third with DDL rights.
+
+Today every backend service resolves the same `DATABASE_URL` from one `env_file`, and that account owns the schema. Until this is built, §1's caveat is the accurate description: splitting the containers stops a public path reaching `/admin/*`, and does nothing about what a compromised gateway can do to the database.
+
+One detail for whoever builds it: the gateway does need INSERT on `usage_records`, so "read-only" is the wrong shape. The restriction is per table, not blanket.
 
 ## 7. High-Risk Features
 
@@ -545,7 +549,7 @@ User-supplied values fill data slots only and must not alter template structure 
 
 - `.env` is never committed. `.gitignore` lists it explicitly, and `.env.example` carries field names only.
 - **pre-commit plus gitleaks**, catching accidental secrets before they enter history. The cheapest high-return control here.
-- Database passwords, the API key pepper, the TOTP encryption key, and the session signing key are **Docker secrets** (file mounts), not environment variables. Environment variables appear in `docker inspect` output and in the process list. `Settings` reads them via `secrets_dir`; see [backend.md](./backend.md) §8.
+- Database passwords, the API key pepper, the TOTP encryption key, and the session signing key should be **Docker secrets** (file mounts), not environment variables, because environment variables appear in `docker inspect` output and in the process list. **Half of this is built**: `Settings` reads `/run/secrets` when it exists ([backend.md](./backend.md) §8), but `docker-compose.yml` has no `secrets:` block and passes every value through `env_file`. Wiring the Compose side is outstanding.
 - **Development and production secrets are never shared.** The Windows development machine uses obviously non-production values.
 - Pepper rotation invalidates every API key, so the verification path supports two peppers simultaneously to allow a staged rotation.
 
@@ -635,6 +639,45 @@ The audit log is stored separately from application logs, designed append-only, 
 ## 13. Phased Rollout
 
 Cross-referenced with [../ROADMAP.md](../ROADMAP.md).
+
+### 13.0 What is actually implemented
+
+This section used to read as an inventory of shipped controls. It is a plan.
+An adversarial review found that several items were absent, and worse, that a
+few were described in the present tense in code comments, which stops people
+looking for the risk. The state below is checked against the code.
+
+**In place and tested**
+
+| Control | Where |
+|---|---|
+| Gateway and both admin entrances as separate ASGI apps on separate sockets | `infrastructure/main_*.py`, compose |
+| Unconditional `Tailscale-*` stripping on the public entrance | `main_admin_public.py` |
+| Network segmentation; nothing published on `0.0.0.0`; `TAILNET_IP` required | `docker-compose.yml` |
+| API keys: HMAC with pepper, `key_id` in the token, mandatory expiry, immediate revocation, staged pepper rotation | `domain/services/api_key_service.py` |
+| Scope enforcement on the inference path | `RouteChatRequest`, `adapters/authz/` |
+| Per-key CIDR allowlist, and per-key rate limiting | `middleware/api_key_auth.py` |
+| Country filter, refusing to start in production without its database | `middleware/geo_filter.py` |
+| Trusted-proxy resolution with a shared secret | `middleware/client_ip.py` |
+| Resource guardrails: concurrency cap, `max_tokens`, context bound, cancel on disconnect | `RouteChatRequest`, `infrastructure/concurrency.py` |
+| Model reference validation; no shell construction anywhere | `adapters/runtime/validation.py` |
+| Production fail-fast: dev auth mode, placeholder secrets, in-memory cache | `infrastructure/config.py` |
+| Single-use invitations and recovery codes, TOTP replay prevention | `adapters/persistence/repositories.py` |
+| Schema-level invariants: password implies TOTP, mandatory key expiry | migration `6ab1a0eec2d1` |
+| gitleaks pre-commit, `.env` gitignored | `.pre-commit-config.yaml` |
+
+**Not implemented, and nothing in the repository arranges it**
+
+| Control | Status |
+|---|---|
+| Separate database accounts per service (§6) | Aspiration. One account, with DDL rights, shared by every service |
+| Secrets as Docker file mounts (§8) | The reading half exists (`secrets_dir`); Compose passes everything through `env_file` |
+| Audit logging (§12) | `AuditPort` and the `audit_log` table exist; there is no adapter and no call site |
+| Local accounts, TOTP, sessions, CSRF (§5.3) | Ports, entities and tables exist. No adapters, no routers, no login endpoint |
+| First-admin bootstrap (§5.5) | `BOOTSTRAP_ADMIN_LOGIN` is read by nothing |
+| The whole admin API | Both admin apps mount only `/healthz` and `/readyz`. The frontend calls about thirty endpoints that do not exist |
+| SSRF guard (§7.2) | Absent, and correct by the letter of the rule: there is no node write path yet |
+| Knowledge base, multi-tenancy, Prometheus (§7.3, §10) | Phase 2, correctly absent |
 
 **Phase 1, all required before anything is exposed publicly**
 
