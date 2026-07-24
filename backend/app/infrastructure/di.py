@@ -16,6 +16,8 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.adapters.authz.role_authorization import RoleAuthorization
+from app.adapters.cache.redis_adapter import InMemoryCache, RedisCache
 from app.adapters.persistence.repositories import (
     PostgresApiKeyRepository,
     PostgresInvitationRepository,
@@ -28,7 +30,9 @@ from app.adapters.persistence.repositories import (
 from app.adapters.runtime.ollama_adapter import OllamaAdapter
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.domain.entities.model import RuntimeKind
+from app.domain.ports.infrastructure_ports import CachePort
 from app.domain.ports.model_runtime_port import ModelRuntimePort
+from app.domain.ports.security_ports import AuthorizationPort
 from app.domain.services.api_key_service import ApiKeyService
 from app.domain.services.memory_budget_service import MemoryBudgetService
 from app.domain.services.routing_service import RoutingService
@@ -66,7 +70,23 @@ def build_concurrency_limiter(settings: Settings) -> SemaphoreConcurrencyLimiter
 
 
 def build_api_key_service(settings: Settings) -> ApiKeyService:
-    return ApiKeyService(peppers=(settings.api_key_pepper.encode(),))
+    """Peppers are ordered: the first signs new keys, the rest are still
+    accepted, which is what allows a rotation to be staged rather than
+    invalidating every key at once."""
+    peppers = [settings.api_key_pepper.encode()]
+    if settings.api_key_pepper_previous:
+        peppers.append(settings.api_key_pepper_previous.encode())
+    return ApiKeyService(peppers=tuple(peppers))
+
+
+def build_cache(settings: Settings) -> CachePort:
+    if settings.cache_backend == "memory":
+        return InMemoryCache()
+    return RedisCache(settings.redis_url, settings.redis_password)
+
+
+def build_authorization() -> AuthorizationPort:
+    return RoleAuthorization()
 
 
 # --- per-request dependencies --------------------------------------------
@@ -92,8 +112,22 @@ def get_api_key_service(request: Request) -> ApiKeyService:
     return request.app.state.api_key_service  # type: ignore[no-any-return]
 
 
+def get_cache(request: Request) -> CachePort:
+    return request.app.state.cache  # type: ignore[no-any-return]
+
+
 def get_api_key_repository(session: SessionDep) -> PostgresApiKeyRepository:
     return PostgresApiKeyRepository(session)
+
+
+def get_usage_repository(session: SessionDep) -> PostgresUsageRepository:
+    """A distinct dependency from the key repository.
+
+    They were previously conflated behind a `getattr` fallback that returned
+    zero when the method was missing, so the quota check silently never ran
+    against the real adapter while passing against a test stub.
+    """
+    return PostgresUsageRepository(session)
 
 
 def get_user_repository(session: SessionDep) -> PostgresUserRepository:
@@ -125,6 +159,7 @@ def build_route_chat_request(
         runtimes=request.app.state.runtimes,
         routing=RoutingService(),
         concurrency=request.app.state.concurrency,
+        authz=request.app.state.authz,
         clock=SystemClock(),
         max_tokens_ceiling=settings.max_tokens_ceiling,
     )

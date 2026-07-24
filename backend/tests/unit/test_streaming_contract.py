@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.adapters.authz.role_authorization import RoleAuthorization
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.entities.chat import CompletionChunk, Message, MessageRole
@@ -43,7 +44,7 @@ class FakeRuntime:
         self.cleaned_up = False
 
     async def generate(
-        self, ref: str, messages: Sequence[Message]
+        self, ref: str, messages: Sequence[Message], max_tokens: int | None = None
     ) -> AsyncIterator[CompletionChunk]:
         try:
             for i in range(self._chunks):
@@ -110,6 +111,7 @@ def build(runtime: FakeRuntime, limit: int = 1, ceiling: int = 1000):
         runtimes={RuntimeKind.OLLAMA: runtime},
         routing=RoutingService(),
         concurrency=limiter,
+        authz=RoleAuthorization(),
         clock=FixedClock(datetime(2026, 1, 1, tzinfo=UTC)),
         max_tokens_ceiling=ceiling,
     )
@@ -170,10 +172,16 @@ async def test_max_tokens_ceiling_is_enforced_regardless_of_runtime() -> None:
     runtime = FakeRuntime(chunks=1000)
     use_case, usage, _ = build(runtime, ceiling=5)
 
-    count = 0
+    chunks = []
     async with aclosing(use_case.execute(ACTOR, "chat", MESSAGES)) as stream:
-        async for _ in stream:
-            count += 1
+        async for chunk in stream:
+            chunks.append(chunk)
 
-    assert count == 5
+    content = [c for c in chunks if c.delta]
+    assert len(content) == 5
     assert usage.records[0].tokens == 5
+
+    # A generation we cut off must not be reported as one the model finished:
+    # OpenAI clients branch on this field to decide whether to continue.
+    assert chunks[-1].finish_reason == "length"
+    assert usage.records[0].completed is False, "truncation is not completion"
