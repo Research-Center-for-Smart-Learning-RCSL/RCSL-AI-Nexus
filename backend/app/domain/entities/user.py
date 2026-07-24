@@ -1,0 +1,43 @@
+"""Platform user.
+
+Accounts are invitation only; there is no self-registration. A user who only
+ever works over the tailnet needs no password, so both credential columns are
+nullable. A user who needs the public entrance is issued a single-use
+invitation link and sets their own password and TOTP; the platform never
+transmits a credential. See docs/architecture/security.md sections 5.3, 5.4.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+
+from app.domain.entities.actor import Role
+
+
+@dataclass(frozen=True, slots=True)
+class User:
+    id: str
+    login: str
+    display_name: str
+    role: Role
+
+    tailscale_login: str | None = None
+
+    password_hash: str | None = None
+    totp_secret: str | None = None
+    """Encrypted at rest. Never returned after enrolment, never logged."""
+
+    totp_last_counter: int | None = None
+    """Highest accepted TOTP time counter. Codes at or below it are rejected,
+    which is what stops a code observed in a phishing proxy from being reused
+    inside its 30 second window."""
+
+    debug_logging_until: datetime | None = None
+    disabled_at: datetime | None = None
+
+    @property
+    def can_use_public_entrance(self) -> bool:
+        """Local credentials are only complete once TOTP is enrolled, so an
+        account never exists in a password-only state."""
+        return self.password_hash is not None and self.totp_secret is not None
