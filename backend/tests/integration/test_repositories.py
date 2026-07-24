@@ -283,20 +283,25 @@ async def test_a_totp_counter_cannot_be_replayed(session) -> None:
 async def test_the_schema_refuses_a_password_without_a_second_factor(session) -> None:
     """ "An account never exists in a password-only state" was a Python
     property, so a direct write could produce the state the design calls
-    impossible. It is a check constraint now."""
+    impossible. It is a check constraint now.
+
+    The violation surfaces from `save` rather than from a later flush, because
+    `save` now flushes: `users` is a foreign key target and these models carry
+    no `relationship()`, so without that flush the unit of work has nothing to
+    order dependent inserts by.
+    """
     repo = PostgresUserRepository(session)
-    await repo.save(
-        User(
-            id="u1",
-            login="a@example.com",
-            display_name="A",
-            role=Role.USER,
-            password_hash="argon2-hash",  # noqa: S106
-            totp_secret=None,
-        )
-    )
     with pytest.raises(IntegrityError):
-        await session.flush()
+        await repo.save(
+            User(
+                id="u1",
+                login="a@example.com",
+                display_name="A",
+                role=Role.USER,
+                password_hash="argon2-hash",  # noqa: S106
+                totp_secret=None,
+            )
+        )
 
 
 async def test_usage_totals_only_count_the_named_key(session) -> None:

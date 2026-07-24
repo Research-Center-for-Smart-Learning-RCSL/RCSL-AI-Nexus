@@ -17,6 +17,91 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-24
 
+### Admin authentication, end to end
+
+Both admin entrances now resolve an identity, and a fresh deployment can get
+from an empty database to a signed-in user on the public entrance. That path
+is covered by an integration test which runs bootstrap, invitation, TOTP
+enrolment, login and sign-out against a real Postgres, because none of the
+unit tests would notice a composition root that wired the wrong adapter in.
+
+Built: argon2id, pyotp, Fernet encryption for the TOTP secret, token issuing
+and recovery codes, the audit adapter, sessions on the existing `CachePort`,
+CSRF, the two identity resolvers, and the use cases behind them.
+
+**Authentication was built before the CRUD, and the ordering paid off twice.**
+Both times the shape of the existing schema rejected the first design rather
+than accepting it quietly.
+
+**The check constraint refused the obvious place to keep a pending TOTP
+secret.** Enrolment spans two calls: one renders the QR, the other verifies a
+code from the authenticator that scanned it, so the secret has to survive
+between them. Writing it to the user row looked right, since
+`can_use_public_entrance` already requires a password as well and a row with
+only a secret authenticates nothing. But `users` carries
+`(password_hash IS NULL) = (totp_secret IS NULL)`, added in the last review,
+and it rejected the write. The constraint was right: a half-finished enrolment
+is not an account. The candidate now waits in the cache for minutes, which is
+better on its own terms. Abandoning a re-enrolment leaves the working
+authenticator untouched, an unproved secret exists nowhere for 72 hours, and
+the unauthenticated `begin` endpoint no longer writes to `users` at all.
+
+**Creating an account and its invitation in one transaction violated a foreign
+key.** The ORM models declare foreign key columns but no `relationship()`, so
+SQLAlchemy's unit of work has no dependency graph to order a flush by, and
+with `autoflush=False` — which production uses deliberately — the invitation
+INSERT was emitted before the user it referenced. `PostgresUserRepository.save`
+now flushes. This is the mirror of the defect found last time, where the tests
+relied on an implicit flush that production does not do; here the production
+code relied on an ordering nothing guarantees, and only a real database could
+say so.
+
+**A test-only hang that is worth recording.** The first end-to-end test opened
+both entrances as concurrent `TestClient`s. It hung forever. `init_engine`
+holds one engine per process and asyncpg connections belong to the event loop
+that created them, so the second client's requests waited on futures from the
+first client's loop. Production never meets this, because the entrances are
+separate containers. The test opens them one after the other.
+
+**And a latent ordering bug in the suite itself.** A unit test configures an
+unreachable database to prove `/readyz` can fail, and cleared the `lru_cache`
+on `get_settings` going in but not coming out. `alembic/env.py` overwrites
+`sqlalchemy.url` with `get_settings().database_url`, so every integration test
+that ran afterwards migrated against a dead host. It had never shown up
+because the integration suite is skipped unless `TEST_DATABASE_URL` is set,
+and the two had not been run together.
+
+**Three decisions worth their reasoning.**
+
+`PasswordHasherPort` is async, and the adapter runs argon2 in a bounded thread
+pool. A hash occupies a core for tens of milliseconds, and login is
+unauthenticated and behind no WAF, so a synchronous port would hand an
+attacker a cheap way to stall every request in the process, including the ones
+that would have rate limited them. anyio's default 40 threads at 64 MiB each
+would then trade a CPU stall for an out-of-memory kill, hence the semaphore.
+
+Audit rows are written in their own transaction. `session_scope` rolls back on
+any exception, so an audit row sharing the request's session disappears
+exactly when the request failed, and failures are what an audit log is for.
+The cost is the mirror case, an audited action that later rolls back, which is
+what `outcome` is for.
+
+The entrances choose their identity resolver by dependency override, and the
+placeholder raises. A branch on `settings.auth_mode` would have been a string
+comparison deciding a trust model, which is the thing section 5.1 says the
+isolation must not rest on. An application that installs neither resolver now
+fails on its first authenticated request rather than defaulting to anything.
+
+Two things changed outside the plan. `users` gained a `created_at` column,
+because the frontend user schema already displayed one and no column existed.
+And the invitation QR endpoint takes the token on its URL: the recipient is
+not signed in, so there is no session to identify the enrolment from, and an
+`<img>` cannot carry a request body.
+
+Still absent, and the reason the frontend is not yet usable end to end: models,
+routing policies, API keys, jobs, dashboard, `/admin/chat`, and the rest of
+`/users`.
+
 ### Theme and progress tracking
 
 Deep blue theme, a busy indicator, and this file.
@@ -224,9 +309,11 @@ non-negotiable, so the documents changed rather than the plan.
 
 ## Where things stand
 
-The inference half is complete and tested. The management half does not exist:
-both admin applications mount only health endpoints, while a full frontend
-calls about thirty routes that return 404.
+The inference half is complete and tested, and so is authentication on both
+admin entrances. What is missing is the management surface itself: models,
+routing policies, API keys, jobs, the dashboard and `/admin/chat`. The
+frontend's sign-in, invitation and reset screens now reach a real backend;
+everything behind them still calls routes that return 404.
 
 Nothing has run on the Mac Studio yet. Everything so far is verified on a
 Windows development machine, which means GPU inference, the tailnet entrance,
@@ -236,40 +323,28 @@ and nginx behaviour are all unverified by construction.
 
 ### Phase 1, to finish it
 
-In this order, and the order matters for the first two.
-
-1. **Admin authentication, including the first-admin bootstrap.** Before the
-   CRUD, not after. `main_admin_tailnet` has no middleware reading
-   `Tailscale-User-Login`, `main_admin_public` has no session, and neither has
-   a path to the `users` table. Building the endpoints first would mean
-   running them against a stand-in identity and retrofitting the real thing,
-   which is exactly where authorisation gaps get left behind.
-
-   Needs: `Argon2Hasher` and `PyotpTotp` adapters, session storage on the
-   existing `CachePort`, CSRF middleware, the tailnet identity middleware, the
-   invitation and reset flows, and `BootstrapFirstAdmin`, which is currently a
-   setting read by nothing.
-
-2. **The admin API.** `/admin/me` first, because the frontend's session layer
-   blocks on it and without it the whole UI sits in a loading state. Then
-   models, users, api-keys, routing policies, and `/admin/chat` reusing
+1. **The rest of the admin API.** Identity, authorization and auditing are in
+   place, so each of these is now a use case that declares its scope plus a
+   router: models, routing policies, api-keys, the rest of `/users` (role
+   change, disable, delete), the dashboard, and `/admin/chat` reusing
    `RouteChatRequest` with user identity instead of an API key.
 
-3. **`AuditPort` adapter and its call sites.** The port and the `audit_log`
-   table both exist with nothing writing to them, which reads as an audit
-   trail that is never written. Every action in step 2 should be audited as it
-   is built, not swept up afterwards.
+   Audit each action as it is built rather than sweeping up afterwards. The
+   adapter exists and the authentication flows already call it, so the pattern
+   is there to follow.
 
-4. **Model download as a background job.** The adapter's `pull()` streams
+2. **Model download as a background job.** The adapter's `pull()` streams
    NDJSON progress already; what is missing is the job layer, the progress
    endpoint, and `MemoryBudgetService` being called before a load rather than
    sitting unused.
 
-5. **A frontend test runner.** No Vitest, no Playwright. Three frontend
+3. **A frontend test runner.** No Vitest, no Playwright. Three frontend
    defects shipped together because the type checker was the only gate, and
-   two of them were security defects.
+   two of them were security defects. More pressing now than it was: the
+   sign-in and enrolment screens are real, and they are the surface where a
+   defect is a security defect.
 
-6. **Database account split, and Docker secrets on the Compose side.** Both
+4. **Database account split, and Docker secrets on the Compose side.** Both
    are documented as if they exist; `security.md` section 13.0 now says
    plainly that they do not.
 

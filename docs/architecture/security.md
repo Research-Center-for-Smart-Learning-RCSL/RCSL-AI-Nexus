@@ -665,6 +665,16 @@ looking for the risk. The state below is checked against the code.
 | Single-use invitations and recovery codes, TOTP replay prevention | `adapters/persistence/repositories.py` |
 | Schema-level invariants: password implies TOTP, mandatory key expiry | migration `6ab1a0eec2d1` |
 | gitleaks pre-commit, `.env` gitignored | `.pre-commit-config.yaml` |
+| argon2id hashing, off the event loop and with bounded concurrency | `adapters/crypto/argon2_hasher.py` |
+| Mandatory TOTP: enrolment, counter replay prevention, encrypted secret at rest | `adapters/crypto/pyotp_totp.py`, `adapters/crypto/secret_box.py` |
+| Password strength by estimation, no composition rules, scored against the user's own details | `adapters/crypto/zxcvbn_policy.py` |
+| No user enumeration: one error, and a dummy hash on the unknown-login path | `application/use_cases/authenticate_local.py` |
+| Escalating rejection rather than lockout, counted by address and by account, checked before hashing | `domain/services/login_throttle.py` |
+| Server-side sessions, `__Host-` cookies, fresh id at login, other sessions ended on password change | `adapters/session/session_store.py` |
+| CSRF double-submit, plus binding to the server-held session token | `middleware/csrf.py`, `middleware/identity.py` |
+| Invitation and reset flows: single use, hashed at rest, expiring, never transmitting a credential | `application/use_cases/issue_invitation.py`, `accept_invitation.py` |
+| First-admin bootstrap: tailnet only, inert once any user exists, atomic under concurrent first requests | `application/use_cases/bootstrap_first_admin.py` |
+| Audit logging, written in its own transaction so failures survive a rollback | `adapters/audit/postgres_audit.py` |
 
 **Not implemented, and nothing in the repository arranges it**
 
@@ -672,10 +682,8 @@ looking for the risk. The state below is checked against the code.
 |---|---|
 | Separate database accounts per service (§6) | Aspiration. One account, with DDL rights, shared by every service |
 | Secrets as Docker file mounts (§8) | The reading half exists (`secrets_dir`); Compose passes everything through `env_file` |
-| Audit logging (§12) | `AuditPort` and the `audit_log` table exist; there is no adapter and no call site |
-| Local accounts, TOTP, sessions, CSRF (§5.3) | Ports, entities and tables exist. No adapters, no routers, no login endpoint |
-| First-admin bootstrap (§5.5) | `BOOTSTRAP_ADMIN_LOGIN` is read by nothing |
-| The whole admin API | Both admin apps mount only `/healthz` and `/readyz`. The frontend calls about thirty endpoints that do not exist |
+| Audit coverage (§12) | The adapter exists and the authentication flows call it. Model, key and node events are not audited, because those endpoints do not exist yet |
+| The rest of the admin API | Models, routing policies, API keys, jobs, dashboard and `/admin/chat` are still absent. `/users` carries only listing and the two link-issuing routes; role change, disable and delete are not implemented |
 | SSRF guard (§7.2) | Absent, and correct by the letter of the rule: there is no node write path yet |
 | Knowledge base, multi-tenancy, Prometheus (§7.3, §10) | Phase 2, correctly absent |
 

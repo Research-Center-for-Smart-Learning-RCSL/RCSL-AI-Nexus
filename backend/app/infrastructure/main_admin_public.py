@@ -18,9 +18,17 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
+from app.infrastructure.admin_composition import admin_lifespan, mount_admin_routers
 from app.infrastructure.config import get_settings
 from app.interfaces.http.errors import install_error_handlers
-from app.interfaces.http.routers import health
+from app.interfaces.http.middleware.csrf import CsrfMiddleware
+from app.interfaces.http.middleware.identity import (
+    current_actor,
+    current_session,
+    resolve_session_actor,
+    session_from_request,
+)
+from app.interfaces.http.routers import auth
 
 STRIPPED_HEADER_PREFIX = b"tailscale-"
 
@@ -53,12 +61,29 @@ def create_app() -> FastAPI:
         docs_url=None if settings.is_production else "/docs",
         openapi_url=None if settings.is_production else "/openapi.json",
         debug=False,
+        lifespan=admin_lifespan,
     )
 
+    # Starlette runs middleware in reverse order of registration, so the CSRF
+    # check registered first runs innermost. Header stripping must be outermost
+    # and is therefore registered last: a `Tailscale-*` header has to be gone
+    # before anything else in this process can look at the request.
+    app.add_middleware(
+        CsrfMiddleware,
+        cookie_name=settings.effective_csrf_cookie,
+        header_name=settings.csrf_header_name,
+        secure=settings.cookie_secure,
+        max_age_seconds=settings.session_absolute_ttl_seconds,
+    )
     app.add_middleware(StripTailscaleHeadersMiddleware)
 
-    install_error_handlers(app, envelope="admin")
-    app.include_router(health.router)
+    install_error_handlers(app, envelope="admin", auth_mode=settings.auth_mode)
+    mount_admin_routers(app)
+    # Only this entrance mounts the credential flow. See the tailnet module.
+    app.include_router(auth.router)
+
+    app.dependency_overrides[current_actor] = resolve_session_actor
+    app.dependency_overrides[current_session] = session_from_request
 
     return app
 

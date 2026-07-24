@@ -62,6 +62,18 @@ class UserRepositoryPort(Protocol):
         blanked. Prefer the targeted updates below where one exists."""
         ...
 
+    async def insert_if_absent(self, user: User) -> User:
+        """Insert, or return whichever row already holds this login.
+
+        Exists for the first-admin bootstrap, where the guard is "no users
+        yet" and a browser's first page load fires several requests at once.
+        All of them see an empty table, all of them try to create the same
+        account, and without an atomic claim the losers raise a constraint
+        violation at commit. Returning the winner's row makes them agree
+        instead.
+        """
+        ...
+
     async def advance_totp_counter(self, user_id: str, counter: int) -> bool:
         """Claim a TOTP counter, False if it is not newer than the stored one."""
         ...
@@ -82,6 +94,15 @@ class InvitationRepositoryPort(Protocol):
 
     async def save_recovery_codes(self, codes: list[RecoveryCode]) -> None: ...
     async def list_recovery_codes(self, user_id: str) -> list[RecoveryCode]: ...
+
+    async def delete_recovery_codes(self, user_id: str) -> None:
+        """Re-enrolling the second factor issues a fresh set.
+
+        The old codes must go in the same transaction, or a set printed
+        against a secret the user no longer holds stays redeemable, which is a
+        standing bypass of the factor they just replaced.
+        """
+        ...
 
     async def consume_recovery_code(self, code_id: str, at: datetime) -> bool: ...
 

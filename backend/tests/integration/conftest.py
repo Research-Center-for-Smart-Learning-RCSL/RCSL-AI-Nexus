@@ -22,6 +22,7 @@ from alembic.config import Config
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from alembic import command
+from app.infrastructure.config import get_settings
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -39,8 +40,17 @@ def reset_schema(url: str) -> None:
 
     `downgrade base` rather than `drop_all`, so the down path is exercised on
     every run instead of being written and never executed.
+
+    Both lines below are needed. `alembic/env.py` overwrites `sqlalchemy.url`
+    with `get_settings().database_url`, and `get_settings` is `lru_cache`d, so
+    setting the environment variable without clearing the cache leaves the
+    migration pointed at whatever the first caller in the process happened to
+    read. That is not hypothetical: a unit test deliberately configures an
+    unreachable database to prove `/readyz` can fail, and every integration
+    test that ran afterwards inherited it.
     """
     os.environ["DATABASE_URL"] = url
+    get_settings.cache_clear()
     config = _alembic_config(url)
     command.downgrade(config, "base")
     command.upgrade(config, "head")

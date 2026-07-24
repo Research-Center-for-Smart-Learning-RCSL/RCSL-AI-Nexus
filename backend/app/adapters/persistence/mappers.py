@@ -199,24 +199,40 @@ def user_to_domain(row: UserRow) -> User:
         password_hash=row.password_hash,
         totp_secret=row.totp_secret,
         totp_last_counter=row.totp_last_counter,
+        created_at=row.created_at,
         debug_logging_until=row.debug_logging_until,
         disabled_at=row.disabled_at,
     )
 
 
+def user_to_row_values(user: User) -> dict[str, object]:
+    """Column values as a mapping, for statements that cannot take an ORM
+    object: `insert_if_absent` builds an `ON CONFLICT` statement. Kept as the
+    single definition of the column list so a new field cannot be added to one
+    path and forgotten on the other."""
+    values: dict[str, object] = {
+        "id": user.id,
+        "login": user.login,
+        "display_name": user.display_name,
+        "role": user.role.value,
+        "tailscale_login": user.tailscale_login,
+        "password_hash": user.password_hash,
+        "totp_secret": user.totp_secret,
+        "totp_last_counter": user.totp_last_counter,
+        "debug_logging_until": user.debug_logging_until,
+        "disabled_at": user.disabled_at,
+    }
+    if user.created_at is not None:
+        # Omitted rather than passed as None when the entity has never been
+        # persisted, so the column's server default applies. Passing None would
+        # violate NOT NULL, and passing a value computed here would let a
+        # client's clock decide when a row was created.
+        values["created_at"] = user.created_at
+    return values
+
+
 def user_to_row(user: User) -> UserRow:
-    return UserRow(
-        id=user.id,
-        login=user.login,
-        display_name=user.display_name,
-        role=user.role.value,
-        tailscale_login=user.tailscale_login,
-        password_hash=user.password_hash,
-        totp_secret=user.totp_secret,
-        totp_last_counter=user.totp_last_counter,
-        debug_logging_until=user.debug_logging_until,
-        disabled_at=user.disabled_at,
-    )
+    return UserRow(**user_to_row_values(user))
 
 
 # --- Invitation ----------------------------------------------------------

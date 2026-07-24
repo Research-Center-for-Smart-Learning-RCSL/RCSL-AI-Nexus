@@ -136,6 +136,28 @@ class InvitationInvalidError(DomainError):
     # Unknown, expired, and already-consumed tokens are indistinguishable.
 
 
+class CsrfValidationError(DomainError):
+    code = "csrf_failed"
+    public_message = "The request could not be verified. Reload the page and try again."
+    # 403 rather than 401 on purpose. A CSRF mismatch usually means a stale
+    # page, not a dead session, and returning 401 would make the frontend sign
+    # the user out over something a reload fixes.
+
+
+class UserAlreadyExistsError(DomainError):
+    code = "user_already_exists"
+    public_message = "An account with that login already exists."
+    # Unlike the login errors above, this one may name the situation: the only
+    # caller is an authenticated administrator who can already list every user.
+
+
+class TotpEnrolmentExpiredError(DomainError):
+    code = "totp_enrolment_expired"
+    public_message = "The enrolment timed out. Start again."
+    # The pending secret is held for minutes only, so a half-finished
+    # re-enrolment cannot leave a usable second factor lying in the cache.
+
+
 class WeakPasswordError(DomainError):
     code = "weak_password"
     public_message = "Choose a stronger password."

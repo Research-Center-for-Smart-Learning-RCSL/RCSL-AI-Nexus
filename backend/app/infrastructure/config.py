@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     tailnet_ip: str = "127.0.0.1"
     proxy_hostname: str = "api.nexus.rcsl.online"
 
+    admin_base_url: str = "http://localhost:3000"
+    """Origin of the management UI, used to build invitation and reset links.
+
+    Configured rather than derived from the request, because the link is issued
+    on whichever entrance the administrator is using and must always point at
+    the public one: a tailnet URL handed to someone who has no Tailscale is a
+    link they cannot open.
+    """
+
     database_url: str = "postgresql+asyncpg://nexus:nexus@localhost:5432/nexus"
     redis_url: str = "redis://localhost:6379/0"
     redis_password: str = ""
@@ -53,6 +62,27 @@ class Settings(BaseSettings):
     session_absolute_ttl_seconds: int = 12 * 3600
     session_idle_ttl_seconds: int = 3600
     invitation_ttl_seconds: int = 72 * 3600
+    totp_enrolment_ttl_seconds: int = 600
+
+    totp_issuer: str = "RCSL AI Nexus"
+    """Shown by the authenticator app next to the account. Changing it after
+    people have enrolled only relabels new enrolments; existing ones keep the
+    name they were provisioned with."""
+
+    session_cookie_name: str = "__Host-nexus_session"
+    csrf_cookie_name: str = "__Host-nexus_csrf"
+    csrf_header_name: str = "X-CSRF-Token"
+    cookie_secure: bool = True
+
+    dev_tailnet_login: str = "dev@localhost"
+    """Stands in for the `Tailscale-User-Login` header under `AUTH_MODE=dev`.
+
+    Substituting the header rather than fabricating an actor is deliberate:
+    the request then travels the same resolution and bootstrap path it would
+    in production, against a real `users` row with a real id that foreign keys
+    can reference. A synthetic actor would exercise neither, and would fail
+    the first time anything tried to record who owns an API key.
+    """
 
     allowed_countries: str = "TW,AU"
     geoip_db_path: str = "/data/GeoLite2-Country.mmdb"
@@ -81,6 +111,14 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.env == "production"
+
+    @property
+    def effective_session_cookie(self) -> str:
+        return _drop_host_prefix_if_insecure(self.session_cookie_name, self.cookie_secure)
+
+    @property
+    def effective_csrf_cookie(self) -> str:
+        return _drop_host_prefix_if_insecure(self.csrf_cookie_name, self.cookie_secure)
 
     @property
     def expose_openapi(self) -> bool:
@@ -136,6 +174,19 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _refuse_insecure_cookies_in_production(self) -> Settings:
+        """Without `Secure`, the session cookie is sent over plain HTTP and the
+        `__Host-` prefix is dropped, which removes both the transport guarantee
+        and the same-origin binding that prefix provides. The setting exists
+        only so the public entrance can be exercised locally."""
+        if self.is_production and not self.cookie_secure:
+            raise ValueError(
+                "COOKIE_SECURE=false cannot be used with ENV=production: the "
+                "session cookie would travel in clear text."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _refuse_in_memory_cache_in_production(self) -> Settings:
         """An in-memory cache silently makes rate limits per-worker, so a
         deployment would appear to enforce a limit it does not."""
@@ -145,6 +196,25 @@ class Settings(BaseSettings):
                 "limits would be counted per process rather than per key."
             )
         return self
+
+
+HOST_COOKIE_PREFIX = "__Host-"
+
+
+def _drop_host_prefix_if_insecure(name: str, secure: bool) -> str:
+    """Browsers reject a `__Host-` cookie that is not also `Secure`.
+
+    Local development of the public entrance runs over plain HTTP, where
+    keeping the prefix would mean the cookie is silently discarded and the
+    login appears to succeed and then immediately fail. Dropping it is
+    confined to that case: `cookie_secure` cannot be false in production.
+
+    The frontend reads the CSRF cookie by name, so a developer who turns this
+    off must set `NEXT_PUBLIC_CSRF_COOKIE` to match. Recorded in .env.example.
+    """
+    if secure or not name.startswith(HOST_COOKIE_PREFIX):
+        return name
+    return name[len(HOST_COOKIE_PREFIX) :]
 
 
 @lru_cache
