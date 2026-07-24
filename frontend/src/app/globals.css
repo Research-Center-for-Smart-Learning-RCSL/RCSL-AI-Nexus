@@ -4,6 +4,59 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Two decorative pieces adapted from Uiverse.io (MIT). See ATTRIBUTIONS.md.
+ *
+ * Both were rewritten to read theme variables instead of the literal colours
+ * they shipped with. That is the whole point of adapting rather than pasting:
+ * a hardcoded hex does not follow the theme into dark mode, and the component
+ * layering exists to keep colour decisions in one place. What was worth taking
+ * is the motion and the geometry, not the palette.
+ *
+ * They are here rather than in a component because they are pure presentation
+ * with no state, and Tailwind v4 has no separate stylesheet to hide them in.
+ */
+
+/* Chasing dot ring, after AHMED-MIT's "serious-mule-65".
+   The box-shadows deliberately specify no colour, so they fall back to
+   currentColor and the whole thing recolours by inheritance. */
+@keyframes nexus-spinner {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+.nexus-spinner {
+  --dot: 4.5px;
+  --radius: 24.6px;
+  width: var(--dot);
+  height: var(--dot);
+  border-radius: 50%;
+  box-shadow:
+    calc(1 * var(--radius)) calc(0 * var(--radius)) 0 0,
+    calc(0.707 * var(--radius)) calc(0.707 * var(--radius)) 0 1.1px,
+    calc(0 * var(--radius)) calc(1 * var(--radius)) 0 2.2px,
+    calc(-0.707 * var(--radius)) calc(0.707 * var(--radius)) 0 3.4px,
+    calc(-1 * var(--radius)) calc(0 * var(--radius)) 0 4.5px,
+    calc(-0.707 * var(--radius)) calc(-0.707 * var(--radius)) 0 5.6px,
+    calc(0 * var(--radius)) calc(-1 * var(--radius)) 0 6.7px;
+  animation: nexus-spinner 1s infinite steps(8);
+}
+
+/* Dot grid for the pre-authentication screens, after adilsarfraz02's
+   "sweet-termite-95". Drawn in the border colour so it stays a texture rather
+   than becoming a focal point, and so it survives the theme switch. */
+.nexus-dot-grid {
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nexus-spinner {
+    animation-duration: 3s;
+  }
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -55,32 +108,39 @@
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
+  /* RCSL deep blue, computed from #1e40af rather than eyeballed. It measures
+     8.72:1 against white, so it clears AAA for body text and not merely AA. */
+  --primary: oklch(0.4244 0.1809 265.64);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
   --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  /* Tinted rather than grey, so hover and selection read as part of the brand
+     instead of as a second, unrelated neutral system. */
+  --accent: oklch(0.9705 0.0142 254.6);
+  --accent-foreground: oklch(0.3791 0.1378 265.52);
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  /* Focus rings carry the brand hue and stay clearly visible on white. */
+  --ring: oklch(0.4882 0.2172 264.38);
+  /* A sequential ramp, not a categorical set: the dashboard shows magnitude
+     over time, and arbitrary hues would imply categories that do not exist. */
+  --chart-1: oklch(0.4244 0.1809 265.64);
+  --chart-2: oklch(0.5461 0.2152 262.88);
+  --chart-3: oklch(0.6231 0.188 259.81);
+  --chart-4: oklch(0.7137 0.1434 254.62);
+  --chart-5: oklch(0.8091 0.0956 251.81);
   --radius: 0.625rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary: oklch(0.4244 0.1809 265.64);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-accent: oklch(0.9705 0.0142 254.6);
+  --sidebar-accent-foreground: oklch(0.3791 0.1378 265.52);
   --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar-ring: oklch(0.4882 0.2172 264.38);
 }
 
 .dark {
@@ -90,31 +150,37 @@
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
   --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
+  /* The light-mode blue is unreadable on a dark surface, so dark mode moves
+     up the ramp rather than reusing the same value. #60a5fa measures 7.79:1
+     against this background, and its foreground flips to dark accordingly. */
+  --primary: oklch(0.7137 0.1434 254.62);
   --primary-foreground: oklch(0.205 0 0);
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
   --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
+  /* A desaturated blue-grey: a light tint here would glare on dark. */
+  --accent: oklch(0.3 0.03 260);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  --ring: oklch(0.7137 0.1434 254.62);
+  /* Same ramp, reversed: lightest first so the primary series stays legible
+     against the dark background. */
+  --chart-1: oklch(0.8091 0.0956 251.81);
+  --chart-2: oklch(0.7137 0.1434 254.62);
+  --chart-3: oklch(0.6231 0.188 259.81);
+  --chart-4: oklch(0.5461 0.2152 262.88);
+  --chart-5: oklch(0.4244 0.1809 265.64);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-primary: oklch(0.7137 0.1434 254.62);
+  --sidebar-primary-foreground: oklch(0.205 0 0);
+  --sidebar-accent: oklch(0.3 0.03 260);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar-ring: oklch(0.7137 0.1434 254.62);
 }
 
 @layer base {

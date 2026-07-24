@@ -33,48 +33,48 @@ carries the checked control-by-control state.
 
 ### Backend: hexagonal skeleton
 
-- [ ] Five layers: `domain` / `application` / `adapters` / `interfaces` / `infrastructure`
-- [ ] `domain/entities`: `Model`, `Node`, `Capability`, `RoutingPolicy`, `ApiKey`, `User`, `Actor`, `UsageRecord`
+- [x] Five layers: `domain` / `application` / `adapters` / `interfaces` / `infrastructure`
+- [x] `domain/entities`: `Model`, `Node`, `Capability`, `RoutingPolicy`, `ApiKey`, `User`, `Actor`, `UsageRecord`
 - [ ] `domain/services`: `RoutingService` (structured requirement matching, **never expression evaluation**), `UsageService`, `MemoryBudgetService`
-- [ ] `domain/ports`: runtime, repositories (model, node, policy, api key, user, usage), authorization, audit, cache, job progress
-- [ ] `domain/exceptions.py`: `DomainError` hierarchy with `code` and `public_message`
-- [ ] `adapters/runtime/ollama_adapter.py` plus `validation.py` for model reference parsing
-- [ ] `adapters/persistence/`: Postgres implementations, ORM models kept separate from entities
+- [x] `domain/ports`: runtime, repositories (model, node, policy, api key, user, usage), authorization, audit, cache, job progress
+- [x] `domain/exceptions.py`: `DomainError` hierarchy with `code` and `public_message`
+- [x] `adapters/runtime/ollama_adapter.py` plus `validation.py` for model reference parsing
+- [x] `adapters/persistence/`: Postgres implementations, ORM models kept separate from entities
 - [ ] `adapters/authz`, `adapters/audit`, `adapters/cache`
 - [ ] `application/use_cases`: `RouteChatRequest`, `RegisterModel`, `DownloadModel`, `LoadModel`, `UnloadModel`, `CreateApiKey`, `RevokeApiKey`, `SetUserRole`, `InviteUser`, `AcceptInvitation`, `AuthenticateLocal`, `ChangePassword`, `IssuePasswordReset`, `BootstrapFirstAdmin`
-- [ ] `interfaces/http/errors.py`: single exception handler, OpenAI envelope on the gateway, plain shape on admin
+- [x] `interfaces/http/errors.py`: single exception handler, OpenAI envelope on the gateway, plain shape on admin
 - [ ] Routers: `chat`, `admin_chat`, `models`, `routing_policies`, `api_keys`, `users`, `auth`, `jobs`, `dashboard`, `health`
 - [ ] **Three ASGI entry points**: `main_gateway`, `main_admin_tailnet`, `main_admin_public`
-- [ ] Streaming contract implemented as specified: concurrency slot spans the generator, `aclosing()` at every consumer, cancellation propagates to the adapter, usage recorded in `finally`
-- [ ] `infrastructure/di.py` composition root, Ollama only
-- [ ] `infrastructure/config.py` with `secrets_dir`, and a startup assertion that `AUTH_MODE=dev` cannot run under `ENV=production`
-- [ ] Alembic migrations: `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `invitations`, `recovery_codes`, `usage_records`, `audit_log`
+- [x] Streaming contract implemented as specified: concurrency slot spans the generator, `aclosing()` at every consumer, cancellation propagates to the adapter, usage recorded in `finally`
+- [x] `infrastructure/di.py` composition root, Ollama only
+- [x] `infrastructure/config.py` with `secrets_dir`, and a startup assertion that `AUTH_MODE=dev` cannot run under `ENV=production`
+- [x] Alembic migrations: `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `invitations`, `recovery_codes`, `usage_records`, `audit_log`
 - [ ] `tests/unit`: routing selection, streaming lifecycle (slot release on disconnect), dev-mode fail-fast, header stripping
 
 ### Frontend
 
-- [ ] Next.js project plus `shadcn/ui init`
-- [ ] `next.config.js` rewrites so `/admin/*` is same-origin
-- [ ] `components/ui`: Button, Input, Table, Dialog, Badge, Tabs, Toast
+- [x] Next.js project plus `shadcn/ui init`
+- [x] `next.config.js` rewrites so `/admin/*` is same-origin
+- [x] `components/ui`: Button, Input, Table, Dialog, Badge, Tabs, Toast
 - [ ] `lib/generated`: `openapi-typescript` against the **admin** port (the gateway serves no schema)
-- [ ] `lib/session.tsx`: consumes `/admin/me`, exposes `auth_mode` through context
-- [ ] `lib/api-client.ts`: `credentials: 'include'`, automatic CSRF header on mutations, 401 handling that branches on `auth_mode`
-- [ ] `components/composed`: `DataTable`, `StatCard`, `FormField`, `ConfirmDialog`, `StatusBadge`, `StreamMessage`, `EmptyState`, `ErrorState`
-- [ ] `features/models`: table, form dialog, download progress via `useDownloadJob`
-- [ ] `features/chat`: SSE consumption with abort on unmount, terminal error frames surfaced
-- [ ] `features/users`: list, invite (copyable single-use link), role change
-- [ ] `features/auth`: two-step login, invitation acceptance with TOTP QR and recovery codes, password change
-- [ ] `features/api-keys`
-- [ ] `features/dashboard`: static data for now
-- [ ] Markdown rendering sanitised, raw HTML disabled
+- [x] `lib/session.tsx`: consumes `/admin/me`, exposes `auth_mode` through context
+- [x] `lib/api-client.ts`: `credentials: 'include'`, automatic CSRF header on mutations, 401 handling that branches on `auth_mode`
+- [x] `components/composed`: `DataTable`, `StatCard`, `FormField`, `ConfirmDialog`, `StatusBadge`, `StreamMessage`, `EmptyState`, `ErrorState`
+- [x] `features/models`: table, form dialog, download progress via `useDownloadJob`
+- [x] `features/chat`: SSE consumption with abort on unmount, terminal error frames surfaced
+- [x] `features/users`: list, invite (copyable single-use link), role change
+- [x] `features/auth`: two-step login, invitation acceptance with TOTP QR and recovery codes, password change
+- [x] `features/api-keys`
+- [x] `features/dashboard`: static data for now
+- [x] Markdown rendering sanitised, raw HTML disabled
 
 ### Infrastructure
 
-- [ ] `docker-compose.yml`: `gateway`, `admin-tailnet`, `admin-public`, `frontend-tailnet`, `frontend-public`, `postgres`, `redis`, `migrate`
-- [ ] Networks `app` and `data` (`data` is `internal: true`); no service publishes on `0.0.0.0`
-- [ ] `migrate` as a one-shot service; all applications gate on `service_completed_successfully`
+- [x] `docker-compose.yml`: `gateway`, `admin-tailnet`, `admin-public`, `frontend-tailnet`, `frontend-public`, `postgres`, `redis`, `migrate`
+- [x] Networks `app` and `data` (`data` is `internal: true`); no service publishes on `0.0.0.0`
+- [x] `migrate` as a one-shot service; all applications gate on `service_completed_successfully`
 - [ ] `tailscale serve` for the tailnet entrance
-- [ ] Health endpoints wired into Compose health checks
+- [x] Health endpoints wired into Compose health checks
 
 ### External coordination (can proceed in parallel)
 
@@ -89,12 +89,12 @@ carries the checked control-by-control state.
 
 Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 
-- [ ] Public admin entrance strips every `Tailscale-*` header unconditionally
-- [ ] Tailscale ACL including `tag:ntnu-proxy`, so members cannot bypass the proxy
-- [ ] Trusted-proxy client address resolution using the shared secret header, not peer IP
-- [ ] Country filter on **both** the gateway and the public admin entrance
-- [ ] Per-key CIDR allowlists
-- [ ] API keys: HMAC with pepper, random `key_id` lookup, scopes, mandatory expiry, immediate revocation
+- [x] Public admin entrance strips every `Tailscale-*` header unconditionally
+- [x] Tailscale ACL including `tag:ntnu-proxy`, so members cannot bypass the proxy
+- [x] Trusted-proxy client address resolution using the shared secret header, not peer IP
+- [x] Country filter on **both** the gateway and the public admin entrance
+- [x] Per-key CIDR allowlists
+- [x] API keys: HMAC with pepper, random `key_id` lookup, scopes, mandatory expiry, immediate revocation
 - [ ] Local accounts: argon2id, zxcvbn strength check, no user enumeration, escalating rate limits rather than hard lockout
 - [ ] TOTP mandatory at enrolment, with counter replay prevention and single-use recovery codes
 - [ ] Invitation and reset links: single use, hashed at rest, expiring; the platform never transmits a password
@@ -102,11 +102,11 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 - [ ] First-admin bootstrap, tailnet entrance only, inert once users exist
 - [ ] Separate database accounts; gateway cannot write `api_keys` or `users`
 - [ ] Default credentials replaced: Redis, Qdrant, MinIO, Grafana, Postgres
-- [ ] Model reference validation; no shell string construction anywhere
+- [x] Model reference validation; no shell string construction anywhere
 - [ ] Host runtime hardening: service account, `127.0.0.1` binding, directory ownership
 - [ ] **Resource guardrails: concurrency cap, `max_tokens`, timeout, cancel on disconnect.** With no edge protection these are the only defence
 - [ ] `AuditPort` plus auditing for key issuance and revocation, model download and load, and bootstrap
-- [ ] gitleaks pre-commit hook
+- [x] gitleaks pre-commit hook
 
 ## Phase 2: Full Management Functionality
 

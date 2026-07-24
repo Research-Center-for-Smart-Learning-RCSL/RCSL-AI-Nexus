@@ -31,6 +31,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ErrorState } from '@/components/composed/error-state';
+import { Spinner } from '@/components/composed/spinner';
 import { useSession, useSessionExpiry } from '@/lib/session';
 import { TAILSCALE_CONNECTION_LOST } from '@/features/auth/messages';
 
@@ -92,7 +93,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   if (status === 'loading') {
     return (
-      <div className="flex flex-1 items-center justify-center">
+      <div className="flex flex-1 flex-col items-center justify-center">
+        <Spinner label="Checking your access" />
         <p className="text-sm text-muted-foreground">Checking your access...</p>
       </div>
     );

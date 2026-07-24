@@ -7,6 +7,10 @@ Design documentation lives in [`docs/`](./docs). Start with
 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md); the decisions and their
 reasoning are recorded there rather than here.
 
+[`docs/PROGRESS.md`](./docs/PROGRESS.md) is the running record of what has
+actually been built and what was learned building it. Read that first if you
+want the current state rather than the design.
+
 ## Layout
 
 ```
@@ -42,11 +46,12 @@ TEST_DATABASE_URL=postgresql+asyncpg://nexus:devpw@127.0.0.1:15432/nexus uv run 
 These tests drop and recreate the schema on every run, which is why they must
 never be pointed at anything you care about.
 
-`AUTH_MODE=dev` injects a fixed admin identity and disables the country
-filter and trusted-proxy check, which is the only way the stack runs without
-`tailscale serve`, openresty, and a GeoLite2 database. It is a **startup
-failure** when combined with `ENV=production`, so a misconfigured deployment
-refuses to boot rather than quietly serving an unauthenticated admin API.
+`AUTH_MODE=dev` disables the trusted-proxy check and resolves the caller to the
+peer address, which is what lets the stack run without `tailscale serve` and
+openresty in front of it. It does **not** inject an admin identity; the gateway
+still requires a real API key locally. It is a **startup failure** when
+combined with `ENV=production`, so a misconfigured deployment refuses to boot
+rather than quietly weakening the perimeter.
 
 What cannot be reproduced locally, and is therefore only verifiable on the
 Mac Studio: GPU-backed inference, the tailnet entrance, and nginx behaviour.
