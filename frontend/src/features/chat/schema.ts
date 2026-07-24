@@ -31,17 +31,37 @@ export const composerSchema = z.object({
 export type ComposerInput = z.infer<typeof composerSchema>;
 
 /**
- * One decoded SSE frame. `admin_chat.py` may use a simpler shape than the
- * OpenAI-compatible gateway (backend.md section 6), so the reader accepts
- * several spellings of the same thing and this stays permissive.
+ * One decoded SSE frame.
+ *
+ * The backend sends the OpenAI envelope, `{choices: [{delta: {content}}]}`.
+ * An earlier version of this schema described a flat `{delta?, content?}`
+ * shape instead, and because zod strips unknown keys rather than rejecting
+ * them, every real frame parsed *successfully* into an empty object. The
+ * result was a chat that appended the user's turn, received `[DONE]`, and
+ * silently rendered no reply at all, with no error anywhere.
+ *
+ * So the envelope is described explicitly, and the flat spelling is kept
+ * alongside it for `admin_chat.py`, which backend.md section 6 says may frame
+ * things more simply.
  */
+const openAiChoiceSchema = z.object({
+  index: z.number().optional(),
+  delta: z
+    .object({
+      role: z.string().optional(),
+      content: z.string().optional(),
+    })
+    .optional(),
+  finish_reason: z.string().nullish(),
+});
+
 export const streamFrameSchema = z.object({
+  choices: z.array(openAiChoiceSchema).optional(),
+  // Flat spelling, for a simpler framer.
   delta: z.string().optional(),
   content: z.string().optional(),
   finish_reason: z.string().nullish(),
-  error: z
-    .union([z.string(), z.object({ message: z.string().optional() })])
-    .optional(),
+  error: z.union([z.string(), z.object({ message: z.string().optional() })]).optional(),
   type: z.string().optional(),
   usage: z
     .object({
@@ -51,3 +71,13 @@ export const streamFrameSchema = z.object({
     .optional(),
 });
 export type StreamFrame = z.infer<typeof streamFrameSchema>;
+
+/** Text carried by a frame, in whichever spelling it arrived. */
+export function frameText(frame: StreamFrame): string {
+  const fromEnvelope = frame.choices?.[0]?.delta?.content;
+  return fromEnvelope ?? frame.delta ?? frame.content ?? '';
+}
+
+export function frameFinishReason(frame: StreamFrame): string | null {
+  return frame.choices?.[0]?.finish_reason ?? frame.finish_reason ?? null;
+}

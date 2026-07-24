@@ -122,7 +122,10 @@ function buildHeaders(
   extra?: Record<string, string>,
 ): Headers {
   const headers = new Headers(extra);
-  headers.set('Accept', 'application/json');
+  // A default, not an override. `set` replaced whatever the caller asked for,
+  // so the chat stream advertised application/json while asking for SSE, and
+  // any intermediary deciding whether to buffer saw the wrong thing.
+  if (!headers.has('Accept')) headers.set('Accept', 'application/json');
 
   const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
   if (body !== undefined && !isForm && !headers.has('Content-Type')) {

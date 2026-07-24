@@ -6,9 +6,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 
 import { Button } from '@/components/ui/button';
 import {
-  Dialog,
   DialogClose,
-  DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
@@ -17,6 +15,7 @@ import {
 import { Form } from '@/components/ui/form';
 import { Label } from '@/components/ui/label';
 import { FormField } from '@/components/composed/form-field';
+import { SecretDialog } from '@/components/composed/secret-dialog';
 import { OneTimeSecret } from '@/components/composed/one-time-secret';
 import { describeError } from '@/components/composed/error-state';
 import { capabilitySchema, type Capability } from '@/features/models/schema';
@@ -76,11 +75,16 @@ export function CreateApiKeyDialog({
   }
 
   return (
-    <Dialog
+    <SecretDialog
       open={open}
+      // While the plaintext is on screen and unacknowledged, Escape, an
+      // outside click, and the corner X are all disabled: each of them would
+      // destroy the only copy that will ever exist.
+      locked={plaintext !== null && !acknowledged}
       onOpenChange={(next) => (next ? onOpenChange(true) : close())}
+      className="sm:max-w-lg"
     >
-      <DialogContent className="sm:max-w-lg">
+      <>
         <DialogHeader>
           <DialogTitle>Issue an API key</DialogTitle>
           <DialogDescription>
@@ -213,7 +217,7 @@ export function CreateApiKeyDialog({
             </DialogFooter>
           </>
         )}
-      </DialogContent>
-    </Dialog>
+      </>
+    </SecretDialog>
   );
 }

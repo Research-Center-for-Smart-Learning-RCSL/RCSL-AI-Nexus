@@ -3,6 +3,7 @@
 import { Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 
+import { sameOriginPath } from '@/lib/safe-redirect';
 import { LoginForm } from '@/features/auth/components/login-form';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
@@ -12,10 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
  */
 function LoginPageInner() {
   const params = useSearchParams();
-  // Only ever a same-origin path. An absolute URL here would make this an
-  // open redirect, which is a convenient phishing primitive on a login page.
-  const requested = params.get('next') ?? '/';
-  const redirectTo = requested.startsWith('/') && !requested.startsWith('//') ? requested : '/';
+  const redirectTo = sameOriginPath(params.get('next'));
 
   return (
     <Card>
