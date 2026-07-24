@@ -62,12 +62,13 @@ comparing it to an aware `now` raised `TypeError`, a bare 500. Both create
 paths destroyed their one-time secret, returning the unsaved entity whose
 `created_at` is null, which the frontend's parse rejects after the row exists,
 taking the plaintext key and the invitation link with it. And a compromised
-gateway could authenticate as an administrator: it shares the `app` Docker
+gateway could authenticate as an administrator: it shared the `app` Docker
 network with `admin-tailnet`, which binds `0.0.0.0` and trusts
 `Tailscale-User-Login` outright, so §5.1's "isolation by socket binding" held
-for the host-published port but not the bridge. That last one is the sharpest
-lesson: making the tailnet entrance a full API is what opened it, and it was
-invisible while the entrance mounted only health.
+for the host-published port but not the bridge. (Closed since, by the network
+split described in the entry above.) That last one is the sharpest lesson:
+making the tailnet entrance a full API is what opened it, and it was invisible
+while the entrance mounted only health.
 
 **Controls the design claimed and the code did not deliver.** The login
 throttle refused on a per-account count alone, which is the hard lockout §5.3
@@ -501,8 +502,10 @@ polls but no page surfaces on its own.
 
 2. **Database account split, and Docker secrets on the Compose side.** Both
    are documented as if they exist; `security.md` section 13.0 now says
-   plainly that they do not. The split is the one place where the
-   architecture's claim and its implementation still disagree.
+   plainly that they do not. With the network split (§15.5) closed, the
+   account split is the remaining control-plane hardening item: it is the
+   deeper defence against a compromised gateway, denying it write access to
+   `api_keys` and `users` rather than only a path to the admin socket.
 
 3. **A routing policy editor.** The API is complete and audited; there is no
    screen for it, so the one thing that makes the gateway serve anything is
