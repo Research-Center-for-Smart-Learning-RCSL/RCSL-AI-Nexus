@@ -1,0 +1,166 @@
+# Deployment topology for the Mac Studio.
+#
+# Two rules govern every port mapping here, and both are easy to break by
+# "tidying up" (see docs/architecture/security.md sections 3.2, 3.3):
+#
+#  1. Nothing is published on 0.0.0.0. On Docker Desktop a bare "5432:5432"
+#     binds to every host interface, which puts the database on the LAN.
+#     Host-side binds are either 127.0.0.1 or the tailnet address.
+#  2. Inside a container uvicorn still binds 0.0.0.0, otherwise the published
+#     port forwards to nothing. Rule 1 is about the left of the colon only.
+#
+# Model runtimes are absent on purpose: Ollama and MLX run natively on macOS
+# because containers there cannot reach the GPU. See docs/ARCHITECTURE.md 0.1.
+
+name: rcsl-ai-nexus
+
+x-backend: &backend
+  build:
+    context: ./backend
+  image: rcsl-ai-nexus:latest
+  restart: unless-stopped
+  env_file: [.env]
+  environment:
+    OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
+networks:
+  app:
+  data:
+    internal: true
+
+volumes:
+  postgres-data:
+  redis-data:
+
+services:
+  # --- one-shot schema migration -----------------------------------------
+  # Not run from an application entrypoint: three containers start from the
+  # same image and would race each other.
+  migrate:
+    build:
+      context: ./backend
+    image: rcsl-ai-nexus:latest
+    command: ["alembic", "upgrade", "head"]
+    env_file: [.env]
+    networks: [data]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # --- data plane ---------------------------------------------------------
+  gateway:
+    <<: *backend
+    command:
+      - uvicorn
+      - app.infrastructure.main_gateway:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+    ports:
+      # Reachable only from the tailnet, and the Tailscale ACL narrows that
+      # further to the proxy host alone.
+      - "${TAILNET_IP}:8000:8000"
+    networks: [app, data]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # --- control plane, tailnet entrance ------------------------------------
+  admin-tailnet:
+    <<: *backend
+    command:
+      - uvicorn
+      - app.infrastructure.main_admin_tailnet:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8001"
+    ports:
+      - "127.0.0.1:8001:8001"
+    networks: [app, data]
+
+  # --- control plane, public entrance -------------------------------------
+  # A separate service, not a second port on the one above: the two trust
+  # models are incompatible and isolation must come from socket binding.
+  admin-public:
+    <<: *backend
+    command:
+      - uvicorn
+      - app.infrastructure.main_admin_public:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8002"
+    ports:
+      - "${TAILNET_IP}:8002:8002"
+    networks: [app, data]
+
+  # --- frontends ----------------------------------------------------------
+  # One image, one instance per entrance, differing only in which admin API
+  # the Next.js rewrite targets. Same-origin proxying avoids CORS entirely.
+  frontend-tailnet:
+    build:
+      context: ./frontend
+    image: rcsl-ai-nexus-frontend:latest
+    restart: unless-stopped
+    environment:
+      ADMIN_API_URL: http://admin-tailnet:8001
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks: [app]
+    depends_on: [admin-tailnet]
+
+  frontend-public:
+    build:
+      context: ./frontend
+    image: rcsl-ai-nexus-frontend:latest
+    restart: unless-stopped
+    environment:
+      ADMIN_API_URL: http://admin-public:8002
+    ports:
+      - "${TAILNET_IP}:3001:3000"
+    networks: [app]
+    depends_on: [admin-public]
+
+  # --- data tier ----------------------------------------------------------
+  # No published ports at all. Reached by service name from the data network.
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nexus}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Redis ships with no password at all. Even on an internal network this
+    # is set, because a compromised gateway sits on that network legitimately.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
