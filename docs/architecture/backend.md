@@ -28,6 +28,7 @@ backend/
         routing_policy.py           # RoutingPolicy, RoutingCandidate, Requirement
         api_key.py                  # ApiKey
         user.py                     # User, Role
+        invitation.py               # Invitation, RecoveryCode
         actor.py                    # Actor, Scope
         usage.py                    # UsageRecord
       services/
@@ -41,8 +42,11 @@ backend/
         routing_policy_repository_port.py
         api_key_repository_port.py
         user_repository_port.py
+        invitation_repository_port.py
         usage_repository_port.py
         knowledge_repository_port.py     # Phase 2
+        password_hasher_port.py          # argon2id lives in an adapter, not the domain
+        totp_port.py
         authorization_port.py
         audit_port.py
         metrics_port.py                  # Phase 2
@@ -61,6 +65,11 @@ backend/
         revoke_api_key.py
         list_users.py
         set_user_role.py
+        invite_user.py
+        accept_invitation.py            # set password + enrol TOTP in one step
+        authenticate_local.py           # password then TOTP, see §7
+        change_password.py
+        issue_password_reset.py
         bootstrap_first_admin.py
         get_dashboard_metrics.py
       dto.py
@@ -83,6 +92,9 @@ backend/
       cache/
         redis_adapter.py
         redis_job_progress.py
+      crypto/
+        argon2_hasher.py            # Implements PasswordHasherPort
+        pyotp_totp.py               # Implements TotpPort
       authz/
         role_authorization.py       # Implements AuthorizationPort
       audit/
@@ -102,7 +114,8 @@ backend/
           api_keys.py
           nodes.py
           users.py                  # /admin/users, /admin/me
-          auth_oidc.py              # /admin/auth/{login,callback,logout} (public entrance only)
+          auth.py                   # /admin/auth/{login,totp,logout,accept-invite,
+                                    #   change-password}          (public entrance only)
           jobs.py                   # /admin/jobs/{id}
           dashboard.py
           health.py                 # /healthz, /readyz
@@ -110,7 +123,7 @@ backend/
           client_ip.py              # Trusted proxy resolution, see deployment.md §7
           geo_filter.py             # Country allowlist, see security.md §4.1
           tailnet_identity.py       # Tailscale header identity  (tailnet app only)
-          oidc_session.py           # OIDC session identity      (public app only)
+          session_auth.py           # Server-side session        (public app only)
           api_key_auth.py           # API key identity           (gateway only)
           csrf.py                   # Double-submit token        (public app only)
         schemas/
@@ -127,7 +140,7 @@ backend/
       concurrency.py                # Global inference semaphore
       main_gateway.py               # Mounts /v1/* only
       main_admin_tailnet.py         # Mounts /admin/* with Tailscale identity
-      main_admin_public.py          # Mounts /admin/* with OIDC + CSRF
+      main_admin_public.py          # Mounts /admin/* with session auth + CSRF
 
   tests/
     unit/                           # domain + application, fake adapters, no Docker
@@ -169,7 +182,9 @@ Ports the domain defines, and what implements them:
 |---|---|
 | `ModelRuntimePort` | `OllamaAdapter` |
 | `ModelRepositoryPort`, `NodeRepositoryPort`, `RoutingPolicyRepositoryPort` | Postgres |
-| `ApiKeyRepositoryPort`, `UserRepositoryPort`, `UsageRepositoryPort` | Postgres |
+| `ApiKeyRepositoryPort`, `UserRepositoryPort`, `InvitationRepositoryPort`, `UsageRepositoryPort` | Postgres |
+| `PasswordHasherPort` | `Argon2Hasher` |
+| `TotpPort` | `PyotpTotp` |
 | `AuthorizationPort` | `RoleAuthorization` |
 | `AuditPort` | `PostgresAudit` |
 | `CachePort`, `JobProgressPort` | Redis |
@@ -234,6 +249,11 @@ A single exception handler registered in `interfaces/http/errors.py` performs th
 | `NotAuthenticatedError` | 401 | |
 | `NotAuthorizedError` | 403 | Does not reveal whether the target resource exists |
 | `InvalidModelReferenceError` | 400 | |
+| `InvalidCredentialsError` | 401 | **Identical body for unknown login and wrong password**, see §7 |
+| `TotpRequiredError` | 401 | Password accepted, second factor outstanding |
+| `InvalidTotpError` | 401 | Also raised on replay of an already-used counter |
+| `InvitationInvalidError` | 400 | Covers unknown, expired, and already-consumed tokens alike |
+| `WeakPasswordError` | 400 | Returns the reason so the UI can guide the user |
 
 Two response shapes exist. The gateway follows the OpenAI error envelope so that existing clients parse it:
 
@@ -303,7 +323,12 @@ async with aclosing(use_case.execute(actor, capability, messages)) as stream:
 |---|---|---|
 | `main_gateway` | `api_key_auth` | `Authorization: Bearer nx_live_...` |
 | `main_admin_tailnet` | `tailnet_identity` | `Tailscale-User-Login` header |
-| `main_admin_public` | `oidc_session` + `csrf` | Session cookie |
+| `main_admin_public` | `session_auth` + `csrf` | Server-side session cookie, established by password plus TOTP |
+
+`AuthenticateLocal` is a use case rather than middleware logic, because it carries real business rules: password verification, then TOTP verification against a stored counter, then session issue. Two constraints are structural rather than incidental and belong in the use case where they can be unit tested:
+
+- **An unknown login must cost the same as a wrong password.** The use case runs a dummy hash verification when no user matches, so neither the response nor the timing distinguishes the two cases.
+- **A TOTP counter is accepted once.** The last accepted counter is persisted and any code at or below it is rejected, which is what stops a code observed in a phishing proxy from being reused inside its window.
 
 **Authorization** happens in `application/use_cases`, which is the right altitude for it:
 
@@ -335,7 +360,7 @@ class Settings(BaseSettings):
     )
 ```
 
-Non-secret configuration comes from environment variables; secrets (database password, API key pepper, OIDC client secret) are mounted as files. Environment variables appear in `docker inspect` output and in the process list, so anyone able to run commands on the host can read them. The full variable list lives in [deployment.md](./deployment.md) §10.
+Non-secret configuration comes from environment variables; secrets (database password, API key pepper, TOTP encryption key, session signing key) are mounted as files. Environment variables appear in `docker inspect` output and in the process list, so anyone able to run commands on the host can read them. The full variable list lives in [deployment.md](./deployment.md) §10.
 
 ## 9. Health Endpoints
 
@@ -350,7 +375,7 @@ Neither response includes a version string, model list, or hostname. `/readyz` r
 
 ## 10. Local Development Mode
 
-The development machine is Windows. It has no `tailscale serve`, no openresty, no OIDC provider, and no GeoLite2 database. Taken literally, the middleware described above rejects every request, so the application would be unrunnable locally.
+The development machine is Windows. It has no `tailscale serve`, no openresty, and no GeoLite2 database. Taken literally, the middleware described above rejects every request, so the application would be unrunnable locally. The local credential flow itself depends on nothing external and does run locally under `AUTH_MODE=local`.
 
 `AUTH_MODE=dev` bypasses the entrance-specific middleware and injects a fixed admin `Actor`. It also disables the geo filter and the trusted-proxy check.
 
@@ -358,7 +383,7 @@ The development machine is Windows. It has no `tailscale serve`, no openresty, n
 
 ## 11. Migrations
 
-Alembic. Phase 1 creates `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `usage_records`, and `audit_log`.
+Alembic. Phase 1 creates `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `invitations`, `recovery_codes`, `usage_records`, and `audit_log`.
 
 Migrations run as a **one-shot Compose service** that the application services depend on with `condition: service_completed_successfully`. They are not run from an application entrypoint, because three containers start from the same image and would race each other.
 
@@ -367,4 +392,4 @@ Migrations run as a **one-shot Compose service** that the application services d
 - **Unit**: `domain/services` and `application/use_cases` with fake adapters. `FakeModelRuntimePort` yields a fixed sequence of chunks, which makes the streaming contract in §6 testable without a runtime. These run in milliseconds and need no Docker.
 - **Integration**: `adapters/persistence` and `adapters/runtime` against real dependencies started by Compose.
 
-Cases worth pinning down early because they are easy to get wrong and expensive to discover late: client disconnect releases the concurrency slot; a mid-stream error produces a terminal frame; `AUTH_MODE=dev` under `ENV=production` refuses to start; the public application strips `Tailscale-*` headers.
+Cases worth pinning down early because they are easy to get wrong and expensive to discover late: client disconnect releases the concurrency slot; a mid-stream error produces a terminal frame; `AUTH_MODE=dev` under `ENV=production` refuses to start; the public application strips `Tailscale-*` headers; an unknown login and a wrong password are indistinguishable; a replayed TOTP counter is rejected; a consumed invitation token cannot be reused.

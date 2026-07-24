@@ -24,14 +24,14 @@ Goal: one capability (`chat`) can be configured through the admin UI and actuall
 - [ ] `adapters/runtime/ollama_adapter.py` plus `validation.py` for model reference parsing
 - [ ] `adapters/persistence/`: Postgres implementations, ORM models kept separate from entities
 - [ ] `adapters/authz`, `adapters/audit`, `adapters/cache`
-- [ ] `application/use_cases`: `RouteChatRequest`, `RegisterModel`, `DownloadModel`, `LoadModel`, `UnloadModel`, `CreateApiKey`, `RevokeApiKey`, `SetUserRole`, `BootstrapFirstAdmin`
+- [ ] `application/use_cases`: `RouteChatRequest`, `RegisterModel`, `DownloadModel`, `LoadModel`, `UnloadModel`, `CreateApiKey`, `RevokeApiKey`, `SetUserRole`, `InviteUser`, `AcceptInvitation`, `AuthenticateLocal`, `ChangePassword`, `IssuePasswordReset`, `BootstrapFirstAdmin`
 - [ ] `interfaces/http/errors.py`: single exception handler, OpenAI envelope on the gateway, plain shape on admin
-- [ ] Routers: `chat`, `admin_chat`, `models`, `routing_policies`, `api_keys`, `users`, `auth_oidc`, `jobs`, `dashboard`, `health`
+- [ ] Routers: `chat`, `admin_chat`, `models`, `routing_policies`, `api_keys`, `users`, `auth`, `jobs`, `dashboard`, `health`
 - [ ] **Three ASGI entry points**: `main_gateway`, `main_admin_tailnet`, `main_admin_public`
 - [ ] Streaming contract implemented as specified: concurrency slot spans the generator, `aclosing()` at every consumer, cancellation propagates to the adapter, usage recorded in `finally`
 - [ ] `infrastructure/di.py` composition root, Ollama only
 - [ ] `infrastructure/config.py` with `secrets_dir`, and a startup assertion that `AUTH_MODE=dev` cannot run under `ENV=production`
-- [ ] Alembic migrations: `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `usage_records`, `audit_log`
+- [ ] Alembic migrations: `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `invitations`, `recovery_codes`, `usage_records`, `audit_log`
 - [ ] `tests/unit`: routing selection, streaming lifecycle (slot release on disconnect), dev-mode fail-fast, header stripping
 
 ### Frontend
@@ -45,7 +45,9 @@ Goal: one capability (`chat`) can be configured through the admin UI and actuall
 - [ ] `components/composed`: `DataTable`, `StatCard`, `FormField`, `ConfirmDialog`, `StatusBadge`, `StreamMessage`, `EmptyState`, `ErrorState`
 - [ ] `features/models`: table, form dialog, download progress via `useDownloadJob`
 - [ ] `features/chat`: SSE consumption with abort on unmount, terminal error frames surfaced
-- [ ] `features/users`, `features/api-keys`
+- [ ] `features/users`: list, invite (copyable single-use link), role change
+- [ ] `features/auth`: two-step login, invitation acceptance with TOTP QR and recovery codes, password change
+- [ ] `features/api-keys`
 - [ ] `features/dashboard`: static data for now
 - [ ] Markdown rendering sanitised, raw HTML disabled
 
@@ -76,8 +78,10 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 - [ ] Country filter on **both** the gateway and the public admin entrance
 - [ ] Per-key CIDR allowlists
 - [ ] API keys: HMAC with pepper, random `key_id` lookup, scopes, mandatory expiry, immediate revocation
-- [ ] OIDC with PKCE, server-side sessions in Redis, `__Host-` cookies, CSRF double-submit
-- [ ] Identity joined on `(oidc_issuer, oidc_subject)`, never on email
+- [ ] Local accounts: argon2id, zxcvbn strength check, no user enumeration, escalating rate limits rather than hard lockout
+- [ ] TOTP mandatory at enrolment, with counter replay prevention and single-use recovery codes
+- [ ] Invitation and reset links: single use, hashed at rest, expiring; the platform never transmits a password
+- [ ] Server-side sessions in Redis, `__Host-` cookies, id rotation on login, invalidation on password change, CSRF double-submit
 - [ ] First-admin bootstrap, tailnet entrance only, inert once users exist
 - [ ] Separate database accounts; gateway cannot write `api_keys` or `users`
 - [ ] Default credentials replaced: Redis, Qdrant, MinIO, Grafana, Postgres
@@ -116,16 +120,14 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 
 ## Decisions
 
-Open, and blocking:
-
-1. **Which OIDC provider** (Google, university account, or other). Required before the public entrance can be implemented.
+No open decisions block Phase 1.
 
 Settled:
 
 - Backend structure: full hexagonal architecture ([backend.md](./architecture/backend.md))
 - Frontend component library: shadcn/ui ([frontend.md](./architecture/frontend.md))
 - Gateway and admin split into separate containers; the admin entrances are two more ([security.md](./architecture/security.md) §1)
-- Management authentication: Tailscale identity on the tailnet, OIDC on the public entrance; roles `admin` and `user` ([security.md](./architecture/security.md) §5)
+- Management authentication: Tailscale identity on the tailnet; invitation-only local accounts with mandatory TOTP on the public entrance. No external identity provider, and no account exists that an administrator did not create ([security.md](./architecture/security.md) §5)
 - Public entrance: the existing openresty proxy plus the `*.rcsl.online` wildcard ([deployment.md](./architecture/deployment.md))
 - Source restriction: application-layer country filter, Taiwan and Australia ([security.md](./architecture/security.md) §4.1)
 - Gateway exposes an OpenAI-compatible API

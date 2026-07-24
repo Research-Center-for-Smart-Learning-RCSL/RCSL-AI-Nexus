@@ -19,7 +19,7 @@ Confirmed premises:
 | Access boundary | Hybrid. The gateway API is public. The management UI has two entrances: tailnet and public |
 | Role model | `admin` / `user` separation |
 | Data sensitivity | Internal unpublished research. No personal data, but disclosure causes real harm |
-| Management authentication | Tailscale identity on the tailnet, OIDC on the public entrance |
+| Management authentication | Tailscale identity on the tailnet; invitation-only local accounts with mandatory TOTP on the public entrance |
 | Tenancy | **Single tenant through Phase 1.** See [../ARCHITECTURE.md](../ARCHITECTURE.md) §2.8 |
 | Runtime placement | **Native on the macOS host**, not in Docker. See [../ARCHITECTURE.md](../ARCHITECTURE.md) §0.1 |
 
@@ -31,7 +31,7 @@ Everything else builds on this.
 |---|---|---|
 | Contents | `/v1/chat/completions`, `/v1/embeddings` | `/admin/*` and the management UI |
 | Exposure | Public | **Tailnet and public (two entrances)** |
-| Authentication | API key | Tailscale identity / OIDC |
+| Authentication | API key | Tailscale identity / password with TOTP |
 | Worst-case damage | Consume compute, read authorized knowledge | Full platform control, data theft, code execution on the host |
 | Deployment | `gateway` container | `admin-tailnet` and `admin-public` containers |
 
@@ -49,7 +49,10 @@ This split costs no duplicated code: all backend containers run the same image a
 |---|---|---|---|
 | Public attacker | Scans the gateway, brute-forces keys, exploits unpatched CVEs | Resource abuse, possible execution | §4, §10 |
 | Public attacker | **Forges `Tailscale-*` headers against the public admin entrance** | **Full admin access** | §5.1 |
-| Public attacker | Floods the admin login endpoint | Account discovery, denial of service | §5.3 |
+| Public attacker | Brute-force or credential-stuffs the admin login | Full admin access if a password is reused or weak | §5.3 |
+| Public attacker | Probes login responses to enumerate accounts | Target list for phishing | §5.3 |
+| Public attacker | Replays an observed TOTP code within its window | Second factor defeated | §5.3 |
+| Interception | An invitation or reset link is delivered over an insecure channel | Account takeover before the intended user acts | §5.4 |
 | Same-LAN device | Guest wifi or compromised IoT reaches an accidentally published database port | Direct database read | §3.3 |
 | Tailnet member | Stolen laptop or account; a `user` attempting admin functions | Up to full control | §5 |
 | Tailnet member | Connects directly to `100.x.x.x:8000` and bypasses the proxy | Skips proxy-side controls | §3.4 |
@@ -319,16 +322,18 @@ Tailscale-User-Name: Your Name
 
 No password, no stealable session token, no password reset flow to protect. Removing someone from the tailnet revokes access immediately.
 
-**Entrance two: public, for people without Tailscale.** Arrives through openresty and authenticates with **OIDC**. The OIDC flow is implemented inside the admin application; openresty is only a reverse proxy, so authentication logic is not outsourced to an nginx configuration maintained by someone else.
+**Entrance two: public, for people without Tailscale.** Arrives through openresty and authenticates with an **invitation-only local account: password plus mandatory TOTP**. Accounts cannot be self-registered; an administrator creates them. Authentication is implemented inside the admin application, so nothing about it depends on an externally maintained nginx configuration or on a third-party identity provider.
+
+Choosing local credentials over an external identity provider trades a one-time integration for permanently owned security work: password storage, reset flows, lockout behaviour, and second-factor handling all become this project's responsibility. That trade is accepted deliberately, in exchange for having no external dependency and no account existing that an administrator did not create. **Mandatory TOTP is what makes it acceptable**; a single password guarding a control plane whose worst case is host code execution would not be.
 
 **Common rules**
 
 - Passing authentication means "may enter", **not "is an admin"**. Identity is always resolved against the `users` table, and roles are owned by the platform.
-- Both entrances map to a single user record. See §5.3 for how the two identities are joined.
+- A user record may carry a Tailscale login, local credentials, or both. Someone who only ever uses the tailnet never needs a password; someone who needs the public entrance is issued an invitation. Both map to one record and one role.
 
 **The most dangerous possible error: sharing one listening socket between the entrances.**
 
-If both entrances served from the same port, anyone on the internet could send a forged `Tailscale-User-Login: admin@example.com` header and bypass OIDC entirely, gaining administrator access.
+If both entrances served from the same port, anyone on the internet could send a forged `Tailscale-User-Login: admin@example.com` header and bypass the password and TOTP entirely, gaining administrator access.
 
 Therefore:
 
@@ -351,19 +356,48 @@ Authorization is enforced in `application/use_cases`, not in the domain (which s
 
 UI-level role gating is a usability affordance only.
 
-### 5.3 OIDC Session, Identity Joining, and CSRF
+### 5.3 Local Credentials, TOTP, and Sessions
 
-**Flow.** Authorization Code with PKCE. `state` and `nonce` are generated per attempt and verified on callback; `iss` and `aud` are validated against configuration. Sessions are stored server-side in Redis, keyed by an opaque identifier.
+**Password storage.** argon2id through a `PasswordHasherPort`, so parameters are tuned in one adapter and the domain never imports a hashing library. Minimum length 12, strength checked with zxcvbn, and no composition rules (which push users toward predictable substitutions without adding entropy). Passwords are never logged, never returned by any endpoint, and never transmitted by the platform; see §5.4.
 
-**Cookies.** `__Host-` prefix, `HttpOnly`, `Secure`, `SameSite=Lax`, no `Domain` attribute. Sessions have an absolute lifetime (for example 12 hours) as well as an idle timeout; `/admin/me` returns `session_expires_at` so the UI can warn before expiry. Logout clears the server-side session and performs RP-initiated logout at the provider where supported.
+**TOTP is mandatory, not optional.** RFC 6238, 30-second step, 6 digits, accepting one step of clock skew either side. Three details that are easy to omit and each defeat the point:
 
-**Identity joining.** The `users` table keys OIDC identity on **`(oidc_issuer, oidc_subject)`**, never on email. Email addresses at an institution are reassigned and renamed, and an unverified `email` claim is attacker-controlled. First-time binding may use a verified email to match an existing record, and only when the provider asserts `email_verified`; after that the subject pair is authoritative. An administrator can also bind the two identities explicitly.
+- **Replay prevention.** The last accepted time counter is stored per user and a code from that counter or earlier is rejected. Without this, a code observed over the shoulder or in a phishing proxy remains valid for its whole window.
+- **Recovery codes.** Ten single-use codes, hashed at rest, displayed exactly once at enrolment. Without them, a lost phone means an administrator must reset the account manually, and in the worst case nobody can reach the platform at all.
+- **The secret is a bearer credential.** It is encrypted at rest, never returned after enrolment, and never written to logs.
+
+Enrolment happens during invitation acceptance and cannot be deferred, so an account never exists in a password-only state.
+
+**Login flow and abuse resistance.** Password verification and TOTP verification are separate steps, and both are rate limited.
+
+- **No user enumeration.** An unknown login and a wrong password produce the same response and comparable timing; the handler runs a dummy hash for unknown accounts rather than returning early.
+- **Rate limiting by source address and by account**, with increasing delay. Hard account lockout is deliberately avoided: it converts a known login into a denial-of-service lever against a real person. Escalating delay plus alerting achieves the defensive goal without that side effect.
+- Repeated failures raise an alert and are written to the audit log.
+- §4.1(a) applies to this entrance as well, so most unsolicited attempts never reach the handler.
+
+**Sessions.** Server-side in Redis under an opaque identifier. Cookie uses the `__Host-` prefix with `HttpOnly`, `Secure`, `SameSite=Lax`, and no `Domain` attribute. Absolute lifetime (for example 12 hours) plus an idle timeout; `/admin/me` returns `session_expires_at` so the UI can warn before expiry. A new session identifier is issued on successful login to prevent session fixation, and **changing a password invalidates every other session** for that user.
 
 **CSRF.** The public entrance authenticates with a cookie, so state-changing requests need protection. `SameSite=Lax` alone is insufficient because it still permits top-level POST navigations. A double-submit token is used: a random value in a non-`HttpOnly` companion cookie must be echoed in a request header on every non-GET request, and the API client attaches it automatically ([frontend.md](./frontend.md) §3). The tailnet entrance does not need this, having no ambient credential.
 
-**Login abuse.** The public entrance rate-limits authentication attempts per source address, and repeated failures raise an alert. Because §4.1(a) also applies here, unsolicited attempts are largely filtered before reaching this point.
+### 5.4 Invitations and Password Reset
 
-### 5.4 Bootstrapping the First Administrator
+**The platform never transmits a credential.** Account creation issues a single-use invitation link; the administrator delivers it out of band by whatever channel is appropriate. The recipient then chooses their own password and enrols TOTP in one flow.
+
+```
+admin creates user (login + role, no credentials)
+  -> system generates a 256-bit invitation token, stores only its hash, 72 hour expiry
+  -> admin copies the link and delivers it out of band
+  -> recipient sets a password, enrols TOTP, receives recovery codes
+  -> token marked consumed, cannot be reused
+```
+
+This avoids sending a password over email, avoids a temporary-password state that people forget to change, and removes any SMTP dependency from Phase 1. Password reset works the same way: an administrator issues a reset link, which invalidates the existing password and all active sessions on use.
+
+Invitation and reset tokens are stored hashed, are single use, expire, and their issue and consumption are audited. The residual risk is the out-of-band delivery channel, which is recorded in the threat model; keeping the expiry short limits the window.
+
+Self-service reset by email can be added later once an `EmailPort` exists, but it is not needed at this team size and would add a delivery dependency and a new enumeration surface.
+
+### 5.5 Bootstrapping the First Administrator
 
 A fresh deployment has an empty `users` table, so every authenticated identity resolves to an unknown role and nobody can reach the management UI, including the person who deployed it.
 
@@ -372,6 +406,8 @@ The bootstrap rule:
 - `BOOTSTRAP_ADMIN_LOGIN` names one Tailscale login.
 - It takes effect **only while the `users` table is empty**, and **only through the tailnet entrance**.
 - The first matching login creates a single `admin` user, after which the setting is inert.
+
+That user is created **without local credentials**, since the tailnet entrance does not use them. If they later need the public entrance, they issue themselves an invitation through the normal flow in §5.4.
 
 Restricting bootstrap to the tailnet entrance matters: were it available publicly, an attacker who reached a freshly deployed instance before its operator could claim administrator rights. The event is written to the audit log.
 
@@ -509,7 +545,7 @@ User-supplied values fill data slots only and must not alter template structure 
 
 - `.env` is never committed. `.gitignore` lists it explicitly, and `.env.example` carries field names only.
 - **pre-commit plus gitleaks**, catching accidental secrets before they enter history. The cheapest high-return control here.
-- Database passwords, the API key pepper, and the OIDC client secret are **Docker secrets** (file mounts), not environment variables. Environment variables appear in `docker inspect` output and in the process list. `Settings` reads them via `secrets_dir`; see [backend.md](./backend.md) §8.
+- Database passwords, the API key pepper, the TOTP encryption key, and the session signing key are **Docker secrets** (file mounts), not environment variables. Environment variables appear in `docker inspect` output and in the process list. `Settings` reads them via `secrets_dir`; see [backend.md](./backend.md) §8.
 - **Development and production secrets are never shared.** The Windows development machine uses obviously non-production values.
 - Pepper rotation invalidates every API key, so the verification path supports two peppers simultaneously to allow a staged rotation.
 
@@ -583,8 +619,9 @@ The practical position:
 
 **Events that must be recorded** (who, when, what, from where, and the outcome):
 
-- Management sign-in and sign-out, at both entrances
-- **First-administrator bootstrap** (§5.4)
+- Management sign-in and sign-out, at both entrances, including failed attempts
+- **First-administrator bootstrap** (§5.5)
+- Invitation and reset link issue and consumption, TOTP enrolment, recovery code use
 - API key issuance, modification, revocation
 - Model download, load, unload
 - Routing policy changes
@@ -611,7 +648,9 @@ Cross-referenced with [../ROADMAP.md](../ROADMAP.md).
 - Application-layer country filter on **both** the gateway and the public admin entrance
 - Per-key CIDR allowlists
 - API keys: HMAC with pepper, `key_id` lookup, scopes, mandatory expiry, immediate revocation
-- OIDC with PKCE, server-side sessions, and CSRF protection
+- Local accounts: argon2id, mandatory TOTP with replay prevention and recovery codes, no user enumeration, escalating rate limits
+- Invitation and reset links: single use, hashed at rest, expiring; the platform never transmits a password
+- Server-side sessions with `__Host-` cookies, rotation on login, and CSRF double-submit
 - First-administrator bootstrap, tailnet-only
 - Model reference validation; no shell string construction
 - Host-level runtime hardening (service account, loopback binding, directory ownership)
@@ -655,6 +694,15 @@ Cross-referenced with [../ROADMAP.md](../ROADMAP.md).
 [ ] Forge X-Forwarded-For from an untrusted peer: rejected
 [ ] Sign in as a `user` role account: admin functions are genuinely unavailable
 [ ] BOOTSTRAP_ADMIN_LOGIN does nothing once users exist, and nothing via the public entrance
+
+--- Local credentials ---
+[ ] No account can reach an authenticated state without TOTP enrolled
+[ ] Replay the same TOTP code twice: the second attempt is rejected
+[ ] Unknown login and wrong password are indistinguishable in response and timing
+[ ] Repeated failures slow down and alert, without hard-locking a real account
+[ ] Session id changes on login; changing a password kills other sessions
+[ ] An invitation link works once, expires, and cannot be replayed after consumption
+[ ] Recovery codes are single use and shown only at enrolment
 
 --- Data plane ---
 [ ] Country filter active on both the gateway and the public admin entrance
