@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import replace
 from datetime import datetime
+from ipaddress import ip_network
 
 from app.domain.entities.actor import Actor, Role
 from app.domain.entities.api_key import ApiKey
@@ -69,6 +70,9 @@ class FakeUsers:
 
     async def set_disabled(self, user_id: str, at: datetime | None) -> None:
         self.rows[user_id] = replace(self.rows[user_id], disabled_at=at)
+
+    async def update_profile(self, user_id: str, *, display_name: str, role: str) -> None:
+        self.rows[user_id] = replace(self.rows[user_id], display_name=display_name, role=Role(role))
 
     async def delete(self, user_id: str) -> None:
         self.rows.pop(user_id, None)
@@ -218,6 +222,37 @@ class FakeModels:
     async def delete(self, model_id: str) -> None:
         self.rows.pop(model_id, None)
 
+    async def list_occupying_memory(self, node_id: str) -> list[Model]:
+        return [
+            model
+            for model in self.rows.values()
+            if model.node_id == node_id and model.state in (ModelState.LOADED, ModelState.LOADING)
+        ]
+
+    async def reconcile_transient_states(self, mapping: dict[ModelState, ModelState]) -> int:
+        moved = 0
+        for model in list(self.rows.values()):
+            if model.state in mapping:
+                self.rows[model.id] = replace(model, state=mapping[model.state])
+                moved += 1
+        return moved
+
+
+class FakeStateCommitter:
+    """The independent-transaction state writer, which in a fake is just a
+    second handle on the same store: the test has no transaction to roll back,
+    so the point being modelled is only that these writes are visible to the
+    reads the use case makes afterwards."""
+
+    def __init__(self, models: FakeModels) -> None:
+        self._models = models
+
+    async def get(self, model_id: str) -> Model | None:
+        return self._models.rows.get(model_id)
+
+    async def commit(self, model_id: str, state: ModelState) -> None:
+        self._models.rows[model_id] = replace(self._models.rows[model_id], state=state)
+
 
 class FakeNodes:
     def __init__(self, nodes: Sequence[Node] = ()) -> None:
@@ -270,6 +305,21 @@ class FakeApiKeys:
         key = self.rows[key_id]
         if key.revoked_at is None:
             self.rows[key_id] = replace(key, revoked_at=at)
+
+    async def update_settings(self, key_id: str, values: dict[str, object]) -> bool:
+        key = self.rows.get(key_id)
+        if key is None or key.revoked_at is not None:
+            return False
+        self.rows[key_id] = replace(
+            key,
+            name=values["name"],
+            scopes=frozenset(values["scopes"]),  # type: ignore[arg-type]
+            expires_at=values["expires_at"],
+            rate_limit_rpm=values["rate_limit_rpm"],
+            quota_tokens_per_day=values["quota_tokens_per_day"],
+            allowed_cidrs=tuple(ip_network(c) for c in values["allowed_cidrs"]),  # type: ignore[union-attr]
+        )
+        return True
 
     async def delete_for_owner(self, owner_id: str) -> None:
         self.rows = {k: v for k, v in self.rows.items() if v.owner_id != owner_id}

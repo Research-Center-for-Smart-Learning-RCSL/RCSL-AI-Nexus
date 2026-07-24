@@ -24,6 +24,7 @@ from app.adapters.crypto.argon2_hasher import Argon2Hasher
 from app.adapters.crypto.pyotp_totp import PyotpTotp
 from app.adapters.crypto.secret_box import FernetSecretBox
 from app.adapters.crypto.zxcvbn_policy import ZxcvbnPasswordPolicy
+from app.adapters.persistence.model_state import ModelStateCommitter
 from app.adapters.persistence.repositories import (
     PostgresApiKeyRepository,
     PostgresInvitationRepository,
@@ -355,6 +356,9 @@ def build_manage_models(
         policies=PostgresRoutingPolicyRepository(session),
         runtimes=request.app.state.runtimes,
         budget=MemoryBudgetService(),
+        # Its own session factory, so a terminal state write survives the
+        # request transaction rolling back when a load or unload raises.
+        state_committer=ModelStateCommitter(get_session_factory()),
         authz=request.app.state.authz,
         audit=request.app.state.audit,
     )
@@ -365,6 +369,7 @@ def build_download_model(request: Request, session: SessionDep) -> DownloadModel
         models=PostgresModelRepository(session),
         runtimes=request.app.state.runtimes,
         jobs=request.app.state.jobs,
+        state_committer=ModelStateCommitter(get_session_factory()),
         authz=request.app.state.authz,
         audit=request.app.state.audit,
     )

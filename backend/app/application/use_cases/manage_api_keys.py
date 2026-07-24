@@ -209,7 +209,24 @@ class ManageApiKeys:
                 _parse_cidrs(allowed_cidrs) if allowed_cidrs is not None else key.allowed_cidrs
             ),
         )
-        await self._keys.save(updated)
+        # A targeted update of the editable columns only, guarded on
+        # `revoked_at IS NULL`. The revoked check above is a courtesy that
+        # gives a clear error; this is what actually prevents an edit racing a
+        # concurrent revoke from reviving the key, and it refuses if the
+        # revoke won.
+        if not await self._keys.update_settings(
+            key.key_id,
+            {
+                "name": updated.name,
+                "scopes": sorted(updated.scopes),
+                "expires_at": updated.expires_at,
+                "rate_limit_rpm": updated.rate_limit_rpm,
+                "quota_tokens_per_day": updated.quota_tokens_per_day,
+                "allowed_cidrs": [str(n) for n in updated.allowed_cidrs],
+            },
+        ):
+            raise ModelStateConflictError(detail=f"key {key_id} was revoked concurrently")
+
         # Scope changes are audited by name, because they are the edit that
         # changes what a leaked key can reach.
         await self._audit.record(

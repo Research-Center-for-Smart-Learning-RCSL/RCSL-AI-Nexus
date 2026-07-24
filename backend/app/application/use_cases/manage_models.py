@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import replace
+from typing import Protocol
 
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.model import Model, ModelState, ResourceProfile, RuntimeKind
@@ -36,6 +37,21 @@ from app.domain.ports.repositories import (
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
 from app.domain.services.memory_budget_service import MemoryBudgetService
 
+
+class ModelStateCommitterPort(Protocol):
+    """Reads and writes a model's state in its own short transaction.
+
+    `commit` surviving the request's rollback is what keeps a failed load's
+    ERROR from being lost with it; see adapters/persistence/model_state.py.
+    `get` is used by the detached download task, which must not hold a session
+    across the multi-hour pull.
+    """
+
+    async def get(self, model_id: str) -> Model | None: ...
+
+    async def commit(self, model_id: str, state: ModelState) -> None: ...
+
+
 DELETABLE_STATES = frozenset({ModelState.NOT_DOWNLOADED, ModelState.DOWNLOADED, ModelState.ERROR})
 """Anything mid-transition is excluded. Deleting a row while a download or a
 load is in flight leaves the runtime holding something the registry has
@@ -50,6 +66,7 @@ class ManageModels:
         policies: RoutingPolicyRepositoryPort,
         runtimes: dict[RuntimeKind, ModelRuntimePort],
         budget: MemoryBudgetService,
+        state_committer: ModelStateCommitterPort,
         authz: AuthorizationPort,
         audit: AuditPort,
     ) -> None:
@@ -58,6 +75,7 @@ class ManageModels:
         self._policies = policies
         self._runtimes = runtimes
         self._budget = budget
+        self._state = state_committer
         self._authz = authz
         self._audit = audit
 
@@ -159,6 +177,19 @@ class ManageModels:
                 detail=f"model {model.id} is {model.state}; unload and delete to repoint it"
             )
 
+        if (
+            model.state is ModelState.LOADED
+            and resource_profile is not None
+            and resource_profile.memory_gb != model.resource_profile.memory_gb
+        ):
+            # The memory budget reads this figure for a loaded model. Shrinking
+            # it while the weights are resident makes the budget under-count by
+            # the difference, admitting a load that should be refused — the
+            # §4.3 guardrail bypassed by editing a form field. Unload first.
+            raise ModelStateConflictError(
+                detail=f"model {model.id} is loaded; unload before changing its memory profile"
+            )
+
         updated = replace(
             model,
             alias=alias if alias is not None else model.alias,
@@ -218,18 +249,31 @@ class ManageModels:
         node = await self._require_node(model.node_id)
         runtime = await self._require_runtime(model.runtime)
 
-        self._budget.assert_can_load(model, node, await self._models.list_loaded(node.id))
+        # Counts LOADING as well as LOADED, because a model mid-load already
+        # holds (or is about to hold) its memory. LOADING is then committed
+        # independently below, so a second load started moments later sees it
+        # in this same count rather than a budget that ignores it.
+        self._budget.assert_can_load(model, node, await self._models.list_occupying_memory(node.id))
 
-        # LOADING is written before the call so a concurrent load sees the
-        # transition rather than a downloaded model it can start again.
-        await self._models.set_state(model.id, ModelState.LOADING)
+        # Committed in its own transaction, not the request's. The request's
+        # write would be invisible to a concurrent load until it commits at the
+        # end — which is after the runtime call — so the claim has to land now.
+        await self._state.commit(model.id, ModelState.LOADING)
         try:
             await runtime.load(model.ref)
         except Exception:
-            await self._models.set_state(model.id, ModelState.ERROR)
+            # Independently, because the raise that follows rolls the request
+            # transaction back. Writing ERROR through the request session lost
+            # it exactly when it mattered: a half-resident model then read as
+            # DOWNLOADED and the budget stopped counting its memory.
+            await self._state.commit(model.id, ModelState.ERROR)
             await self._audit.record(actor, "model.loaded", target=model.id, outcome="failed")
             raise
 
+        # The success transition may ride the request transaction: if that
+        # commit fails the load did not durably happen and the state should
+        # not claim it did. Reconciliation at the next deploy would move a
+        # LOADING left by such a failure to ERROR.
         await self._models.set_state(model.id, ModelState.LOADED)
         await self._audit.record(actor, "model.loaded", target=model.id)
         return replace(model, state=ModelState.LOADED)
@@ -242,14 +286,14 @@ class ManageModels:
             raise ModelStateConflictError(detail=f"model {model.id} is {model.state}, not loaded")
 
         runtime = await self._require_runtime(model.runtime)
-        await self._models.set_state(model.id, ModelState.UNLOADING)
+        await self._state.commit(model.id, ModelState.UNLOADING)
         try:
             await runtime.unload(model.ref)
         except Exception:
-            # Deliberately back to LOADED, not ERROR. The unload failed, so as
-            # far as anyone knows the weights are still resident and the memory
-            # budget must keep counting them.
-            await self._models.set_state(model.id, ModelState.LOADED)
+            # Deliberately back to LOADED, not ERROR, and independently. The
+            # unload failed, so as far as anyone knows the weights are still
+            # resident and the memory budget must keep counting them.
+            await self._state.commit(model.id, ModelState.LOADED)
             await self._audit.record(actor, "model.unloaded", target=model.id, outcome="failed")
             raise
 

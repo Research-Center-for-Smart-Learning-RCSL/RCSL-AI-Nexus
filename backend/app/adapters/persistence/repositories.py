@@ -98,6 +98,17 @@ class PostgresModelRepository(_Base):
         ).all()
         return [m.model_to_domain(r) for r in rows]
 
+    async def list_occupying_memory(self, node_id: str) -> list[Model]:
+        rows = (
+            await self._session.scalars(
+                select(ModelRow).where(
+                    ModelRow.node_id == node_id,
+                    ModelRow.state.in_((ModelState.LOADED.value, ModelState.LOADING.value)),
+                )
+            )
+        ).all()
+        return [m.model_to_domain(r) for r in rows]
+
     async def save(self, model: Model) -> None:
         await self._session.merge(m.model_to_row(model))
         await self._session.flush()
@@ -109,6 +120,18 @@ class PostgresModelRepository(_Base):
 
     async def delete(self, model_id: str) -> None:
         await self._session.execute(delete(ModelRow).where(ModelRow.id == model_id))
+
+    async def reconcile_transient_states(self, mapping: dict[ModelState, ModelState]) -> int:
+        """One UPDATE per transient state. A CASE would be terser but this
+        reports the count per source state, which is what an operator wants in
+        the log after a crash."""
+        total = 0
+        for source, target in mapping.items():
+            result = await self._session.execute(
+                update(ModelRow).where(ModelRow.state == source.value).values(state=target.value)
+            )
+            total += result.rowcount or 0  # type: ignore[attr-defined]
+        return total
 
 
 class PostgresRoutingPolicyRepository(_Base):
@@ -164,6 +187,23 @@ class PostgresApiKeyRepository(_Base):
             .where(ApiKeyRow.key_id == key_id, ApiKeyRow.revoked_at.is_(None))
             .values(revoked_at=at)
         )
+
+    async def update_settings(self, key_id: str, values: dict[str, object]) -> bool:
+        """Targeted update of the editable columns, refused if revoked.
+
+        A full-row `save` of a read-then-modified entity would write back
+        `revoked_at` from the value it read, so an edit racing a concurrent
+        `revoke` rerevived the key by overwriting the revocation with the NULL
+        it had loaded. This touches only the named columns and requires
+        `revoked_at IS NULL`, so it cannot revert a revocation and returns
+        False if one landed first.
+        """
+        result = await self._session.execute(
+            update(ApiKeyRow)
+            .where(ApiKeyRow.key_id == key_id, ApiKeyRow.revoked_at.is_(None))
+            .values(**values)
+        )
+        return (result.rowcount or 0) == 1  # type: ignore[attr-defined]
 
 
 class PostgresUserRepository(_Base):
@@ -252,6 +292,21 @@ class PostgresUserRepository(_Base):
         login that read the row a moment earlier and saved it back whole."""
         await self._session.execute(
             update(UserRow).where(UserRow.id == user_id).values(disabled_at=at)
+        )
+
+    async def update_profile(self, user_id: str, *, display_name: str, role: str) -> None:
+        """Targeted, for the same reason `set_disabled` is.
+
+        The administrator edit form reads a user, changes a field, and would
+        otherwise save the whole row back — reverting a `disabled_at` or a
+        `totp_last_counter` that a concurrent disable or login had advanced in
+        between. This writes only the two columns the form owns, so those
+        conditional updates cannot be undone by it.
+        """
+        await self._session.execute(
+            update(UserRow)
+            .where(UserRow.id == user_id)
+            .values(display_name=display_name, role=role)
         )
 
     async def delete(self, user_id: str) -> None:
