@@ -17,6 +17,85 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-25
 
+### Five adversarial reviews, and the twenty-eight defects they found
+
+The admin API was attacked by five independent reviews, each on one surface:
+authentication and sessions, authorization and data exposure, persistence and
+concurrency, the model lifecycle and jobs, and the frontend/backend contract.
+Their findings were verified before acting, and the verification mattered:
+several passed against the in-memory fakes while being wrong in Postgres, and
+one review's headline claim needed a real database to confirm.
+
+Most of these were introduced by the two admin-API commits above. The fixes
+are in four commits after this one; what follows is why they existed.
+
+**Four defects made the system unusable.** Every admin call 404'd, because the
+Next.js rewrite keeps the `/admin` prefix and the routers mounted at the root;
+nothing caught it because every test called the ASGI app directly, so they
+exercised handlers and never the contract. No API key could be issued, because
+the expiry field is an `<input type="date">` that sends a naive datetime and
+comparing it to an aware `now` raised `TypeError`, a bare 500. Both create
+paths destroyed their one-time secret, returning the unsaved entity whose
+`created_at` is null, which the frontend's parse rejects after the row exists,
+taking the plaintext key and the invitation link with it. And a compromised
+gateway could authenticate as an administrator: it shares the `app` Docker
+network with `admin-tailnet`, which binds `0.0.0.0` and trusts
+`Tailscale-User-Login` outright, so §5.1's "isolation by socket binding" held
+for the host-published port but not the bridge. That last one is the sharpest
+lesson: making the tailnet entrance a full API is what opened it, and it was
+invisible while the entrance mounted only health.
+
+**Controls the design claimed and the code did not deliver.** The login
+throttle refused on a per-account count alone, which is the hard lockout §5.3
+forbids because it is a denial-of-service lever against a named person, and a
+successful login cleared the per-address counter so one valid account could
+reset it. A `user` could mint an unmetered gateway key, because the gateway
+reads `rate_limit_rpm <= 0` as no limit and quota zero as no quota, and expiry
+had no upper bound. The country filter was absent from the public admin
+entrance while four places said it was present, one of them a router comment.
+CSRF was absent from the tailnet entrance on the false premise that it has no
+ambient credential, when `tailscale serve` attaches the identity header to any
+request a hostile page can provoke.
+
+**State and data corruption.** A failed load wrote `error` and then raised,
+and the raise rolled the write back, so a half-resident model read as
+`downloaded` and the budget under-counted it. The three transient states were
+permanent dead ends after a crash, escapable only by SQL. The download task
+held one transaction open for the whole multi-hour pull. Two full-row `save`
+calls could revert a concurrent revoke or disable. Each of these had a passing
+test that used an in-memory fake with no transaction and no row lock, which is
+why the new coverage runs against real Postgres.
+
+The lower-severity findings — a `user` role wider than §5.2, a challenge that
+outlived a disable, two CSRF paths that 500'd, `GET /api-keys` loading full
+user entities, a double SSE terminal frame — are in the fourth fix commit.
+
+**What was checked and found sound, so it is worth recording as tested:**
+session fixation and the watermark invalidation, TOTP replay across every skew
+case, the bootstrap atomicity, enumeration resistance, the model-reference
+grammar (`fullmatch` closes the trailing-newline hole and the registry
+allowlist rejects `hf.co.evil.com`), the streaming slot released within a
+millisecond of disconnect, and the migrations round-tripping with zero ORM
+drift.
+
+**Residual items, accepted or deferred rather than fixed:**
+
+- **Commit-after-response.** FastAPI commits the request transaction after the
+  response is sent, so a create returns `201` with the body before the INSERT
+  is attempted; a constraint violation then has nowhere to report. The
+  narrow trigger is a TOCTOU on a uniqueness check under concurrent identical
+  creates. Structural to how the yield-dependency session works; not changed.
+- **A model stuck in a transient state by a bare container crash** (not a
+  `compose` restart) is reconciled only at the next deploy, because
+  provisioning runs in the `migrate` service. `restart: unless-stopped`
+  brings the container back without re-running it.
+- **The concurrent-load budget race** is narrowed, not closed: `LOADING` is
+  now committed independently and counted, so the window is milliseconds
+  rather than the whole load, but two loads landing in that window can still
+  both pass. A node advisory lock would close it and is deferred.
+- **`session_signing_key`** is enforced as a production secret and read by
+  nothing: sessions are opaque Redis ids by design. Left in place, noted here.
+
 ### The rest of the admin API
 
 Models and their lifecycle, downloads as background jobs, routing policies,
