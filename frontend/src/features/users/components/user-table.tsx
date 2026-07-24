@@ -9,9 +9,9 @@ import { Badge } from '@/components/ui/badge';
 import { DataTable } from '@/components/composed/data-table';
 import { ConfirmDialog } from '@/components/composed/confirm-dialog';
 import { OneTimeSecret } from '@/components/composed/one-time-secret';
+import { SecretDialog } from '@/components/composed/secret-dialog';
 import {
-  Dialog,
-  DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -34,6 +34,7 @@ export function UserTable() {
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [deleting, setDeleting] = useState<User | null>(null);
+  const [linkAcknowledged, setLinkAcknowledged] = useState(false);
   const [issuedLink, setIssuedLink] = useState<{
     title: string;
     url: string;
@@ -127,7 +128,7 @@ export function UserTable() {
                 variant="ghost"
                 size="xs"
                 className="text-destructive"
-                disabled={user.id === me?.login}
+                disabled={user.id === me?.id}
                 onClick={() => setDeleting(user)}
               >
                 Remove
@@ -164,13 +165,21 @@ export function UserTable() {
 
       <InviteUserDialog open={inviteOpen} onOpenChange={setInviteOpen} />
 
-      <Dialog
+      <SecretDialog
         open={Boolean(issuedLink)}
+        // The acknowledgement here used to be decorative: the checkbox had no
+        // handler and no gated control, so the link could be dismissed with
+        // Escape and lost.
+        locked={Boolean(issuedLink) && !linkAcknowledged}
         onOpenChange={(open) => {
-          if (!open) setIssuedLink(null);
+          if (!open) {
+            setIssuedLink(null);
+            setLinkAcknowledged(false);
+          }
         }}
+        className="sm:max-w-lg"
       >
-        <DialogContent className="sm:max-w-lg">
+        <>
           <DialogHeader>
             <DialogTitle>{issuedLink?.title}</DialogTitle>
           </DialogHeader>
@@ -180,10 +189,22 @@ export function UserTable() {
               description="Single use, expires, and is not shown again."
               values={[issuedLink.url]}
               acknowledgement="I have copied this link"
+              onAcknowledgedChange={setLinkAcknowledged}
             />
           ) : null}
-        </DialogContent>
-      </Dialog>
+          <DialogFooter>
+            <Button
+              disabled={!linkAcknowledged}
+              onClick={() => {
+                setIssuedLink(null);
+                setLinkAcknowledged(false);
+              }}
+            >
+              Done
+            </Button>
+          </DialogFooter>
+        </>
+      </SecretDialog>
 
       <ConfirmDialog
         open={Boolean(deleting)}

@@ -32,6 +32,13 @@ export type AuthMode = 'tailnet' | 'local' | 'dev';
 export type Role = 'admin' | 'user';
 
 export type Me = {
+  /**
+   * The user's own id. Absent from an earlier version, which forced callers
+   * to substitute `login` wherever an id was needed: the self-deletion guard
+   * compared a UUID to an email and so never matched, and new API keys were
+   * attributed to a login string that will not join.
+   */
+  id: string;
   auth_mode: AuthMode;
   login: string;
   display_name: string;
@@ -121,10 +128,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     // Only meaningful on the public entrance; the tailnet has no session to end.
-    await api.post('/auth/logout');
-    queryClient.clear();
-    lastKnownAuthMode = 'local';
-    window.location.assign('/login');
+    //
+    // The local clear-down happens whatever the server says. Previously a
+    // rejected POST (missing CSRF cookie, a blip, a 5xx) skipped both the
+    // cache clear and the redirect, and the caller discards the rejection, so
+    // clicking Sign out on a shared machine did nothing visible while every
+    // cached user list and key list stayed in memory on screen.
+    try {
+      await api.post('/auth/logout');
+    } catch {
+      // The server-side session may survive; the local one must not.
+    } finally {
+      queryClient.clear();
+      lastKnownAuthMode = 'local';
+      window.location.assign('/login');
+    }
   }, [queryClient]);
 
   const value = useMemo<SessionValue>(() => {

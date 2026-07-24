@@ -36,11 +36,23 @@ export function useLogin(redirectTo = '/') {
   const [pending, setPending] = useState(false);
 
   /**
-   * 429 is disclosed because it is not an oracle: it tells the caller about
-   * their own request rate, not about whether an account exists. Everything
-   * else, including a 404, becomes the one message.
+   * Everything that can fail the password step reports the one message,
+   * including 429.
+   *
+   * Showing "too many attempts" there was an account-enumeration oracle, and a
+   * clean binary one. Rate limiting is specified per source address *and per
+   * account* (security.md section 5.3), so the per-account bucket can only
+   * trip for a login that exists. An attacker below the address limit submits
+   * junk passwords for a candidate address and watches for the message to
+   * change: for a real account it eventually does, for a nonexistent one it
+   * never can. That undoes the dummy-hash work the backend does to make the
+   * two indistinguishable.
+   *
+   * The second step is different: reaching it already required the password,
+   * so there is nothing left to enumerate and the rate-limit message is
+   * genuinely useful there.
    */
-  const collapse = useCallback((caught: unknown, fallback: string) => {
+  const collapseSecondStep = useCallback((caught: unknown, fallback: string) => {
     if (caught instanceof ApiError && caught.status === 429) return RATE_LIMITED;
     return fallback;
   }, []);
@@ -53,13 +65,13 @@ export function useLogin(redirectTo = '/') {
         const result = await loginWithPassword(values);
         setChallenge(result.challenge);
         setStep('totp');
-      } catch (caught) {
-        setError(collapse(caught, CREDENTIALS_REJECTED));
+      } catch {
+        setError(CREDENTIALS_REJECTED);
       } finally {
         setPending(false);
       }
     },
-    [collapse],
+    [],
   );
 
   const finish = useCallback(async () => {
@@ -78,12 +90,12 @@ export function useLogin(redirectTo = '/') {
         await loginWithTotp({ challenge, code: values.code });
         await finish();
       } catch (caught) {
-        setError(collapse(caught, SECOND_FACTOR_REJECTED));
+        setError(collapseSecondStep(caught, SECOND_FACTOR_REJECTED));
       } finally {
         setPending(false);
       }
     },
-    [challenge, collapse, finish],
+    [challenge, collapseSecondStep, finish],
   );
 
   const submitRecoveryCode = useCallback(
@@ -98,12 +110,12 @@ export function useLogin(redirectTo = '/') {
         });
         await finish();
       } catch (caught) {
-        setError(collapse(caught, SECOND_FACTOR_REJECTED));
+        setError(collapseSecondStep(caught, SECOND_FACTOR_REJECTED));
       } finally {
         setPending(false);
       }
     },
-    [challenge, collapse, finish],
+    [challenge, collapseSecondStep, finish],
   );
 
   const restart = useCallback(() => {

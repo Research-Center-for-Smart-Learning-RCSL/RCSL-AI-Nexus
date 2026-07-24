@@ -5,10 +5,9 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 
 import { Button } from '@/components/ui/button';
+import { SecretDialog } from '@/components/composed/secret-dialog';
 import {
-  Dialog,
   DialogClose,
-  DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
@@ -63,14 +62,18 @@ export function InviteUserDialog({
   }
 
   return (
-    <Dialog
+    <SecretDialog
       open={open}
+      // The link is single-use and never shown again, so a stray Escape while
+      // it is on screen loses it.
+      locked={inviteUrl !== null && !acknowledged}
       onOpenChange={(next) => {
         if (!next) close();
         else onOpenChange(true);
       }}
+      className="sm:max-w-lg"
     >
-      <DialogContent className="sm:max-w-lg">
+      <>
         <DialogHeader>
           <DialogTitle>Invite a user</DialogTitle>
           <DialogDescription>
@@ -161,7 +164,7 @@ export function InviteUserDialog({
             </DialogFooter>
           </>
         )}
-      </DialogContent>
-    </Dialog>
+      </>
+    </SecretDialog>
   );
 }

@@ -8,7 +8,12 @@
  * error frame as a first-class outcome and hands the message to the caller.
  */
 
-import { streamFrameSchema, type StreamFrame } from '@/features/chat/schema';
+import {
+  frameFinishReason,
+  frameText,
+  streamFrameSchema,
+  type StreamFrame,
+} from '@/features/chat/schema';
 
 export const DONE_SENTINEL = '[DONE]';
 
@@ -19,11 +24,8 @@ export type StreamHandlers = {
   onDone: () => void;
 };
 
-function extractDelta(frame: StreamFrame): string {
-  if (typeof frame.delta === 'string') return frame.delta;
-  if (typeof frame.content === 'string') return frame.content;
-  return '';
-}
+// Reading the envelope is the schema's job, so both spellings resolve here.
+const extractDelta = frameText;
 
 function extractError(frame: StreamFrame): string | null {
   if (frame.type === 'error') {
@@ -34,6 +36,15 @@ function extractError(frame: StreamFrame): string | null {
   if (frame.error && typeof frame.error === 'object') {
     return frame.error.message ?? 'The model stopped unexpectedly.';
   }
+  return null;
+}
+
+/** First event boundary in the buffer, in either LF or CRLF spelling. */
+function nextBoundary(buffer: string): { index: number; length: number } | null {
+  const lf = buffer.indexOf('\n\n');
+  const crlf = buffer.indexOf('\r\n\r\n');
+  if (crlf !== -1 && (lf === -1 || crlf < lf)) return { index: crlf, length: 4 };
+  if (lf !== -1) return { index: lf, length: 2 };
   return null;
 }
 
@@ -77,11 +88,17 @@ export async function readChatStream(
 
       // SSE events are separated by a blank line. Anything after the last
       // separator is a partial event and stays in the buffer.
-      let separator = buffer.indexOf('\n\n');
-      while (separator !== -1) {
-        const block = buffer.slice(0, separator);
-        buffer = buffer.slice(separator + 2);
-        separator = buffer.indexOf('\n\n');
+      //
+      // Both spellings are accepted. The current framer emits `\n\n`, but the
+      // spec permits CRLF and sse-starlette uses it, so matching only on LF
+      // would leave the buffer growing until the response ended and then
+      // report a truncation. That failure only appears when the server-side
+      // framer is swapped, which is exactly when nobody would look here.
+      let boundary = nextBoundary(buffer);
+      while (boundary !== null) {
+        const block = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary.length);
+        boundary = nextBoundary(buffer);
 
         for (const payload of dataLines(block)) {
           if (!payload) continue;
@@ -119,7 +136,7 @@ export async function readChatStream(
           const delta = extractDelta(frame.data);
           if (delta) handlers.onDelta(delta);
 
-          if (frame.data.finish_reason) {
+          if (frameFinishReason(frame.data)) {
             sawTerminator = true;
             handlers.onDone();
             return;
@@ -147,7 +164,16 @@ export async function readChatStream(
       caught instanceof Error ? caught.message : 'The stream failed.',
     );
   } finally {
-    // Releases the lock so the body can be cancelled by the abort controller.
+    // Cancel, not just release. Every early return above (the `[DONE]`
+    // sentinel, a finish_reason, an error frame) leaves unread bytes on the
+    // wire; releasing the lock alone keeps the connection alive until garbage
+    // collection. Cancelling can itself throw if the body is already gone,
+    // which is not worth failing a completed stream over.
+    try {
+      await reader.cancel();
+    } catch {
+      // already closed
+    }
     reader.releaseLock();
   }
 }

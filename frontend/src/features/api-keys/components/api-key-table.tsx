@@ -135,7 +135,7 @@ export function ApiKeyTable() {
       <CreateApiKeyDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        ownerId={me?.login ?? ''}
+        ownerId={me?.id ?? ''}
       />
 
       <ConfirmDialog
