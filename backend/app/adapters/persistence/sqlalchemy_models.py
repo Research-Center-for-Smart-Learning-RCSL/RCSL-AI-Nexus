@@ -157,6 +157,14 @@ class ApiKeyRow(Base):
     enforced it; a nullable column meant one direct insert or import produced a
     permanently valid key with rotation bypassed."""
 
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    """There is deliberately no `last_used_at` beside this. Maintaining one
+    would mean the gateway writing to this table on every request, and the
+    account split in security.md section 6 exists so that it cannot. The same
+    fact is derived from `usage_records`, which the gateway does write."""
+
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     debug_logging_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

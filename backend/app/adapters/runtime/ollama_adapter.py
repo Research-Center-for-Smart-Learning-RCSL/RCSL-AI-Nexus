@@ -47,6 +47,11 @@ class OllamaAdapter:
 
     # --- inference -------------------------------------------------------
 
+    def validate_ref(self, ref: str) -> None:
+        """Ollama's grammar, exposed so the registry can refuse a reference at
+        the moment someone types it rather than at the first download."""
+        assert_valid_model_ref(ref)
+
     async def generate(
         self, ref: str, messages: Sequence[Message], max_tokens: int | None = None
     ) -> AsyncIterator[CompletionChunk]:

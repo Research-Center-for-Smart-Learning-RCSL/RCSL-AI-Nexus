@@ -15,6 +15,70 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-07-25
+
+### The rest of the admin API
+
+Models and their lifecycle, downloads as background jobs, routing policies,
+API keys, the remainder of `/users`, the dashboard, and `/admin/chat`. An
+integration test now walks Phase 1's stated goal in one sequence: register a
+model, bind a routing policy to it, issue a key, and read the dashboard back.
+
+**A gap that only appeared once the endpoints existed: nothing could create a
+node.** Models attach to one, and `security.md` §7.2 says a node write
+endpoint must ship with the SSRF guard, because a node record is an address
+the platform will then make outbound requests to. So a fresh deployment could
+register nothing at all. Phase 1 is single-node by definition, so the node is
+named in configuration and written at admin start instead. That keeps the rule
+intact rather than working around it: nothing accepts an address from a
+caller, and the write endpoint still waits for the guard.
+
+**`last_used_at` is derived, not stored.** The frontend wanted the column, and
+maintaining one would mean the gateway writing to `api_keys` on every request
+— which is precisely what the least-privilege split in §6 exists to prevent.
+The same fact is already in `usage_records`, written by the account that
+should write it and indexed on `(api_key_id, at)`, so it is one aggregate at
+list time. The dashboard's 24-hour figures come from there too; the frontend
+schema had them as Phase 2, but Phase 2 is live metrics from Prometheus, and
+request and token counts have been in the database since Phase 1.
+
+**Model reference validation moved onto the port.** Registering a model needed
+the same check the Ollama adapter already performs, and importing it into the
+application layer would have been the layering violation fixed a day earlier.
+Putting it on `ModelRuntimePort` is the better answer anyway: what counts as a
+reference differs by runtime. Ollama takes `namespace/name:tag` from a small
+set of registries, MLX takes a HuggingFace repository id, vLLM will take a
+path. A shared helper would have to be the union of all of them, which is no
+grammar at all.
+
+**Where the state machine can lie.** Most of the model tests exist for
+failures that leave a plausible-looking row. A failed load writes `error`, not
+`loaded`. A failed *unload* writes `loaded`, not `error`, because as far as
+anyone knows the weights are still resident and the memory budget has to keep
+counting them. A crashed download writes `error` in a `finally`, since a row
+stuck in `downloading` is one no later operation will touch and nothing sweeps
+up. Deleting a model whose alias a routing policy names is refused: no foreign
+key enforces that binding, and without the check inference starts answering
+"no available model" with nothing in the registry to explain why.
+
+The download job runs detached, in its own transaction, because the request's
+session is closed the moment the response is sent. It does not survive a
+restart, which is accepted rather than solved: a durable queue is a second
+piece of infrastructure to run for one operation, and keeping progress in the
+cache means an interrupted pull is visibly stuck rather than silently gone.
+The set of strong task references in `infrastructure/jobs.py` is not
+decoration — `asyncio` holds only weak ones, and a task nobody keeps can be
+collected mid-await with nothing logged.
+
+Two smaller things. SSE framing moved into one module, so the gateway and the
+chat panel cannot drift into two envelope shapes; that drift is exactly what
+made the chat panel display nothing the first time. And the runtime port now
+declares `AsyncGenerator` rather than `AsyncIterator`, because every consumer
+wraps it in `aclosing()` and only the former promises `aclose()` — the
+promise the whole streaming contract rests on.
+
+---
+
 ## 2026-07-24
 
 ### Admin authentication, end to end
@@ -309,44 +373,37 @@ non-negotiable, so the documents changed rather than the plan.
 
 ## Where things stand
 
-The inference half is complete and tested, and so is authentication on both
-admin entrances. What is missing is the management surface itself: models,
-routing policies, API keys, jobs, the dashboard and `/admin/chat`. The
-frontend's sign-in, invitation and reset screens now reach a real backend;
-everything behind them still calls routes that return 404.
+Phase 1's functionality is complete. Inference, authentication on both admin
+entrances, and the management API are all built and tested, and every screen
+in the frontend now reaches a real backend. The remaining Phase 1 items are
+operational rather than functional.
 
 Nothing has run on the Mac Studio yet. Everything so far is verified on a
 Windows development machine, which means GPU inference, the tailnet entrance,
 and nginx behaviour are all unverified by construction.
 
+Two things exist as an API with no UI: routing policies, which are editable
+only with curl, and the download progress endpoint, which the models table
+polls but no page surfaces on its own.
+
 ## What comes next
 
 ### Phase 1, to finish it
 
-1. **The rest of the admin API.** Identity, authorization and auditing are in
-   place, so each of these is now a use case that declares its scope plus a
-   router: models, routing policies, api-keys, the rest of `/users` (role
-   change, disable, delete), the dashboard, and `/admin/chat` reusing
-   `RouteChatRequest` with user identity instead of an API key.
-
-   Audit each action as it is built rather than sweeping up afterwards. The
-   adapter exists and the authentication flows already call it, so the pattern
-   is there to follow.
-
-2. **Model download as a background job.** The adapter's `pull()` streams
-   NDJSON progress already; what is missing is the job layer, the progress
-   endpoint, and `MemoryBudgetService` being called before a load rather than
-   sitting unused.
-
-3. **A frontend test runner.** No Vitest, no Playwright. Three frontend
+1. **A frontend test runner.** No Vitest, no Playwright. Three frontend
    defects shipped together because the type checker was the only gate, and
    two of them were security defects. More pressing now than it was: the
    sign-in and enrolment screens are real, and they are the surface where a
    defect is a security defect.
 
-4. **Database account split, and Docker secrets on the Compose side.** Both
+2. **Database account split, and Docker secrets on the Compose side.** Both
    are documented as if they exist; `security.md` section 13.0 now says
-   plainly that they do not.
+   plainly that they do not. The split is the one place where the
+   architecture's claim and its implementation still disagree.
+
+3. **A routing policy editor.** The API is complete and audited; there is no
+   screen for it, so the one thing that makes the gateway serve anything is
+   currently configured by hand.
 
 ### Then: deploy to the Mac Studio for the first time
 

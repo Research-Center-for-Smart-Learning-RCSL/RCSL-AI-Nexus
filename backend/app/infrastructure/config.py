@@ -59,6 +59,22 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = "http://host.docker.internal:11434"
 
+    node_id: str = "local"
+    node_name: str = "local"
+    node_total_memory_gb: float = 64.0
+    """Capacity of the machine the runtimes are on.
+
+    The memory budget refuses a load that would exceed a fraction of this, and
+    it is static in Phase 1 because `MetricsPort` is Phase 2. **It must match
+    the real machine**: too high and the guardrail lets the host into swap,
+    too low and models that would fit are refused.
+
+    The node is configured rather than registered through the API because
+    Phase 1 is single-node, and a node write endpoint has to ship alongside
+    the SSRF guard: registering a node means storing an address the platform
+    will then make requests to. See docs/architecture/security.md section 7.2.
+    """
+
     session_absolute_ttl_seconds: int = 12 * 3600
     session_idle_ttl_seconds: int = 3600
     invitation_ttl_seconds: int = 72 * 3600

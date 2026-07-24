@@ -18,8 +18,13 @@ from datetime import datetime
 from pydantic import BaseModel, EmailStr, Field
 
 from app.domain.entities.actor import Role
+from app.domain.entities.api_key import ApiKey
 from app.domain.entities.invitation import Invitation
+from app.domain.entities.model import Model, RuntimeKind
+from app.domain.entities.node import Node
+from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.user import User
+from app.domain.ports.infrastructure_ports import JobStatus
 
 
 class MeResponse(BaseModel):
@@ -155,3 +160,246 @@ class ChangePasswordRequest(BaseModel):
 
 class ConfirmTotpRequest(BaseModel):
     code: str = Field(min_length=6, max_length=8)
+
+
+class UpdateUserRequest(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=120)
+    role: Role | None = None
+    disabled: bool | None = None
+
+
+# --- models and nodes ----------------------------------------------------
+
+
+class ResourceProfileBody(BaseModel):
+    memory_gb: float = Field(gt=0)
+    context_length: int = Field(gt=0)
+
+
+class ModelResponse(BaseModel):
+    id: str
+    alias: str
+    ref: str
+    runtime: str
+    node_id: str
+    state: str
+    capabilities: list[str]
+    resource_profile: ResourceProfileBody
+
+    @classmethod
+    def of(cls, model: Model) -> ModelResponse:
+        return cls(
+            id=model.id,
+            alias=model.alias,
+            ref=model.ref,
+            runtime=model.runtime.value,
+            node_id=model.node_id,
+            state=model.state.value,
+            # Sorted so the list is stable between requests; the domain holds a
+            # frozenset, whose iteration order is not.
+            capabilities=sorted(model.capabilities),
+            resource_profile=ResourceProfileBody(
+                memory_gb=model.resource_profile.memory_gb,
+                context_length=model.resource_profile.context_length,
+            ),
+        )
+
+
+ALIAS_PATTERN = r"^[a-z0-9-]+$"
+REF_PATTERN = r"^[A-Za-z0-9._:/-]+$"
+"""Mirrors the frontend. The authoritative check is `validate_model_ref` in
+the runtime adapter; this one keeps an obviously wrong value from reaching the
+use case at all."""
+
+
+class CreateModelRequest(BaseModel):
+    alias: str = Field(min_length=1, max_length=64, pattern=ALIAS_PATTERN)
+    ref: str = Field(min_length=1, max_length=255, pattern=REF_PATTERN)
+    runtime: RuntimeKind
+    node_id: str = Field(min_length=1, max_length=36)
+    capabilities: list[str] = Field(min_length=1)
+    resource_profile: ResourceProfileBody
+
+
+class UpdateModelRequest(BaseModel):
+    alias: str | None = Field(default=None, min_length=1, max_length=64, pattern=ALIAS_PATTERN)
+    ref: str | None = Field(default=None, min_length=1, max_length=255, pattern=REF_PATTERN)
+    runtime: RuntimeKind | None = None
+    node_id: str | None = Field(default=None, min_length=1, max_length=36)
+    capabilities: list[str] | None = Field(default=None, min_length=1)
+    resource_profile: ResourceProfileBody | None = None
+
+
+class NodeResponse(BaseModel):
+    id: str
+    name: str
+    address: str
+    status: str
+    total_memory_gb: float
+    runtimes: list[str]
+
+    @classmethod
+    def of(cls, node: Node) -> NodeResponse:
+        return cls(
+            id=node.id,
+            name=node.name,
+            address=node.address,
+            status=node.status.value,
+            total_memory_gb=node.total_memory_gb,
+            runtimes=sorted(r.value for r in node.runtimes),
+        )
+
+
+class DownloadJobResponse(BaseModel):
+    job_id: str
+    model_id: str
+    state: str
+    progress: float | None
+    bytes_downloaded: int | None
+    bytes_total: int | None
+    message: str | None
+
+    @classmethod
+    def of(cls, status: JobStatus) -> DownloadJobResponse:
+        return cls(
+            job_id=status.job_id,
+            # `target` is the generic name on the port; this endpoint only ever
+            # carries downloads, so it is spelled for its one caller.
+            model_id=status.target or "",
+            state=status.state,
+            progress=status.progress,
+            bytes_downloaded=status.completed_bytes,
+            bytes_total=status.total_bytes,
+            message=status.message,
+        )
+
+
+# --- API keys ------------------------------------------------------------
+
+
+class ApiKeyResponse(BaseModel):
+    key_id: str
+    name: str
+    scopes: list[str]
+    rate_limit_rpm: int
+    quota_tokens_per_day: int
+    allowed_cidrs: list[str]
+    expires_at: datetime
+    owner_id: str
+    owner_display: str | None
+    revoked_at: datetime | None
+    created_at: datetime | None
+    last_used_at: datetime | None
+    """Derived from `usage_records`, not stored on the key. Maintaining a
+    column would put a write to `api_keys` on the gateway's hot path, which
+    the account split exists to prevent."""
+
+    @classmethod
+    def of(
+        cls,
+        key: ApiKey,
+        *,
+        owner_display: str | None = None,
+        last_used_at: datetime | None = None,
+    ) -> ApiKeyResponse:
+        return cls(
+            # The digest is absent, and there is no field for it. A response
+            # model that cannot express the secret cannot leak it by accident.
+            key_id=key.key_id,
+            name=key.name,
+            scopes=sorted(key.scopes),
+            rate_limit_rpm=key.rate_limit_rpm,
+            # The frontend treats this as a plain number; zero reads as "no
+            # quota", which is what None means here.
+            quota_tokens_per_day=key.quota_tokens_per_day or 0,
+            allowed_cidrs=[str(n) for n in key.allowed_cidrs],
+            expires_at=key.expires_at,
+            owner_id=key.owner_id,
+            owner_display=owner_display,
+            revoked_at=key.revoked_at,
+            created_at=key.created_at,
+            last_used_at=last_used_at,
+        )
+
+
+class CreateApiKeyRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    owner_id: str = Field(min_length=1, max_length=36)
+    scopes: list[str] = Field(min_length=1)
+    rate_limit_rpm: int = Field(ge=0, le=100_000)
+    quota_tokens_per_day: int = Field(ge=0)
+    allowed_cidrs: list[str] = Field(default_factory=list)
+    expires_at: datetime
+    """Mandatory, with no "never" option, so that rotation is forced rather
+    than encouraged."""
+
+
+class UpdateApiKeyRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    scopes: list[str] | None = Field(default=None, min_length=1)
+    rate_limit_rpm: int | None = Field(default=None, ge=0, le=100_000)
+    quota_tokens_per_day: int | None = Field(default=None, ge=0)
+    allowed_cidrs: list[str] | None = None
+    expires_at: datetime | None = None
+
+
+class IssuedApiKeyResponse(BaseModel):
+    key: ApiKeyResponse
+    plaintext: str
+    """Present in this response and in no other, ever."""
+
+
+# --- routing policies ----------------------------------------------------
+
+
+class RequirementBody(BaseModel):
+    node_status: list[str] = Field(default_factory=list)
+    model_state: list[str] = Field(default_factory=list)
+    min_free_memory_gb: float | None = None
+
+
+class RoutingCandidateBody(BaseModel):
+    model_alias: str = Field(min_length=1, max_length=128)
+    priority: int
+    require: RequirementBody = Field(default_factory=RequirementBody)
+
+
+class RoutingPolicyResponse(BaseModel):
+    capability: str
+    candidates: list[RoutingCandidateBody]
+
+    @classmethod
+    def of(cls, policy: RoutingPolicy) -> RoutingPolicyResponse:
+        return cls(
+            capability=policy.capability,
+            candidates=[
+                RoutingCandidateBody(
+                    model_alias=c.model_alias,
+                    priority=c.priority,
+                    require=RequirementBody(
+                        node_status=sorted(s.value for s in c.require.node_status),
+                        model_state=sorted(s.value for s in c.require.model_state),
+                        min_free_memory_gb=c.require.min_free_memory_gb,
+                    ),
+                )
+                for c in policy.candidates
+            ],
+        )
+
+
+class SaveRoutingPolicyRequest(BaseModel):
+    candidates: list[RoutingCandidateBody] = Field(min_length=1)
+
+
+# --- dashboard -----------------------------------------------------------
+
+
+class DashboardResponse(BaseModel):
+    models_total: int
+    models_loaded: int
+    nodes_online: int
+    nodes_total: int
+    api_keys_active: int
+    users_total: int
+    requests_last_24h: int
+    tokens_last_24h: int

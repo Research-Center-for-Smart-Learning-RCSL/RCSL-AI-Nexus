@@ -41,6 +41,15 @@ class ApiKey:
     rate_limit_rpm: int = 60
     quota_tokens_per_day: int | None = None
 
+    created_at: datetime | None = None
+    """Assigned by the database on first write. `None` means "not persisted
+    yet", which is why it is not required at construction.
+
+    There is no `last_used_at` beside it. Keeping one current would mean the
+    gateway writing to `api_keys` on every request, which the account split in
+    security.md section 6 exists to prevent; the same fact is derived from
+    `usage_records`."""
+
     revoked_at: datetime | None = None
     debug_logging_until: datetime | None = None
 

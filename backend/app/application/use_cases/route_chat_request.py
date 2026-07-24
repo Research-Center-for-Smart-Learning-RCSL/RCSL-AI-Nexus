@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import aclosing
 
 from app.domain.entities.actor import Actor, Scope
@@ -82,7 +82,7 @@ class RouteChatRequest:
         capability: str,
         messages: Sequence[Message],
         max_tokens: int | None = None,
-    ) -> AsyncIterator[CompletionChunk]:
+    ) -> AsyncGenerator[CompletionChunk, None]:
         self._authz.require(actor, self.required_scope)
 
         # A ceiling on input as well as output. Context cost grows faster than
@@ -132,7 +132,7 @@ class RouteChatRequest:
         runtime: ModelRuntimePort,
         messages: Sequence[Message],
         max_tokens: int | None,
-    ) -> AsyncIterator[CompletionChunk]:
+    ) -> AsyncGenerator[CompletionChunk, None]:
         # The caller's request is honoured only where it is stricter than ours.
         # An unbounded generation is a hardware problem, not a client choice.
         ceiling = min(max_tokens or self._max_tokens_ceiling, self._max_tokens_ceiling)

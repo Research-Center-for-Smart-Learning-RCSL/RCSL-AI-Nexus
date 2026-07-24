@@ -675,6 +675,11 @@ looking for the risk. The state below is checked against the code.
 | Invitation and reset flows: single use, hashed at rest, expiring, never transmitting a credential | `application/use_cases/issue_invitation.py`, `accept_invitation.py` |
 | First-admin bootstrap: tailnet only, inert once any user exists, atomic under concurrent first requests | `application/use_cases/bootstrap_first_admin.py` |
 | Audit logging, written in its own transaction so failures survive a rollback | `adapters/audit/postgres_audit.py` |
+| Authorization on every administrative action, declared by the use case rather than the router | `application/use_cases/manage_*.py` |
+| Model reference validated at registration as well as at the runtime call, per runtime | `ModelRuntimePort.validate_ref` |
+| Memory budget enforced before a load, as a refusal | `ManageModels.load` |
+| Key issuance: mandatory future expiry, capability check, CIDR parsing, plaintext returned once | `application/use_cases/manage_api_keys.py` |
+| Last-administrator and self-removal guards | `application/use_cases/manage_users.py` |
 
 **Not implemented, and nothing in the repository arranges it**
 
@@ -682,9 +687,8 @@ looking for the risk. The state below is checked against the code.
 |---|---|
 | Separate database accounts per service (§6) | Aspiration. One account, with DDL rights, shared by every service |
 | Secrets as Docker file mounts (§8) | The reading half exists (`secrets_dir`); Compose passes everything through `env_file` |
-| Audit coverage (§12) | The adapter exists and the authentication flows call it. Model, key and node events are not audited, because those endpoints do not exist yet |
-| The rest of the admin API | Models, routing policies, API keys, jobs, dashboard and `/admin/chat` are still absent. `/users` carries only listing and the two link-issuing routes; role change, disable and delete are not implemented |
-| SSRF guard (§7.2) | Absent, and correct by the letter of the rule: there is no node write path yet |
+| SSRF guard (§7.2) | Absent, and correct by the letter of the rule: there is still no node write path. The single node is named in configuration and written at admin start, so nothing accepts an address from a caller |
+| Logging boundaries and the expiring debug switch (§9.2) | The columns exist on both `users` and `api_keys` and are read by nothing |
 | Knowledge base, multi-tenancy, Prometheus (§7.3, §10) | Phase 2, correctly absent |
 
 **Phase 1, all required before anything is exposed publicly**

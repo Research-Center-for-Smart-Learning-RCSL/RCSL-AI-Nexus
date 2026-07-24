@@ -28,10 +28,11 @@ carries the checked control-by-control state.
 | Local accounts, TOTP, sessions, CSRF, bootstrap | Complete, tested from a fresh deployment to a signed-in user |
 | Both admin entrances: identity resolution, `/me` | Complete. Each installs its own resolver; neither can default to the other's |
 | Invitation and password reset flows, both ends | Complete |
-| Audit logging | Adapter written and called by the authentication flows. Nothing else is audited, because nothing else exists |
-| **The rest of the admin API** | **Not started.** Models, routing policies, API keys, jobs, dashboard, `/admin/chat`. `/users` has listing and link issuing only |
+| Audit logging | Adapter written, and every administrative action records one |
+| Admin API: models, downloads, routing policies, API keys, users, dashboard, `/admin/chat` | Complete, exercised end to end against a real Postgres |
+| Node management | Read only. The single node is named in configuration; a write endpoint ships with the SSRF guard ([security.md](./architecture/security.md) §7.2) |
 | Database account split, Docker secrets in Compose | Not started |
-| Frontend | Sign-in, invitation acceptance and password reset now reach a real backend. Everything else still calls endpoints that 404. No test runner |
+| Frontend | Every screen now reaches a real backend. No test runner |
 
 ### Backend: hexagonal skeleton
 
@@ -43,11 +44,10 @@ carries the checked control-by-control state.
 - [x] `adapters/runtime/ollama_adapter.py` plus `validation.py` for model reference parsing
 - [x] `adapters/persistence/`: Postgres implementations, ORM models kept separate from entities
 - [x] `adapters/authz`, `adapters/audit`, `adapters/cache`, `adapters/crypto`, `adapters/session`
-- [x] `application/use_cases`: `RouteChatRequest`, `AuthenticateLocal`, `AcceptInvitation`, `IssueInvitation`, `ManageOwnAccount`, `BootstrapFirstAdmin`
-- [ ] `application/use_cases`: `RegisterModel`, `DownloadModel`, `LoadModel`, `UnloadModel`, `CreateApiKey`, `RevokeApiKey`, `SetUserRole`
+- [x] `application/use_cases`: `RouteChatRequest`, `AuthenticateLocal`, `AcceptInvitation`, `IssueInvitation`, `ManageOwnAccount`, `BootstrapFirstAdmin`, `ManageModels`, `DownloadModel`, `ManageApiKeys`, `ManageUsers`, `ManageRoutingPolicies`, `ReadDashboard`
 - [x] `interfaces/http/errors.py`: single exception handler, OpenAI envelope on the gateway, plain shape on admin
-- [x] Routers: `chat`, `auth`, `me`, `invitations`, `health`; `users` partially (list and link issuing)
-- [ ] Routers: `admin_chat`, `models`, `routing_policies`, `api_keys`, `jobs`, `dashboard`, and the rest of `users`
+- [x] Routers: `chat`, `admin_chat`, `models`, `routing_policies`, `api_keys`, `users`, `auth`, `me`, `invitations`, `jobs`, `dashboard`, `health`
+- [x] `interfaces/http/sse.py`: one framing implementation, so the gateway and the chat panel cannot drift into two envelope shapes
 - [x] **Three ASGI entry points**: `main_gateway`, `main_admin_tailnet`, `main_admin_public`, each installing its own identity resolver
 - [x] Streaming contract implemented as specified: concurrency slot spans the generator, `aclosing()` at every consumer, cancellation propagates to the adapter, usage recorded in `finally`
 - [x] `interfaces/http/middleware/identity.py`: per-entrance identity resolution, installed by dependency override so an entrance that chooses neither fails closed
@@ -62,7 +62,9 @@ carries the checked control-by-control state.
 - [x] Next.js project plus `shadcn/ui init`
 - [x] `next.config.js` rewrites so `/admin/*` is same-origin
 - [x] `components/ui`: Button, Input, Table, Dialog, Badge, Tabs, Toast
+- [x] `features/models`: node selection, now that `GET /nodes` exists
 - [ ] `lib/generated`: `openapi-typescript` against the **admin** port (the gateway serves no schema)
+- [ ] `features/routing-policies`: the API exists and has no UI, so policies are edited with curl
 - [x] `lib/session.tsx`: consumes `/admin/me`, exposes `auth_mode` through context
 - [x] `lib/api-client.ts`: `credentials: 'include'`, automatic CSRF header on mutations, 401 handling that branches on `auth_mode`
 - [x] `components/composed`: `DataTable`, `StatCard`, `FormField`, `ConfirmDialog`, `StatusBadge`, `StreamMessage`, `EmptyState`, `ErrorState`
@@ -111,8 +113,7 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 - [x] Model reference validation; no shell string construction anywhere
 - [ ] Host runtime hardening: service account, `127.0.0.1` binding, directory ownership
 - [ ] **Resource guardrails: concurrency cap, `max_tokens`, timeout, cancel on disconnect.** With no edge protection these are the only defence
-- [x] `AuditPort` adapter, and auditing for bootstrap, invitation, reset and credential changes
-- [ ] Auditing for key issuance and revocation and for model download and load, which arrives with those endpoints
+- [x] `AuditPort` adapter, and auditing for bootstrap, invitations, resets, credential changes, key issuance and revocation, model registration, download and load, role changes and account removal
 - [x] gitleaks pre-commit hook
 
 ## Phase 2: Full Management Functionality

@@ -10,13 +10,20 @@ the production wiring did nothing.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import replace
 from datetime import datetime
 
-from app.domain.entities.actor import Actor
+from app.domain.entities.actor import Actor, Role
+from app.domain.entities.api_key import ApiKey
 from app.domain.entities.invitation import Invitation, InvitationPurpose, RecoveryCode
+from app.domain.entities.model import Model, ModelState, PullProgress
+from app.domain.entities.node import Node
+from app.domain.entities.routing_policy import RoutingPolicy
+from app.domain.entities.usage import UsageRecord
 from app.domain.entities.user import User
+from app.domain.exceptions import InvalidModelReferenceError
+from app.domain.ports.infrastructure_ports import JobStatus
 
 
 class FakeUsers:
@@ -63,6 +70,15 @@ class FakeUsers:
     async def set_disabled(self, user_id: str, at: datetime | None) -> None:
         self.rows[user_id] = replace(self.rows[user_id], disabled_at=at)
 
+    async def delete(self, user_id: str) -> None:
+        self.rows.pop(user_id, None)
+
+    async def count_admins(self) -> int:
+        # Enabled administrators only, matching the repository. A disabled one
+        # cannot sign in, so counting them would let the last-admin guard pass
+        # while leaving nobody able to manage the instance.
+        return sum(1 for u in self.rows.values() if u.role is Role.ADMIN and u.disabled_at is None)
+
 
 class FakeInvitations:
     def __init__(self) -> None:
@@ -98,6 +114,10 @@ class FakeInvitations:
 
     async def delete_recovery_codes(self, user_id: str) -> None:
         self.codes = {k: v for k, v in self.codes.items() if v.user_id != user_id}
+
+    async def delete_for_user(self, user_id: str) -> None:
+        await self.delete_recovery_codes(user_id)
+        self.rows = {k: v for k, v in self.rows.items() if v.user_id != user_id}
 
     async def consume_recovery_code(self, code_id: str, at: datetime) -> bool:
         code = self.codes.get(code_id)
@@ -169,3 +189,176 @@ class FakeSessions:
 class AcceptingPolicy:
     def assert_acceptable(self, password: str, *, user_inputs: Sequence[str] = ()) -> None:
         return None
+
+
+class FakeModels:
+    def __init__(self, models: Sequence[Model] = ()) -> None:
+        self.rows: dict[str, Model] = {m.id: m for m in models}
+
+    async def get(self, model_id: str) -> Model | None:
+        return self.rows.get(model_id)
+
+    async def get_by_alias(self, alias: str) -> Model | None:
+        return next((m for m in self.rows.values() if m.alias == alias), None)
+
+    async def list_all(self) -> list[Model]:
+        return list(self.rows.values())
+
+    async def list_loaded(self, node_id: str) -> list[Model]:
+        return [
+            m for m in self.rows.values() if m.node_id == node_id and m.state is ModelState.LOADED
+        ]
+
+    async def save(self, model: Model) -> None:
+        self.rows[model.id] = model
+
+    async def set_state(self, model_id: str, state: ModelState) -> None:
+        self.rows[model_id] = replace(self.rows[model_id], state=state)
+
+    async def delete(self, model_id: str) -> None:
+        self.rows.pop(model_id, None)
+
+
+class FakeNodes:
+    def __init__(self, nodes: Sequence[Node] = ()) -> None:
+        self.rows: dict[str, Node] = {n.id: n for n in nodes}
+
+    async def get(self, node_id: str) -> Node | None:
+        return self.rows.get(node_id)
+
+    async def list_all(self) -> list[Node]:
+        return list(self.rows.values())
+
+    async def save(self, node: Node) -> None:
+        self.rows[node.id] = node
+
+
+class FakePolicies:
+    def __init__(self, policies: Sequence[RoutingPolicy] = ()) -> None:
+        self.rows: dict[str, RoutingPolicy] = {p.capability: p for p in policies}
+
+    async def get(self, capability: str) -> RoutingPolicy | None:
+        return self.rows.get(capability)
+
+    async def list_all(self) -> list[RoutingPolicy]:
+        return list(self.rows.values())
+
+    async def save(self, policy: RoutingPolicy) -> None:
+        self.rows[policy.capability] = policy
+
+    async def delete(self, capability: str) -> None:
+        self.rows.pop(capability, None)
+
+
+class FakeApiKeys:
+    def __init__(self, keys: Sequence[ApiKey] = ()) -> None:
+        self.rows: dict[str, ApiKey] = {k.key_id: k for k in keys}
+
+    async def get_by_key_id(self, key_id: str) -> ApiKey | None:
+        return self.rows.get(key_id)
+
+    async def list_for_owner(self, owner_id: str) -> list[ApiKey]:
+        return [k for k in self.rows.values() if k.owner_id == owner_id]
+
+    async def list_all(self) -> list[ApiKey]:
+        return list(self.rows.values())
+
+    async def save(self, key: ApiKey) -> None:
+        self.rows[key.key_id] = key
+
+    async def revoke(self, key_id: str, at: datetime) -> None:
+        key = self.rows[key_id]
+        if key.revoked_at is None:
+            self.rows[key_id] = replace(key, revoked_at=at)
+
+    async def delete_for_owner(self, owner_id: str) -> None:
+        self.rows = {k: v for k, v in self.rows.items() if v.owner_id != owner_id}
+
+
+class FakeUsage:
+    def __init__(self) -> None:
+        self.records: list[UsageRecord] = []
+
+    async def record(self, usage: UsageRecord) -> None:
+        self.records.append(usage)
+
+    async def tokens_used_today(self, api_key_id: str) -> int:
+        return sum(r.tokens for r in self.records if r.api_key_id == api_key_id)
+
+    async def last_used_by_key(self) -> dict[str, datetime]:
+        latest: dict[str, datetime] = {}
+        for record in self.records:
+            if record.api_key_id is None:
+                continue
+            current = latest.get(record.api_key_id)
+            if current is None or record.at > current:
+                latest[record.api_key_id] = record.at
+        return latest
+
+    async def totals_since(self, since: datetime) -> tuple[int, int]:
+        window = [r for r in self.records if r.at >= since]
+        return len(window), sum(r.tokens for r in window)
+
+
+class FakeJobs:
+    def __init__(self) -> None:
+        self.rows: dict[str, JobStatus] = {}
+        self.history: list[JobStatus] = []
+
+    async def set(self, status: JobStatus, ttl_seconds: int) -> None:
+        self.rows[status.job_id] = status
+        # Kept so a test can assert the sequence of states, which is what a
+        # progress bar actually consumes.
+        self.history.append(status)
+
+    async def get(self, job_id: str) -> JobStatus | None:
+        return self.rows.get(job_id)
+
+
+class FakeRuntime:
+    """Enough of `ModelRuntimePort` for the registry use cases.
+
+    `pull` is an async generator and `validate_ref` is synchronous, matching
+    the port exactly: the distinction is the kind of thing that is silent
+    until it breaks at runtime.
+    """
+
+    def __init__(
+        self,
+        *,
+        pull_updates: Sequence[PullProgress] = (),
+        fail_on: str | None = None,
+        invalid_refs: frozenset[str] = frozenset(),
+    ) -> None:
+        self.loaded: list[str] = []
+        self.unloaded: list[str] = []
+        self.pull_closed = False
+        self._updates = pull_updates
+        self._fail_on = fail_on
+        self._invalid = invalid_refs
+
+    def validate_ref(self, ref: str) -> None:
+        if ref in self._invalid:
+            raise InvalidModelReferenceError(detail=f"rejected {ref}")
+
+    async def load(self, ref: str) -> None:
+        if self._fail_on == "load":
+            raise RuntimeError("runtime refused the load")
+        self.loaded.append(ref)
+
+    async def unload(self, ref: str) -> None:
+        if self._fail_on == "unload":
+            raise RuntimeError("runtime refused the unload")
+        self.unloaded.append(ref)
+
+    async def pull(self, ref: str) -> AsyncIterator[PullProgress]:
+        try:
+            for update in self._updates:
+                yield update
+            if self._fail_on == "pull":
+                raise RuntimeError("the registry hung up")
+        finally:
+            self.pull_closed = True
+
+    async def health(self) -> bool:
+        return True
