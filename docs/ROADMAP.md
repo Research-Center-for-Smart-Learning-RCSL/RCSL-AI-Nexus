@@ -33,6 +33,7 @@ carries the checked control-by-control state.
 | Node management | Read only. The single node is named in configuration; a write endpoint ships with the SSRF guard ([security.md](./architecture/security.md) §7.2) |
 | Database account split, Docker secrets in Compose | Not started |
 | Frontend | Every screen now reaches a real backend. No test runner |
+| Adversarial review of the admin API | Five independent reviews run; 28 findings verified and fixed across four commits, residuals recorded in [security.md](./architecture/security.md) §13.0 and §15.5 |
 
 ### Backend: hexagonal skeleton
 
@@ -96,6 +97,8 @@ carries the checked control-by-control state.
 ### Security: required before anything is exposed publicly
 
 Full list in [security.md](./architecture/security.md) §13, checklist in §14.
+
+The single most important open item is [security.md](./architecture/security.md) §15.5: the gateway shares a Docker network with the tailnet admin entrance and can forge an administrator identity to it. Close it by segmenting the control plane onto its own network or by implementing the §6 service-to-service credential, before public exposure.
 
 - [x] Public admin entrance strips every `Tailscale-*` header unconditionally
 - [x] Tailscale ACL including `tag:ntnu-proxy`, so members cannot bypass the proxy

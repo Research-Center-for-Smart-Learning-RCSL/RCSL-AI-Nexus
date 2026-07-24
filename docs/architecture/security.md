@@ -124,6 +124,8 @@ An earlier draft also defined an `edge` network described as "the only segment t
 
 `internal: true` on `data` is a genuine control but a narrow one. It stops the database tier from reaching the internet; it does nothing about a compromised gateway, which legitimately sits on that network. §6 addresses that with per-service credentials and least privilege.
 
+**The gateway shares the `app` network with `admin-tailnet`, and that is a live exposure.** The tailnet entrance binds `0.0.0.0` inside its container and trusts `Tailscale-User-Login` outright, so a process with code execution in the gateway container can reach `http://admin-tailnet:8001` over the bridge and forge an administrator identity, without a tailnet or a session. §5.1's "isolation by socket binding" holds for the host-published port (`127.0.0.1:8001`) but not for the Docker service name. An adversarial review surfaced this once the tailnet entrance became a full API rather than health-only. It is recorded as an accepted risk in §15.5 with the conditions that should trigger closing it (segmenting the control plane onto its own network the gateway cannot join, or requiring a service-to-service credential per §6); the standing mitigation is that a gateway compromise is already the §2 worst case and every §6 credential is meant to contain it.
+
 ### 3.3 Rule: No Port May Be Published on `0.0.0.0`
 
 The most common and most damaging mistake in practice. **On Docker Desktop, `ports: - "5432:5432"` binds Postgres to every host interface**, so any device on the LAN (a guest phone, a compromised printer, another lab machine) can reach the database.
@@ -680,6 +682,14 @@ looking for the risk. The state below is checked against the code.
 | Memory budget enforced before a load, as a refusal | `ManageModels.load` |
 | Key issuance: mandatory future expiry, capability check, CIDR parsing, plaintext returned once | `application/use_cases/manage_api_keys.py` |
 | Last-administrator and self-removal guards | `application/use_cases/manage_users.py` |
+| Escalating throttle that cannot lock a named account out, keyed on address not login | `domain/services/login_throttle.py` |
+| Country filter and trusted-proxy check on every public admin route, not only login | `middleware/geo_middleware.py` |
+| CSRF double-submit on both admin entrances | `middleware/csrf.py`, both `main_admin_*.py` |
+| Step-up (current password) required to replace the second factor | `application/use_cases/manage_own_account.py` |
+| Failed model load/unload state committed independently, surviving the request rollback | `adapters/persistence/model_state.py` |
+| Transient model states reconciled at deploy, so a crash leaves no dead-end row | `infrastructure/provision.py` |
+| Targeted key and user updates that cannot revert a concurrent revoke or disable | `adapters/persistence/repositories.py` |
+| `user` role limited to chat, own keys, own usage; no registry or node read | `adapters/authz/role_authorization.py` |
 
 **Not implemented, and nothing in the repository arranges it**
 
@@ -687,7 +697,7 @@ looking for the risk. The state below is checked against the code.
 |---|---|
 | Separate database accounts per service (§6) | Aspiration. One account, with DDL rights, shared by every service |
 | Secrets as Docker file mounts (§8) | The reading half exists (`secrets_dir`); Compose passes everything through `env_file` |
-| SSRF guard (§7.2) | Absent, and correct by the letter of the rule: there is still no node write path. The single node is named in configuration and written at admin start, so nothing accepts an address from a caller |
+| SSRF guard (§7.2) | Absent, and correct by the letter of the rule: there is still no node write path. The single node is named in configuration and written by the `migrate` service, so nothing accepts an address from a caller |
 | Logging boundaries and the expiring debug switch (§9.2) | The columns exist on both `users` and `api_keys` and are read by nothing |
 | Knowledge base, multi-tenancy, Prometheus (§7.3, §10) | Phase 2, correctly absent |
 
@@ -825,3 +835,13 @@ Recorded explicitly so they are not later mistaken for oversights, with the cond
 **Situation.** `*.rcsl.online` resolves every subdomain to the proxy host. Anyone able to obtain a vhost there can serve content under a plausible-looking name, which assists phishing. This also means `ai.nexus.rcsl.online` depends on no one ever creating a `nexus.rcsl.online` node in the zone, which would break resolution.
 
 **Why accepted.** The domain is maintained by someone else and the wildcard predates this project. Worth raising with its administrator, and worth requesting explicit A records for the two hostnames this project uses rather than relying on wildcard synthesis.
+
+### 15.5 The Gateway Can Reach the Tailnet Admin Entrance Over the Docker Bridge
+
+**Situation.** `gateway` and `admin-tailnet` share the `app` Compose network (§3.2). The tailnet entrance binds `0.0.0.0` inside its container and trusts `Tailscale-User-Login` outright, so a process with code execution in the gateway can `curl http://admin-tailnet:8001/...` with a forged identity header and obtain administrator access, with no tailnet and no session. Socket binding isolates the host-published port, not the Docker service name.
+
+**Why accepted for now.** A gateway compromise is already the §2 worst case, and the §6 credential split (not yet implemented) is the control meant to contain it. The exposure was surfaced by an adversarial review once the tailnet entrance grew from health-only into a full API; it is recorded rather than silently carried.
+
+**Mitigation, standing.** Nothing in the gateway process imports an admin router, so isolation does not depend on a path rule. The reachable damage is bounded by whatever the admin API can do, which is the whole control plane.
+
+**Reconsider — and close — when** the control plane can be moved onto its own Compose network that the gateway does not join, or when §6's service-to-service authentication lands, at which point the forged header alone is not enough. Either removes the exposure entirely; until then it is the most important open item before public exposure.
