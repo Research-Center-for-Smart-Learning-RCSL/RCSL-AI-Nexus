@@ -63,8 +63,11 @@ async def readyz(request: Request) -> JSONResponse:
     This previously returned hardcoded booleans and could never report 503, so
     anything gating a rollout on it was gating on a constant.
 
-    It reveals which dependency is down, which is mildly useful to an
-    attacker, so on the gateway it is served only on the tailnet-bound port.
+    The per-dependency breakdown is returned only when the caller was not
+    resolved through the public perimeter. Which dependency is down is mildly
+    useful to an attacker, and on the public admin entrance this endpoint is
+    exempt from the geo and proxy checks so a health prober can reach it — so
+    there it answers only `{"ready": bool}`.
     """
     probes = [_probe("database", _check_database())]
 
@@ -79,7 +82,12 @@ async def readyz(request: Request) -> JSONResponse:
 
     checks = dict(await asyncio.gather(*probes))
     ready = all(checks.values())
-    return JSONResponse(
-        status_code=200 if ready else 503,
-        content={"ready": ready, "checks": checks},
-    )
+
+    body: dict[str, object] = {"ready": ready}
+    # Detail only where the perimeter is not the public one. The public admin
+    # and gateway entrances strip it; the tailnet entrance and local
+    # development keep it, which is where an operator actually reads it.
+    if getattr(request.app.state, "expose_readiness_detail", True):
+        body["checks"] = checks
+
+    return JSONResponse(status_code=200 if ready else 503, content=body)

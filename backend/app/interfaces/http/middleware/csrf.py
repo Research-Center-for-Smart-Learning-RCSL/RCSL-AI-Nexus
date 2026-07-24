@@ -42,6 +42,18 @@ logger = logging.getLogger(__name__)
 TOKEN_BYTES = 32
 
 
+def _tokens_match(presented: str, expected: str) -> bool:
+    """Constant-time comparison that tolerates a non-ASCII header.
+
+    Starlette decodes header values as latin-1, so a header carrying bytes
+    above 0x7f yields a `str` that `hmac.compare_digest` refuses with a
+    `TypeError` — which, uncaught, becomes a 500 and defeats the deliberate
+    403. Comparing the utf-8 encodings sidesteps that; a token is url-safe
+    base64, so a legitimate one is pure ASCII and unaffected.
+    """
+    return compare_digest(presented.encode("utf-8", "ignore"), expected.encode("utf-8", "ignore"))
+
+
 class CsrfMiddleware(BaseHTTPMiddleware):
     def __init__(
         self,
@@ -59,7 +71,11 @@ class CsrfMiddleware(BaseHTTPMiddleware):
         self._max_age = max_age_seconds
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        presented_cookie = request.cookies.get(self._cookie)
+        # An empty-string cookie is treated as absent, not present. A cookie
+        # set to "" failed the double-submit check *and*, when the guard was
+        # `is None`, was never re-issued, so every non-safe request stayed
+        # wedged at 403 until the client deleted the cookie itself.
+        presented_cookie = request.cookies.get(self._cookie) or None
 
         if request.method not in SAFE_METHODS:
             failure = self._double_submit_failure(request, presented_cookie)
@@ -73,7 +89,13 @@ class CsrfMiddleware(BaseHTTPMiddleware):
                 # Returned, not raised: an exception here would escape past
                 # ExceptionMiddleware and surface as a 500. See
                 # interfaces/http/errors.py:error_response.
-                return error_response(failure, envelope="admin")
+                response = error_response(failure, envelope="admin")
+                # Re-seed on the rejection too, so a wedged or missing cookie
+                # is replaced by the same response that reports the failure and
+                # the client's retry can succeed.
+                if presented_cookie is None:
+                    self._issue(response, secrets.token_urlsafe(TOKEN_BYTES))
+                return response
 
         response = await call_next(request)
 
@@ -92,7 +114,7 @@ class CsrfMiddleware(BaseHTTPMiddleware):
             return CsrfValidationError(detail=f"no {self._cookie} cookie on {request.method}")
 
         presented = request.headers.get(self._header, "")
-        if not compare_digest(presented, cookie_value):
+        if not _tokens_match(presented, cookie_value):
             return CsrfValidationError(detail=f"{self._header} does not match the cookie")
         return None
 

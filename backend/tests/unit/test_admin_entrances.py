@@ -133,6 +133,23 @@ def test_the_first_response_issues_a_csrf_cookie_readable_by_scripts() -> None:
     assert "httponly" not in header.lower()
 
 
+def test_an_empty_csrf_cookie_is_re_seeded_rather_than_wedging() -> None:
+    """An empty-string cookie failed the check and, with the old `is None`
+    guard, was never replaced, so every non-safe request stayed at 403 until
+    the client deleted the cookie itself."""
+    with TestClient(create_public()) as client:
+        client.get("/admin/me", headers=PROXY_HEADERS)
+        client.cookies.set(CSRF_COOKIE, "")
+
+        rejected = client.post(
+            "/admin/auth/login", json={"login": "a@b.c", "password": "x"}, headers=PROXY_HEADERS
+        )
+
+    assert rejected.status_code == 403
+    # The rejection carries a fresh cookie, so the client's retry can succeed.
+    assert CSRF_COOKIE in rejected.headers.get("set-cookie", "")
+
+
 def test_csrf_is_installed_on_the_tailnet_entrance_too() -> None:
     """The first version got this wrong. `tailscale serve` attaches the
     identity header to any request the browser can be made to issue, including

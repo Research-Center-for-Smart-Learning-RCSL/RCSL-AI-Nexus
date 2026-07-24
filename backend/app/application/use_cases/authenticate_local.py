@@ -53,6 +53,18 @@ class AuthenticateLocal:
         self._secret_box = secret_box
         self._clock = clock
 
+    def _assert_still_usable(self, user: User) -> None:
+        """Re-checked at the second step, not only the first.
+
+        The challenge between password and TOTP lasts up to five minutes, and
+        an account disabled inside that window would otherwise still complete
+        the login and be issued a session. `resolve_session_actor` catches it
+        on the next request, but "disable now" should take effect now. Same
+        error as a missing second factor, so the step reveals nothing new.
+        """
+        if user.disabled_at is not None or not user.can_use_public_entrance:
+            raise TotpRequiredError(detail=f"user {user.id} no longer usable")
+
     async def verify_password(self, login: str, password: str, *, client_ip: str) -> PasswordResult:
         # Before the hash, not after. See LoginThrottle.assert_allowed.
         await self._throttle.assert_allowed(login=login, client_ip=client_ip)
@@ -96,6 +108,7 @@ class AuthenticateLocal:
         user = await self._users.get(user_id)
         if user is None or user.totp_secret is None:
             raise TotpRequiredError()
+        self._assert_still_usable(user)
 
         await self._throttle.assert_allowed(login=user.login, client_ip=client_ip)
 
@@ -132,6 +145,7 @@ class AuthenticateLocal:
         user = await self._users.get(user_id)
         if user is None:
             raise TotpRequiredError()
+        self._assert_still_usable(user)
 
         await self._throttle.assert_allowed(login=user.login, client_ip=client_ip)
 

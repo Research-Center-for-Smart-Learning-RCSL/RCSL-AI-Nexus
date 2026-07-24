@@ -8,9 +8,11 @@
  *     header the browser never sees, or a server-side session cookie. The
  *     frontend holds no token.
  *  2. Every non-GET request echoes the CSRF value from the non-HttpOnly
- *     companion cookie (security.md section 5.3, double submit). The tailnet
- *     entrance has no such cookie and simply sends no header, which is correct:
- *     it has no ambient credential to protect.
+ *     companion cookie (security.md section 5.3, double submit). Both entrances
+ *     carry the cookie now: the tailnet identity header is attached by
+ *     `tailscale serve` to any request a hostile page can provoke, so it is an
+ *     ambient credential in the CSRF sense. When the cookie is absent this
+ *     sends no header, which the server refuses on a non-safe method.
  *
  * All calls are same-origin because next.config.js rewrites `/admin/*` to the
  * entrance's backend.
@@ -132,7 +134,7 @@ function buildHeaders(
     headers.set('Content-Type', 'application/json');
   }
 
-  // Double-submit CSRF. Absent on the tailnet entrance by design.
+  // Double-submit CSRF, on both entrances. See the module docstring.
   if (method !== 'GET' && method !== 'HEAD') {
     const token = readCookie(CSRF_COOKIE);
     if (token) headers.set(CSRF_HEADER, token);

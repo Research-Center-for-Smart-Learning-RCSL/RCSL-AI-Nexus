@@ -38,9 +38,10 @@ async def list_api_keys(
 ) -> list[ApiKeyResponse]:
     visible, last_used = await keys.list_visible(actor)
 
-    # One listing rather than a lookup per key. The table is small, and a
-    # per-row query here would be N+1 on the page that is most often open.
-    display = {u.id: u.display_name for u in await users.list_all()}
+    # Only ids and display names, not full user entities: the latter carries
+    # the password hash and TOTP secret into a handler a `user`-role caller can
+    # reach. One query, not one per key.
+    display = await users.display_names()
 
     return [
         ApiKeyResponse.of(

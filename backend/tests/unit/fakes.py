@@ -44,6 +44,9 @@ class FakeUsers:
     async def list_all(self) -> list[User]:
         return list(self.rows.values())
 
+    async def display_names(self) -> dict[str, str]:
+        return {u.id: u.display_name for u in self.rows.values()}
+
     async def count(self) -> int:
         return len(self.rows)
 

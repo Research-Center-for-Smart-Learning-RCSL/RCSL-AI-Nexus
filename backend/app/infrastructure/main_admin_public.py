@@ -88,6 +88,11 @@ def create_app() -> FastAPI:
     app.add_middleware(GeoFilterMiddleware, auth_mode=settings.auth_mode)
     app.add_middleware(StripTailscaleHeadersMiddleware)
 
+    # `/readyz` answers only {"ready": bool} here, without naming the failing
+    # dependency, because this entrance faces the internet and the endpoint is
+    # exempt from the perimeter checks so a prober can reach it.
+    app.state.expose_readiness_detail = False
+
     install_error_handlers(app, envelope="admin", auth_mode=settings.auth_mode)
     mount_admin_routers(app)
     # Only this entrance mounts the credential flow. See the tailnet module.
