@@ -56,6 +56,11 @@ class InvalidModelReferenceError(DomainError):
     public_message = "The model reference is not valid."
 
 
+class ContextTooLongError(DomainError):
+    code = "context_too_long"
+    public_message = "The conversation is longer than this platform accepts."
+
+
 # --- Quota and rate limiting ---------------------------------------------
 
 
