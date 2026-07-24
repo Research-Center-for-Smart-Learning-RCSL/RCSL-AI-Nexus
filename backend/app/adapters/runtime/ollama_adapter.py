@@ -25,6 +25,15 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_KEEP_ALIVE = "10m"
 
+# Ollama's done_reason vocabulary is its own. OpenAI clients branch on
+# finish_reason, and an unrecognised value ("load", "unload") reads to them as
+# a protocol error, so anything outside the known set is reported as "stop".
+_FINISH_REASONS = {"stop": "stop", "length": "length", "load": "stop", "unload": "stop"}
+
+
+def _finish_reason(done_reason: str | None) -> str:
+    return _FINISH_REASONS.get(done_reason or "stop", "stop")
+
 
 class OllamaAdapter:
     def __init__(self, base_url: str, request_timeout_seconds: int = 300) -> None:
@@ -39,7 +48,7 @@ class OllamaAdapter:
     # --- inference -------------------------------------------------------
 
     async def generate(
-        self, ref: str, messages: Sequence[Message]
+        self, ref: str, messages: Sequence[Message], max_tokens: int | None = None
     ) -> AsyncIterator[CompletionChunk]:
         """Stream a completion.
 
@@ -49,13 +58,19 @@ class OllamaAdapter:
         it Ollama keeps generating for someone who has already gone.
         """
         assert_valid_model_ref(ref)
-        payload = {
+        payload: dict = {
             "model": ref,
             "messages": [{"role": m.role.value, "content": m.content} for m in messages],
             "stream": True,
         }
+        if max_tokens is not None:
+            # Stopping at the source beats counting chunks and cutting the
+            # stream: the model stops generating rather than producing tokens
+            # nobody reads.
+            payload["options"] = {"num_predict": max_tokens}
 
         counted = 0
+        saw_done = False
         async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
             async with client.stream("POST", "/api/chat", json=payload) as response:
                 await self._raise_for_status(response, ref)
@@ -75,16 +90,28 @@ class OllamaAdapter:
                     delta = (event.get("message") or {}).get("content", "")
 
                     if event.get("done"):
+                        saw_done = True
                         # Ollama reports the authoritative token count only at
                         # the end. Chunks were counted as one apiece so that a
                         # disconnect still bills something sensible, so emit
                         # the difference here rather than the whole figure,
                         # which would otherwise be counted twice.
                         eval_count = int(event.get("eval_count") or 0)
-                        correction = max(eval_count - counted, 0)
+                        correction = eval_count - counted
+                        if correction < 0:
+                            # Chunks outnumbered the model's own token count.
+                            # There is no downward correction to make, so this
+                            # is logged rather than silently over-billed.
+                            logger.info(
+                                "ollama eval_count=%s below chunk count=%s for %s",
+                                eval_count,
+                                counted,
+                                ref,
+                            )
+                            correction = 0
                         yield CompletionChunk(
                             delta=delta,
-                            finish_reason=event.get("done_reason") or "stop",
+                            finish_reason=_finish_reason(event.get("done_reason")),
                             token_count=correction,
                         )
                         return
@@ -92,6 +119,15 @@ class OllamaAdapter:
                     if delta:
                         counted += 1
                         yield CompletionChunk(delta=delta, token_count=1)
+
+                if not saw_done:
+                    # The stream ended without a terminal event: the model was
+                    # evicted, Ollama restarted, or the read timeout fired.
+                    # Returning quietly would let the caller record a complete
+                    # generation and report "stop" to the client.
+                    raise NoAvailableModelError(
+                        detail=f"ollama stream for {ref} ended without a done event"
+                    )
 
     # --- model lifecycle -------------------------------------------------
 

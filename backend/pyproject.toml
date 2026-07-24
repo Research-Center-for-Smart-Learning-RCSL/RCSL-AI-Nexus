@@ -7,7 +7,9 @@ license = "AGPL-3.0-or-later"
 license-files = ["../LICENSE"]
 
 dependencies = [
-    "fastapi>=0.115",
+    # 0.106-0.12x closed the yield-dependency exit stack before the response was
+    # sent, which silently dropped every streaming request's usage record.
+    "fastapi>=0.129",
     "uvicorn[standard]>=0.34",
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
@@ -56,3 +58,4 @@ strict = true
 [[tool.mypy.overrides]]
 module = "app.adapters.*"
 strict = false
+

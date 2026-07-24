@@ -15,7 +15,9 @@ class ModelRuntimePort(Protocol):
     something on `host.docker.internal`, not a sibling container.
     """
 
-    def generate(self, ref: str, messages: Sequence[Message]) -> AsyncIterator[CompletionChunk]:
+    def generate(
+        self, ref: str, messages: Sequence[Message], max_tokens: int | None = None
+    ) -> AsyncIterator[CompletionChunk]:
         """Stream completion chunks. Implementations are async generators.
 
         Declared with `def`, not `async def`. An async generator function is

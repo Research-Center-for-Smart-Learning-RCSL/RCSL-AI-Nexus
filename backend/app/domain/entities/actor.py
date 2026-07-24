@@ -57,5 +57,13 @@ class Actor:
     source: ActorSource
     scopes: frozenset[Scope]
 
+    api_key_id: str | None = None
+    """The `key_id` handle when `source` is `api_key`, otherwise None.
+
+    Carried explicitly rather than read back out of `display`, because usage
+    accounting and the per-key quota both key on it and a positional
+    convention would be silently wrong the first time `display` changed.
+    """
+
     def has(self, scope: Scope) -> bool:
         return scope in self.scopes

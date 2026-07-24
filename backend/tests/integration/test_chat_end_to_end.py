@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.adapters.persistence.repositories import (
@@ -27,7 +28,7 @@ from app.adapters.persistence.repositories import (
     PostgresRoutingPolicyRepository,
     PostgresUserRepository,
 )
-from app.adapters.persistence.sqlalchemy_models import Base
+from app.adapters.persistence.sqlalchemy_models import Base, UsageRecordRow
 from app.domain.entities.actor import Role
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.chat import CompletionChunk, Message
@@ -52,11 +53,13 @@ class StubRuntime:
         self._chunks = chunks
         self.cleaned_up = False
         self.seen_ref: str | None = None
+        self.seen_max_tokens: int | None = None
 
     async def generate(
-        self, ref: str, messages: Sequence[Message]
+        self, ref: str, messages: Sequence[Message], max_tokens: int | None = None
     ) -> AsyncIterator[CompletionChunk]:
         self.seen_ref = ref
+        self.seen_max_tokens = max_tokens
         try:
             for i in range(self._chunks):
                 yield CompletionChunk(delta=f"tok{i} ", token_count=1)
@@ -134,12 +137,48 @@ async def _seed(plaintext_holder: dict) -> None:
     await engine.dispose()
 
 
+async def issue_key(**overrides) -> str:
+    """Mint an extra key with custom limits, and return its plaintext."""
+    engine = create_async_engine(TEST_DATABASE_URL or "")
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    issued = ApiKeyService(peppers=(PEPPER.encode(),)).issue()
+    async with factory() as session:
+        fields = {
+            "id": str(uuid.uuid4()),
+            "key_id": issued.key_id,
+            "digest": issued.digest,
+            "name": "extra",
+            "owner_id": "u1",
+            "scopes": frozenset({"chat"}),
+            "expires_at": datetime.now(UTC) + timedelta(days=1),
+            **overrides,
+        }
+        await PostgresApiKeyRepository(session).save(ApiKey(**fields))
+        await session.commit()
+    await engine.dispose()
+    return issued.plaintext
+
+
+async def count_usage() -> int:
+    """Counted through a fresh engine, so nothing can be served out of the
+    application's own session state."""
+    engine = create_async_engine(TEST_DATABASE_URL or "")
+    factory = async_sessionmaker(engine)
+    async with factory() as session:
+        total = await session.scalar(select(func.count()).select_from(UsageRecordRow))
+    await engine.dispose()
+    return int(total or 0)
+
+
 @pytest.fixture
 async def client(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", TEST_DATABASE_URL or "")
     monkeypatch.setenv("ENV", "development")
     monkeypatch.setenv("AUTH_MODE", "dev")
     monkeypatch.setenv("API_KEY_PEPPER", PEPPER)
+    # No Redis in the test environment; per-process counting is fine here
+    # because each test builds its own app.
+    monkeypatch.setenv("CACHE_BACKEND", "memory")
     get_settings.cache_clear()
 
     holder: dict = {}
@@ -251,3 +290,123 @@ async def test_unknown_capability_reports_no_available_model(client) -> None:
     # The error must not name what was considered.
     assert "primary" not in json.dumps(body)
     assert "qwen" not in json.dumps(body).lower()
+
+
+# --- regressions for defects found by adversarial review ------------------
+
+
+async def test_a_key_without_the_chat_scope_is_refused(client) -> None:
+    """Scopes were computed and then never consulted, so any valid key could
+    consume the hardware regardless of what it was issued for."""
+    test_client, _, _ = client
+    token = await issue_key(scopes=frozenset())
+    test_client.headers["Authorization"] = f"Bearer {token}"
+
+    response = test_client.post(
+        "/v1/chat/completions",
+        json={"model": "chat", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "not_authorized"
+
+
+async def test_streaming_usage_is_persisted(client) -> None:
+    """A streaming response is produced after the endpoint returns, so this
+    asserts the session outlives it and the row is actually committed. No test
+    checked this, and the declared FastAPI floor included versions where it
+    silently did not hold."""
+    test_client, _, _ = client
+    assert await count_usage() == 0
+
+    response = test_client.post(
+        "/v1/chat/completions",
+        json={"model": "chat", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+    )
+    assert response.status_code == 200
+
+    assert await count_usage() == 1, "streaming usage was not committed"
+
+
+async def test_quota_is_enforced(client) -> None:
+    """Dead in two independent ways: the quota was read off a repository that
+    has no such method (silently returning zero), and no usage row carried the
+    key it belonged to."""
+    test_client, _, _ = client
+    token = await issue_key(quota_tokens_per_day=2)
+    test_client.headers["Authorization"] = f"Bearer {token}"
+
+    body = {"model": "chat", "messages": [{"role": "user", "content": "hi"}]}
+
+    first = test_client.post("/v1/chat/completions", json=body)
+    assert first.status_code == 200, "the first request is within quota"
+
+    second = test_client.post("/v1/chat/completions", json=body)
+    assert second.status_code == 429
+    assert second.json()["error"]["code"] == "quota_exceeded"
+    assert second.headers["Retry-After"]
+
+
+async def test_rate_limit_is_enforced(client) -> None:
+    """`rate_limit_rpm` was persisted end to end and enforced nowhere."""
+    test_client, _, _ = client
+    token = await issue_key(rate_limit_rpm=2)
+    test_client.headers["Authorization"] = f"Bearer {token}"
+
+    body = {"model": "chat", "messages": [{"role": "user", "content": "hi"}]}
+    statuses = [test_client.post("/v1/chat/completions", json=body).status_code for _ in range(4)]
+
+    assert statuses[:2] == [200, 200]
+    assert 429 in statuses[2:], f"rate limit never fired: {statuses}"
+
+
+async def test_truncation_reports_length_not_stop(client) -> None:
+    """Reporting `stop` for a generation we cut off is an active lie: OpenAI
+    clients branch on this field to decide whether to continue a reply."""
+    test_client, _, _ = client
+    test_client.app.state.runtimes = {RuntimeKind.OLLAMA: StubRuntime(chunks=100)}
+
+    response = test_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "chat",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 3,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["finish_reason"] == "length"
+
+
+async def test_client_max_tokens_is_honoured_when_stricter(client) -> None:
+    """It was parsed and discarded, so a caller asking for 3 tokens was billed
+    for up to the platform ceiling."""
+    test_client, runtime, _ = client
+    test_client.app.state.runtimes = {RuntimeKind.OLLAMA: (runtime := StubRuntime(chunks=100))}
+
+    test_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "chat",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 5,
+        },
+    )
+
+    assert runtime.seen_max_tokens == 5, "the limit never reached the runtime"
+
+
+async def test_a_pre_generation_failure_on_the_streaming_path_still_returns_503(client) -> None:
+    """The role frame used to be emitted before anything could fail, so the
+    status was committed as 200 and routing failures were reported in-band as
+    successes while the identical non-streaming request returned 503."""
+    test_client, _, _ = client
+
+    response = test_client.post(
+        "/v1/chat/completions",
+        json={"model": "vision", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "no_available_model"

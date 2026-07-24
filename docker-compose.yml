@@ -70,7 +70,7 @@ services:
     ports:
       # Reachable only from the tailnet, and the Tailscale ACL narrows that
       # further to the proxy host alone.
-      - "${TAILNET_IP}:8000:8000"
+      - "${TAILNET_IP:?set TAILNET_IP in .env; an empty value publishes on 0.0.0.0}:8000:8000"
     networks: [app, data]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
@@ -106,7 +106,7 @@ services:
       - --port
       - "8002"
     ports:
-      - "${TAILNET_IP}:8002:8002"
+      - "${TAILNET_IP:?set TAILNET_IP in .env; an empty value publishes on 0.0.0.0}:8002:8002"
     networks: [app, data]
 
   # --- frontends ----------------------------------------------------------
@@ -131,7 +131,7 @@ services:
     environment:
       ADMIN_API_URL: http://admin-public:8002
     ports:
-      - "${TAILNET_IP}:3001:3000"
+      - "${TAILNET_IP:?set TAILNET_IP in .env; an empty value publishes on 0.0.0.0}:3001:3000"
     networks: [app]
     depends_on: [admin-public]
 
@@ -167,3 +167,4 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+

@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from app.domain.entities.actor import Actor
-from app.domain.entities.chat import Message, MessageRole
+from app.domain.entities.chat import CompletionChunk, Message, MessageRole
 from app.domain.exceptions import DomainError
 from app.infrastructure.di import RouteChatRequestDep
 from app.interfaces.http.middleware.api_key_auth import authenticate_api_key
@@ -55,8 +55,24 @@ async def chat_completions(
     messages = _to_domain(body)
 
     if body.stream:
+        generation = use_case.execute(actor, body.model, messages, body.max_tokens)
+
+        # Pulling the first chunk here, while we can still choose a status
+        # code, is what keeps authorization, routing, and reference validation
+        # reportable. Handing an unstarted generator to StreamingResponse
+        # commits 200 before any of that has run, so a routing failure came
+        # back as a successful response containing an error frame while the
+        # identical non-streaming request returned 503.
+        try:
+            first: CompletionChunk | None = await anext(generation)
+        except StopAsyncIteration:
+            first = None
+        except BaseException:
+            await generation.aclose()
+            raise
+
         return StreamingResponse(
-            _stream(completion_id, created, body.model, actor, use_case, messages),
+            _stream(completion_id, created, body.model, generation, first),
             media_type="text/event-stream",
             headers={
                 # Belt and braces against an intermediary buffering the stream.
@@ -67,17 +83,24 @@ async def chat_completions(
             },
         )
 
-    return await _collect(completion_id, created, body.model, actor, use_case, messages)
+    return await _collect(
+        completion_id, created, body.model, actor, use_case, messages, body.max_tokens
+    )
 
 
 async def _stream(
     completion_id: str,
     created: int,
     capability: str,
-    actor: Actor,
-    use_case,
-    messages: list[Message],
+    generation: AsyncIterator[CompletionChunk],
+    first: CompletionChunk | None,
 ) -> AsyncIterator[str]:
+    """Frame an already-primed generation as SSE.
+
+    Receives the generator rather than creating it, because the first chunk has
+    to be pulled before the response exists. See `chat_completions`.
+    """
+
     def envelope(delta: dict, finish_reason: str | None) -> dict:
         return {
             "id": completion_id,
@@ -87,26 +110,40 @@ async def _stream(
             "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
         }
 
+    def frames_for(chunk: CompletionChunk) -> list[str]:
+        out = []
+        if chunk.delta:
+            out.append(_frame(envelope({"content": chunk.delta}, None)))
+        if chunk.finish_reason:
+            out.append(_frame(envelope({}, chunk.finish_reason)))
+        return out
+
+    failed = False
     yield _frame(envelope({"role": "assistant"}, None))
 
     try:
+        if first is not None:
+            for frame in frames_for(first):
+                yield frame
         # `aclosing` is the caller's half of the streaming contract: without it
         # the use case's `finally` may not run promptly, leaking a concurrency
         # slot and leaving the runtime generating for a departed client.
-        async with aclosing(use_case.execute(actor, capability, messages)) as stream:
+        async with aclosing(generation) as stream:
             async for chunk in stream:
-                if chunk.delta:
-                    yield _frame(envelope({"content": chunk.delta}, None))
-                if chunk.finish_reason:
-                    yield _frame(envelope({}, chunk.finish_reason))
+                for frame in frames_for(chunk):
+                    yield frame
     except DomainError as exc:
-        # The status line went out with the first frame, so failures after that
-        # point can only be reported in-band. Clients reading only the HTTP
-        # status will see 200 with a truncated body; that is inherent to SSE
-        # and is documented for API consumers rather than worked around.
+        failed = True
+        # Past the first byte the status line is already committed, so this is
+        # the only channel left. Inherent to SSE, documented for consumers
+        # rather than worked around.
         yield _frame({"error": {"code": exc.code, "message": exc.public_message}})
 
-    yield "data: [DONE]\n\n"
+    if not failed:
+        # `[DONE]` means "completed normally". Emitting it after an error frame
+        # tells every client that treats it as the success sentinel that a
+        # truncated response was fine.
+        yield "data: [DONE]\n\n"
 
 
 async def _collect(
@@ -116,6 +153,7 @@ async def _collect(
     actor: Actor,
     use_case,
     messages: list[Message],
+    max_tokens: int | None,
 ) -> ChatCompletionResponse:
     """Non-streaming path.
 
@@ -126,7 +164,7 @@ async def _collect(
     tokens = 0
     finish_reason: str | None = None
 
-    async with aclosing(use_case.execute(actor, capability, messages)) as stream:
+    async with aclosing(use_case.execute(actor, capability, messages, max_tokens)) as stream:
         async for chunk in stream:
             parts.append(chunk.delta)
             tokens += chunk.token_count

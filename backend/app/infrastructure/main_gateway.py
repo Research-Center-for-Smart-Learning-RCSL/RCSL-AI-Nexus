@@ -18,6 +18,8 @@ from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.db import dispose_engine, init_engine
 from app.infrastructure.di import (
     build_api_key_service,
+    build_authorization,
+    build_cache,
     build_concurrency_limiter,
     build_runtimes,
 )
@@ -34,9 +36,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.runtimes = build_runtimes(settings)
     app.state.concurrency = build_concurrency_limiter(settings)
     app.state.api_key_service = build_api_key_service(settings)
+    app.state.authz = build_authorization()
+    app.state.cache = build_cache(settings)
     try:
         yield
     finally:
+        await app.state.cache.close()
         await dispose_engine()
 
 

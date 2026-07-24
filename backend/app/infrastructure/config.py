@@ -16,6 +16,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 AuthMode = Literal["tailnet", "local", "dev"]
 Environment = Literal["development", "production"]
+CacheBackend = Literal["redis", "memory"]
 
 SECRETS_DIR = Path("/run/secrets")
 _secrets_dir = str(SECRETS_DIR) if SECRETS_DIR.is_dir() else None
@@ -39,6 +40,12 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://nexus:nexus@localhost:5432/nexus"
     redis_url: str = "redis://localhost:6379/0"
+    redis_password: str = ""
+    cache_backend: CacheBackend = "redis"
+    """`memory` is per-process and therefore wrong for anything counted across
+    workers. Chosen explicitly, never inferred, so it cannot be reached in a
+    deployment by accident."""
+
     ollama_base_url: str = "http://host.docker.internal:11434"
 
     session_absolute_ttl_seconds: int = 12 * 3600
@@ -56,6 +63,11 @@ class Settings(BaseSettings):
     request_timeout_seconds: int = 300
 
     api_key_pepper: str = Field(default="dev-pepper-not-for-production")
+    api_key_pepper_previous: str = Field(
+        default="",
+        description="Set during a pepper rotation so keys signed with the old "
+        "value keep verifying until they are reissued.",
+    )
     totp_encryption_key: str = Field(default="dev-totp-key-not-for-production")
     session_signing_key: str = Field(default="dev-session-key-not-for-production")
     proxy_shared_secret: str = Field(default="dev-proxy-secret-not-for-production")
@@ -97,12 +109,26 @@ class Settings(BaseSettings):
             "totp_encryption_key": self.totp_encryption_key,
             "session_signing_key": self.session_signing_key,
             "proxy_shared_secret": self.proxy_shared_secret,
+            # Included because the placeholder is embedded in a URL rather than
+            # standing alone, which is exactly why it was missed before.
+            "database_url": self.database_url,
         }
         offenders = [name for name, value in placeholders.items() if "not-for-production" in value]
         if offenders:
             raise ValueError(
                 f"Placeholder secrets present in production: {', '.join(sorted(offenders))}. "
                 "Mount real values under /run/secrets."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _refuse_in_memory_cache_in_production(self) -> Settings:
+        """An in-memory cache silently makes rate limits per-worker, so a
+        deployment would appear to enforce a limit it does not."""
+        if self.is_production and self.cache_backend == "memory":
+            raise ValueError(
+                "CACHE_BACKEND=memory cannot be used with ENV=production: rate "
+                "limits would be counted per process rather than per key."
             )
         return self
 
