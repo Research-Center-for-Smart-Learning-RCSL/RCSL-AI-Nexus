@@ -63,12 +63,17 @@ to `migrate` too, because it calls `get_settings()` and production refuses the
 placeholders. Postgres reads its password through `POSTGRES_PASSWORD_FILE`;
 redis, which has no such convention, reads the file in its command.
 
-**Verified structurally only.** `docker compose config` resolves the secret
-mounts as intended and the unit suite passes (225 tests), but the live grants,
-the role creation, and every service connecting as its own account are exercised
-for the first time at the Mac Studio deploy, by construction: none of it runs on
-the Windows development machine, which uses the single-account default and
-`AUTH_MODE=dev`.
+**What is verified, and what waits for the deploy.** The security property
+itself is now proven against a live Postgres 17: an integration test
+(`tests/integration/test_db_role_grants.py`) provisions the two roles the way
+`migrate` does and asserts the server refuses the gateway account an INSERT into
+`api_keys`, `users`, `routing_policies` and `audit_log`, while keeping its reads
+and its `usage_records` write, with the admin account as the positive control.
+`docker compose config` resolves the secret mounts as intended and the unit
+suite passes. What still waits for the Mac Studio is the full compose wiring end
+to end: `migrate` creating the roles from the mounted URL secrets, and each
+service connecting as its own account rather than the single-account
+`AUTH_MODE=dev` default the Windows machine uses.
 
 ### A routing policy editor, so the one thing that makes the gateway serve is no longer curl-only
 

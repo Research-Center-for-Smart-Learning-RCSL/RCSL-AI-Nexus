@@ -31,7 +31,7 @@ carries the checked control-by-control state.
 | Audit logging | Adapter written, and every administrative action records one |
 | Admin API: models, downloads, routing policies, API keys, users, dashboard, `/admin/chat` | Complete, exercised end to end against a real Postgres |
 | Node management | Read only. The single node is named in configuration; a write endpoint ships with the SSRF guard ([security.md](./architecture/security.md) §7.2) |
-| Database account split, Docker secrets in Compose | Complete. Three least-privilege Postgres accounts provisioned by `migrate`; all credentials mounted as Docker file secrets. Unverified against a live stack (Mac Studio deploy pending) |
+| Database account split, Docker secrets in Compose | Complete. Three least-privilege Postgres accounts provisioned by `migrate`; all credentials mounted as Docker file secrets. The grant enforcement is proven against a live Postgres 17 (`tests/integration/test_db_role_grants.py`); the full Compose wiring is first exercised at the Mac Studio deploy |
 | Frontend | Every screen now reaches a real backend. Vitest covers the security-critical logic units; no E2E runner yet |
 | Adversarial review of the admin API | Five independent reviews run; 28 findings verified and fixed across four commits, residuals recorded in [security.md](./architecture/security.md) §13.0 and §15.5 |
 
