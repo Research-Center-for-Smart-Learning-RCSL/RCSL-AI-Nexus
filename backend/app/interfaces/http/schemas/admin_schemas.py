@@ -18,8 +18,11 @@ from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, EmailStr, Field
 
+from app.application.use_cases.read_audit_log import AuditLogPage
+from app.application.use_cases.read_usage_analytics import UsageAnalytics
 from app.domain.entities.actor import Role
 from app.domain.entities.api_key import ApiKey
+from app.domain.entities.audit import AuditEntry
 from app.domain.entities.invitation import Invitation
 from app.domain.entities.model import Model, RuntimeKind
 from app.domain.entities.node import Node
@@ -503,3 +506,92 @@ class DashboardResponse(BaseModel):
     users_total: int
     requests_last_24h: int
     tokens_last_24h: int
+
+
+# --- logs ----------------------------------------------------------------
+
+
+class AuditEntryResponse(BaseModel):
+    id: str
+    actor_id: str
+    actor_display: str
+    actor_source: str
+    action: str
+    target: str | None
+    outcome: str
+    detail: dict[str, str]
+    at: datetime
+
+    @classmethod
+    def of(cls, entry: AuditEntry) -> AuditEntryResponse:
+        return cls(
+            id=entry.id,
+            actor_id=entry.actor_id,
+            actor_display=entry.actor_display,
+            actor_source=entry.actor_source,
+            action=entry.action,
+            target=entry.target,
+            outcome=entry.outcome,
+            detail=entry.detail,
+            at=entry.at,
+        )
+
+
+class AuditLogResponse(BaseModel):
+    entries: list[AuditEntryResponse]
+    total: int
+    limit: int
+    offset: int
+
+    @classmethod
+    def of(cls, page: AuditLogPage) -> AuditLogResponse:
+        return cls(
+            entries=[AuditEntryResponse.of(e) for e in page.entries],
+            total=page.total,
+            limit=page.limit,
+            offset=page.offset,
+        )
+
+
+# --- usage analytics -----------------------------------------------------
+
+
+class UsagePointResponse(BaseModel):
+    t: datetime
+    requests: int
+    tokens: int
+
+
+class CapabilitySeriesResponse(BaseModel):
+    capability: str
+    points: list[UsagePointResponse]
+
+
+class UsageAnalyticsResponse(BaseModel):
+    bucket: str
+    since: datetime
+    until: datetime
+    totals: list[UsagePointResponse]
+    by_capability: list[CapabilitySeriesResponse]
+
+    @classmethod
+    def of(cls, analytics: UsageAnalytics) -> UsageAnalyticsResponse:
+        return cls(
+            bucket=analytics.bucket,
+            since=analytics.since,
+            until=analytics.until,
+            totals=[
+                UsagePointResponse(t=p.at, requests=p.requests, tokens=p.tokens)
+                for p in analytics.totals
+            ],
+            by_capability=[
+                CapabilitySeriesResponse(
+                    capability=s.capability,
+                    points=[
+                        UsagePointResponse(t=p.at, requests=p.requests, tokens=p.tokens)
+                        for p in s.points
+                    ],
+                )
+                for s in analytics.by_capability
+            ],
+        )

@@ -13,6 +13,7 @@ from typing import Any
 
 from app.adapters.persistence.sqlalchemy_models import (
     ApiKeyRow,
+    AuditLogRow,
     InvitationRow,
     ModelRow,
     NodeRow,
@@ -24,6 +25,7 @@ from app.adapters.persistence.sqlalchemy_models import (
 )
 from app.domain.entities.actor import Role
 from app.domain.entities.api_key import ApiKey
+from app.domain.entities.audit import AuditEntry
 from app.domain.entities.invitation import Invitation, InvitationPurpose, RecoveryCode
 from app.domain.entities.model import Model, ModelState, ResourceProfile, RuntimeKind
 from app.domain.entities.node import Node, NodeStatus
@@ -300,6 +302,24 @@ def recovery_code_to_row(code: RecoveryCode) -> RecoveryCodeRow:
 
 
 # --- Usage ---------------------------------------------------------------
+
+
+def audit_row_to_domain(row: AuditLogRow) -> AuditEntry:
+    # detail is JSON, so its values arrive as Any; coerce to str because the
+    # entity and the response both promise str, and the writer only ever stores
+    # strings. See adapters/audit/postgres_audit.py.
+    return AuditEntry(
+        id=row.id,
+        actor_id=row.actor_id,
+        actor_display=row.actor_display,
+        actor_source=row.actor_source,
+        action=row.action,
+        target=row.target,
+        outcome=row.outcome,
+        detail={k: str(v) for k, v in (row.detail or {}).items()},
+        at=row.at,
+        tenant_id=row.tenant_id,
+    )
 
 
 def usage_to_row(usage: UsageRecord) -> UsageRecordRow:

@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapters.persistence import mappers as m
 from app.adapters.persistence.sqlalchemy_models import (
     ApiKeyRow,
+    AuditLogRow,
     InvitationRow,
     ModelRow,
     NodeRow,
@@ -49,12 +50,13 @@ from app.adapters.persistence.sqlalchemy_models import (
 )
 from app.domain.entities.actor import Role
 from app.domain.entities.api_key import ApiKey
+from app.domain.entities.audit import AuditEntry
 from app.domain.entities.invitation import Invitation, InvitationPurpose, RecoveryCode
 from app.domain.entities.model import Model, ModelState
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.tenant import Tenant
-from app.domain.entities.usage import UsageRecord
+from app.domain.entities.usage import BucketUnit, UsageBucket, UsageRecord
 from app.domain.entities.user import User
 
 
@@ -321,9 +323,7 @@ class PostgresUserRepository(_TenantScoped):
 
     async def get_by_tailscale_login(self, login: str) -> User | None:
         row = await self._session.scalar(
-            self._scope(
-                select(UserRow).where(UserRow.tailscale_login == login), UserRow.tenant_id
-            )
+            self._scope(select(UserRow).where(UserRow.tailscale_login == login), UserRow.tenant_id)
         )
         return m.user_to_domain(row) if row else None
 
@@ -613,3 +613,107 @@ class PostgresUsageRepository(_TenantScoped):
             )
         ).one()
         return int(row[0] or 0), int(row[1] or 0)
+
+    async def bucketed_usage(
+        self, since: datetime, until: datetime, unit: BucketUnit
+    ) -> list[UsageBucket]:
+        # `unit` reaches date_trunc as a bind parameter, not interpolated text,
+        # and the use case restricts it to the BucketUnit literals regardless.
+        bucket = func.date_trunc(unit, UsageRecordRow.at)
+        rows = await self._session.execute(
+            self._scope(
+                select(
+                    bucket.label("bucket"),
+                    UsageRecordRow.capability,
+                    func.count(),
+                    func.coalesce(func.sum(UsageRecordRow.tokens), 0),
+                )
+                .where(UsageRecordRow.at >= since, UsageRecordRow.at < until)
+                .group_by(bucket, UsageRecordRow.capability)
+                .order_by(bucket),
+                UsageRecordRow.tenant_id,
+            )
+        )
+        return [
+            UsageBucket(
+                bucket_start=start,
+                capability=capability,
+                requests=int(requests or 0),
+                tokens=int(tokens or 0),
+            )
+            for start, capability, requests, tokens in rows
+        ]
+
+
+class PostgresAuditLogRepository(_TenantScoped):
+    """Read side of the audit log, tenant-scoped like every other read. The
+    write side (`PostgresAudit`) uses its own transaction; this does not, because
+    reading is an ordinary request-session query."""
+
+    def _filtered(
+        self,
+        stmt: Any,
+        *,
+        action: str | None,
+        outcome: str | None,
+        actor_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> Any:
+        stmt = self._scope(stmt, AuditLogRow.tenant_id)
+        if action:
+            stmt = stmt.where(AuditLogRow.action == action)
+        if outcome:
+            stmt = stmt.where(AuditLogRow.outcome == outcome)
+        if actor_id:
+            stmt = stmt.where(AuditLogRow.actor_id == actor_id)
+        if since is not None:
+            stmt = stmt.where(AuditLogRow.at >= since)
+        if until is not None:
+            stmt = stmt.where(AuditLogRow.at < until)
+        return stmt
+
+    async def list_entries(
+        self,
+        *,
+        action: str | None,
+        outcome: str | None,
+        actor_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> list[AuditEntry]:
+        stmt = self._filtered(
+            select(AuditLogRow),
+            action=action,
+            outcome=outcome,
+            actor_id=actor_id,
+            since=since,
+            until=until,
+        )
+        # Newest first: an operator reads the most recent action, and the pager
+        # walks backwards through history.
+        stmt = stmt.order_by(AuditLogRow.at.desc()).limit(limit).offset(offset)
+        rows = await self._session.scalars(stmt)
+        return [m.audit_row_to_domain(row) for row in rows]
+
+    async def count_entries(
+        self,
+        *,
+        action: str | None,
+        outcome: str | None,
+        actor_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> int:
+        stmt = self._filtered(
+            select(func.count()).select_from(AuditLogRow),
+            action=action,
+            outcome=outcome,
+            actor_id=actor_id,
+            since=since,
+            until=until,
+        )
+        total = await self._session.scalar(stmt)
+        return int(total or 0)

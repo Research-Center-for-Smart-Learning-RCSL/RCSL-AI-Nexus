@@ -30,6 +30,7 @@ from app.adapters.metrics.prometheus import MeteredUsageRepository
 from app.adapters.persistence.model_state import ModelStateCommitter
 from app.adapters.persistence.repositories import (
     PostgresApiKeyRepository,
+    PostgresAuditLogRepository,
     PostgresInvitationRepository,
     PostgresModelRepository,
     PostgresNodeRepository,
@@ -54,7 +55,9 @@ from app.application.use_cases.manage_routing_policies import ManageRoutingPolic
 from app.application.use_cases.manage_tenants import ManageTenants
 from app.application.use_cases.manage_users import ManageUsers
 from app.application.use_cases.pending_enrolment import PendingEnrolment
+from app.application.use_cases.read_audit_log import ReadAuditLog
 from app.application.use_cases.read_dashboard import ReadDashboard
+from app.application.use_cases.read_usage_analytics import ReadUsageAnalytics
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.domain.entities.actor import Actor
 from app.domain.entities.model import RuntimeKind
@@ -548,6 +551,27 @@ def build_read_dashboard(
         nodes=PostgresNodeRepository(session),
         keys=PostgresApiKeyRepository(session, tenant),
         users=PostgresUserRepository(session, tenant),
+        usage=PostgresUsageRepository(session, tenant),
+        authz=request.app.state.authz,
+        clock=SystemClock(),
+    )
+
+
+def build_read_audit_log(
+    request: Request, session: SessionDep, tenant: TenantIdDep
+) -> ReadAuditLog:
+    return ReadAuditLog(
+        # Scoped: the logs view shows only the caller's own tenant's trail.
+        entries=PostgresAuditLogRepository(session, tenant),
+        authz=request.app.state.authz,
+    )
+
+
+def build_read_usage_analytics(
+    request: Request, session: SessionDep, tenant: TenantIdDep
+) -> ReadUsageAnalytics:
+    return ReadUsageAnalytics(
+        # Scoped: a tenant's charts show only its own usage, like the dashboard.
         usage=PostgresUsageRepository(session, tenant),
         authz=request.app.state.authz,
         clock=SystemClock(),

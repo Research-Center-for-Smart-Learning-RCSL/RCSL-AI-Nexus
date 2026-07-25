@@ -22,7 +22,7 @@ from app.domain.entities.model import Model, ModelState, PullProgress
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.tenant import Tenant
-from app.domain.entities.usage import UsageRecord
+from app.domain.entities.usage import BucketUnit, UsageBucket, UsageRecord
 from app.domain.entities.user import User
 from app.domain.exceptions import InvalidModelReferenceError, InvalidNodeAddressError
 from app.domain.ports.infrastructure_ports import JobStatus
@@ -400,6 +400,27 @@ class FakeUsage:
     async def totals_since(self, since: datetime) -> tuple[int, int]:
         window = [r for r in self.records if r.at >= since]
         return len(window), sum(r.tokens for r in window)
+
+    async def bucketed_usage(
+        self, since: datetime, until: datetime, unit: BucketUnit
+    ) -> list[UsageBucket]:
+        # A Python stand-in for date_trunc: enough to fold in the tests. The real
+        # SQL bucketing is exercised against Postgres, not here.
+        buckets: dict[tuple[datetime, str], list[int]] = {}
+        for r in self.records:
+            if not (since <= r.at < until):
+                continue
+            if unit == "hour":
+                start = r.at.replace(minute=0, second=0, microsecond=0)
+            else:
+                start = r.at.replace(hour=0, minute=0, second=0, microsecond=0)
+            agg = buckets.setdefault((start, r.capability), [0, 0])
+            agg[0] += 1
+            agg[1] += r.tokens
+        return [
+            UsageBucket(bucket_start=start, capability=capability, requests=n, tokens=tok)
+            for (start, capability), (n, tok) in sorted(buckets.items())
+        ]
 
 
 class FakeJobs:
