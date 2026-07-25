@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     node_id: str = "local"
     node_name: str = "local"
     node_total_memory_gb: float = 64.0
+    node_heartbeat_interval_seconds: int = 30
+    """How often the admin app probes each node and writes the observed status,
+    so a routing requirement of an online node reflects reality rather than the
+    value provisioning wrote once. Zero or negative disables the loop."""
     """Capacity of the machine the runtimes are on.
 
     The memory budget refuses a load that would exceed a fraction of this, and
