@@ -726,7 +726,7 @@ looking for the risk. The state below is checked against the code.
 | Targeted key and user updates that cannot revert a concurrent revoke or disable | `adapters/persistence/repositories.py` |
 | `user` role limited to chat, own keys, own usage; no registry or node read | `adapters/authz/role_authorization.py` |
 | Data plane and control plane on separate Docker networks; the gateway can reach no admin entrance | `docker-compose.yml` §3.2 |
-| Separate database accounts per service: gateway reads every table and writes only `usage_records`, admin has full DML and no DDL, owner has DDL and is used only by `migrate` | `infrastructure/db_roles.py`, `docker-compose.yml` |
+| Separate database accounts per service: gateway reads every table and writes only `usage_records`, admin has full DML and no DDL, owner has DDL and is used only by `migrate`; the denial is proven against a live Postgres | `infrastructure/db_roles.py`, `docker-compose.yml`, `tests/integration/test_db_role_grants.py` |
 | Secrets as Docker file mounts rather than environment variables | `docker-compose.yml` secrets, `config.py` `secrets_dir`, `secrets/README.md` |
 
 **Not implemented, and nothing in the repository arranges it**
