@@ -24,6 +24,7 @@ Instrument choices worth the note:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from datetime import datetime
 
@@ -41,6 +42,8 @@ from prometheus_client.registry import Collector
 from app.domain.entities.usage import UsageRecord
 from app.domain.ports.infrastructure_ports import ConcurrencyLimiterPort
 from app.domain.ports.repositories import UsageRepositoryPort
+
+logger = logging.getLogger(__name__)
 
 # One bucket set for both HTTP and inference latency. A gateway request is a
 # streaming completion whose duration is the whole stream, so the default
@@ -165,9 +168,12 @@ class MeteredUsageRepository:
     contract's generator untouched: the use case already builds one `UsageRecord`
     carrying tokens, latency and completion, in a `finally` that runs on normal
     completion, disconnect and error alike, which is exactly the set of events
-    worth counting. Metrics are emitted before the write is attempted, so a
-    billing-persistence failure (which the use case swallows) does not also lose
-    the observability signal for work the hardware genuinely did.
+    worth counting.
+
+    The persistence write goes first, and the metric emission is guarded, so the
+    two failure modes cannot cross: a metrics error must never lose the usage row
+    (billing is the more important of the two), and a persistence error, which
+    the use case already swallows, simply means no metric for that request.
     """
 
     def __init__(self, inner: UsageRepositoryPort, metrics: Metrics) -> None:
@@ -175,8 +181,11 @@ class MeteredUsageRepository:
         self._metrics = metrics
 
     async def record(self, usage: UsageRecord) -> None:
-        self._metrics.observe_inference(usage)
         await self._inner.record(usage)
+        try:
+            self._metrics.observe_inference(usage)
+        except Exception:  # noqa: BLE001
+            logger.warning("failed to emit inference metrics", exc_info=True)
 
     async def tokens_used_today(self, api_key_id: str) -> int:
         return await self._inner.tokens_used_today(api_key_id)

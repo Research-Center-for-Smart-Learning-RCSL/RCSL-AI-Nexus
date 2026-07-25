@@ -73,8 +73,11 @@ def create_app() -> FastAPI:
     # Starlette runs middleware in reverse order of registration, so the last
     # registered runs outermost. The order that matters:
     #
-    #   StripTailscaleHeaders (outermost) — a forged identity header must be
-    #     gone before anything else in this process can look at the request.
+    #   MetricsMiddleware (outermost) — only observes; it reads no request
+    #     content and makes no trust decision, so counting a request before the
+    #     perimeter runs is deliberate and safe.
+    #   StripTailscaleHeaders — a forged identity header must be gone before any
+    #     handler or trust-bearing middleware in this process can look at it.
     #   GeoFilter — rejects a caller outside the allowed countries, and (via
     #     resolve_client_ip) one that did not arrive through the proxy, before
     #     a handler or the CSRF cookie logic runs.
