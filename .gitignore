@@ -2,7 +2,12 @@
 .env
 .env.*
 !.env.example
-secrets/
+# The secrets/ directory holds one file per credential, populated per
+# deployment. The real files are ignored; the templates and README are not.
+secrets/*
+!secrets/README.md
+!secrets/.gitignore
+!secrets/*.example
 *.pem
 *.key
 

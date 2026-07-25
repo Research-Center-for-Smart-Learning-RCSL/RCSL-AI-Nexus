@@ -460,11 +460,13 @@ Even on an `internal: true` network, every service requires authentication. This
 | Postgres | Password from configuration | **Separate database users per service**, see below |
 | Ollama on the host | Binds `0.0.0.0:11434` by default | Set `OLLAMA_HOST=127.0.0.1`, see §7.1 |
 
-The Postgres split is the important one, and it is **not implemented**. The intent: the gateway's account must not be able to write `api_keys`, `routing_policies`, or `users`, only read them, so that a compromised public service cannot mint itself an admin key. `admin-tailnet` and `admin-public` would share a second account with write access, and the migration job a third with DDL rights.
+The Postgres split is the important one, and it **is implemented** (`infrastructure/db_roles.py`, `docker-compose.yml`). Three accounts, not one:
 
-Today every backend service resolves the same `DATABASE_URL` from one `env_file`, and that account owns the schema. Until this is built, §1's caveat is the accurate description: splitting the containers stops a public path reaching `/admin/*`, and does nothing about what a compromised gateway can do to the database.
+- The **gateway** account may read every table and may INSERT into `usage_records`, nothing else. It cannot write `api_keys`, `routing_policies`, or `users`, so a compromised public service cannot mint itself an admin key. The gateway does need INSERT on `usage_records`, so "read-only" is the wrong shape: the restriction is per table, and the writable set is named in code (`GATEWAY_WRITABLE_TABLES`) where it is subject to review.
+- The **admin** account, shared by `admin-tailnet` and `admin-public` (same trust tier, §1), has full DML and no DDL.
+- The **owner** account owns the schema and holds DDL. Only the `migrate` job connects as it.
 
-One detail for whoever builds it: the gateway does need INSERT on `usage_records`, so "read-only" is the wrong shape. The restriction is per table, not blanket.
+Each service mounts its own account's connection URL as the `database_url` secret; the account name inside that URL is the single source of truth. The `migrate` job, connecting as the owner, creates the gateway and admin roles from their URLs and re-asserts their grants on every deploy, so a table added by a later migration is regranted and the gateway's writable set stays exactly one table. The grants are declarative: the gateway's privileges are revoked and re-granted each run, so a prior over-grant cannot survive. §1's earlier caveat, that splitting the containers did nothing about what a compromised gateway could do to the database, no longer holds.
 
 ## 7. High-Risk Features
 
@@ -724,13 +726,13 @@ looking for the risk. The state below is checked against the code.
 | Targeted key and user updates that cannot revert a concurrent revoke or disable | `adapters/persistence/repositories.py` |
 | `user` role limited to chat, own keys, own usage; no registry or node read | `adapters/authz/role_authorization.py` |
 | Data plane and control plane on separate Docker networks; the gateway can reach no admin entrance | `docker-compose.yml` §3.2 |
+| Separate database accounts per service: gateway reads every table and writes only `usage_records`, admin has full DML and no DDL, owner has DDL and is used only by `migrate` | `infrastructure/db_roles.py`, `docker-compose.yml` |
+| Secrets as Docker file mounts rather than environment variables | `docker-compose.yml` secrets, `config.py` `secrets_dir`, `secrets/README.md` |
 
 **Not implemented, and nothing in the repository arranges it**
 
 | Control | Status |
 |---|---|
-| Separate database accounts per service (§6) | Aspiration. One account, with DDL rights, shared by every service |
-| Secrets as Docker file mounts (§8) | The reading half exists (`secrets_dir`); Compose passes everything through `env_file` |
 | SSRF guard (§7.2) | Absent, and correct by the letter of the rule: there is still no node write path. The single node is named in configuration and written by the `migrate` service, so nothing accepts an address from a caller |
 | Logging boundaries and the expiring debug switch (§9.2) | The columns exist on both `users` and `api_keys` and are read by nothing |
 | Knowledge base, multi-tenancy, Prometheus (§7.3, §10) | Phase 2, correctly absent |
@@ -876,4 +878,4 @@ Recorded explicitly so they are not later mistaken for oversights, with the cond
 
 **How it was closed.** The single `app` network was split so that the gateway shares no network with either admin entrance (§3.2). The data plane has its own database segment (`gateway-data`) and its own host-egress network (`gateway-egress`); the control plane has `admin-data` and a per-entrance control network. postgres and redis are dual-homed across the two database segments, which is safe because they accept connections and never open one. The invariant is verifiable from `docker compose config`: the intersection of the gateway's networks with each admin entrance's is empty. As a bonus of the same change, `frontend-public` — which faces the internet — can no longer reach `admin-tailnet` either.
 
-**Residual.** None from this vector. The deeper defence against a compromised gateway, the §6 per-service database credential split, is still not implemented and remains the outstanding control-plane hardening item, but the forged-header path specifically is gone.
+**Residual.** None from this vector, and the deeper defence has since landed too: the §6 per-service database credential split is now implemented, so a compromised gateway can neither forge a header to the admin socket (closed here) nor write `api_keys` or `users` directly (denied by its database grants).

@@ -310,8 +310,8 @@ Non-secret values are environment variables; secrets are mounted files read thro
 | `AUTH_MODE` | `tailnet` / `local` / `dev` | `dev` refuses to start when `ENV=production` |
 | `TAILNET_IP` | `100.x.y.z` | Used for host-side port binding |
 | `PROXY_HOSTNAME` | `api.nexus.rcsl.online` | |
-| `DATABASE_URL` | `postgresql+asyncpg://...` | Password comes from a secret |
-| `REDIS_URL` | `redis://redis:6379/0` | |
+| `DATABASE_URL` | `postgresql+asyncpg://...` | Not an environment variable: mounted as the `database_url` secret, a different least-privilege account per service (§6) |
+| `REDIS_URL` | `redis://redis:6379/0` | The password is a separate `redis_password` secret |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Runtime on the host |
 | `ADMIN_API_URL` | `http://admin-tailnet:8001` | Set per frontend service in Compose, not from `.env` |
 | `EXPOSE_OPENAPI` | `false` | Opt-in; ignored under `ENV=production` |
@@ -330,28 +330,35 @@ Non-secret values are environment variables; secrets are mounted files read thro
 
 **Secrets** (`/run/secrets`, never environment variables)
 
-**Not yet wired.** `Settings` reads `/run/secrets` when the directory exists,
-but `docker-compose.yml` declares no `secrets:` block, so today every value
-arrives through `env_file`. The table is the target.
+Wired. `docker-compose.yml` declares a `secrets:` block backed by files under
+`./secrets`, and each service mounts only what its role needs. `Settings` reads
+them through `secrets_dir`. An environment variable outranks a file secret in
+pydantic-settings, so a secret left in `.env` would silently override the mount;
+`.env` therefore carries only non-secret configuration, and `secrets/README.md`
+holds the setup. One file per credential, raw value, no trailing newline.
 
-| Secret | Purpose | Settings field exists |
+| Secret | Purpose | Mounted into |
 |---|---|---|
-| `api_key_pepper` | HMAC pepper | yes |
-| `api_key_pepper_previous` | Accepted during a rotation | yes |
-| `totp_encryption_key` | Encrypts TOTP secrets at rest | yes, unused until TOTP is built |
-| `session_signing_key` | | yes, unused until sessions are built |
-| `proxy_shared_secret` | Matches `X-Nexus-Proxy` in nginx | yes |
-| `postgres_password_gateway` / `_admin` / `_migrate` | The §6 split | **no**, one `DATABASE_URL` today |
-| `redis_password` | | yes |
-| `qdrant_api_key`, `minio_root_password` | Phase 2 | no |
+| `owner_database_url` | Schema owner (DDL); URL | `migrate` only |
+| `gateway_database_url` | Gateway account (read all, write `usage_records`); URL | `gateway`; and `migrate`, to provision the role |
+| `admin_database_url` | Admin account (full DML, no DDL); URL | both admin entrances; and `migrate` |
+| `postgres_password` | Superuser password; must equal the password in `owner_database_url` | `postgres` |
+| `redis_password` | Read from the file in redis's command; no `_FILE` convention | `redis`, and the services that use redis |
+| `api_key_pepper` | HMAC pepper | every backend service and `migrate` |
+| `api_key_pepper_previous` | Accepted during a rotation; add only for its duration | (as needed) |
+| `totp_encryption_key` | Encrypts TOTP secrets at rest | backend services, `migrate` |
+| `session_signing_key` | Present for completeness; sessions are opaque Redis ids | backend services, `migrate` |
+| `proxy_shared_secret` | Matches `X-Nexus-Proxy` in nginx | backend services, `migrate` |
+| `qdrant_api_key`, `minio_root_password` | Phase 2 | not yet |
 
-Also required by `docker-compose.yml` and absent from the table above until
-now: `POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_PASSWORD` and `REDIS_PASSWORD`.
-Two of those use the fail-if-unset form, so Compose refuses to start without
-them.
+The four crypto secrets are mounted into `migrate` as well, because it calls
+`get_settings()`, which refuses the shipped placeholders under `ENV=production`.
+`POSTGRES_USER` and `POSTGRES_DB` stay non-secret environment values, read by
+the Postgres container.
 
-`.env.example` lists every field name with development placeholders, all of
-which `Settings` refuses under `ENV=production`.
+`.env.example` lists every non-secret field with a development default, and
+documents the secrets as file mounts rather than listing them, since a value
+there would override the mount.
 
 ## 11. Local Development
 

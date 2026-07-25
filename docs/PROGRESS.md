@@ -17,6 +17,59 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-25
 
+### The database account split, and secrets moved to file mounts
+
+The last functional-to-operational Phase 1 item, and the deeper half of the
+defence the network split (§15.5) only started. Until now every backend service
+connected as one account that owns the schema, so a compromised gateway that
+could not reach the admin socket could still write `api_keys` and mint itself a
+key. Now there are three Postgres accounts: the gateway reads every table and
+writes only `usage_records`; the two admin entrances share an account with full
+DML and no DDL; the owner holds DDL and is used only by `migrate`.
+
+The roles are provisioned in code (`infrastructure/db_roles.py`), run by the
+`migrate` job after the schema exists. Three decisions carried it.
+
+The grants are **declarative, not additive**: the gateway's table privileges
+are revoked and re-granted on every deploy, so its writable set is always
+exactly `GATEWAY_WRITABLE_TABLES` regardless of what a previous run left, and a
+table added by a later migration is regranted without anyone editing SQL. The
+one writable table is named in code, where it is under review, rather than in a
+deployment file.
+
+The account **name is taken from each service's own connection URL**, so the
+URL secret is the single source of truth for both the name and the password;
+this module never invents a name the deployment did not commit to. `migrate`
+connects as the owner and reads the gateway and admin URLs to create those two
+roles.
+
+And the SQL is **built as text with hand-quoted identifiers and literals**,
+because `GRANT`, `CREATE ROLE`, and a role password are DDL that no driver
+parameterises. The quoting helpers are the standard minimal escapers, safe
+under `standard_conforming_strings`; role names are additionally constrained to
+a strict pattern because a name is an identifier we control. `exec_driver_sql`
+rather than `text()` runs them, so a colon in a generated password is not read
+as a bind parameter. Ten unit tests pin the security property directly: the
+gateway is granted no write anywhere but `usage_records`.
+
+Alongside it, secrets moved from `env_file` to Docker **file mounts**. This was
+forced by the split as much as chosen: an environment variable outranks a file
+secret in pydantic-settings, so a value left in `.env` would silently override
+the mounted one. `.env` now carries only non-secret configuration; every
+credential is a file under `./secrets` (git-ignored, with `.example` templates
+and a README), mounted at `/run/secrets` and read through `secrets_dir`. Each
+service mounts only what its role needs, except that the four crypto secrets go
+to `migrate` too, because it calls `get_settings()` and production refuses the
+placeholders. Postgres reads its password through `POSTGRES_PASSWORD_FILE`;
+redis, which has no such convention, reads the file in its command.
+
+**Verified structurally only.** `docker compose config` resolves the secret
+mounts as intended and the unit suite passes (225 tests), but the live grants,
+the role creation, and every service connecting as its own account are exercised
+for the first time at the Mac Studio deploy, by construction: none of it runs on
+the Windows development machine, which uses the single-account default and
+`AUTH_MODE=dev`.
+
 ### A routing policy editor, so the one thing that makes the gateway serve is no longer curl-only
 
 The routing policy API was complete and audited but had no screen, so the
@@ -550,21 +603,18 @@ routing policy editor now exists, so a policy is no longer curl-only.
 
 ## What comes next
 
-Two of the three items here are now done, recorded in the dated entries above:
-a **frontend test runner** (Vitest over the units where a defect is a security
-defect) and the **routing policy editor**. What remains functional-to-
-operational is one item.
-
-1. **Database account split, and Docker secrets on the Compose side.** Both
-   are documented as if they exist; `security.md` section 13.0 now says
-   plainly that they do not. With the network split (§15.5) closed, the
-   account split is the remaining control-plane hardening item: it is the
-   deeper defence against a compromised gateway, denying it write access to
-   `api_keys` and `users` rather than only a path to the admin socket.
+The three Phase 1 finishing items are now done, each recorded in a dated entry
+above: a **frontend test runner** (Vitest over the units where a defect is a
+security defect), the **routing policy editor**, and the **database account
+split with secrets on file mounts**. Phase 1's functional and control-plane work
+is complete; what is left is verification that can only happen on the target
+hardware.
 
 The frontend test runner covers logic units only; component and browser (E2E,
 Playwright) coverage of the sign-in and enrolment screens is still the deferred
-increment, recorded in `ROADMAP.md` Phase 3.
+increment, recorded in `ROADMAP.md` Phase 3. And the database split, the secret
+mounts, GPU inference, the tailnet entrance and nginx are all verified only
+structurally so far, which is what the Mac Studio deploy below is for.
 
 ### Then: deploy to the Mac Studio for the first time
 
@@ -576,6 +626,12 @@ there, and because it needs another person.
 - Ask the NTNU proxy administrator for four things, listed in `ROADMAP.md`:
   join the tailnet under `tag:ntnu-proxy`, add two nginx server blocks, issue
   Let's Encrypt certificates, and confirm no request-body logging.
+- Populate `./secrets` from `secrets/README.md`: three distinct database URLs,
+  the postgres password matching the owner URL, and real values for the rest.
+- Confirm the account split holds against the live database, which nothing has
+  exercised yet: `migrate` creates the two roles and their grants, each service
+  connects as its own account, and the gateway's account is refused an INSERT
+  into `api_keys`.
 - Work through the pre-launch checklist in `security.md` section 14. Several
   items say to test rather than assume, and mean it: the forged
   `Tailscale-User-Login` case, the forged `X-Forwarded-For` case, and
