@@ -35,12 +35,12 @@ out/
 frontend/src/lib/generated/*
 !frontend/src/lib/generated/.gitkeep
 
-# Data that must never reach the repository
-models/
-data/
-# Anchored to the repo root: unanchored, `logs/` also matched the source
-# directory frontend/src/features/logs/ and hid it from git. (`models/` and
-# `data/` have the same latent issue but are left as-is here.)
+# Data that must never reach the repository. Anchored to the repo root so each
+# matches the runtime data directory, not a source folder that shares the name:
+# unanchored, `logs/` hid frontend/src/features/logs/ and `models/` hid the
+# entire models feature from git.
+/models/
+/data/
 /logs/
 *.mmdb
 
