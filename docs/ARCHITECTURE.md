@@ -29,6 +29,24 @@ Consequences that run through the rest of these documents:
 - Runtime hardening is done at the host level (dedicated service account, filesystem permissions, loopback binding) rather than through container primitives such as `cap_drop` or `read_only`.
 - "Keep the host clean" from the original plan is achieved for everything except the runtimes.
 
+### 0.2 The machine
+
+The target host is a Mac Studio (M4 Max):
+
+- 16-core CPU, 40-core GPU
+- 64 GB unified memory
+- 4 TB SSD
+- 10 Gb Ethernet, Wi-Fi 6E (802.11ax), Bluetooth 5.3
+
+Two of these numbers are load-bearing rather than incidental. The 64 GB is
+unified across CPU and GPU, which is why the memory budget (`MemoryBudgetService`,
+`NODE_TOTAL_MEMORY_GB=64`) governs model loads against a single figure rather
+than a separate VRAM pool; that setting must match this number, since too high
+drives the host into swap and too low refuses models that would fit. And the
+inference concurrency cap (`MAX_CONCURRENT_INFERENCE`) is sized for one 40-core
+GPU with no second compute node yet. The 10 Gb Ethernet is the wired path to the
+NTNU proxy; the tailnet rides over it.
+
 ## 1. Layered Architecture
 
 ```
