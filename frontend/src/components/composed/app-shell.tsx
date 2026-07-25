@@ -23,6 +23,7 @@ import {
   KeyIcon,
   LogOutIcon,
   MessageSquareIcon,
+  RouteIcon,
   UserCogIcon,
   UsersIcon,
 } from 'lucide-react';
@@ -58,6 +59,12 @@ const NAV: NavItem[] = [
     href: '/models',
     label: 'Models',
     icon: <BoxIcon className="size-4" />,
+    adminOnly: true,
+  },
+  {
+    href: '/routing-policies',
+    label: 'Routing',
+    icon: <RouteIcon className="size-4" />,
     adminOnly: true,
   },
   {
