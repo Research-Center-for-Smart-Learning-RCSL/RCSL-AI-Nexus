@@ -38,7 +38,10 @@ frontend/src/lib/generated/*
 # Data that must never reach the repository
 models/
 data/
-logs/
+# Anchored to the repo root: unanchored, `logs/` also matched the source
+# directory frontend/src/features/logs/ and hid it from git. (`models/` and
+# `data/` have the same latent issue but are left as-is here.)
+/logs/
 *.mmdb
 
 # Claude Code
