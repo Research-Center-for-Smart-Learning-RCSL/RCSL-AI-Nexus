@@ -327,7 +327,8 @@ Critical on this hardware. Under unified memory, **unbounded concurrent inferenc
 | Global inference concurrency | Semaphore sized to the loaded models | Queue rather than letting twenty requests contend for memory |
 | Per-request `max_tokens` | Hard cap, overriding larger client requests | Bounds a single runaway generation |
 | Per-request context length | Hard cap | Memory cost grows non-linearly |
-| Request timeout | For example 300 s | Paired with disconnect detection |
+| Per-read request timeout | For example 300 s | A stalled upstream (no bytes for the interval) fails fast rather than holding a slot |
+| Wall-clock generation deadline | For example 600 s | Bounds a slow-but-steady stream that stays under the per-read timeout yet never reaches the token cap; on unified memory near swap it would otherwise hold a slot for hours |
 | Cancel on client disconnect | Required | Otherwise generation continues for a departed client |
 | Model memory budget | Loaded total must stay under a fraction of node capacity | Checked before load, refuses with a message to unload first |
 
@@ -699,7 +700,7 @@ looking for the risk. The state below is checked against the code.
 | Per-key CIDR allowlist, and per-key rate limiting | `middleware/api_key_auth.py` |
 | Country filter, refusing to start in production without its database | `middleware/geo_filter.py` |
 | Trusted-proxy resolution with a shared secret | `middleware/client_ip.py` |
-| Resource guardrails: concurrency cap, `max_tokens`, context bound, cancel on disconnect | `RouteChatRequest`, `infrastructure/concurrency.py` |
+| Resource guardrails: concurrency cap, `max_tokens`, context bound, per-read timeout, wall-clock generation deadline, cancel on disconnect | `RouteChatRequest`, `infrastructure/concurrency.py`, `adapters/runtime/ollama_adapter.py` |
 | Model reference validation; no shell construction anywhere | `adapters/runtime/validation.py` |
 | Production fail-fast: dev auth mode, placeholder secrets, in-memory cache | `infrastructure/config.py` |
 | Single-use invitations and recovery codes, TOTP replay prevention | `adapters/persistence/repositories.py` |
@@ -761,7 +762,7 @@ looking for the risk. The state below is checked against the code.
 - First-administrator bootstrap, tailnet-only
 - Model reference validation; no shell string construction
 - Host-level runtime hardening (service account, loopback binding, directory ownership)
-- **Resource guardrails: concurrency cap, `max_tokens`, timeout, cancel on disconnect.** With no edge protection these are the only defence
+- **Resource guardrails: concurrency cap, `max_tokens`, context bound, per-read timeout, wall-clock generation deadline, cancel on disconnect.** With no edge protection these are the only defence
 - `AuditPort` plus auditing for key issuance and revocation and model download and load. These features ship in Phase 1, so their audit trail cannot wait for Phase 2
 - `AUTH_MODE=dev` refuses to start under `ENV=production`
 - gitleaks pre-commit
@@ -816,7 +817,7 @@ looking for the risk. The state below is checked against the code.
 [ ] Per-key CIDR allowlist verified
 [ ] API key expiry is mandatory; revocation takes effect immediately
 [ ] Gateway serves no /docs or /openapi.json; debug=False
-[ ] Guardrails verified in practice: concurrency cap, max_tokens, timeout, disconnect cancels generation
+[ ] Guardrails verified in practice: concurrency cap, max_tokens, context bound, per-read timeout, wall-clock generation deadline, disconnect cancels generation
 [ ] nginx has proxy_buffering off; confirm streaming is not buffered
 [ ] Health endpoints reachable without authentication and leak no version or model information
 

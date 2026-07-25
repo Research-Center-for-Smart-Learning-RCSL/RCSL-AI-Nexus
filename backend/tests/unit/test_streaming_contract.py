@@ -7,7 +7,7 @@ unbilled usage only shows up as a quota that never triggers.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import aclosing
 from datetime import UTC, datetime
 
@@ -84,7 +84,49 @@ class RecordingUsage:
         return 0
 
 
-def build(runtime: FakeRuntime, limit: int = 1, ceiling: int = 1000):
+class FakeMonotonic:
+    """A controllable elapsed-time source. `advance` is what a slow runtime
+    calls per chunk, so the deadline can be crossed without any real waiting."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class SlowRuntime:
+    """Yields forever, moving the injected clock forward on each chunk, so a
+    stream that never trips the token ceiling still trips the deadline."""
+
+    def __init__(self, monotonic: FakeMonotonic, seconds_per_chunk: float) -> None:
+        self._monotonic = monotonic
+        self._seconds_per_chunk = seconds_per_chunk
+        self.cleaned_up = False
+
+    async def generate(
+        self, ref: str, messages: Sequence[Message], max_tokens: int | None = None
+    ) -> AsyncIterator[CompletionChunk]:
+        try:
+            i = 0
+            while True:
+                self._monotonic.advance(self._seconds_per_chunk)
+                yield CompletionChunk(delta=f"tok{i} ", token_count=1)
+                i += 1
+        finally:
+            self.cleaned_up = True
+
+
+def build(
+    runtime,
+    limit: int = 1,
+    ceiling: int = 1000,
+    deadline: int = 600,
+    monotonic: Callable[[], float] | None = None,
+):
     model = Model(
         id="m1",
         alias="primary",
@@ -114,6 +156,8 @@ def build(runtime: FakeRuntime, limit: int = 1, ceiling: int = 1000):
         authz=RoleAuthorization(),
         clock=FixedClock(datetime(2026, 1, 1, tzinfo=UTC)),
         max_tokens_ceiling=ceiling,
+        generation_deadline_seconds=deadline,
+        **({"monotonic": monotonic} if monotonic is not None else {}),
     )
     return use_case, usage, limiter
 
@@ -185,3 +229,48 @@ async def test_max_tokens_ceiling_is_enforced_regardless_of_runtime() -> None:
     # OpenAI clients branch on this field to decide whether to continue.
     assert chunks[-1].finish_reason == "length"
     assert usage.records[0].completed is False, "truncation is not completion"
+
+
+async def test_wall_clock_deadline_cuts_a_slow_stream_below_the_token_ceiling() -> None:
+    """A stream that never reaches the token ceiling must still be bounded.
+
+    Ten seconds per token against a 25s deadline and a ceiling well out of
+    reach: the slot is what a slow model holds, and the deadline is the only
+    guardrail that releases it, since the token ceiling never trips and the
+    per-read HTTP timeout never fires while chunks keep arriving.
+    """
+    clock = FakeMonotonic()
+    runtime = SlowRuntime(clock, seconds_per_chunk=10.0)
+    use_case, usage, limiter = build(
+        runtime, limit=1, ceiling=1000, deadline=25, monotonic=clock
+    )
+
+    chunks = []
+    async with aclosing(use_case.execute(ACTOR, "chat", MESSAGES)) as stream:
+        async for chunk in stream:
+            chunks.append(chunk)
+
+    content = [c for c in chunks if c.delta]
+    assert len(content) == 3, "two tokens under the deadline, the third crosses it"
+    assert chunks[-1].finish_reason == "length", "a deadline cut is not a clean stop"
+    assert limiter.available == limiter.limit, "slot must be released on a deadline cut"
+    assert runtime.cleaned_up is True, "adapter must close its upstream on a deadline cut"
+    assert usage.records[0].completed is False, "a deadline cut is not completion"
+    assert usage.records[0].tokens == 3
+
+
+async def test_deadline_disabled_by_non_positive_value() -> None:
+    """Zero disables the deadline, matching the heartbeat convention. The token
+    ceiling remains the bound, so the stream stops there rather than never."""
+    clock = FakeMonotonic()
+    runtime = SlowRuntime(clock, seconds_per_chunk=10_000.0)
+    use_case, usage, _ = build(runtime, limit=1, ceiling=4, deadline=0, monotonic=clock)
+
+    content = []
+    async with aclosing(use_case.execute(ACTOR, "chat", MESSAGES)) as stream:
+        async for chunk in stream:
+            if chunk.delta:
+                content.append(chunk)
+
+    assert len(content) == 4, "no deadline, so only the token ceiling stops it"
+    assert usage.records[0].tokens == 4

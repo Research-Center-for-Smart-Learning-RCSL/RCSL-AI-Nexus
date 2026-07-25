@@ -123,6 +123,17 @@ class Settings(BaseSettings):
     max_tokens_ceiling: int = 4096
     max_context_length: int = 32768
     request_timeout_seconds: int = 300
+    generation_deadline_seconds: int = 600
+    """Wall-clock ceiling on a single generation while it holds a concurrency slot.
+
+    Distinct from `request_timeout_seconds`, which is the per-read HTTP timeout:
+    that bounds a stalled stream (no bytes for the interval), while this bounds a
+    stream that keeps producing slowly enough to stay under it yet below the token
+    ceiling. On unified memory near swap that case can hold a slot for hours, and
+    with only `max_concurrent_inference` slots and no edge protection it is the one
+    guardrail the other three do not cover. Zero or negative disables it. The
+    stream is cut with `finish_reason=length`, the honest signal to an OpenAI
+    client that the model did not finish."""
 
     api_key_max_lifetime_days: int = 365
     """Ceiling on how far ahead a key may be set to expire.

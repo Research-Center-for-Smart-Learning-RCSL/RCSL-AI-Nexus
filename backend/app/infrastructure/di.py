@@ -301,6 +301,7 @@ def build_route_chat_request(
         clock=SystemClock(),
         max_tokens_ceiling=settings.max_tokens_ceiling,
         max_context_chars=settings.max_context_length * 4,
+        generation_deadline_seconds=settings.generation_deadline_seconds,
     )
 
 

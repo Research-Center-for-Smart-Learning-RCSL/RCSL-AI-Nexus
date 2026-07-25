@@ -17,6 +17,46 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-25
 
+### The last resource guardrail: a wall-clock generation deadline
+
+Auditing ROADMAP §120 against the code found the item mislabelled rather than
+missing. Of the four guardrails it lists, three were already built and wired:
+the concurrency cap (`SemaphoreConcurrencyLimiter`, held for the whole generator
+in `RouteChatRequest`), the `max_tokens` output ceiling (min of the caller's
+request and our cap, pushed to Ollama's `num_predict` so the model stops at the
+source), and cancel on disconnect (`aclosing` throughout, so the adapter closes
+its upstream HTTP request). A fourth, the per-request context bound, was wired
+too, closing the `max_context_length` setting that an earlier review had flagged
+as configured and read by nothing. Only "timeout" was partial: the adapter has a
+per-read HTTP timeout, but nothing bounded the total wall-clock time of a
+generation.
+
+That gap is narrow but real. The token ceiling bounds a stream producing at a
+healthy pace, and the per-read timeout bounds a stalled one (no bytes for the
+interval). The uncovered case is a stream that keeps producing slowly enough to
+stay under the read timeout yet never reaches the token cap, which on unified
+memory near swap can hold one of only two concurrency slots for hours. With no
+edge protection that is a genuine, if edge, denial-of-service lever.
+
+So `RouteChatRequest._generate` now checks a wall-clock deadline in the yield
+loop and cuts the stream with `finish_reason=length`, the same honest signal the
+token-ceiling truncation already uses, so an OpenAI client is not told the model
+finished. The deadline is `generation_deadline_seconds` (default 600, zero or
+negative disables it, matching the heartbeat convention). Elapsed time comes from
+an injected `monotonic` callable rather than the wall-clock `Clock`, for two
+reasons: an NTP step must not move a live generation's deadline, and the seam
+lets the deadline be tested without any real waiting. Two unit tests drive it: a
+slow runtime that advances the injected clock ten seconds per token trips a 25s
+deadline after three tokens and releases its slot, and a zero deadline falls back
+to the token ceiling. 272 unit tests pass; ruff is clean and mypy shows no new
+errors over the pre-existing baseline.
+
+What waits for the Mac Studio is the same boundary inference has always had: the
+guardrail's arithmetic and the truncation contract are exercised now against an
+injected clock, but a real slow generation on the GPU is only observable there.
+The pre-launch checklist item in security.md §14 that says to verify the
+guardrails in practice still stands.
+
 ### Multi-tenancy, the isolation boundary made real (Phase 2)
 
 The third Phase 2 item, and the most invasive: the platform was single tenant and
