@@ -17,6 +17,28 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-25
 
+### A production smoke test on the dev machine, which moved the deploy risk down
+
+Ran the whole stack once on Windows under `ENV=production` with generated
+(non-placeholder) file secrets, which exercises the Compose wiring the account
+split had only been structurally checked against. It held: `migrate` exited 0
+having run the migrations and logged `database roles provisioned:
+nexus_gateway(gateway), nexus_admin(admin)`, so `db_roles` created both roles
+from the mounted URL secrets and applied their grants in the real flow. All
+eight containers came up; postgres, redis and the gateway reported healthy, and
+`/readyz` returned 200 on the gateway and both admin entrances. `pg_stat_activity`
+showed the gateway connected as `nexus_gateway`, not the owner. And the boundary
+is enforced by the deployed database, not just by the earlier unit and
+integration tests: as `nexus_gateway`, `SELECT api_keys` and an `INSERT` into
+`usage_records` both succeed, while `INSERT INTO api_keys` is refused with
+`permission denied for table api_keys`.
+
+What this does not cover, and still waits for the Mac Studio: the country filter
+(run with `ALLOWED_COUNTRIES` empty, since there is no GeoLite2 database here),
+GPU inference, `tailscale serve`, and nginx. The production config validators,
+the role provisioning, the per-account connections, and the grant enforcement
+are no longer first-run risks.
+
 ### A first-deploy runbook, and the GeoLite2 mount it turned up
 
 Compiling the Mac Studio pre-deploy checklist ([runbooks/first-deploy.md](./runbooks/first-deploy.md))
