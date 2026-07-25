@@ -101,6 +101,17 @@ def test_a_scanner_hitting_unknown_paths_does_not_explode_cardinality() -> None:
     assert ".env" not in body
 
 
+def test_an_unusual_http_method_does_not_become_its_own_label() -> None:
+    """The method is a free token, so an arbitrary word must bucket to OTHER
+    rather than spawning a series, the same cardinality guard the path has."""
+    with TestClient(create_gateway()) as client:
+        client.request("BREW", "/healthz")
+        body = client.get("/metrics", headers=AUTH).text
+
+    assert 'method="OTHER"' in body
+    assert "BREW" not in body
+
+
 def test_route_label_reconstructs_the_template_from_path_params() -> None:
     matched = {
         "endpoint": object(),
@@ -111,6 +122,24 @@ def test_route_label_reconstructs_the_template_from_path_params() -> None:
 
     no_params = {"endpoint": object(), "path": "/healthz", "path_params": {}}
     assert _route_label(no_params) == "/healthz"
+
+
+def test_route_label_does_not_rewrite_a_value_that_appears_in_an_earlier_segment() -> None:
+    """A substring replace would turn the "1" in "v1" into the placeholder and
+    leave the real id in the label, reintroducing unbounded cardinality."""
+    scope = {"endpoint": object(), "path": "/api/v1/items/1", "path_params": {"id": "1"}}
+    assert _route_label(scope) == "/api/v1/items/{id}"
+
+
+def test_route_label_when_the_id_equals_a_static_segment() -> None:
+    """A key whose value is literally 'api-keys' must templatise only the
+    trailing segment, not the static one before it."""
+    scope = {
+        "endpoint": object(),
+        "path": "/admin/api-keys/api-keys",
+        "path_params": {"key_id": "api-keys"},
+    }
+    assert _route_label(scope) == "/admin/api-keys/{key_id}"
 
 
 def test_route_label_buckets_anything_unmatched() -> None:
