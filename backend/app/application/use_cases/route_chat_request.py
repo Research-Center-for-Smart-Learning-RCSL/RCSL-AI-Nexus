@@ -9,7 +9,9 @@ deliberate rather than incidental:
 - usage is recorded in `finally`, so a client that disconnects mid-stream
   still bills what the hardware actually produced;
 - cancellation is allowed to propagate, so the runtime adapter can close its
-  upstream request instead of generating tokens for nobody.
+  upstream request instead of generating tokens for nobody;
+- a generation is bounded by both a token ceiling and a wall-clock deadline,
+  so a slow-but-steady stream cannot hold a concurrency slot indefinitely.
 
 Consumers must wrap iteration in `contextlib.aclosing()`. A `finally` inside
 an async generator only runs when the generator is closed, and abandoning one
@@ -21,12 +23,12 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
 
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.chat import CompletionChunk, Message
-from app.domain.entities.model import RuntimeKind
+from app.domain.entities.model import Model, RuntimeKind
 from app.domain.entities.usage import UsageRecord
 from app.domain.exceptions import ContextTooLongError, NoAvailableModelError
 from app.domain.ports.infrastructure_ports import ConcurrencyLimiterPort
@@ -60,6 +62,8 @@ class RouteChatRequest:
         clock: Clock,
         max_tokens_ceiling: int,
         max_context_chars: int = 4 * 32768,
+        generation_deadline_seconds: int = 600,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._policies = policies
         self._models = models
@@ -75,6 +79,11 @@ class RouteChatRequest:
         """Characters, not tokens: counting tokens would mean loading the
         model's tokeniser here, and a rough bound applied before any work
         starts is worth more than an exact one applied later."""
+        self._generation_deadline_seconds = generation_deadline_seconds
+        self._monotonic = monotonic
+        """A monotonic elapsed-time source, injected so the deadline is testable
+        without real waiting. Monotonic, not the wall-clock `Clock`, because an
+        NTP step must not move a generation's deadline."""
 
     async def execute(
         self,
@@ -128,7 +137,7 @@ class RouteChatRequest:
         self,
         actor: Actor,
         capability: str,
-        target,
+        target: Model,
         runtime: ModelRuntimePort,
         messages: Sequence[Message],
         max_tokens: int | None,
@@ -141,7 +150,8 @@ class RouteChatRequest:
         completed = False
         truncated = False
         upstream_finished = False
-        started = time.monotonic()
+        started = self._monotonic()
+        deadline = self._generation_deadline_seconds
 
         try:
             # `aclosing` on the upstream generator is not optional. When a
@@ -160,6 +170,22 @@ class RouteChatRequest:
                     yield chunk
                     if produced >= ceiling:
                         truncated = True
+                        break
+                    # A wall-clock ceiling as well as a token one. A model
+                    # producing slowly enough to stay under the per-read timeout
+                    # yet below the token ceiling would otherwise hold a
+                    # concurrency slot indefinitely; near swap on unified memory
+                    # that is the realistic case. Cutting here reports "length"
+                    # through the same block below, the honest signal that the
+                    # model did not finish.
+                    if deadline > 0 and self._monotonic() - started > deadline:
+                        truncated = True
+                        logger.info(
+                            "generation for %s hit the %ss deadline after %s tokens",
+                            target.ref,
+                            deadline,
+                            produced,
+                        )
                         break
 
             # Only when the upstream did not already send a terminal chunk. At
@@ -191,7 +217,7 @@ class RouteChatRequest:
                         capability=capability,
                         model_alias=target.alias,
                         tokens=produced,
-                        latency_ms=int((time.monotonic() - started) * 1000),
+                        latency_ms=int((self._monotonic() - started) * 1000),
                         completed=completed,
                         at=self._clock.now(),
                         # Attributed to the caller's tenant, so per-tenant usage

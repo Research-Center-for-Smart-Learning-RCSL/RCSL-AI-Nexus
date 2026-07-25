@@ -117,7 +117,7 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 - [~] Default credentials replaced: Redis and Postgres now take real values from Docker file secrets; Qdrant, MinIO and Grafana arrive in Phase 2
 - [x] Model reference validation; no shell string construction anywhere
 - [ ] Host runtime hardening: service account, `127.0.0.1` binding, directory ownership
-- [ ] **Resource guardrails: concurrency cap, `max_tokens`, timeout, cancel on disconnect.** With no edge protection these are the only defence
+- [x] **Resource guardrails: concurrency cap, `max_tokens`, context bound, per-read timeout, wall-clock generation deadline, cancel on disconnect.** With no edge protection these are the only defence. All enforced in `RouteChatRequest`; the concurrency slot spans the whole generator and disconnect cancellation propagates to the adapter (backend.md §6). The wall-clock deadline is the last piece: a slow-but-steady stream that stays under the per-read timeout yet never reaches the token cap would otherwise hold a slot for hours on unified memory near swap. Verified by unit tests against an injected clock; real GPU behaviour still waits for the Mac Studio, the same boundary inference has
 - [x] `AuditPort` adapter, and auditing for bootstrap, invitations, resets, credential changes, key issuance and revocation, model registration, download and load, role changes and account removal
 - [x] gitleaks pre-commit hook
 
