@@ -17,6 +17,35 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-25
 
+### A routing policy editor, so the one thing that makes the gateway serve is no longer curl-only
+
+The routing policy API was complete and audited but had no screen, so the
+single thing that decides what the gateway serves for a capability was
+configured by hand. `features/routing-policies` now carries a table (one row
+per capability, candidates summarised highest-priority-first to match how the
+gateway evaluates) and a candidate editor: a `useFieldArray` over the candidate
+list, each with a model alias, a priority, and the structured requirement as
+checkbox groups over node status and model state plus an optional free-memory
+floor.
+
+Three decisions worth the note. The requirement stays a closed set of
+structured fields rather than an expression box, exactly as the domain demands
+(ARCHITECTURE.md section 2.4): the same reason the backend refuses one is the
+reason the form does not offer one. Creating a policy is only offered for
+capabilities that do not already have one, because a save is a full replacement
+keyed by capability (`PUT`) and a "create" over an existing capability would
+silently overwrite it. And the memory floor is backed by a text input where a
+blank field means "no floor" and becomes null, kept out of a plain
+`z.coerce.number()` because coercing an empty string yields zero, which would
+read as a real 0 GB requirement rather than the absence of one; the schema test
+pins that.
+
+The response schemas parse against the same enums the models feature uses, so a
+node status or model state the frontend does not know surfaces as a parse
+failure rather than a candidate that silently never matches. Verified through
+`tsc`, `eslint`, `next build` (the `/routing-policies` route generates), and ten
+new schema tests.
+
 ### A frontend test runner, on the units where a defect is a security defect
 
 The one Phase 1 gap most worth closing first, because the type checker had been
@@ -515,30 +544,27 @@ Nothing has run on the Mac Studio yet. Everything so far is verified on a
 Windows development machine, which means GPU inference, the tailnet entrance,
 and nginx behaviour are all unverified by construction.
 
-Two things exist as an API with no UI: routing policies, which are editable
-only with curl, and the download progress endpoint, which the models table
-polls but no page surfaces on its own.
+One thing still exists as an API with no dedicated UI: the download progress
+endpoint, which the models table polls but no page surfaces on its own. The
+routing policy editor now exists, so a policy is no longer curl-only.
 
 ## What comes next
 
-### Phase 1, to finish it
+Two of the three items here are now done, recorded in the dated entries above:
+a **frontend test runner** (Vitest over the units where a defect is a security
+defect) and the **routing policy editor**. What remains functional-to-
+operational is one item.
 
-1. **A frontend test runner.** No Vitest, no Playwright. Three frontend
-   defects shipped together because the type checker was the only gate, and
-   two of them were security defects. More pressing now than it was: the
-   sign-in and enrolment screens are real, and they are the surface where a
-   defect is a security defect.
-
-2. **Database account split, and Docker secrets on the Compose side.** Both
+1. **Database account split, and Docker secrets on the Compose side.** Both
    are documented as if they exist; `security.md` section 13.0 now says
    plainly that they do not. With the network split (§15.5) closed, the
    account split is the remaining control-plane hardening item: it is the
    deeper defence against a compromised gateway, denying it write access to
    `api_keys` and `users` rather than only a path to the admin socket.
 
-3. **A routing policy editor.** The API is complete and audited; there is no
-   screen for it, so the one thing that makes the gateway serve anything is
-   currently configured by hand.
+The frontend test runner covers logic units only; component and browser (E2E,
+Playwright) coverage of the sign-in and enrolment screens is still the deferred
+increment, recorded in `ROADMAP.md` Phase 3.
 
 ### Then: deploy to the Mac Studio for the first time
 

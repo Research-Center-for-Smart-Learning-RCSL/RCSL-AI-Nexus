@@ -65,7 +65,7 @@ carries the checked control-by-control state.
 - [x] `components/ui`: Button, Input, Table, Dialog, Badge, Tabs, Toast
 - [x] `features/models`: node selection, now that `GET /nodes` exists
 - [ ] `lib/generated`: `openapi-typescript` against the **admin** port (the gateway serves no schema)
-- [ ] `features/routing-policies`: the API exists and has no UI, so policies are edited with curl
+- [x] `features/routing-policies`: table plus a candidate editor (per-capability, `useFieldArray` over candidates, structured requirement checkboxes), so a policy is no longer edited with curl
 - [x] `lib/session.tsx`: consumes `/admin/me`, exposes `auth_mode` through context
 - [x] `lib/api-client.ts`: `credentials: 'include'`, automatic CSRF header on mutations, 401 handling that branches on `auth_mode`
 - [x] `components/composed`: `DataTable`, `StatCard`, `FormField`, `ConfirmDialog`, `StatusBadge`, `StreamMessage`, `EmptyState`, `ErrorState`
@@ -124,7 +124,7 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 ## Phase 2: Full Management Functionality
 
 - [ ] Second runtime adapter (vLLM or MLX), proving swappability without touching use cases or interfaces
-- [ ] Routing policy editor UI, including fallback configuration
+- [x] Routing policy editor UI, including fallback configuration (the ordered candidate list with per-candidate priority and requirements is the fallback mechanism; shipped in Phase 1)
 - [ ] Node management UI, `NodeHealthPort`, heartbeats, and the SSRF guard shipping alongside the first node write endpoint
 - [ ] Multi-tenancy: `Tenant` entity, `tenant_id` columns, repository-enforced query filters
 - [ ] Logs UI
