@@ -10,6 +10,7 @@ translate between the two.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -78,7 +79,7 @@ class RoutingPolicyRow(Base):
     __tablename__ = "routing_policies"
 
     capability: Mapped[str] = mapped_column(String(64), primary_key=True)
-    candidates: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    candidates: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     """Structured requirement documents, never expression strings. See
     docs/ARCHITECTURE.md section 2.4 for why this distinction matters."""
 
@@ -238,7 +239,7 @@ class AuditLogRow(Base):
     action: Mapped[str] = mapped_column(String(64), index=True)
     target: Mapped[str | None] = mapped_column(String(255), nullable=True)
     outcome: Mapped[str] = mapped_column(String(16))
-    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     """Append-only by convention and by the migration account's grants; there
     is no update or delete path in any repository."""

@@ -35,8 +35,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -90,7 +91,7 @@ class MlxAdapter:
 
     async def generate(
         self, ref: str, messages: Sequence[Message], max_tokens: int | None = None
-    ) -> AsyncIterator[CompletionChunk]:
+    ) -> AsyncGenerator[CompletionChunk, None]:
         """Stream a completion over the OpenAI-compatible endpoint.
 
         An async generator, declared without `async def` in the port and called
@@ -99,7 +100,7 @@ class MlxAdapter:
         generating for someone who has already gone.
         """
         assert_valid_hf_repo_id(ref)
-        payload: dict = {
+        payload: dict[str, Any] = {
             "model": ref,
             "messages": [{"role": m.role.value, "content": m.content} for m in messages],
             "stream": True,
@@ -185,7 +186,7 @@ class MlxAdapter:
 
     # --- model lifecycle -------------------------------------------------
 
-    async def pull(self, ref: str) -> AsyncIterator[PullProgress]:
+    async def pull(self, ref: str) -> AsyncGenerator[PullProgress, None]:
         """Download a model into the host-shared HuggingFace cache, with progress.
 
         Unlike Ollama, there is no server endpoint to delegate to: the download
@@ -296,7 +297,10 @@ class MlxAdapter:
 
     def _map_hf_error(self, exc: BaseException, ref: str) -> DomainError:
         try:
-            from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError
+            from huggingface_hub.utils import (  # type: ignore[attr-defined]
+                GatedRepoError,
+                RepositoryNotFoundError,
+            )
         except ImportError:
             return DomainError(detail=f"mlx pull failed for {ref}: {exc}")
 
@@ -306,7 +310,7 @@ class MlxAdapter:
             return NoAvailableModelError(detail=f"{ref} is gated and needs authorisation")
         return DomainError(detail=f"mlx pull failed for {ref}: {exc}")
 
-    async def _post(self, path: str, payload: dict, ref: str) -> None:
+    async def _post(self, path: str, payload: dict[str, Any], ref: str) -> None:
         async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
             response = await client.post(path, json=payload)
             if response.status_code == 404:

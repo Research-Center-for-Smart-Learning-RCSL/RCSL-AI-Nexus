@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
+from typing import Any
 
 import httpx
 
@@ -54,7 +55,7 @@ class OllamaAdapter:
 
     async def generate(
         self, ref: str, messages: Sequence[Message], max_tokens: int | None = None
-    ) -> AsyncIterator[CompletionChunk]:
+    ) -> AsyncGenerator[CompletionChunk, None]:
         """Stream a completion.
 
         An async generator, so it is declared without `async def` in the port
@@ -63,7 +64,7 @@ class OllamaAdapter:
         it Ollama keeps generating for someone who has already gone.
         """
         assert_valid_model_ref(ref)
-        payload: dict = {
+        payload: dict[str, Any] = {
             "model": ref,
             "messages": [{"role": m.role.value, "content": m.content} for m in messages],
             "stream": True,
@@ -136,7 +137,7 @@ class OllamaAdapter:
 
     # --- model lifecycle -------------------------------------------------
 
-    async def pull(self, ref: str) -> AsyncIterator[PullProgress]:
+    async def pull(self, ref: str) -> AsyncGenerator[PullProgress, None]:
         """Stream download progress.
 
         Also an async generator: Ollama's pull endpoint answers with a stream
@@ -194,7 +195,7 @@ class OllamaAdapter:
 
     # --- internals -------------------------------------------------------
 
-    async def _post(self, path: str, payload: dict, ref: str) -> None:
+    async def _post(self, path: str, payload: dict[str, Any], ref: str) -> None:
         async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
             response = await client.post(path, json=payload)
             if response.status_code == 404:

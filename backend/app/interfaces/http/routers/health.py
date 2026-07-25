@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -41,7 +42,7 @@ async def _check_database() -> bool:
     return True
 
 
-async def _probe(name: str, coro) -> tuple[str, bool]:
+async def _probe(name: str, coro: Awaitable[bool]) -> tuple[str, bool]:
     """Run one dependency check, bounded and never raising.
 
     A readiness probe that hangs is worse than one that reports failure: the

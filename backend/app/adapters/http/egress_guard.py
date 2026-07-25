@@ -75,7 +75,7 @@ def resolve_node_ips(address: str) -> list[IpAddress]:
     ips: list[IpAddress] = []
     seen: set[str] = set()
     for info in infos:
-        raw = info[4][0]
+        raw = str(info[4][0])
         if raw in seen:
             continue
         seen.add(raw)

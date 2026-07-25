@@ -12,7 +12,9 @@ from contextlib import aclosing
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 
+from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.domain.entities.actor import Actor
 from app.domain.entities.chat import Message, MessageRole
 from app.infrastructure.di import RouteChatRequestDep
@@ -35,12 +37,15 @@ def _to_domain(request: ChatCompletionRequest) -> list[Message]:
     return [Message(role=MessageRole(m.role), content=m.content) for m in request.messages]
 
 
-@router.post("/chat/completions")
+# response_model=None: the return annotation is a union over a Pydantic body
+# and a StreamingResponse, which FastAPI cannot turn into a response model. The
+# annotation is for the type checker; the wire shape is built by hand.
+@router.post("/chat/completions", response_model=None)
 async def chat_completions(
     body: ChatCompletionRequest,
     actor: ActorDep,
     use_case: RouteChatRequestDep,
-):
+) -> ChatCompletionResponse | StreamingResponse:
     completion_id = sse.new_completion_id()
     created = sse.created_now()
     messages = _to_domain(body)
@@ -66,7 +71,7 @@ async def _collect(
     created: int,
     capability: str,
     actor: Actor,
-    use_case,
+    use_case: RouteChatRequest,
     messages: list[Message],
     max_tokens: int | None,
 ) -> ChatCompletionResponse:
