@@ -17,6 +17,35 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-25
 
+### A frontend test runner, on the units where a defect is a security defect
+
+The one Phase 1 gap most worth closing first, because the type checker had been
+the only gate and two of the three defects it let through were security
+defects. Vitest with jsdom, and 44 tests over the pure logic the adversarial
+review had already found holes in: `safe-redirect` (the backslash open-redirect
+that survives a prefix check), the chat SSE schema and reader (the OpenAI
+envelope that an earlier flat schema silently stripped to nothing, plus the
+error, malformed, truncation and abort frames), `api-client` (the CSRF header
+attached only on mutations and only when the cookie is present, the 401 that
+becomes an `UnauthorizedError` and an event, and the absence of any
+`Authorization` header), and the password schema's length-and-strength
+threshold.
+
+Two decisions worth the note. The `@/` alias is resolved in `vitest.config.ts`
+directly rather than through a tsconfig-reading plugin, so the test setup does
+not depend on how that plugin parses config. And the jsdom environment runs on
+`https://localhost/` because the CSRF cookie carries the `__Host-` prefix,
+which jsdom's cookie jar correctly refuses to store over http, so a test on
+http would have been asserting against a control that the browser also drops.
+The test files are excluded from `tsconfig.json` so `next build` does not try
+to type-check them.
+
+What is not covered: nothing renders a component or drives a browser yet. The
+sign-in and enrolment screens, which are the surface where a defect is a
+security defect, are still only reachable through their schemas and hooks in
+these tests. Playwright is the deferred increment, recorded in `ROADMAP.md`
+Phase 3.
+
 ### Closed the network exposure the review left standing
 
 The sharpest finding, recorded as accepted risk §15.5, is now fixed rather than
