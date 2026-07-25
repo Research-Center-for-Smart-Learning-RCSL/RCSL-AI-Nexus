@@ -34,6 +34,7 @@ from app.adapters.persistence.repositories import (
     PostgresUsageRepository,
     PostgresUserRepository,
 )
+from app.adapters.runtime.mlx_adapter import MlxAdapter
 from app.adapters.runtime.ollama_adapter import OllamaAdapter
 from app.adapters.session.session_store import SessionStore
 from app.application.use_cases.accept_invitation import AcceptInvitation
@@ -73,17 +74,22 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
 def build_runtimes(settings: Settings) -> dict[RuntimeKind, ModelRuntimePort]:
-    """Only Ollama in Phase 1.
+    """The one place that knows which runtimes this build serves.
 
-    Adding vLLM or MLX means one more entry and one more adapter file. That
-    the use cases need no change is the payoff the hexagonal layering was
-    chosen for, so it is worth keeping this list as the only place that knows.
+    Adding MLX cost one entry here and one adapter file, with no use case and no
+    interface touched: the payoff the hexagonal layering was chosen for. vLLM
+    would be the same, once there is hardware it runs on. See
+    adapters/runtime/mlx_adapter.py.
     """
     return {
         RuntimeKind.OLLAMA: OllamaAdapter(
             base_url=settings.ollama_base_url,
             request_timeout_seconds=settings.request_timeout_seconds,
-        )
+        ),
+        RuntimeKind.MLX: MlxAdapter(
+            base_url=settings.mlx_base_url,
+            request_timeout_seconds=settings.request_timeout_seconds,
+        ),
     }
 
 

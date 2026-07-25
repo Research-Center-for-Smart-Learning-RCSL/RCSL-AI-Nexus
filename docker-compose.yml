@@ -33,6 +33,10 @@ x-backend: &backend
   env_file: [.env]
   environment:
     OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    MLX_BASE_URL: ${MLX_BASE_URL:-http://host.docker.internal:8080}
+    # The MLX adapter downloads snapshots here; the mount below makes this the
+    # host cache the native mlx_lm.server reads. See adapters/runtime/mlx_adapter.py.
+    HF_HOME: /hf-cache
   extra_hosts:
     - "host.docker.internal:host-gateway"
   volumes:
@@ -42,6 +46,12 @@ x-backend: &backend
     # public admin entrance both need it. Populate ./data/GeoLite2-Country.mmdb
     # before starting; see docs/runbooks/first-deploy.md.
     - ./data:/data:ro
+    # The HuggingFace cache the MLX adapter downloads into, shared with the
+    # host-native mlx_lm.server that serves those weights. Writable, unlike the
+    # GeoLite2 mount: this is the one place a container writes onto a host path,
+    # and it holds model files only. On the Mac Studio, HF_CACHE_HOST_PATH points
+    # at the runtime account's ~/.cache/huggingface. See docs/architecture/deployment.md.
+    - ${HF_CACHE_HOST_PATH:-./data/hf-cache}:/hf-cache
   depends_on:
     migrate:
       condition: service_completed_successfully

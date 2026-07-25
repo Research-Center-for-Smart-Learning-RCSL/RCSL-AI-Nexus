@@ -24,6 +24,10 @@ dependencies = [
     "geoip2>=4.8",
     "zxcvbn>=4.5.0",
     "segno>=1.6.6",
+    # Only the MLX adapter's download path uses it, and only there: it is
+    # imported lazily inside the methods that pull a snapshot, so the inference
+    # path neither pays its import cost nor depends on it.
+    "huggingface-hub>=0.27",
 ]
 
 [dependency-groups]
@@ -69,5 +73,11 @@ strict = false
 # The Python port of zxcvbn ships no stubs. Only the score and the feedback
 # strings are read, and the adapter narrows both.
 module = "zxcvbn.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# huggingface_hub ships no stubs and is imported lazily inside the MLX adapter's
+# download seams only. Those are covered by tests that replace them.
+module = "huggingface_hub.*"
 ignore_missing_imports = true
 

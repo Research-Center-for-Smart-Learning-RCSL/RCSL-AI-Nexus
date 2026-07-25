@@ -123,7 +123,7 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 
 ## Phase 2: Full Management Functionality
 
-- [ ] Second runtime adapter (vLLM or MLX), proving swappability without touching use cases or interfaces
+- [x] Second runtime adapter (MLX), proving swappability without touching use cases or interfaces. Done: one adapter file plus three wiring points (`build_runtimes`, one setting, one Compose mount); `application/use_cases` and `interfaces` untouched, domain untouched. The layering held. What it surfaced is recorded in [PROGRESS.md](./PROGRESS.md) 2026-07-25: MLX has no download-with-progress endpoint (so `pull` downloads via `huggingface_hub` into a host-shared cache) and no unload (so `unload` refuses rather than desyncing the memory budget). Real MLX inference and a real download still wait for the Mac Studio, the same boundary Ollama inference has. vLLM stays deferred until there is NVIDIA/Linux hardware it runs on
 - [x] Routing policy editor UI, including fallback configuration (the ordered candidate list with per-candidate priority and requirements is the fallback mechanism; shipped in Phase 1)
 - [ ] Node management UI, `NodeHealthPort`, heartbeats, and the SSRF guard shipping alongside the first node write endpoint
 - [ ] Multi-tenancy: `Tenant` entity, `tenant_id` columns, repository-enforced query filters

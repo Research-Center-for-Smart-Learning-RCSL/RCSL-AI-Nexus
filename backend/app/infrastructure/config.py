@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     deployment by accident."""
 
     ollama_base_url: str = "http://host.docker.internal:11434"
+    mlx_base_url: str = "http://host.docker.internal:8080"
+    """`mlx_lm.server` on the host, reached the same way as Ollama. Downloads it
+    triggers land under HF_HOME, which the Compose file bind-mounts onto the host
+    HuggingFace cache the native server reads; see adapters/runtime/mlx_adapter.py."""
 
     node_id: str = "local"
     node_name: str = "local"
