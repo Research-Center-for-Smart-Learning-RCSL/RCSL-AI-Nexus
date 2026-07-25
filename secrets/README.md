@@ -34,6 +34,13 @@ Keep the usernames as above unless you change them in both the URLs and nowhere
 else (the grants follow whatever username the URL carries). Each URL has the
 shape `postgresql+asyncpg://<user>:<password>@postgres:5432/nexus`.
 
+The account usernames and the database name (`POSTGRES_DB`) must be lower-case
+`[a-z_][a-z0-9_]*`. The role provisioner (`db_roles.py`) constrains identifiers
+to that shape and aborts on anything else, so a hyphen or a capital letter in a
+name stops the `migrate` job rather than being silently quoted. Passwords have
+no such restriction. If a password contains URL-reserved characters (`@`, `:`,
+`/`, `#`), percent-encode it inside the URL; the value is decoded before use.
+
 **`postgres_password` must equal the password inside `owner_database_url`.** The
 Postgres container sets the `nexus` superuser password from `postgres_password`
 on first initialisation; the owner URL then connects with it. They are two files
