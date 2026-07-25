@@ -336,6 +336,8 @@ The concurrency slot must be held for the entire generator lifetime, and disconn
 
 The memory budget in Phase 1 is **static**: `nodes.total_memory_gb` minus the sum of `resource_profile.memory_gb` over currently loaded models, all from the database. Live metrics through `MetricsPort` arrive in Phase 2, and this check must not wait for them.
 
+The Phase 2 observability stack (Prometheus and Grafana, §13.0) ships the *emission* side: each application exposes what it is doing at `/metrics`. It does not yet change this check. The `MetricsPort` the budget would read is the *ingestion* side, a live free-memory figure for the node, and a real one only exists on the Mac Studio. So the budget stays static and authoritative until that figure is real, which is the conservative reading of the rule above rather than a gap.
+
 ### 4.4 General Public Service Hardening
 
 - No version numbers in responses; `debug=False`; error bodies never carry stack traces, internal model names, or node addresses. Enforced centrally by the error mapping in [backend.md](./backend.md) §5.
@@ -456,8 +458,8 @@ Even on an `internal: true` network, every service requires authentication. This
 | Redis | **No password at all by default** | Set `requirepass`; disable `FLUSHALL`, `CONFIG`, `DEBUG` |
 | Qdrant | **No API key by default** | Set `QDRANT__SERVICE__API_KEY` |
 | MinIO | **Defaults to `minioadmin`/`minioadmin`** | Replace root credentials; give the application a least-privilege service account |
-| Grafana | **Defaults to `admin`/`admin`** | Replace; disable anonymous access and self-registration |
-| Prometheus | **No authentication at all** | Publish no port; reachable only by Grafana |
+| Grafana | **Defaults to `admin`/`admin`** | Replace; disable anonymous access and self-registration. **Implemented** (`docker-compose.yml`): password from a file secret, `GF_AUTH_ANONYMOUS_ENABLED=false`, `GF_USERS_ALLOW_SIGN_UP=false` |
+| Prometheus | **No authentication at all** | Publish no port; reachable only by Grafana. **Implemented**: no host port, on the internal metrics networks only, and `/metrics` on each app additionally requires a bearer token (`metrics_scrape_token`) |
 | Postgres | Password from configuration | **Separate database users per service**, see below |
 | Ollama on the host | Binds `0.0.0.0:11434` by default | Set `OLLAMA_HOST=127.0.0.1`, see §7.1 |
 
@@ -468,6 +470,8 @@ The Postgres split is the important one, and it **is implemented** (`infrastruct
 - The **owner** account owns the schema and holds DDL. Only the `migrate` job connects as it.
 
 Each service mounts its own account's connection URL as the `database_url` secret; the account name inside that URL is the single source of truth. The `migrate` job, connecting as the owner, creates the gateway and admin roles from their URLs and re-asserts their grants on every deploy, so a table added by a later migration is regranted and the gateway's writable set stays exactly one table. The grants are declarative: the gateway's privileges are revoked and re-granted each run, so a prior over-grant cannot survive. §1's earlier caveat, that splitting the containers did nothing about what a compromised gateway could do to the database, no longer holds.
+
+**Metrics scraping does not reopen the gateway/admin isolation.** Prometheus scrapes all three applications, so it is on both a gateway-side scrape network (`metrics-gateway`) and an admin-side one (`metrics-admin`). The gateway and the admin entrances still share no network with each other, which is the invariant §1 and §3.2 rest on; the only node on both is Prometheus. Unlike Postgres and Redis, which are also on two segments but never initiate a connection, Prometheus does initiate. What makes it safe is that it is a scraper, not a forwarding proxy: it issues only the fixed `GET /metrics` requests in `prometheus/prometheus.yml`, so a compromised gateway cannot use it to reach an admin entrance. The `/metrics` endpoints themselves require a bearer token, so scraping does not depend on network placement being perfect, and neither Prometheus nor Grafana publishes a port a client outside the tailnet could reach.
 
 ## 7. High-Risk Features
 
@@ -736,13 +740,15 @@ looking for the risk. The state below is checked against the code.
 | Node writes (register, edit, delete, health check) shipping with the guard, refusing to delete a node with models attached, audited | `interfaces/http/routers/nodes.py`, `application/use_cases/manage_nodes.py`, `tests/unit/test_manage_nodes.py` |
 | Node status observed by a heartbeat rather than assumed online; runs in the admin app because the gateway may not write `nodes`, writes only on change | `infrastructure/heartbeat.py`, `adapters/http/node_health.py`, `tests/unit/test_heartbeat.py` |
 | Multi-tenancy: `tenant_id` on users/keys/usage/audit, tenant-scoped repositories that filter reads and stamp writes from the actor's tenant, an explicit unscoped variant for identity/bootstrap; isolation pinned against real Postgres | `domain/entities/tenant.py`, `adapters/persistence/repositories.py` (`_TenantScoped`), `application/use_cases/manage_tenants.py`, `tests/integration/test_tenant_isolation.py` |
+| Observability emission: `/metrics` on all three apps behind a bearer token, HTTP and inference series, a scrape-time concurrency-slot gauge; Prometheus and Grafana on internal-only networks, Grafana password from a file secret with anonymous access and self-registration off | `adapters/metrics/prometheus.py`, `middleware/metrics.py`, `routers/metrics.py`, `docker-compose.yml`, `prometheus/`, `grafana/`, `tests/unit/test_metrics.py` |
 
 **Not implemented, and nothing in the repository arranges it**
 
 | Control | Status |
 |---|---|
 | Logging boundaries and the expiring debug switch (§9.2) | The columns exist on both `users` and `api_keys` and are read by nothing |
-| Knowledge base, Prometheus (§7.3, §10) | Phase 2, correctly absent. The knowledge base plugs into the tenant boundary above when built |
+| Knowledge base (§7.3) | Phase 2, correctly absent. It plugs into the tenant boundary above when built |
+| Live free-memory ingestion into the budget (§4.3) | The emission stack ships, but the `MetricsPort` figure the budget would read is a real hardware number only on the Mac Studio; the budget stays static until then |
 
 **Phase 1, all required before anything is exposed publicly**
 
@@ -775,7 +781,7 @@ looking for the risk. The state below is checked against the code.
 - Logging boundaries and the expiring debug switch
 - Encrypted backups and a rehearsed restore
 - Authorization checks covering every use case
-- Prometheus and Grafana; live metrics replace the static memory budget
+- Prometheus and Grafana: the emission stack and both services ship (see the table above); replacing the static memory budget with a live free-memory figure still waits for the Mac Studio, where that figure is real
 - Knowledge base upload handling and parser isolation
 
 **Phase 3**
@@ -793,6 +799,8 @@ looking for the risk. The state below is checked against the code.
 [ ] Scan the Mac Studio from outside the tailnet: no open ports
 [ ] Tailscale ACL applied; verify a plain member cannot reach 8000/8002 directly
 [ ] Verify uvicorn binds 0.0.0.0 inside containers (published ports otherwise forward nowhere)
+[ ] Prometheus publishes no host port; /metrics is not in any nginx location, so it is unreachable through the proxy
+[ ] GET /metrics without the bearer token returns 404 on all three apps; with the token, 200
 
 --- Dual entrance, the easiest thing to get wrong; test each one ---
 [ ] 8001 and 8002 are separate ASGI apps on separate sockets with separate middleware
@@ -826,10 +834,12 @@ looking for the risk. The state below is checked against the code.
 [ ] Model reference validation active; no shell=True anywhere
 [ ] Database accounts separated; gateway cannot write api_keys or users
 [ ] Secrets mounted as files, not environment variables
+[ ] metrics_scrape_token and grafana_admin_password are real values, not the shipped placeholders
 [ ] .env untracked; gitleaks enabled
 [ ] AUTH_MODE=dev fails to start under ENV=production (test it, do not assume)
 
 --- Data and operations ---
+[ ] Grafana: admin password replaced, anonymous access off, self-registration off; reachable only via `tailscale serve`
 [ ] Full prompt logging disabled by default
 [ ] Backups encrypted and a restore actually rehearsed
 [ ] FileVault enabled; authrestart verified and documented in the runbook

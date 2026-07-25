@@ -94,9 +94,24 @@ networks:
   admin-data:
     internal: true
 
+  # Scrape segments, kept separate so the gateway/admin invariant above still
+  # holds: Prometheus is on both, but the gateway and the admin entrances never
+  # share one. Prometheus is a scraper, not a router — it issues only the fixed
+  # GET /metrics in prometheus/prometheus.yml — so a compromised gateway cannot
+  # use it to reach an admin entrance. All internal: nothing here is published.
+  metrics-gateway:
+    internal: true
+  metrics-admin:
+    internal: true
+  # Grafana to Prometheus only. Grafana is the sole member with a host port.
+  metrics-viz:
+    internal: true
+
 volumes:
   postgres-data:
   redis-data:
+  prometheus-data:
+  grafana-data:
 
 # Every secret is a file under ./secrets, git-ignored, populated per deployment.
 # The three database URLs each name a different least-privilege account
@@ -124,6 +139,14 @@ secrets:
     file: ./secrets/session_signing_key
   proxy_shared_secret:
     file: ./secrets/proxy_shared_secret
+  # The bearer token Prometheus presents to every /metrics endpoint, and that
+  # each backend reads as metrics_scrape_token. One file, mounted into both sides,
+  # so they cannot drift.
+  metrics_scrape_token:
+    file: ./secrets/metrics_scrape_token
+  # Grafana's initial admin password, replacing its admin/admin default.
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password
 
 services:
   # --- one-shot schema migration and provisioning ------------------------
@@ -153,6 +176,9 @@ services:
       - totp_encryption_key
       - session_signing_key
       - proxy_shared_secret
+      # Read only so get_settings() does not trip the production placeholder
+      # check; this job scrapes nothing.
+      - metrics_scrape_token
     depends_on:
       postgres:
         condition: service_healthy
@@ -172,8 +198,9 @@ services:
       # further to the proxy host alone.
       - "${TAILNET_IP:?set TAILNET_IP in .env; an empty value publishes on 0.0.0.0}:8000:8000"
     # Deliberately not on any control network. The data plane reaches only the
-    # database and the host runtime; it has no path to an admin entrance.
-    networks: [gateway-egress, gateway-data]
+    # database, the host runtime, and (for scraping) Prometheus; it has no path
+    # to an admin entrance. metrics-gateway carries only this service and Prometheus.
+    networks: [gateway-egress, gateway-data, metrics-gateway]
     secrets:
       # The gateway account: reads every table, writes only usage_records.
       - source: gateway_database_url
@@ -183,6 +210,7 @@ services:
       - totp_encryption_key
       - session_signing_key
       - proxy_shared_secret
+      - metrics_scrape_token
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
       interval: 30s
@@ -202,7 +230,7 @@ services:
       - "8001"
     ports:
       - "127.0.0.1:8001:8001"
-    networks: [control-tailnet, admin-data]
+    networks: [control-tailnet, admin-data, metrics-admin]
     secrets:
       - source: admin_database_url
         target: database_url
@@ -211,6 +239,7 @@ services:
       - totp_encryption_key
       - session_signing_key
       - proxy_shared_secret
+      - metrics_scrape_token
 
   # --- control plane, public entrance -------------------------------------
   # A separate service, not a second port on the one above: the two trust
@@ -226,7 +255,7 @@ services:
       - "8002"
     ports:
       - "${TAILNET_IP:?set TAILNET_IP in .env; an empty value publishes on 0.0.0.0}:8002:8002"
-    networks: [control-public, admin-data]
+    networks: [control-public, admin-data, metrics-admin]
     secrets:
       - source: admin_database_url
         target: database_url
@@ -235,6 +264,7 @@ services:
       - totp_encryption_key
       - session_signing_key
       - proxy_shared_secret
+      - metrics_scrape_token
 
   # --- frontends ----------------------------------------------------------
   # One image, one instance per entrance, differing only in which admin API
@@ -309,3 +339,52 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # --- observability ------------------------------------------------------
+  # Prometheus scrapes the three applications; Grafana reads Prometheus. See
+  # docs/architecture/security.md section 6 for why neither may be public:
+  # Prometheus has no authentication and Grafana ships with admin/admin.
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    # No published port at all. Reachable only by Grafana over metrics-viz, and
+    # scraping the apps over metrics-gateway and metrics-admin. Exposing it would
+    # publish an unauthenticated read of every internal series.
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks: [metrics-gateway, metrics-admin, metrics-viz]
+    secrets:
+      # Presented as the bearer token to each /metrics; see prometheus/prometheus.yml.
+      - metrics_scrape_token
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    restart: unless-stopped
+    # The three hardening points security.md section 6 requires of Grafana:
+    # replace the default password (from a file secret, not the environment),
+    # and disable both anonymous access and self-registration.
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_ALLOW_ORG_CREATE: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    ports:
+      # Loopback only, exposed to the tailnet through `tailscale serve --https
+      # 8443 http://127.0.0.1:3002`. Never published on 0.0.0.0.
+      - "127.0.0.1:3002:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks: [metrics-viz]
+    secrets:
+      - grafana_admin_password
+    depends_on:
+      - prometheus

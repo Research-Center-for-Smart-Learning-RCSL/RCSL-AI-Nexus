@@ -1,0 +1,93 @@
+{
+  "uid": "nexus-overview",
+  "title": "Nexus Overview",
+  "tags": ["nexus"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Inference concurrency slots",
+      "description": "Slots held versus the ceiling. Sustained saturation is the pressure the resource guardrails exist to bound.",
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "nexus_inference_slots_in_use{job=\"gateway\"}", "legendFormat": "in use" },
+        { "refId": "B", "expr": "nexus_inference_slots_max{job=\"gateway\"}", "legendFormat": "ceiling" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Tokens per second",
+      "description": "Produced tokens, counted even when a client disconnects mid-stream.",
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (model) (rate(nexus_inference_tokens_total[5m]))", "legendFormat": "{{model}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "HTTP request rate",
+      "description": "By matched route template and job. Unmatched paths (scanners) collapse to __unmatched__.",
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (job, path) (rate(nexus_http_requests_total[5m]))", "legendFormat": "{{job}} {{path}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "HTTP p95 latency",
+      "description": "95th percentile request duration by route. On the gateway the /v1 route is a whole streamed completion.",
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, path) (rate(nexus_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{path}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Requests in progress",
+      "description": "Concurrent HTTP requests per entrance.",
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "nexus_http_requests_in_progress", "legendFormat": "{{job}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Completions by outcome",
+      "description": "Ran to completion versus cut short (token ceiling, wall-clock deadline, or client disconnect).",
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (completed) (rate(nexus_inference_requests_total[5m]))",
+          "legendFormat": "completed={{completed}}"
+        }
+      ]
+    }
+  ]
+}

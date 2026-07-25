@@ -17,6 +17,81 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-25
 
+### Observability: the emission side, and the word "metrics" pulled apart (Phase 2)
+
+The Phase 2 item read "MetricsPort with Prometheus and Grafana; live metrics
+replace the static memory budget," and the first useful thing was noticing it
+conflates two different things the codebase already keeps apart. There is a
+`MetricsPort` in the domain, and it is the *ingestion* side: `free_memory_gb`, a
+live hardware figure the memory budget would consult instead of static capacity.
+And there is the thing every deployment actually wants first, the *emission*
+side: the process exposing what it is doing so Prometheus can scrape it. This
+change ships emission in full. The ingestion half stays deferred on purpose,
+because a real free-memory number for the node exists only on the Mac Studio, and
+`security.md` §4.3 already says the budget must not wait on metrics: so the budget
+stays static and authoritative until the figure is real, which is the
+conservative reading of that rule rather than a gap.
+
+**The instruments are derived from what the code already produces, so the
+delicate paths are untouched.** HTTP series (request count, duration, in-flight)
+come from one pure-ASGI middleware. Pure ASGI rather than `BaseHTTPMiddleware`
+because the gateway's reason for being is streaming, and `BaseHTTPMiddleware`
+returns once the response object exists, which for an SSE stream is before a
+single token has gone out: timing and the in-flight gauge would measure
+time-to-first-byte, not the duration a request actually occupied a slot. Wrapping
+`send` and recording when the response truly finishes fixes both. Inference series
+(tokens, completion outcome, duration by capability and model) come from a
+`MeteredUsageRepository` that wraps the usage repository and reads the same
+`UsageRecord` the streaming use case already writes in its `finally` — so
+`RouteChatRequest`, the most carefully ordered file in the tree, gains observation
+without a line of instrumentation in it. The concurrency-slot gauge is read from
+the live limiter at scrape time rather than tracked through the request path, so
+it cannot drift out of step with the semaphore it reports.
+
+**The route label is a template, never the raw path.** An id in a URL would make
+each request its own time series, and a port scanner hammering 404s would turn
+unbounded cardinality into a memory problem. The middleware reconstructs the
+matched template from the router's path params and collapses anything unmatched to
+a single `__unmatched__` label. No label carries a caller identity, tenant, or
+key, for the same reason and because the exposition body is an information
+disclosure if it ever leaks.
+
+**Which is why /metrics is guarded, not merely placed on an internal network.**
+The gateway carries `/metrics` on the same ASGI app that faces the proxy, so
+network placement alone would rest on the operator's nginx being precise forever.
+The endpoint requires a bearer token from a file secret — the same shared-secret
+pattern the trusted-proxy check already uses — and returns 404, not 401, without
+it, so a caller does not even learn it exists. On the admin entrances `/metrics`
+is exempted from the geo/proxy perimeter (like health) so Prometheus can scrape
+over the internal network; the token is the actual control there. Placeholder
+tokens are refused in production exactly like the other secrets, but only when
+metrics are enabled, so a deployment that runs no Prometheus is not forced to
+invent one.
+
+**Scraping does not reopen the gateway/admin isolation.** Prometheus scrapes all
+three apps, so it sits on both a gateway-side scrape network and an admin-side
+one, but the gateway and the admin entrances still share no network with each
+other, which is the §1/§3.2 invariant (`docker compose config` confirms the
+intersection is empty). The only node on both is Prometheus, and unlike Postgres
+and Redis — also dual-homed but never initiating — Prometheus does initiate. What
+makes it safe is that it is a scraper, not a forwarding proxy: it issues only the
+fixed `GET /metrics` requests in its config, so a compromised gateway cannot use
+it to reach an admin entrance. Grafana is on the Prometheus network only, binds
+loopback, and is reached over `tailscale serve`; Prometheus publishes no port.
+Grafana's default `admin`/`admin` is replaced from a file secret, with anonymous
+access and self-registration off, which is the §6 requirement that had been
+sitting unactioned.
+
+Verified: 18 new unit tests (the token guard returning 404 on all three apps, the
+disabled-endpoint case, a served request counted under its template, the slot
+ceiling reported, a scanner's paths collapsing to `__unmatched__`, the label
+reconstruction, and the metered repository emitting from a record while still
+persisting it); the full unit suite at 290 passing; ruff and mypy clean; and
+`docker compose config` renders with the network invariant intact. What waits for
+the Mac Studio is what always does: real scrape traffic, and the ingestion figure
+that would let the budget go live. The two dependent Phase 2 items, the logs UI
+and in-app usage charts, are unstarted; Grafana covers the metrics view for now.
+
 ### mypy made honest, and put where it cannot drift again
 
 Running `mypy app` over the whole package, which this log had repeatedly called
@@ -994,8 +1069,10 @@ implementation:
   schema was written not to preclude it, but adding `tenant_id` touches every
   repository and the filter has to be injected inside the adapter so a caller
   cannot forget it.
-- **Prometheus and Grafana**, which replaces the static memory budget with
-  live metrics.
+- **Prometheus and Grafana** are now built on the emission side (see the
+  2026-07-25 entry). What remains is the ingestion half: a live free-memory
+  figure feeding the memory budget, which needs the Mac Studio to produce a real
+  one.
 - **A second compute node**, which is the point of the node abstraction and
   will be the first time routing has more than one place to send anything.
 

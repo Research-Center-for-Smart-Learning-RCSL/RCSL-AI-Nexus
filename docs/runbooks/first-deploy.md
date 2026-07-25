@@ -138,6 +138,16 @@ Ollama 預設會聽所有介面 (`0.0.0.0:11434`)。要把它綁回本機，只�
   不同 tailscale 版本語法略有差異，用 `tailscale serve --help` 確認；目標是
   `https://<你的主機>.ts.net/` 轉到 `http://127.0.0.1:3000`。
 
+- [ ]（選配）要從 tailnet 看 Grafana 儀表板，把它的本機埠也 serve 出去。Grafana 只綁
+  在 `127.0.0.1:3002`，Prometheus 完全不對外：
+
+  ```sh
+  tailscale serve --bg --https 8443 http://127.0.0.1:3002
+  ```
+
+  之後在同一 tailnet 上開 `https://<你的主機>.ts.net:8443`，用 admin 加
+  `grafana_admin_password` 登入。
+
 ---
 
 ## 5. GeoLite2 國別資料庫（不放會起不來）
@@ -210,6 +220,10 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
     `session_signing_key`：各一個 `openssl rand -base64 32`
   - `secrets/proxy_shared_secret`：要跟 NTNU proxy 送的 `X-Nexus-Proxy` 一致，
     跟管理員對齊同一個值
+  - `secrets/metrics_scrape_token`：`/metrics` 的 bearer token，一個
+    `openssl rand -base64 32` 即可。同一個檔會掛給 Prometheus，兩邊自動一致。若把
+    `METRICS_ENABLED` 設成 `false` 就不需要這個
+  - `secrets/grafana_admin_password`：Grafana 首次登入的 admin 密碼
 
   寫檔避免尾端換行的寫法：
 
@@ -282,6 +296,8 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
 - [ ] 資料庫帳號切分：gateway 帳號寫不了 `api_keys`/`users`（已有自動化整合測試佐證，
   見 `backend/tests/integration/test_db_role_grants.py`）
 - [ ] secrets 都是檔案掛載、`.env` 裡沒有機密、gitleaks pre-commit 有開
+- [ ] `/metrics` 沒帶 token 直接打應回 404；Prometheus 沒有對外埠、也沒被 nginx 轉發。
+  `metrics_scrape_token` 與 `grafana_admin_password` 都是真值，不是範本佔位字串
 
 ---
 
