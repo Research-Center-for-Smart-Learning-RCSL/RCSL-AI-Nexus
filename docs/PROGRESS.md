@@ -17,6 +17,19 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-25
 
+### A first-deploy runbook, and the GeoLite2 mount it turned up
+
+Compiling the Mac Studio pre-deploy checklist ([runbooks/first-deploy.md](./runbooks/first-deploy.md))
+surfaced a blocker: the Compose file mounted no `/data` into the backend
+services, but `build_geo_filter` refuses to start in production when
+`ALLOWED_COUNTRIES` is set and the GeoLite2 database is missing. So the stack as
+written would have failed to boot on the first real deploy. The `x-backend`
+anchor now bind-mounts `./data` read-only, and the runbook step is to drop
+`GeoLite2-Country.mmdb` there. The runbook is written for someone who has not
+used macOS: first boot, Homebrew, Docker Desktop, native Ollama bound to
+loopback, Tailscale and `tailscale serve`, the secrets, and the §14 checks that
+must be tested rather than assumed.
+
 ### The database account split, and secrets moved to file mounts
 
 The last functional-to-operational Phase 1 item, and the deeper half of the
@@ -624,7 +637,8 @@ structurally so far, which is what the Mac Studio deploy below is for.
 ### Then: deploy to the Mac Studio for the first time
 
 This is a milestone in its own right because several things can only be tested
-there, and because it needs another person.
+there, and because it needs another person. The step-by-step is in
+[runbooks/first-deploy.md](./runbooks/first-deploy.md); the essentials:
 
 - Install Ollama natively under launchd as a dedicated service account, bound
   to `127.0.0.1`.

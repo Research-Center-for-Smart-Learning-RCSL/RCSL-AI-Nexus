@@ -35,6 +35,13 @@ x-backend: &backend
     OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
   extra_hosts:
     - "host.docker.internal:host-gateway"
+  volumes:
+    # The GeoLite2 country database, read-only. build_geo_filter refuses to
+    # start in production when ALLOWED_COUNTRIES is set and this file is absent
+    # (interfaces/http/middleware/geo_filter.py §4.1), so the gateway and the
+    # public admin entrance both need it. Populate ./data/GeoLite2-Country.mmdb
+    # before starting; see docs/runbooks/first-deploy.md.
+    - ./data:/data:ro
   depends_on:
     migrate:
       condition: service_completed_successfully
