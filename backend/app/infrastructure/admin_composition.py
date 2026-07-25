@@ -44,12 +44,14 @@ from app.interfaces.http.routers import (
     dashboard,
     health,
     invitations,
+    logs,
     me,
     metrics,
     models,
     nodes,
     routing_policies,
     tenants,
+    usage,
     users,
 )
 
@@ -148,6 +150,8 @@ def mount_admin_routers(app: FastAPI) -> None:
         api_keys.router,
         routing_policies.router,
         dashboard.router,
+        usage.router,
+        logs.router,
         admin_chat.router,
     ):
         app.include_router(router, prefix=ADMIN_PREFIX)

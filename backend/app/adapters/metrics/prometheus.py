@@ -39,7 +39,7 @@ from prometheus_client import (
 from prometheus_client.core import GaugeMetricFamily
 from prometheus_client.registry import Collector
 
-from app.domain.entities.usage import UsageRecord
+from app.domain.entities.usage import BucketUnit, UsageBucket, UsageRecord
 from app.domain.ports.infrastructure_ports import ConcurrencyLimiterPort
 from app.domain.ports.repositories import UsageRepositoryPort
 
@@ -195,3 +195,8 @@ class MeteredUsageRepository:
 
     async def totals_since(self, since: datetime) -> tuple[int, int]:
         return await self._inner.totals_since(since)
+
+    async def bucketed_usage(
+        self, since: datetime, until: datetime, unit: BucketUnit
+    ) -> list[UsageBucket]:
+        return await self._inner.bucketed_usage(since, until, unit)

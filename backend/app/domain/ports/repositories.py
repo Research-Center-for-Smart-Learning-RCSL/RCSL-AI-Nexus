@@ -11,12 +11,13 @@ from datetime import datetime
 from typing import Protocol
 
 from app.domain.entities.api_key import ApiKey
+from app.domain.entities.audit import AuditEntry
 from app.domain.entities.invitation import Invitation, InvitationPurpose, RecoveryCode
 from app.domain.entities.model import Model, ModelState
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.tenant import Tenant
-from app.domain.entities.usage import UsageRecord
+from app.domain.entities.usage import BucketUnit, UsageBucket, UsageRecord
 from app.domain.entities.user import User
 
 
@@ -222,4 +223,44 @@ class UsageRepositoryPort(Protocol):
 
     async def totals_since(self, since: datetime) -> tuple[int, int]:
         """`(requests, tokens)` across all callers, for the dashboard."""
+        ...
+
+    async def bucketed_usage(
+        self, since: datetime, until: datetime, unit: BucketUnit
+    ) -> list[UsageBucket]:
+        """Usage grouped by time bucket and capability, for the analytics charts.
+
+        One query grouped by `(date_trunc(unit, at), capability)`; the use case
+        folds the rows into per-bucket totals and per-capability series. Scoped,
+        so a tenant's charts show only its own traffic.
+        """
+        ...
+
+
+class AuditLogRepositoryPort(Protocol):
+    """Read side of the audit log. The write side is `AuditPort`, whose adapter
+    commits in its own transaction; this is an ordinary tenant-scoped query."""
+
+    async def list_entries(
+        self,
+        *,
+        action: str | None,
+        outcome: str | None,
+        actor_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> list[AuditEntry]: ...
+
+    async def count_entries(
+        self,
+        *,
+        action: str | None,
+        outcome: str | None,
+        actor_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> int:
+        """Total matching the same filters, for the pager."""
         ...
