@@ -60,11 +60,25 @@ external and does run locally.
 
 ## Running the stack
 
+Configuration and secrets come first. `.env` holds non-secret settings; every
+credential is a file under `./secrets`, read at `/run/secrets` (see
+[`secrets/README.md`](./secrets/README.md)). Compose will not start without the
+secret files present, which is deliberate.
+
 ```bash
+cp .env.example .env          # then edit the non-secret values
+for f in secrets/*.example; do cp -n "$f" "${f%.example}"; done
+# fill in each file under secrets/ with a real value; see secrets/README.md
+
 docker compose build
 docker compose up -d
 docker compose ps             # migrate should have exited 0
 ```
+
+`migrate` provisions the three database accounts before any application starts;
+if it exits non-zero, read its log rather than the application logs, because the
+applications gate on it. Account and database names must be lower-case
+(`[a-z_][a-z0-9_]*`); the defaults already are.
 
 Model runtimes are deliberately **not** in Compose. Containers on macOS
 cannot reach the GPU, so a containerised Ollama would be CPU-only and MLX
