@@ -18,6 +18,7 @@ import { useEffect, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
+  ActivityIcon,
   BoxIcon,
   GaugeIcon,
   KeyIcon,
@@ -25,6 +26,7 @@ import {
   MessageSquareIcon,
   Building2Icon,
   RouteIcon,
+  ScrollTextIcon,
   ServerIcon,
   UserCogIcon,
   UsersIcon,
@@ -73,6 +75,18 @@ const NAV: NavItem[] = [
     href: '/nodes',
     label: 'Nodes',
     icon: <ServerIcon className="size-4" />,
+    adminOnly: true,
+  },
+  {
+    href: '/usage',
+    label: 'Usage',
+    icon: <ActivityIcon className="size-4" />,
+    adminOnly: true,
+  },
+  {
+    href: '/logs',
+    label: 'Logs',
+    icon: <ScrollTextIcon className="size-4" />,
     adminOnly: true,
   },
   {

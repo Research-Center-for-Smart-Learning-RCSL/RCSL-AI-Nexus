@@ -3,12 +3,22 @@
 import { BoxIcon, CpuIcon, KeyIcon, UsersIcon } from 'lucide-react';
 
 import { StatCard } from '@/components/composed/stat-card';
-import { MetricChart } from '@/components/composed/metric-chart';
+import { MetricChart, type MetricSeries } from '@/components/composed/metric-chart';
 import { ErrorState } from '@/components/composed/error-state';
 import { useDashboardSummary } from '@/features/dashboard/hooks/use-dashboard';
+import { useUsage } from '@/features/usage/hooks/use-usage';
 
 export function DashboardOverview() {
   const { data, isLoading, error, refetch } = useDashboardSummary();
+  // The charts read the usage-analytics endpoint directly; the stat tiles keep
+  // their own 24h totals from /dashboard.
+  const usage = useUsage('24h');
+  const requests: MetricSeries[] | undefined = usage.data
+    ? [{ label: 'Requests', points: usage.data.totals.map((p) => ({ t: p.t, v: p.requests })) }]
+    : undefined;
+  const tokens: MetricSeries[] | undefined = usage.data
+    ? [{ label: 'Tokens', points: usage.data.totals.map((p) => ({ t: p.t, v: p.tokens })) }]
+    : undefined;
 
   if (error) {
     return <ErrorState error={error} onRetry={() => void refetch()} />;
@@ -50,13 +60,17 @@ export function DashboardOverview() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <MetricChart title="Requests, last 24 hours" />
-        <MetricChart title="Tokens, last 24 hours" />
+        <MetricChart
+          title="Requests, last 24 hours"
+          series={requests}
+          isLoading={usage.isLoading}
+        />
+        <MetricChart title="Tokens, last 24 hours" series={tokens} isLoading={usage.isLoading} />
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Real metrics arrive in Phase 2 from Prometheus through the metrics port.
-        Until then these counts come straight from the registry.
+        Request and token counts come from usage records. Live operational
+        metrics (memory, latency, node health) are in Grafana.
       </p>
     </div>
   );
