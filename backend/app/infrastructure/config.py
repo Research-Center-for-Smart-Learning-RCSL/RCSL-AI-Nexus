@@ -143,6 +143,11 @@ class Settings(BaseSettings):
     and rotated nothing.
     """
 
+    metrics_enabled: bool = True
+    """Whether each application exposes `/metrics` for Prometheus. On by default;
+    an operator who runs no Prometheus can turn it off, which also lifts the
+    production requirement below that its scrape token be a real value."""
+
     api_key_pepper: str = Field(default="dev-pepper-not-for-production")
     api_key_pepper_previous: str = Field(
         default="",
@@ -152,6 +157,10 @@ class Settings(BaseSettings):
     totp_encryption_key: str = Field(default="dev-totp-key-not-for-production")
     session_signing_key: str = Field(default="dev-session-key-not-for-production")
     proxy_shared_secret: str = Field(default="dev-proxy-secret-not-for-production")
+    metrics_scrape_token: str = Field(default="dev-metrics-token-not-for-production")
+    """Bearer token Prometheus presents to `/metrics`. A secret, so it is a file
+    mount like the rest; required to be a real value in production only when
+    `metrics_enabled` is set. See interfaces/http/routers/metrics.py."""
 
     @property
     def allowed_country_set(self) -> frozenset[str]:
@@ -214,6 +223,10 @@ class Settings(BaseSettings):
             # standing alone, which is exactly why it was missed before.
             "database_url": self.database_url,
         }
+        # Only when metrics are actually exposed: a deployment that runs no
+        # Prometheus has no token to protect and should not be forced to invent one.
+        if self.metrics_enabled:
+            placeholders["metrics_scrape_token"] = self.metrics_scrape_token
         offenders = [name for name, value in placeholders.items() if "not-for-production" in value]
         if offenders:
             raise ValueError(

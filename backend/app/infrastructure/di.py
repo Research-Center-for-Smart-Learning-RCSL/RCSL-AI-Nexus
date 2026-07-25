@@ -26,6 +26,7 @@ from app.adapters.crypto.secret_box import FernetSecretBox
 from app.adapters.crypto.zxcvbn_policy import ZxcvbnPasswordPolicy
 from app.adapters.http.egress_guard import TailnetEgressGuard
 from app.adapters.http.node_health import RuntimeNodeHealth
+from app.adapters.metrics.prometheus import MeteredUsageRepository
 from app.adapters.persistence.model_state import ModelStateCommitter
 from app.adapters.persistence.repositories import (
     PostgresApiKeyRepository,
@@ -59,6 +60,7 @@ from app.domain.entities.actor import Actor
 from app.domain.entities.model import RuntimeKind
 from app.domain.ports.infrastructure_ports import CachePort
 from app.domain.ports.model_runtime_port import ModelRuntimePort
+from app.domain.ports.repositories import UsageRepositoryPort
 from app.domain.ports.security_ports import AuthorizationPort
 from app.domain.services.api_key_service import ApiKeyService
 from app.domain.services.login_throttle import LoginThrottle
@@ -287,13 +289,19 @@ def build_route_chat_request(
     session: SessionDep,
     settings: SettingsDep,
 ) -> RouteChatRequest:
+    # Unscoped: RouteChatRequest stamps the record's tenant from the authenticated
+    # actor, so the write lands under the key's tenant. Wrapped to emit inference
+    # metrics from the same UsageRecord the streaming path already produces, which
+    # is what keeps that generator untouched; see adapters/metrics/prometheus.py.
+    usage: UsageRepositoryPort = PostgresUsageRepository.unscoped(session)
+    metrics = getattr(request.app.state, "metrics", None)
+    if metrics is not None:
+        usage = MeteredUsageRepository(usage, metrics)
     return RouteChatRequest(
         policies=PostgresRoutingPolicyRepository(session),
         models=PostgresModelRepository(session),
         nodes=PostgresNodeRepository(session),
-        # Unscoped: RouteChatRequest stamps the record's tenant from the
-        # authenticated actor, so the write lands under the key's tenant.
-        usage=PostgresUsageRepository.unscoped(session),
+        usage=usage,
         runtimes=request.app.state.runtimes,
         routing=RoutingService(),
         concurrency=request.app.state.concurrency,

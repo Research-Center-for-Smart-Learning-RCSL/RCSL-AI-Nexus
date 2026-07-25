@@ -20,6 +20,7 @@ REAL_SECRETS = {
     "totp_encryption_key": "real-totp-key",
     "session_signing_key": "real-session-key",
     "proxy_shared_secret": "real-proxy-secret",
+    "metrics_scrape_token": "real-metrics-token",
     "database_url": "postgresql+asyncpg://nexus:real@db:5432/nexus",
     "cache_backend": "redis",
 }
@@ -37,6 +38,8 @@ _AMBIENT = (
     "TOTP_ENCRYPTION_KEY",
     "SESSION_SIGNING_KEY",
     "PROXY_SHARED_SECRET",
+    "METRICS_SCRAPE_TOKEN",
+    "METRICS_ENABLED",
     "ALLOWED_COUNTRIES",
     "EXPOSE_OPENAPI",
 )
@@ -92,6 +95,20 @@ def test_in_memory_cache_is_rejected_in_production() -> None:
                 "cache_backend": "memory",
             }
         )
+
+
+def test_placeholder_metrics_token_is_rejected_only_when_metrics_are_enabled() -> None:
+    """The scrape token guards /metrics, so a placeholder is a production defect
+    when metrics are exposed. A deployment that runs no Prometheus turns them off
+    and is not forced to invent a token it will not use."""
+    base = {**REAL_SECRETS, "env": "production", "auth_mode": "tailnet"}
+    placeholder = "dev-metrics-token-not-for-production"
+
+    with pytest.raises(ValidationError, match="metrics_scrape_token"):
+        Settings(**{**base, "metrics_scrape_token": placeholder})
+
+    disabled = Settings(**{**base, "metrics_scrape_token": placeholder, "metrics_enabled": False})
+    assert disabled.metrics_enabled is False
 
 
 def test_a_placeholder_hidden_inside_a_url_is_caught() -> None:

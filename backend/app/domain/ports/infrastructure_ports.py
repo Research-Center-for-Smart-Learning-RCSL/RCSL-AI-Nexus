@@ -64,3 +64,14 @@ class ConcurrencyLimiterPort(Protocol):
     """
 
     def slot(self) -> AbstractAsyncContextManager[None]: ...
+
+    @property
+    def available(self) -> int:
+        """Slots free right now. Read by the saturation gauge, which is the one
+        pressure the resource guardrails exist to bound."""
+        ...
+
+    @property
+    def limit(self) -> int:
+        """Total slots configured."""
+        ...

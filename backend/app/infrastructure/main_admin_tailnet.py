@@ -36,6 +36,7 @@ from app.infrastructure.config import get_settings
 from app.interfaces.http.errors import install_error_handlers
 from app.interfaces.http.middleware.csrf import CsrfMiddleware
 from app.interfaces.http.middleware.identity import current_actor, resolve_tailnet_actor
+from app.interfaces.http.middleware.metrics import MetricsMiddleware
 
 TAILSCALE_IDENTITY_HEADERS = ("tailscale-user-login", "tailscale-user-name")
 
@@ -58,6 +59,9 @@ def create_app() -> FastAPI:
         secure=settings.cookie_secure,
         max_age_seconds=settings.session_absolute_ttl_seconds,
     )
+    # Outermost user middleware, so every request is counted; see the public
+    # entrance for the same note.
+    app.add_middleware(MetricsMiddleware)
 
     install_error_handlers(app, envelope="admin", auth_mode=settings.auth_mode)
     mount_admin_routers(app)

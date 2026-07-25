@@ -28,6 +28,7 @@ dependencies = [
     # imported lazily inside the methods that pull a snapshot, so the inference
     # path neither pays its import cost nor depends on it.
     "huggingface-hub>=0.27",
+    "prometheus-client>=0.21",
 ]
 
 [dependency-groups]
@@ -82,4 +83,3 @@ ignore_missing_imports = true
 # download seams only. Those are covered by tests that replace them.
 module = "huggingface_hub.*"
 ignore_missing_imports = true
-
