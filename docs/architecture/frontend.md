@@ -154,9 +154,11 @@ The chat UI consumes SSE from `/admin/chat` ([backend.md](./backend.md) §6). Th
 
 ## 7. Charts
 
-Charts appear on the Dashboard and Usage Analytics, both Phase 2. **Verify the chart library choice before building.** Tremor was an early candidate, but its distribution model has shifted toward copy-in source in the style of shadcn/ui, so its packaging should be confirmed at implementation time. Recharts directly is the fallback.
+Charts appear on the Dashboard and Usage Analytics. **Decided: no chart library.** Tremor had shifted to copy-in source (the supply-chain caveat below), and Recharts, the documented fallback, is a real dependency plus a React 19 version constraint. The data these screens show is simple magnitude-over-time, so the charts are drawn as inline SVG instead: `components/composed/metric-chart.tsx` renders lines and an area, with axes and a hover tooltip, and the pure geometry (scales, path building, nice-max) lives in `chart-geometry.ts` where it is unit-tested without a DOM. Series colours read the theme's computed ramp (`--chart-1..5`) through `currentColor`, so they follow light and dark rather than carrying a second palette. One series renders as a filled area; several render as plain lines with a legend.
 
-This is the same supply-chain caveat as [security.md](./security.md) §10: copy-in component libraries do not receive upstream fixes automatically.
+The trade is that axes, ticks and the tooltip are ours to maintain rather than a library's. That is acceptable while the charts stay simple time series; a genuinely richer visualisation (stacked areas, brushing, dual axes) would be the point to revisit the dependency.
+
+This avoids the supply-chain caveat in [security.md](./security.md) §10 entirely: copy-in component libraries do not receive upstream fixes automatically, and here there is nothing copied in.
 
 ## 8. Rendering Untrusted Content
 
