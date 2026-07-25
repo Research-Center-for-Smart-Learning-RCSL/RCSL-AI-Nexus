@@ -63,11 +63,13 @@ per-file-ignores = { "tests/*" = [
 [tool.mypy]
 python_version = "3.12"
 strict = true
-# The domain layer is the part worth being strict about; adapters wrap
-# third-party libraries whose stubs are often incomplete.
-[[tool.mypy.overrides]]
-module = "app.adapters.*"
-strict = false
+# Every layer is checked under strict, adapters included. An earlier config
+# carried an `[[overrides]] module = "app.adapters.*" strict = false` block, but
+# mypy silently ignores `strict` in a per-module override (it is a global-only
+# meta-flag), so it never relaxed anything: the adapters were strict-checked all
+# along, and the code is now clean under that. What third-party stub gaps remain
+# are pinned with targeted casts and `type: ignore` at the call site, where they
+# are visible, rather than a blanket relaxation that hides real errors too.
 
 [[tool.mypy.overrides]]
 # The Python port of zxcvbn ships no stubs. Only the score and the feedback

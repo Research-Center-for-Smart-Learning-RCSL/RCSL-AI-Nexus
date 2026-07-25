@@ -17,6 +17,57 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-25
 
+### mypy made honest, and put where it cannot drift again
+
+Running `mypy app` over the whole package, which this log had repeatedly called
+clean, turned up 24 errors. Two things had been hiding them.
+
+There was no automation. pre-commit ran gitleaks and ruff but never mypy, and
+there is no CI, so "mypy clean" was an impression from running it by hand on
+whichever module was just written, never the whole package at once.
+
+And the config's relaxation was inert. A block declared `strict = false` for
+`app.adapters.*`, on the reasoning that adapters wrap third-party libraries with
+incomplete stubs. But mypy silently ignores `strict` in a per-module override:
+it is a global-only meta-flag, so the adapters were strict-checked the entire
+time, and the comment describing them as relaxed was describing something that
+was not happening.
+
+The one error worth calling a defect rather than noise was a contract lie. Both
+runtime adapters typed `generate` and `pull` as returning `AsyncIterator`, while
+`ModelRuntimePort` promises `AsyncGenerator`. `AsyncIterator` is the wider type
+and does not guarantee `aclose()`, which is the exact promise the port's own
+docstring spends a paragraph on, because that promise is the streaming contract:
+without it a disconnected client leaves the runtime generating and the slot held.
+The behaviour was correct (an `async def` with `yield` is an async generator), but
+the annotation was weaker than the code, and it was the mismatch mypy flagged at
+`di.py` as the adapters not satisfying the port. Aligning the annotations closed
+that and the port-conformance errors together.
+
+The rest were ordinary: a missing `target: Model` and three unannotated function
+parameters, a response-variable that needed widening to `Response`, and a
+`type: ignore` that no longer suppressed anything. Genuine third-party stub gaps
+(SQLAlchemy typing async `execute` as `Result`, which lacks `rowcount`; redis
+returning `str` under `decode_responses=True` but typed `bytes | str | None`;
+huggingface_hub not exporting two error classes) are pinned with targeted casts
+and `type: ignore` at the call site, where they are visible and greppable, rather
+than a blanket relaxation that would hide real errors alongside them. The inert
+override is gone, replaced by a comment recording why it never worked.
+
+To stop the drift recurring, a local pre-commit hook now runs
+`uv run --directory backend mypy app` on any change under `backend/app`. Local
+rather than mirrors-mypy so it type-checks against the project's real resolved
+dependencies instead of a hand-maintained second copy, and whole-package because
+mypy's cross-module inference is what makes it accurate.
+
+One change surfaced a latent issue. Giving `chat_completions` a return annotation
+(`ChatCompletionResponse | StreamingResponse`) made FastAPI try to build a
+response model from a union containing a `Response`, which it cannot; the fix is
+the documented `response_model=None`. It was caught immediately by the unit tests
+that load the gateway app, not left for deploy, which is the payoff of the
+annotation existing at all. Verified: `mypy app` reports no issues over 118 files,
+ruff is clean, and 272 unit tests pass.
+
 ### The last resource guardrail: a wall-clock generation deadline
 
 Auditing ROADMAP §120 against the code found the item mislabelled rather than

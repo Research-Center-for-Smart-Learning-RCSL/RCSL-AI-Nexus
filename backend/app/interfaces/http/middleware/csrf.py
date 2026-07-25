@@ -89,7 +89,7 @@ class CsrfMiddleware(BaseHTTPMiddleware):
                 # Returned, not raised: an exception here would escape past
                 # ExceptionMiddleware and surface as a 500. See
                 # interfaces/http/errors.py:error_response.
-                response = error_response(failure, envelope="admin")
+                response: Response = error_response(failure, envelope="admin")
                 # Re-seed on the rejection too, so a wedged or missing cookie
                 # is replaced by the same response that reports the failure and
                 # the client's retry can succeed.

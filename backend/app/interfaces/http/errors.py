@@ -93,7 +93,7 @@ OPENAI_ERROR_TYPES: dict[int, str] = {
 def _status_for(exc: DomainError) -> int:
     for klass in type(exc).__mro__:
         if klass in STATUS_MAP:
-            return STATUS_MAP[klass]  # type: ignore[index]
+            return STATUS_MAP[klass]
     return 500
 
 

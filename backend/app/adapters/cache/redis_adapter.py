@@ -13,6 +13,7 @@ it is not inferred from anything else.
 from __future__ import annotations
 
 import time
+from typing import cast
 
 from redis.asyncio import Redis
 
@@ -22,7 +23,9 @@ class RedisCache:
         self._redis: Redis = Redis.from_url(url, password=password or None, decode_responses=True)
 
     async def get(self, key: str) -> str | None:
-        return await self._redis.get(key)
+        # decode_responses=True makes redis return str, but the stub types get()
+        # as bytes | str | None regardless.
+        return cast("str | None", await self._redis.get(key))
 
     async def set(self, key: str, value: str, ttl_seconds: int) -> None:
         await self._redis.set(key, value, ex=ttl_seconds)

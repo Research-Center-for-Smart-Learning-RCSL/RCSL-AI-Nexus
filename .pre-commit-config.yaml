@@ -24,3 +24,19 @@ repos:
         files: ^backend/
       - id: ruff-format
         files: ^backend/
+
+  # A local hook rather than mirrors-mypy: mypy needs the project's real
+  # dependencies to type-check against, and reproducing them as
+  # additional_dependencies would be a second copy to keep in sync. `uv run`
+  # uses the environment uv already resolves; `--directory backend` runs mypy
+  # from where its config and package root live. Whole-package (not per-file),
+  # because mypy's cross-module inference is what makes it accurate.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (backend, strict)
+        entry: uv run --directory backend mypy app
+        language: system
+        types: [python]
+        files: ^backend/app/
+        pass_filenames: false

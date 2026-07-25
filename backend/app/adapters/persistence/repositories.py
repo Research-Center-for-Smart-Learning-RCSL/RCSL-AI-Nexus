@@ -29,9 +29,9 @@ is not worth buying nothing.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any, Self
+from typing import Any, Self, cast
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import CursorResult, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -421,7 +421,10 @@ class PostgresUserRepository(_TenantScoped):
                 UserRow.tenant_id,
             )
         )
-        return result.rowcount == 1
+        # SQLAlchemy types async execute() as Result, which has no rowcount;
+        # an UPDATE returns a CursorResult, which does. The cast is the stub gap,
+        # not a runtime one.
+        return cast("CursorResult[Any]", result).rowcount == 1
 
     async def set_disabled(self, user_id: str, at: datetime | None) -> None:
         """Targeted update, so disabling an account cannot be undone by a
@@ -498,7 +501,10 @@ class PostgresInvitationRepository(_Base):
             .where(InvitationRow.id == invitation_id, InvitationRow.consumed_at.is_(None))
             .values(consumed_at=at)
         )
-        return result.rowcount == 1
+        # SQLAlchemy types async execute() as Result, which has no rowcount;
+        # an UPDATE returns a CursorResult, which does. The cast is the stub gap,
+        # not a runtime one.
+        return cast("CursorResult[Any]", result).rowcount == 1
 
     async def invalidate_outstanding(self, user_id: str, purpose: InvitationPurpose) -> None:
         """Issuing a new link kills any earlier one.
@@ -546,7 +552,10 @@ class PostgresInvitationRepository(_Base):
             .where(RecoveryCodeRow.id == code_id, RecoveryCodeRow.used_at.is_(None))
             .values(used_at=at)
         )
-        return result.rowcount == 1
+        # SQLAlchemy types async execute() as Result, which has no rowcount;
+        # an UPDATE returns a CursorResult, which does. The cast is the stub gap,
+        # not a runtime one.
+        return cast("CursorResult[Any]", result).rowcount == 1
 
 
 class PostgresUsageRepository(_TenantScoped):
