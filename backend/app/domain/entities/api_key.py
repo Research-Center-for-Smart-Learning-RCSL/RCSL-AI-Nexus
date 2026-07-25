@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from ipaddress import IPv4Network, IPv6Network
 
+from app.domain.entities.tenant import DEFAULT_TENANT_ID
+
 KEY_PREFIX = "nx_live_"
 
 
@@ -32,6 +34,12 @@ class ApiKey:
     a key with no expiry was treated as never expiring, so the mandatory
     rotation the design relies on could be bypassed by one direct write.
     Placed among the required fields so that omitting it is a type error."""
+
+    tenant_id: str = DEFAULT_TENANT_ID
+    """The tenant this key belongs to, carried into the `Actor` the gateway
+    builds so a key can only ever reach its own tenant's data. Defaulted for the
+    same reason `User.tenant_id` is; the issuing use case and the scoped
+    repository set it."""
 
     scopes: frozenset[str] = field(default_factory=frozenset)
     allowed_cidrs: tuple[IPv4Network | IPv6Network, ...] = ()

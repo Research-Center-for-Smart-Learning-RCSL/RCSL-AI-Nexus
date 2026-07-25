@@ -38,7 +38,7 @@ async def persist(sessions, user: User) -> User:
     rather than relying on an implicit flush.
     """
     async with sessions() as session:
-        await PostgresUserRepository(session).save(user)
+        await PostgresUserRepository.unscoped(session).save(user)
         await session.commit()
     return user
 
@@ -61,11 +61,11 @@ async def test_created_at_is_assigned_by_the_database(database_url: str) -> None
     user = make_user()
 
     async with sessions() as session:
-        await PostgresUserRepository(session).save(user)
+        await PostgresUserRepository.unscoped(session).save(user)
         await session.commit()
 
     async with sessions() as session:
-        stored = await PostgresUserRepository(session).get(user.id)
+        stored = await PostgresUserRepository.unscoped(session).get(user.id)
 
     assert stored is not None
     assert stored.created_at is not None
@@ -80,13 +80,13 @@ async def test_insert_if_absent_returns_the_existing_row(database_url: str) -> N
     login = "founder@example.org"
 
     async with sessions() as session:
-        first = await PostgresUserRepository(session).insert_if_absent(
+        first = await PostgresUserRepository.unscoped(session).insert_if_absent(
             make_user(login=login, role=Role.ADMIN)
         )
         await session.commit()
 
     async with sessions() as session:
-        second = await PostgresUserRepository(session).insert_if_absent(
+        second = await PostgresUserRepository.unscoped(session).insert_if_absent(
             make_user(login=login, role=Role.ADMIN)
         )
         await session.commit()
@@ -103,7 +103,7 @@ async def test_an_account_cannot_be_left_with_a_password_and_no_second_factor(
 
     with pytest.raises(IntegrityError):
         async with sessions() as session:
-            await PostgresUserRepository(session).save(
+            await PostgresUserRepository.unscoped(session).save(
                 make_user(password_hash="argon2-ish", totp_secret=None)  # noqa: S106
             )
             await session.commit()
@@ -204,7 +204,7 @@ async def test_a_totp_counter_cannot_move_backwards(database_url: str) -> None:
     )
 
     async with sessions() as session:
-        repo = PostgresUserRepository(session)
+        repo = PostgresUserRepository.unscoped(session)
         assert await repo.advance_totp_counter(user.id, 100) is True
         assert await repo.advance_totp_counter(user.id, 100) is False
         assert await repo.advance_totp_counter(user.id, 99) is False

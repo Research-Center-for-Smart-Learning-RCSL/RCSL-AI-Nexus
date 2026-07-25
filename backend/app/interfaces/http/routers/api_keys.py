@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, Response
 from app.adapters.persistence.repositories import PostgresUserRepository
 from app.application.use_cases.manage_api_keys import ManageApiKeys
 from app.domain.entities.actor import Actor
-from app.infrastructure.di import build_manage_api_keys, get_user_repository
+from app.infrastructure.di import build_manage_api_keys, get_user_repository_scoped
 from app.interfaces.http.middleware.identity import current_actor
 from app.interfaces.http.schemas.admin_schemas import (
     ApiKeyResponse,
@@ -34,13 +34,14 @@ router = APIRouter(prefix="/api-keys", tags=["api-keys"])
 async def list_api_keys(
     actor: Annotated[Actor, Depends(current_actor)],
     keys: Annotated[ManageApiKeys, Depends(build_manage_api_keys)],
-    users: Annotated[PostgresUserRepository, Depends(get_user_repository)],
+    users: Annotated[PostgresUserRepository, Depends(get_user_repository_scoped)],
 ) -> list[ApiKeyResponse]:
     visible, last_used = await keys.list_visible(actor)
 
     # Only ids and display names, not full user entities: the latter carries
     # the password hash and TOTP secret into a handler a `user`-role caller can
-    # reach. One query, not one per key.
+    # reach. One query, not one per key. Scoped to the caller's tenant, so the
+    # owner names shown are only their own tenant's.
     display = await users.display_names()
 
     return [

@@ -18,6 +18,7 @@ from app.adapters.persistence.sqlalchemy_models import (
     NodeRow,
     RecoveryCodeRow,
     RoutingPolicyRow,
+    TenantRow,
     UsageRecordRow,
     UserRow,
 )
@@ -31,8 +32,23 @@ from app.domain.entities.routing_policy import (
     RoutingCandidate,
     RoutingPolicy,
 )
+from app.domain.entities.tenant import Tenant
 from app.domain.entities.usage import UsageRecord
 from app.domain.entities.user import User
+
+# --- Tenant --------------------------------------------------------------
+
+
+def tenant_to_domain(row: TenantRow) -> Tenant:
+    return Tenant(id=row.id, name=row.name, created_at=row.created_at)
+
+
+def tenant_to_row(tenant: Tenant) -> TenantRow:
+    row = TenantRow(id=tenant.id, name=tenant.name)
+    if tenant.created_at is not None:
+        row.created_at = tenant.created_at
+    return row
+
 
 # --- Node ----------------------------------------------------------------
 
@@ -155,6 +171,7 @@ def api_key_to_domain(row: ApiKeyRow) -> ApiKey:
     ]
     return ApiKey(
         id=row.id,
+        tenant_id=row.tenant_id,
         key_id=row.key_id,
         digest=row.digest,
         name=row.name,
@@ -173,6 +190,7 @@ def api_key_to_domain(row: ApiKeyRow) -> ApiKey:
 def api_key_to_row(key: ApiKey) -> ApiKeyRow:
     row = ApiKeyRow(
         id=key.id,
+        tenant_id=key.tenant_id,
         key_id=key.key_id,
         digest=key.digest,
         name=key.name,
@@ -199,6 +217,7 @@ def api_key_to_row(key: ApiKey) -> ApiKeyRow:
 def user_to_domain(row: UserRow) -> User:
     return User(
         id=row.id,
+        tenant_id=row.tenant_id,
         login=row.login,
         display_name=row.display_name,
         role=Role(row.role),
@@ -219,6 +238,7 @@ def user_to_row_values(user: User) -> dict[str, object]:
     path and forgotten on the other."""
     values: dict[str, object] = {
         "id": user.id,
+        "tenant_id": user.tenant_id,
         "login": user.login,
         "display_name": user.display_name,
         "role": user.role.value,
@@ -285,6 +305,7 @@ def recovery_code_to_row(code: RecoveryCode) -> RecoveryCodeRow:
 def usage_to_row(usage: UsageRecord) -> UsageRecordRow:
     return UsageRecordRow(
         id=usage.id,
+        tenant_id=usage.tenant_id,
         actor_id=usage.actor_id,
         api_key_id=usage.api_key_id,
         capability=usage.capability,

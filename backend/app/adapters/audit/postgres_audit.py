@@ -50,6 +50,7 @@ class PostgresAudit:
     ) -> None:
         row = AuditLogRow(
             id=str(uuid.uuid4()),
+            tenant_id=actor.tenant_id,
             actor_id=actor.id,
             actor_display=actor.display,
             actor_source=actor.source,

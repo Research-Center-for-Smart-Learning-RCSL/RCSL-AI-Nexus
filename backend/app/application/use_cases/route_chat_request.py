@@ -194,6 +194,9 @@ class RouteChatRequest:
                         latency_ms=int((time.monotonic() - started) * 1000),
                         completed=completed,
                         at=self._clock.now(),
+                        # Attributed to the caller's tenant, so per-tenant usage
+                        # reads see only their own.
+                        tenant_id=actor.tenant_id,
                     )
                 )
             except Exception:  # noqa: BLE001

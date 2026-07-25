@@ -159,11 +159,11 @@ async def test_routing_policy_structured_requirements_round_trip(session) -> Non
 
 
 async def test_api_key_cidrs_round_trip(session) -> None:
-    await PostgresUserRepository(session).save(
+    await PostgresUserRepository.unscoped(session).save(
         User(id="u1", login="a@example.com", display_name="A", role=Role.ADMIN)
     )
     await session.flush()  # parent first; autoflush is off, as in production
-    repo = PostgresApiKeyRepository(session)
+    repo = PostgresApiKeyRepository.unscoped(session)
     expires = datetime.now(UTC) + timedelta(days=90)
     key = ApiKey(
         id=str(uuid.uuid4()),
@@ -193,7 +193,7 @@ async def test_api_key_cidrs_round_trip(session) -> None:
 
 
 async def test_user_count_backs_the_bootstrap_guard(session) -> None:
-    repo = PostgresUserRepository(session)
+    repo = PostgresUserRepository.unscoped(session)
     assert await repo.count() == 0, "a fresh deployment must look empty"
 
     await repo.save(User(id="u1", login="a@example.com", display_name="A", role=Role.ADMIN))
@@ -204,7 +204,7 @@ async def test_user_count_backs_the_bootstrap_guard(session) -> None:
 async def test_issuing_a_new_link_invalidates_the_previous_one(session) -> None:
     """Otherwise an intercepted reset link stays usable after the real user
     asks for another."""
-    await PostgresUserRepository(session).save(
+    await PostgresUserRepository.unscoped(session).save(
         User(id="u1", login="a@example.com", display_name="A", role=Role.USER)
     )
     await session.flush()
@@ -235,7 +235,7 @@ async def test_consuming_a_link_twice_reports_the_second_as_a_loss(session) -> N
     both believing they had claimed it, which is exactly the interception case
     the single-use rule exists for.
     """
-    await PostgresUserRepository(session).save(
+    await PostgresUserRepository.unscoped(session).save(
         User(id="u1", login="a@example.com", display_name="A", role=Role.USER)
     )
     await session.flush()
@@ -261,7 +261,7 @@ async def test_a_totp_counter_cannot_be_replayed(session) -> None:
     requests carrying the same code both pass, which is how a code observed in
     a phishing proxy stays usable inside its window.
     """
-    repo = PostgresUserRepository(session)
+    repo = PostgresUserRepository.unscoped(session)
     await repo.save(
         User(
             id="u1",
@@ -290,7 +290,7 @@ async def test_the_schema_refuses_a_password_without_a_second_factor(session) ->
     no `relationship()`, so without that flush the unit of work has nothing to
     order dependent inserts by.
     """
-    repo = PostgresUserRepository(session)
+    repo = PostgresUserRepository.unscoped(session)
     with pytest.raises(IntegrityError):
         await repo.save(
             User(
@@ -305,7 +305,7 @@ async def test_the_schema_refuses_a_password_without_a_second_factor(session) ->
 
 
 async def test_usage_totals_only_count_the_named_key(session) -> None:
-    repo = PostgresUsageRepository(session)
+    repo = PostgresUsageRepository.unscoped(session)
     now = datetime.now(UTC)
     for key_id, tokens in (("k1", 100), ("k1", 50), ("k2", 999)):
         await repo.record(

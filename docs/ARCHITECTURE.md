@@ -187,13 +187,11 @@ class Actor:
     scopes: frozenset[Scope]
 ```
 
-### 2.8 Tenancy: single tenant in Phase 1
+### 2.8 Tenancy: single tenant in Phase 1, multi-tenant foundation in Phase 2
 
-The platform is **single tenant** through Phase 1. All users and API keys share one knowledge base namespace, and there is no project-level isolation.
+Phase 1 was **single tenant** and said so, deliberately: an earlier draft described tenant-scoped filtering in the knowledge base repository, implying an isolation boundary that no entity, table, or migration actually provided, and a claimed boundary that does not exist is worse than none because it stops people from looking for the risk.
 
-This is stated explicitly because an earlier draft described tenant-scoped filtering in the knowledge base repository, which implied an isolation boundary that no entity, table, or migration actually provided. Claiming a security boundary that does not exist is worse than not having it, because it stops people from looking for the risk.
-
-Multi-tenancy (a `Tenant` entity, `users.tenant_id`, `api_keys.tenant_id`, and enforced query filters) is Phase 2 work. The design intent is recorded in [security.md](./architecture/security.md) §7.3 so that the Phase 1 schema does not paint itself into a corner.
+**The boundary now exists (Phase 2).** A `Tenant` entity, a `tenant_id` on `users`, `api_keys`, `usage_records` and `audit_log`, and tenant-scoped repositories that filter every read and stamp every write from the actor's tenant, inside the adapter so a use case cannot forget it. `models`, `nodes` and `routing_policies` carry no tenant: they are the shared compute the tenants use. Scope so far is the foundation plus minimal management (create and list tenants); the knowledge base plugs into this boundary when it is built. See [security.md](./architecture/security.md) §7.3 and [ROADMAP.md](./ROADMAP.md).
 
 ## 3. Management Modules
 
@@ -211,7 +209,7 @@ calls endpoints that return 404. The Phase column is a plan, not a status.
 | API Keys | `/admin/api-keys` | 1 | frontend only |
 | Users and roles | `/admin/users`, `/admin/me` | 1 | frontend only |
 | Chat | `/admin/chat` | 1 | frontend only |
-| Node management | `/admin/nodes` | 2 | no |
+| Node management | `/admin/nodes` | 2 | yes, end to end (register/edit/delete/health, SSRF guard, heartbeat) |
 | Logs | `/admin/logs` | 2 | no |
 | Usage analytics | `/admin/usage` | 2 | no |
 | Knowledge base | `/admin/knowledge` | 2 | no |

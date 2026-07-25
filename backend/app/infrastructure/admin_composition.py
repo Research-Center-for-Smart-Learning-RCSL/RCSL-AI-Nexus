@@ -12,8 +12,9 @@ interfaces/http/middleware/identity.py.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
@@ -34,6 +35,7 @@ from app.infrastructure.di import (
     build_token_service,
     build_totp,
 )
+from app.infrastructure.heartbeat import run_heartbeat
 from app.interfaces.http.middleware.geo_filter import build_geo_filter
 from app.interfaces.http.routers import (
     admin_chat,
@@ -43,7 +45,9 @@ from app.interfaces.http.routers import (
     invitations,
     me,
     models,
+    nodes,
     routing_policies,
+    tenants,
     users,
 )
 
@@ -81,13 +85,27 @@ async def admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
     # service here rather than silently disabling a documented control.
     app.state.geo_filter = build_geo_filter(settings)
 
-    # Nothing is written here. The one row no endpoint creates, the compute
-    # node, is provisioned by the `migrate` service; see
+    # Nothing is written here at startup. The one row no endpoint creates, the
+    # compute node, is provisioned by the `migrate` service; see
     # infrastructure/provision.py for why startup is the wrong place for it.
+
+    # The node status heartbeat. It runs here rather than in the gateway because
+    # §6 forbids the gateway writing `nodes`; it sleeps before its first sweep,
+    # so a lifespan that opens and closes quickly (every test) cancels it before
+    # it touches the database. Disabled by a non-positive interval.
+    heartbeat: asyncio.Task[None] | None = None
+    if settings.node_heartbeat_interval_seconds > 0:
+        heartbeat = asyncio.create_task(
+            run_heartbeat(app, settings.node_heartbeat_interval_seconds)
+        )
 
     try:
         yield
     finally:
+        if heartbeat is not None:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
         app.state.geo_filter.close()
         await app.state.cache.close()
         await dispose_engine()
@@ -117,6 +135,8 @@ def mount_admin_routers(app: FastAPI) -> None:
         users.router,
         invitations.router,
         models.router,
+        nodes.router,
+        tenants.router,
         api_keys.router,
         routing_policies.router,
         dashboard.router,

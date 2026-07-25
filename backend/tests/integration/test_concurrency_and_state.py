@@ -161,7 +161,7 @@ async def test_a_targeted_key_update_does_not_revert_a_concurrent_revoke(
     sessions = make_session_factory(database_url)
     user = User(id=str(uuid.uuid4()), login="o@example.org", display_name="O", role=Role.ADMIN)
     async with sessions() as s:
-        await PostgresUserRepository(s).save(user)
+        await PostgresUserRepository.unscoped(s).save(user)
         await s.commit()
 
     key = ApiKey(
@@ -173,21 +173,23 @@ async def test_a_targeted_key_update_does_not_revert_a_concurrent_revoke(
         expires_at=NOW + timedelta(days=30),
     )
     async with sessions() as s:
-        await PostgresApiKeyRepository(s).save(key)
+        await PostgresApiKeyRepository.unscoped(s).save(key)
         await s.commit()
 
     # A concurrent revoke commits first.
     async with sessions() as s:
-        await PostgresApiKeyRepository(s).revoke(key.key_id, NOW)
+        await PostgresApiKeyRepository.unscoped(s).revoke(key.key_id, NOW)
         await s.commit()
 
     # The edit, which read the key before the revoke, now tries to land.
     async with sessions() as s:
-        updated = await PostgresApiKeyRepository(s).update_settings(key.key_id, {"name": "renamed"})
+        updated = await PostgresApiKeyRepository.unscoped(s).update_settings(
+            key.key_id, {"name": "renamed"}
+        )
         await s.commit()
 
     async with sessions() as s:
-        stored = await PostgresApiKeyRepository(s).get_by_key_id(key.key_id)
+        stored = await PostgresApiKeyRepository.unscoped(s).get_by_key_id(key.key_id)
 
     assert updated is False
     assert stored is not None
@@ -203,19 +205,21 @@ async def test_a_targeted_profile_update_does_not_revert_a_concurrent_disable(
     sessions = make_session_factory(database_url)
     user = User(id=str(uuid.uuid4()), login="u@example.org", display_name="U", role=Role.USER)
     async with sessions() as s:
-        await PostgresUserRepository(s).save(user)
+        await PostgresUserRepository.unscoped(s).save(user)
         await s.commit()
 
     async with sessions() as s:
-        await PostgresUserRepository(s).set_disabled(user.id, NOW)
+        await PostgresUserRepository.unscoped(s).set_disabled(user.id, NOW)
         await s.commit()
 
     async with sessions() as s:
-        await PostgresUserRepository(s).update_profile(user.id, display_name="Renamed", role="user")
+        await PostgresUserRepository.unscoped(s).update_profile(
+            user.id, display_name="Renamed", role="user"
+        )
         await s.commit()
 
     async with sessions() as s:
-        stored = await PostgresUserRepository(s).get(user.id)
+        stored = await PostgresUserRepository.unscoped(s).get(user.id)
 
     assert stored is not None
     assert stored.disabled_at is not None  # disable intact

@@ -126,4 +126,7 @@ async def authenticate_api_key(
         source="api_key",
         scopes=_scopes_for(key),
         api_key_id=key.key_id,
+        # The key's tenant, so usage is attributed to it and, once the knowledge
+        # base exists, a key can only ever reach its own tenant's data.
+        tenant_id=key.tenant_id,
     )

@@ -17,6 +17,147 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-25
 
+### Multi-tenancy, the isolation boundary made real (Phase 2)
+
+The third Phase 2 item, and the most invasive: the platform was single tenant and
+said so, and this makes the boundary exist. Every `users`, `api_keys`,
+`usage_records` and `audit_log` row now carries a `tenant_id`, a migration
+backfilled the existing rows into one default tenant, and the tenant-scoped
+repositories filter every read and stamp every write by it.
+
+**The filter lives in the adapter and is taken from the actor, never the caller,
+which is the whole of section 7.3.** A tenant-scoped repository is constructed
+with a tenant id, and the di builder takes that id from the authenticated actor
+(`users.tenant_id` on the admin entrances, `api_keys.tenant_id` on the gateway),
+so a use case receives an already-scoped repository and cannot read another
+tenant's rows or forget to say which tenant it means. The use cases themselves
+barely changed, which is the payoff: the boundary is structural, not something
+each handler remembers. A scoped read adds `WHERE tenant_id = :t`; a scoped write
+stamps the repository's tenant onto the row regardless of what the entity carried;
+and the targeted updates (revoke, disable, edit) carry the tenant into their
+`WHERE`, so a scoped operation cannot touch another tenant's row even by its id.
+The integration test proves all of this against a real Postgres, which the unit
+fakes cannot, because they have no filter to enforce.
+
+**A few paths are deliberately unscoped, and each resolves a principal before any
+tenant is known.** Authentication looks a user up by a globally-unique login, the
+session resolver looks one up by id, the gateway looks a key up by its handle, and
+bootstrap counts every user platform-wide. Reading exactly the one row a unique
+handle names is not a cross-tenant enumeration, and the tenant is then read from
+that row. These use an explicit `.unscoped()` repository, so the choice is visible
+and greppable rather than a forgotten default.
+
+**A review of these three Phase 2 commits caught where the scoping went one step
+too far.** The invite flow's duplicate-login check had been left on the
+tenant-scoped repository, but a login is a platform-global namespace: `users.login`
+is globally unique, so a login already taken in another tenant would slip past a
+scoped check and fail at the unique constraint as a bare 500 rather than the clean
+409 the check exists to give. `get_by_login` is now never tenant-scoped, for the
+same reason authentication resolves it globally: it answers only "does this login
+exist anywhere", and the row it returns carries its own tenant. The review's other
+findings were hygiene rather than logic: a docstring displaced onto the wrong
+field, a stray UTF-8 BOM and mangled em-dashes that a scripted `.unscoped()` edit
+had left in four integration test files, an unhandled promise rejection in the
+tenant-create dialog, and a duplicated onboarding-link builder now shared between
+the users and tenants routers.
+
+**Shared infrastructure stays platform-global.** `models`, `nodes` and
+`routing_policies` are the compute the tenants share (one loaded model serves
+everyone), so they carry no tenant and are managed by any admin. Tenants
+themselves are platform-global too: managing them is an admin operation, not
+tenant data.
+
+**Minimal but usable tenant management.** `ManageTenants` creates a tenant and,
+in the same call, mints its first administrator's invitation into that new tenant
+(a tenant with no admin cannot be populated), and lists tenants. The ordinary user
+invite lands in the inviting admin's own tenant, stamped by the scoped repository.
+There is no platform-super-admin versus tenant-admin split yet: admins are
+platform-trusted, which suits a single research centre, and the stricter hierarchy
+can follow if a genuinely external tenant appears. The knowledge base, the main
+tenant-scoped consumer, is not built yet; it plugs into this boundary when it is.
+
+One structural change made it clean: `current_actor` and `current_session` moved
+from the identity middleware into `di.py`, so the scoped-repository builders can
+depend on the actor without the middleware and the composition root importing each
+other in a cycle. The middleware re-exports both, so routers and the entrance apps
+are untouched.
+
+Verified: the migration round-trips (it seeds and backfills the default tenant, so
+the column is NOT NULL with no data-migration window); the account split is
+undisturbed (the gateway's schema-wide SELECT already covers the new table, and it
+still has no write on `api_keys`, `users` or `tenants`); 270 unit tests pass, with
+four new for `ManageTenants` and a five-case integration test pinning the isolation
+property against real Postgres; ruff and mypy are clean on the new code; and the
+frontend gained a `features/tenants` screen (list plus a create dialog that shows
+the first admin's one-time link) through `tsc`, `eslint` and `next build`.
+
+### Node management, and the SSRF guard that had to ship with it (Phase 2)
+
+The second Phase 2 item, and the one the security document had been holding a
+rule over: a node write endpoint may exist only if the SSRF guard ships with it,
+because a node's `address` is a value the platform makes outbound requests to,
+and an attacker who can register `169.254.169.254` or `127.0.0.1` has turned node
+management into internal probing (§7.2). Until now the rule was satisfied by the
+absence of a write path: the single node was seeded from configuration and no
+endpoint accepted an address. This change adds the write path and the guard
+together.
+
+**The guard is the core, and it validates on the way in, not only on the way
+out.** `adapters/http/egress_guard.py` resolves an address and requires every
+result inside the tailnet range (`100.64.0.0/10` and the Tailscale IPv6 ULA).
+One range is the whole rule: loopback, link-local, the RFC 1918 LAN, and the
+cloud metadata endpoint are all outside it, so none has to be enumerated. A
+literal IP is checked without a DNS lookup, which also means the value stored is
+the value connected to; a hostname is resolved and rejected if any answer falls
+outside the tailnet, so a name that resolves partly off-net cannot pass on the
+strength of one good record. The check runs at every node write, so an address
+that could never be reached safely is refused before it is stored rather than
+surfacing later as a failed probe. It reaches the use case through
+`EgressGuardPort`, not a direct import, the same discipline that keeps
+model-reference validation off the application layer.
+
+**Status stopped being an assumption.** Phase 1 wrote every node `online` at
+provision and never looked again, which made a routing requirement of
+`node_status: [online]` inert, since it always held. A `NodeHealthPort` now
+observes status by probing the runtimes a node declares (online when all answer,
+degraded when some do, offline when none does or none can be probed), and a
+heartbeat in the admin application runs it on an interval. So a policy that
+demands an online node actually stops routing to one whose runtime has gone away.
+The heartbeat runs in the admin app rather than the gateway because the §6
+least-privilege split lets the gateway write only `usage_records`, never
+`nodes`; both admin entrances run it, which is why the write is a targeted,
+idempotent `set_status` and why a status is written only when it changed. The
+loop sleeps before its first sweep, so the many tests that open and close the
+admin lifespan cancel it before it ever touches the database. Single-node scope
+is stated plainly in the adapter: the runtime adapters point at the configured
+host runtime, so the probe is accurate for the one node they can reach and a
+second node will need per-node runtime endpoints, deferred with multi-node.
+
+**Deletion is guarded too.** `models.node_id` is a foreign key, so deleting a
+node with models attached would fail as an IntegrityError at flush, which in
+FastAPI is after the response has gone and has nowhere to report. The use case
+refuses it first, naming the models, and the same shape gives a duplicate node
+name a clean 409 instead of a unique-violation 500, matching how `ManageModels`
+already reports a taken alias. Registration and removal are audited, as §12
+requires.
+
+`GET /nodes` moved from the models router to a new `routers/nodes.py` carrying
+the full lifecycle: the read the model form needs plus register, edit, delete,
+and an explicit health check for the UI's refresh action. The frontend gained a
+`features/nodes` management screen (table with live status, a create/edit form
+whose address field is validated server-side, delete, and check-now) and a nav
+entry. The stale "node management is Phase 1 read-only" comments across the
+models feature were corrected rather than left to mislead.
+
+Verified: 27 new backend tests (the egress guard against loopback, LAN, metadata
+and rebinding; `ManageNodes` for the guard running before a store, the
+attached-models delete refusal, status as the probe's observation; the heartbeat
+writing only changed statuses), the full unit suite at 266 passing, ruff and
+mypy clean on the new code, and the frontend through `tsc`, `eslint`, and
+`next build` with the `/nodes` route generating. Real probing of a runtime still
+waits for the Mac Studio, the same boundary inference has; the guard, the write
+rules, and the heartbeat's change-detection are exercised now.
+
 ### The second runtime adapter, which is the real test of the layering (Phase 2)
 
 The first Phase 2 item, and the one worth doing first because it answers a
