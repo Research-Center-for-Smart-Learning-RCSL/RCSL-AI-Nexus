@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
+from app.adapters.metrics.prometheus import build_metrics
 from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.db import dispose_engine, init_engine
 from app.infrastructure.di import (
@@ -44,6 +45,7 @@ from app.interfaces.http.routers import (
     health,
     invitations,
     me,
+    metrics,
     models,
     nodes,
     routing_policies,
@@ -79,6 +81,9 @@ async def admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
     # as public traffic is.
     app.state.runtimes = build_runtimes(settings)
     app.state.concurrency = build_concurrency_limiter(settings)
+    # After the limiter, whose saturation it reports; `/admin/chat` runs inference
+    # here too, so the slot gauge is meaningful on both admin entrances.
+    app.state.metrics = build_metrics(app.state.concurrency)
     app.state.api_key_service = build_api_key_service(settings)
     app.state.jobs = build_job_progress(app.state.cache)
     # Built at startup so a missing GeoLite2 database in production stops the
@@ -129,6 +134,9 @@ Compose and by the reverse proxy, neither of which goes through the rewrite.
 
 def mount_admin_routers(app: FastAPI) -> None:
     app.include_router(health.router)
+    # Root-level like health, not under /admin: Prometheus scrapes it directly
+    # over the internal metrics network, not through the frontend rewrite.
+    app.include_router(metrics.router)
 
     for router in (
         me.router,

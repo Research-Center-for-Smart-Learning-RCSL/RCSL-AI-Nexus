@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.adapters.metrics.prometheus import build_metrics
 from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.db import dispose_engine, init_engine
 from app.infrastructure.di import (
@@ -25,7 +26,8 @@ from app.infrastructure.di import (
 )
 from app.interfaces.http.errors import install_error_handlers
 from app.interfaces.http.middleware.geo_filter import build_geo_filter
-from app.interfaces.http.routers import chat, health
+from app.interfaces.http.middleware.metrics import MetricsMiddleware
+from app.interfaces.http.routers import chat, health, metrics
 
 
 @asynccontextmanager
@@ -36,6 +38,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # so a test can build an app with different wiring without it leaking.
     app.state.runtimes = build_runtimes(settings)
     app.state.concurrency = build_concurrency_limiter(settings)
+    # After the limiter, whose saturation it reports at scrape time.
+    app.state.metrics = build_metrics(app.state.concurrency)
     app.state.api_key_service = build_api_key_service(settings)
     app.state.authz = build_authorization()
     app.state.cache = build_cache(settings)
@@ -64,8 +68,13 @@ def create_app() -> FastAPI:
     )
 
     install_error_handlers(app, envelope="openai")
+    # No stack-level perimeter middleware runs here (the gateway applies the geo
+    # filter inline in key auth), so /metrics rests on its bearer token alone;
+    # see interfaces/http/routers/metrics.py.
+    app.add_middleware(MetricsMiddleware)
     app.include_router(health.router)
     app.include_router(chat.router)
+    app.include_router(metrics.router)
 
     return app
 

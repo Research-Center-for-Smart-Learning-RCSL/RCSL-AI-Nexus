@@ -32,7 +32,10 @@ from app.interfaces.http.middleware.client_ip import resolve_client_ip
 
 logger = logging.getLogger(__name__)
 
-EXEMPT_PATHS = frozenset({"/healthz", "/readyz"})
+# /metrics is exempt so Prometheus can scrape over the internal network without
+# the proxy's shared secret and X-Forwarded-For that this check otherwise
+# requires. Its own bearer token is the control there; see routers/metrics.py.
+EXEMPT_PATHS = frozenset({"/healthz", "/readyz", "/metrics"})
 
 
 class GeoFilterMiddleware(BaseHTTPMiddleware):

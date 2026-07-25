@@ -33,6 +33,7 @@ from app.interfaces.http.middleware.identity import (
     resolve_session_actor,
     session_from_request,
 )
+from app.interfaces.http.middleware.metrics import MetricsMiddleware
 from app.interfaces.http.routers import auth
 
 STRIPPED_HEADER_PREFIX = b"tailscale-"
@@ -87,6 +88,10 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(GeoFilterMiddleware, auth_mode=settings.auth_mode)
     app.add_middleware(StripTailscaleHeadersMiddleware)
+    # Outermost, so a request rejected at the perimeter is still counted rather
+    # than invisible. /metrics itself is exempt from the geo check below and
+    # rests on its bearer token; see routers/metrics.py.
+    app.add_middleware(MetricsMiddleware)
 
     # `/readyz` answers only {"ready": bool} here, without naming the failing
     # dependency, because this entrance faces the internet and the endpoint is
