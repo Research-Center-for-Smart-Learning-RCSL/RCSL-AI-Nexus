@@ -12,16 +12,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
 
-from app.adapters.persistence.repositories import PostgresNodeRepository
 from app.application.use_cases.download_model import DownloadModel
 from app.application.use_cases.manage_models import ManageModels
-from app.domain.entities.actor import Actor, Scope
+from app.domain.entities.actor import Actor
 from app.domain.entities.model import ResourceProfile
-from app.domain.exceptions import NotAuthorizedError
 from app.infrastructure.di import (
     build_download_model,
     build_manage_models,
-    get_node_repository,
 )
 from app.infrastructure.jobs import schedule_download
 from app.interfaces.http.middleware.identity import current_actor
@@ -29,7 +26,6 @@ from app.interfaces.http.schemas.admin_schemas import (
     CreateModelRequest,
     DownloadJobResponse,
     ModelResponse,
-    NodeResponse,
     UpdateModelRequest,
 )
 
@@ -160,18 +156,6 @@ async def read_download_job(
     return DownloadJobResponse.of(await downloads.status(actor, job_id))
 
 
-@router.get("/nodes")
-async def list_nodes(
-    actor: Annotated[Actor, Depends(current_actor)],
-    nodes: Annotated[PostgresNodeRepository, Depends(get_node_repository)],
-) -> list[NodeResponse]:
-    """Read only, and that is the whole of node management in Phase 1.
-
-    A write endpoint has to ship alongside the SSRF guard, because registering
-    a node means storing an address the platform will then make requests to.
-    Reading is what the model form needs and carries no such risk.
-    See docs/architecture/security.md section 7.2.
-    """
-    if not actor.has(Scope.NODE_READ):
-        raise NotAuthorizedError(detail=f"{actor.display} lacks {Scope.NODE_READ.value}")
-    return [NodeResponse.of(n) for n in await nodes.list_all()]
+# `GET /nodes` moved to routers/nodes.py, which now carries the full node
+# lifecycle: the read the model form needs plus the writes that ship with the
+# SSRF guard (security.md §7.2).
