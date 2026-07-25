@@ -29,6 +29,7 @@ is not worth buying nothing.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any, Self
 
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -42,6 +43,7 @@ from app.adapters.persistence.sqlalchemy_models import (
     NodeRow,
     RecoveryCodeRow,
     RoutingPolicyRow,
+    TenantRow,
     UsageRecordRow,
     UserRow,
 )
@@ -49,8 +51,9 @@ from app.domain.entities.actor import Role
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.invitation import Invitation, InvitationPurpose, RecoveryCode
 from app.domain.entities.model import Model, ModelState
-from app.domain.entities.node import Node
+from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import RoutingPolicy
+from app.domain.entities.tenant import Tenant
 from app.domain.entities.usage import UsageRecord
 from app.domain.entities.user import User
 
@@ -58,6 +61,57 @@ from app.domain.entities.user import User
 class _Base:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+
+class _TenantScoped:
+    """A repository whose reads filter and whose writes stamp `tenant_id`.
+
+    The filter lives here, in the adapter, and is taken from the tenant this
+    repository was constructed with, never from a caller, so a use case cannot
+    read or write another tenant's rows and cannot forget to say which tenant it
+    means. The di builders construct these with the actor's tenant, so the wiring
+    is the only place that decides. See docs/architecture/security.md section 7.3.
+
+    `unscoped` builds one with no tenant, for the identity and bootstrap paths
+    only: they resolve a principal (by session id, login, or key handle) before
+    any tenant is known, and reading exactly the one row a unique handle names is
+    not a cross-tenant enumeration. Every other construction passes a real tenant.
+    """
+
+    def __init__(self, session: AsyncSession, tenant_id: str | None) -> None:
+        self._session = session
+        self._tenant_id = tenant_id
+
+    @classmethod
+    def unscoped(cls, session: AsyncSession) -> Self:
+        return cls(session, None)
+
+    def _scope(self, stmt: Any, column: Any) -> Any:
+        """Add `column == tenant` unless this is an unscoped repository."""
+        if self._tenant_id is None:
+            return stmt
+        return stmt.where(column == self._tenant_id)
+
+
+class PostgresTenantRepository(_Base):
+    """Platform-global, like nodes and models: tenants are not themselves
+    tenant-scoped, and managing them is an admin operation."""
+
+    async def get(self, tenant_id: str) -> Tenant | None:
+        row = await self._session.get(TenantRow, tenant_id)
+        return m.tenant_to_domain(row) if row else None
+
+    async def get_by_name(self, name: str) -> Tenant | None:
+        row = await self._session.scalar(select(TenantRow).where(TenantRow.name == name))
+        return m.tenant_to_domain(row) if row else None
+
+    async def list_all(self) -> list[Tenant]:
+        rows = (await self._session.scalars(select(TenantRow).order_by(TenantRow.name))).all()
+        return [m.tenant_to_domain(r) for r in rows]
+
+    async def save(self, tenant: Tenant) -> None:
+        await self._session.merge(m.tenant_to_row(tenant))
+        await self._session.flush()
 
 
 class PostgresNodeRepository(_Base):
@@ -72,6 +126,14 @@ class PostgresNodeRepository(_Base):
     async def save(self, node: Node) -> None:
         await self._session.merge(m.node_to_row(node))
         await self._session.flush()
+
+    async def set_status(self, node_id: str, status: NodeStatus) -> None:
+        await self._session.execute(
+            update(NodeRow).where(NodeRow.id == node_id).values(status=status.value)
+        )
+
+    async def delete(self, node_id: str) -> None:
+        await self._session.execute(delete(NodeRow).where(NodeRow.id == node_id))
 
 
 class PostgresModelRepository(_Base):
@@ -153,29 +215,51 @@ class PostgresRoutingPolicyRepository(_Base):
         )
 
 
-class PostgresApiKeyRepository(_Base):
+class PostgresApiKeyRepository(_TenantScoped):
     async def get_by_key_id(self, key_id: str) -> ApiKey | None:
-        row = await self._session.scalar(select(ApiKeyRow).where(ApiKeyRow.key_id == key_id))
+        # Unscoped on the gateway's authentication path (the tenant is not known
+        # until the key is found); scoped for management, so an admin cannot
+        # reach another tenant's key by its handle.
+        row = await self._session.scalar(
+            self._scope(select(ApiKeyRow).where(ApiKeyRow.key_id == key_id), ApiKeyRow.tenant_id)
+        )
         return m.api_key_to_domain(row) if row else None
 
     async def list_for_owner(self, owner_id: str) -> list[ApiKey]:
         rows = (
-            await self._session.scalars(select(ApiKeyRow).where(ApiKeyRow.owner_id == owner_id))
+            await self._session.scalars(
+                self._scope(
+                    select(ApiKeyRow).where(ApiKeyRow.owner_id == owner_id), ApiKeyRow.tenant_id
+                )
+            )
         ).all()
         return [m.api_key_to_domain(r) for r in rows]
 
     async def list_all(self) -> list[ApiKey]:
         rows = (
-            await self._session.scalars(select(ApiKeyRow).order_by(ApiKeyRow.created_at.desc()))
+            await self._session.scalars(
+                self._scope(
+                    select(ApiKeyRow).order_by(ApiKeyRow.created_at.desc()), ApiKeyRow.tenant_id
+                )
+            )
         ).all()
         return [m.api_key_to_domain(r) for r in rows]
 
     async def save(self, key: ApiKey) -> None:
-        await self._session.merge(m.api_key_to_row(key))
+        row = m.api_key_to_row(key)
+        if self._tenant_id is not None:
+            # Stamp rather than trust the entity, so a new key lands in this
+            # repository's tenant regardless of what the use case set.
+            row.tenant_id = self._tenant_id
+        await self._session.merge(row)
         await self._session.flush()
 
     async def delete_for_owner(self, owner_id: str) -> None:
-        await self._session.execute(delete(ApiKeyRow).where(ApiKeyRow.owner_id == owner_id))
+        await self._session.execute(
+            self._scope(
+                delete(ApiKeyRow).where(ApiKeyRow.owner_id == owner_id), ApiKeyRow.tenant_id
+            )
+        )
 
     async def revoke(self, key_id: str, at: datetime) -> None:
         # Only the first revocation writes a timestamp. Without the guard a
@@ -183,9 +267,12 @@ class PostgresApiKeyRepository(_Base):
         # revoked" answers with the most recent attempt rather than the moment
         # it stopped working.
         await self._session.execute(
-            update(ApiKeyRow)
-            .where(ApiKeyRow.key_id == key_id, ApiKeyRow.revoked_at.is_(None))
-            .values(revoked_at=at)
+            self._scope(
+                update(ApiKeyRow)
+                .where(ApiKeyRow.key_id == key_id, ApiKeyRow.revoked_at.is_(None))
+                .values(revoked_at=at),
+                ApiKeyRow.tenant_id,
+            )
         )
 
     async def update_settings(self, key_id: str, values: dict[str, object]) -> bool:
@@ -196,41 +283,74 @@ class PostgresApiKeyRepository(_Base):
         `revoke` rerevived the key by overwriting the revocation with the NULL
         it had loaded. This touches only the named columns and requires
         `revoked_at IS NULL`, so it cannot revert a revocation and returns
-        False if one landed first.
+        False if one landed first. The tenant scope means an admin cannot edit
+        another tenant's key even by its handle.
         """
         result = await self._session.execute(
-            update(ApiKeyRow)
-            .where(ApiKeyRow.key_id == key_id, ApiKeyRow.revoked_at.is_(None))
-            .values(**values)
+            self._scope(
+                update(ApiKeyRow)
+                .where(ApiKeyRow.key_id == key_id, ApiKeyRow.revoked_at.is_(None))
+                .values(**values),
+                ApiKeyRow.tenant_id,
+            )
         )
         return (result.rowcount or 0) == 1  # type: ignore[attr-defined]
 
 
-class PostgresUserRepository(_Base):
+class PostgresUserRepository(_TenantScoped):
     async def get(self, user_id: str) -> User | None:
-        row = await self._session.get(UserRow, user_id)
+        # A select rather than `session.get`, so the tenant filter can be added.
+        # Unscoped on the session-resolution path (the tenant is read from the
+        # row); scoped for management, so an admin cannot fetch another tenant's
+        # user by id.
+        row = await self._session.scalar(
+            self._scope(select(UserRow).where(UserRow.id == user_id), UserRow.tenant_id)
+        )
         return m.user_to_domain(row) if row else None
 
     async def get_by_login(self, login: str) -> User | None:
+        # Deliberately NOT tenant-scoped, even on a scoped repository: `login` is
+        # globally unique, so it names one account across the whole platform. The
+        # invite flow's duplicate-login check must see that global namespace, or a
+        # login already taken in another tenant slips past the check and fails at
+        # the unique constraint as a 500 instead of a clean 409. Callers that then
+        # act within a tenant use `get(id)`, which is scoped; this only answers
+        # "does this login exist anywhere", and the row carries its own tenant.
         row = await self._session.scalar(select(UserRow).where(UserRow.login == login))
         return m.user_to_domain(row) if row else None
 
     async def get_by_tailscale_login(self, login: str) -> User | None:
-        row = await self._session.scalar(select(UserRow).where(UserRow.tailscale_login == login))
+        row = await self._session.scalar(
+            self._scope(
+                select(UserRow).where(UserRow.tailscale_login == login), UserRow.tenant_id
+            )
+        )
         return m.user_to_domain(row) if row else None
 
     async def list_all(self) -> list[User]:
-        rows = (await self._session.scalars(select(UserRow).order_by(UserRow.login))).all()
+        rows = (
+            await self._session.scalars(
+                self._scope(select(UserRow).order_by(UserRow.login), UserRow.tenant_id)
+            )
+        ).all()
         return [m.user_to_domain(r) for r in rows]
 
     async def display_names(self) -> dict[str, str]:
-        rows = await self._session.execute(select(UserRow.id, UserRow.display_name))
+        rows = await self._session.execute(
+            self._scope(select(UserRow.id, UserRow.display_name), UserRow.tenant_id)
+        )
         return {user_id: name for user_id, name in rows}
 
     async def count(self) -> int:
         """Backs the bootstrap guard: BOOTSTRAP_ADMIN_LOGIN is inert once any
-        user exists, so this must count every row, not only enabled ones."""
-        return int(await self._session.scalar(select(func.count()).select_from(UserRow)) or 0)
+        user exists, so this must count every row platform-wide, which is why
+        bootstrap uses an unscoped repository. When scoped it counts one tenant."""
+        return int(
+            await self._session.scalar(
+                self._scope(select(func.count()).select_from(UserRow), UserRow.tenant_id)
+            )
+            or 0
+        )
 
     async def save(self, user: User) -> None:
         """Full-row upsert. The caller must pass a complete entity.
@@ -246,7 +366,10 @@ class PostgresUserRepository(_Base):
 
         Flushes, for the reason given in the module docstring.
         """
-        await self._session.merge(m.user_to_row(user))
+        row = m.user_to_row(user)
+        if self._tenant_id is not None:
+            row.tenant_id = self._tenant_id
+        await self._session.merge(row)
         await self._session.flush()
 
     async def insert_if_absent(self, user: User) -> User:
@@ -257,10 +380,16 @@ class PostgresUserRepository(_Base):
         sees an empty `users` table, and every one of them tries to create the
         same account. Postgres blocks the losers on the conflicting key until
         the winner commits, so the SELECT below then sees the committed row.
+
+        Bootstrap runs unscoped, so the user's own `tenant_id` (the default
+        tenant) is what lands.
         """
+        values = m.user_to_row_values(user)
+        if self._tenant_id is not None:
+            values["tenant_id"] = self._tenant_id
         stmt = (
             pg_insert(UserRow)
-            .values(**m.user_to_row_values(user))
+            .values(**values)
             .on_conflict_do_nothing(index_elements=[UserRow.login])
         )
         await self._session.execute(stmt)
@@ -282,12 +411,15 @@ class PostgresUserRepository(_Base):
         a session. The comparison has to happen in the UPDATE.
         """
         result = await self._session.execute(
-            update(UserRow)
-            .where(
-                UserRow.id == user_id,
-                or_(UserRow.totp_last_counter.is_(None), UserRow.totp_last_counter < counter),
+            self._scope(
+                update(UserRow)
+                .where(
+                    UserRow.id == user_id,
+                    or_(UserRow.totp_last_counter.is_(None), UserRow.totp_last_counter < counter),
+                )
+                .values(totp_last_counter=counter),
+                UserRow.tenant_id,
             )
-            .values(totp_last_counter=counter)
         )
         return result.rowcount == 1
 
@@ -295,7 +427,10 @@ class PostgresUserRepository(_Base):
         """Targeted update, so disabling an account cannot be undone by a
         login that read the row a moment earlier and saved it back whole."""
         await self._session.execute(
-            update(UserRow).where(UserRow.id == user_id).values(disabled_at=at)
+            self._scope(
+                update(UserRow).where(UserRow.id == user_id).values(disabled_at=at),
+                UserRow.tenant_id,
+            )
         )
 
     async def update_profile(self, user_id: str, *, display_name: str, role: str) -> None:
@@ -308,23 +443,32 @@ class PostgresUserRepository(_Base):
         conditional updates cannot be undone by it.
         """
         await self._session.execute(
-            update(UserRow)
-            .where(UserRow.id == user_id)
-            .values(display_name=display_name, role=role)
+            self._scope(
+                update(UserRow)
+                .where(UserRow.id == user_id)
+                .values(display_name=display_name, role=role),
+                UserRow.tenant_id,
+            )
         )
 
     async def delete(self, user_id: str) -> None:
-        await self._session.execute(delete(UserRow).where(UserRow.id == user_id))
+        await self._session.execute(
+            self._scope(delete(UserRow).where(UserRow.id == user_id), UserRow.tenant_id)
+        )
 
     async def count_admins(self) -> int:
         """Counts enabled administrators only. A disabled one cannot sign in,
         so treating them as cover for the last-admin guard would leave an
-        instance nobody can manage."""
+        instance nobody can manage. Scoped, so the guard keeps every tenant with
+        at least one administrator of its own."""
         return int(
             await self._session.scalar(
-                select(func.count())
-                .select_from(UserRow)
-                .where(UserRow.role == Role.ADMIN.value, UserRow.disabled_at.is_(None))
+                self._scope(
+                    select(func.count())
+                    .select_from(UserRow)
+                    .where(UserRow.role == Role.ADMIN.value, UserRow.disabled_at.is_(None)),
+                    UserRow.tenant_id,
+                )
             )
             or 0
         )
@@ -405,16 +549,24 @@ class PostgresInvitationRepository(_Base):
         return result.rowcount == 1
 
 
-class PostgresUsageRepository(_Base):
+class PostgresUsageRepository(_TenantScoped):
     async def record(self, usage: UsageRecord) -> None:
-        self._session.add(m.usage_to_row(usage))
+        row = m.usage_to_row(usage)
+        if self._tenant_id is not None:
+            # Stamp from the gateway's scoped repository, so usage lands under
+            # the tenant of the key that produced it regardless of the entity.
+            row.tenant_id = self._tenant_id
+        self._session.add(row)
 
     async def tokens_used_today(self, api_key_id: str) -> int:
         since = datetime.now(UTC) - timedelta(days=1)
         total = await self._session.scalar(
-            select(func.coalesce(func.sum(UsageRecordRow.tokens), 0)).where(
-                UsageRecordRow.api_key_id == api_key_id,
-                UsageRecordRow.at >= since,
+            self._scope(
+                select(func.coalesce(func.sum(UsageRecordRow.tokens), 0)).where(
+                    UsageRecordRow.api_key_id == api_key_id,
+                    UsageRecordRow.at >= since,
+                ),
+                UsageRecordRow.tenant_id,
             )
         )
         return int(total or 0)
@@ -426,22 +578,29 @@ class PostgresUsageRepository(_Base):
         mean the gateway updating that table on every request, and the account
         split in security.md section 6 exists precisely so a compromised
         gateway cannot write there. The same fact is already in this table,
-        under the index `ix_usage_key_at`.
+        under the index `ix_usage_key_at`. Scoped, so a tenant's dashboard sees
+        only its own keys' activity.
         """
         rows = await self._session.execute(
-            select(UsageRecordRow.api_key_id, func.max(UsageRecordRow.at))
-            .where(UsageRecordRow.api_key_id.is_not(None))
-            .group_by(UsageRecordRow.api_key_id)
+            self._scope(
+                select(UsageRecordRow.api_key_id, func.max(UsageRecordRow.at))
+                .where(UsageRecordRow.api_key_id.is_not(None))
+                .group_by(UsageRecordRow.api_key_id),
+                UsageRecordRow.tenant_id,
+            )
         )
         return {key_id: at for key_id, at in rows if key_id is not None}
 
     async def totals_since(self, since: datetime) -> tuple[int, int]:
         row = (
             await self._session.execute(
-                select(
-                    func.count(),
-                    func.coalesce(func.sum(UsageRecordRow.tokens), 0),
-                ).where(UsageRecordRow.at >= since)
+                self._scope(
+                    select(
+                        func.count(),
+                        func.coalesce(func.sum(UsageRecordRow.tokens), 0),
+                    ).where(UsageRecordRow.at >= since),
+                    UsageRecordRow.tenant_id,
+                )
             )
         ).one()
         return int(row[0] or 0), int(row[1] or 0)

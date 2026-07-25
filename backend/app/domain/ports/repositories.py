@@ -13,10 +13,21 @@ from typing import Protocol
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.invitation import Invitation, InvitationPurpose, RecoveryCode
 from app.domain.entities.model import Model, ModelState
-from app.domain.entities.node import Node
+from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import RoutingPolicy
+from app.domain.entities.tenant import Tenant
 from app.domain.entities.usage import UsageRecord
 from app.domain.entities.user import User
+
+
+class TenantRepositoryPort(Protocol):
+    """Platform-global, not tenant-scoped: tenants are the boundary, not data
+    inside one."""
+
+    async def get(self, tenant_id: str) -> Tenant | None: ...
+    async def get_by_name(self, name: str) -> Tenant | None: ...
+    async def list_all(self) -> list[Tenant]: ...
+    async def save(self, tenant: Tenant) -> None: ...
 
 
 class ModelRepositoryPort(Protocol):
@@ -51,6 +62,19 @@ class NodeRepositoryPort(Protocol):
     async def get(self, node_id: str) -> Node | None: ...
     async def list_all(self) -> list[Node]: ...
     async def save(self, node: Node) -> None: ...
+
+    async def set_status(self, node_id: str, status: NodeStatus) -> None:
+        """Targeted status write for the heartbeat.
+
+        A full-row `save` would carry the whole entity back and could revert a
+        concurrent edit to the name, memory or runtimes, the same read-modify-
+        write hazard the key and user repositories already avoid. The heartbeat
+        runs in both admin entrances, so this also has to be idempotent, which a
+        single-column update is.
+        """
+        ...
+
+    async def delete(self, node_id: str) -> None: ...
 
 
 class RoutingPolicyRepositoryPort(Protocol):

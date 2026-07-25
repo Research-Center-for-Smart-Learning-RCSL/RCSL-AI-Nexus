@@ -82,13 +82,13 @@ async def _seed(plaintext_holder: dict) -> None:
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
-        await PostgresUserRepository(session).save(
+        await PostgresUserRepository.unscoped(session).save(
             User(id="u1", login="owner@example.com", display_name="Owner", role=Role.ADMIN)
         )
 
         issued = ApiKeyService(peppers=(PEPPER.encode(),)).issue()
         plaintext_holder["token"] = issued.plaintext
-        await PostgresApiKeyRepository(session).save(
+        await PostgresApiKeyRepository.unscoped(session).save(
             ApiKey(
                 id=str(uuid.uuid4()),
                 key_id=issued.key_id,
@@ -157,7 +157,7 @@ async def issue_key(**overrides) -> str:
             "expires_at": datetime.now(UTC) + timedelta(days=1),
             **overrides,
         }
-        await PostgresApiKeyRepository(session).save(ApiKey(**fields))
+        await PostgresApiKeyRepository.unscoped(session).save(ApiKey(**fields))
         await session.commit()
     await engine.dispose()
     return issued.plaintext

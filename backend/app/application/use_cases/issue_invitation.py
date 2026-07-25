@@ -61,7 +61,13 @@ class IssueInvitation:
         self._ttl = timedelta(seconds=ttl_seconds)
 
     async def create_account(
-        self, actor: Actor, *, login: str, display_name: str, role: Role
+        self,
+        actor: Actor,
+        *,
+        login: str,
+        display_name: str,
+        role: Role,
+        tenant_id: str | None = None,
     ) -> IssuedInvitation:
         self._authz.require(actor, Scope.USER_WRITE)
 
@@ -69,11 +75,17 @@ class IssueInvitation:
         if await self._users.get_by_login(normalised) is not None:
             raise UserAlreadyExistsError(detail=f"login={normalised}")
 
+        # `tenant_id` is set explicitly only when creating a tenant's first
+        # administrator (ManageTenants), where the target tenant is not the
+        # caller's. In the ordinary invite the argument is omitted and the
+        # tenant-scoped user repository stamps the caller's tenant on write.
+        extra = {"tenant_id": tenant_id} if tenant_id is not None else {}
         user = User(
             id=str(uuid.uuid4()),
             login=normalised,
             display_name=display_name.strip() or normalised,
             role=role,
+            **extra,  # type: ignore[arg-type]
         )
         await self._users.save(user)
         # Read back for `created_at`, which the database assigns. Returning

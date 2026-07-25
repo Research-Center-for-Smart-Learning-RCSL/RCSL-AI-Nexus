@@ -14,16 +14,15 @@ immediately rather than at its own expiry.
 from __future__ import annotations
 
 from typing import Annotated
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Response
 
 from app.application.use_cases.issue_invitation import IssuedInvitation, IssueInvitation
 from app.application.use_cases.manage_users import ManageUsers
 from app.domain.entities.actor import Actor
-from app.domain.entities.invitation import InvitationPurpose
 from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.di import build_issue_invitation, build_manage_users
+from app.interfaces.http.invitation_link import invitation_url
 from app.interfaces.http.middleware.identity import current_actor
 from app.interfaces.http.schemas.admin_schemas import (
     CreateUserRequest,
@@ -34,9 +33,6 @@ from app.interfaces.http.schemas.admin_schemas import (
 )
 
 router = APIRouter(prefix="/users", tags=["users"])
-
-ONBOARD_PATH = "/accept-invite"
-RESET_PATH = "/reset-password"
 
 
 @router.get("")
@@ -122,8 +118,7 @@ async def delete_user(
 
 
 def _invitation_response(issued: IssuedInvitation, settings: Settings) -> InvitationResponse:
-    path = ONBOARD_PATH if issued.purpose == InvitationPurpose.ONBOARD else RESET_PATH
-    url = f"{settings.admin_base_url.rstrip('/')}{path}?token={quote(issued.token)}"
+    url = invitation_url(settings, issued.purpose, issued.token)
 
     return InvitationResponse(
         id=issued.invitation_id,

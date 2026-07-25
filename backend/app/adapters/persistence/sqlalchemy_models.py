@@ -31,6 +31,16 @@ class Base(DeclarativeBase):
     pass
 
 
+class TenantRow(Base):
+    __tablename__ = "tenants"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class NodeRow(Base):
     __tablename__ = "nodes"
 
@@ -77,7 +87,14 @@ class UserRow(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("tenants.id"), index=True
+    )
     login: Mapped[str] = mapped_column(String(255), unique=True)
+    """Globally unique, not per-tenant. Authentication resolves a login before
+    any tenant is known, so a login names exactly one account across the whole
+    platform and its tenant is then read from the row."""
+
     display_name: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(16))
 
@@ -138,6 +155,9 @@ class ApiKeyRow(Base):
     __tablename__ = "api_keys"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("tenants.id"), index=True
+    )
     key_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     """Independent random lookup handle, not a prefix of the secret, so
     nothing secret reaches logs or indexes."""
@@ -175,6 +195,12 @@ class UsageRecordRow(Base):
     __tablename__ = "usage_records"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    """No foreign key, matching `api_key_id` below: this table stays free of
+    them so a record survives the deletion of anything it names. The tenant is
+    stamped from an already-authenticated actor, so integrity holds at the
+    application layer."""
+
     actor_id: Mapped[str] = mapped_column(String(36), index=True)
 
     api_key_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -201,6 +227,11 @@ class AuditLogRow(Base):
     __tablename__ = "audit_log"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    """The tenant of the actor who performed the action, so a future per-tenant
+    logs view can filter to it. No foreign key, keeping this append-only table
+    free of them."""
+
     actor_id: Mapped[str] = mapped_column(String(36), index=True)
     actor_display: Mapped[str] = mapped_column(String(255))
     actor_source: Mapped[str] = mapped_column(String(16))

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.domain.entities.actor import Role
+from app.domain.entities.tenant import DEFAULT_TENANT_ID
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +22,12 @@ class User:
     login: str
     display_name: str
     role: Role
+
+    tenant_id: str = DEFAULT_TENANT_ID
+    """Which tenant this account belongs to. Defaulted so the many constructions
+    that predate multi-tenancy keep compiling; the identity layer and the
+    invitation flow set it explicitly, and the tenant-scoped repositories stamp
+    it on write. See docs/architecture/security.md section 7.3."""
 
     tailscale_login: str | None = None
 

@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
+from app.domain.entities.tenant import DEFAULT_TENANT_ID
+
 ActorSource = Literal["tailnet", "local", "api_key", "dev"]
 
 
@@ -41,6 +43,9 @@ class Scope(StrEnum):
     NODE_READ = "node:read"
     NODE_WRITE = "node:write"
 
+    TENANT_READ = "tenant:read"
+    TENANT_WRITE = "tenant:write"
+
     USAGE_READ_OWN = "usage:read_own"
     USAGE_READ_ALL = "usage:read_all"
 
@@ -56,6 +61,13 @@ class Actor:
     role: Role
     source: ActorSource
     scopes: frozenset[Scope]
+
+    tenant_id: str = DEFAULT_TENANT_ID
+    """The tenant this caller acts within. From `users.tenant_id` on the admin
+    entrances and `api_keys.tenant_id` on the gateway. The tenant-scoped
+    repositories are constructed with it, so a use case reads and writes only
+    this tenant's rows. Defaulted so the many test actors that predate tenancy
+    keep constructing. See docs/architecture/security.md section 7.3."""
 
     api_key_id: str | None = None
     """The `key_id` handle when `source` is `api_key`, otherwise None.

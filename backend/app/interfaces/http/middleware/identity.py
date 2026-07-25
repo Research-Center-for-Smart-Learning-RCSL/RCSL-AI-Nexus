@@ -29,11 +29,25 @@ from app.domain.ports.security_ports import AuthorizationPort
 from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.di import (
     build_bootstrap_first_admin,
+    current_actor,
+    current_session,
     get_authorization,
     get_session_store,
     get_user_repository,
 )
 from app.shared.clock import SystemClock
+
+# `current_actor` and `current_session` are defined in di.py (so the tenant-
+# scoped repository builders can depend on the actor without a circular import)
+# and re-exported here, because routers and the entrance apps import them from
+# this module. See app/infrastructure/di.py.
+__all__ = [
+    "current_actor",
+    "current_session",
+    "resolve_session_actor",
+    "resolve_tailnet_actor",
+    "session_from_request",
+]
 
 TAILSCALE_LOGIN_HEADER = "tailscale-user-login"
 TAILSCALE_NAME_HEADER = "tailscale-user-name"
@@ -41,23 +55,6 @@ TAILSCALE_NAME_HEADER = "tailscale-user-name"
 SESSION_STATE_KEY = "nexus_session"
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-
-
-def current_actor() -> Actor:
-    """Overridden per application. Never called."""
-    raise NotImplementedError(
-        "No identity resolver installed. create_app must override current_actor."
-    )
-
-
-def current_session() -> SessionData | None:
-    """The caller's session, or None on an entrance that has none.
-
-    The tailnet entrance authenticates from a header on every request and holds
-    no session at all, which is why this returns an optional rather than each
-    caller branching on the entrance.
-    """
-    return None
 
 
 async def resolve_tailnet_actor(
@@ -152,6 +149,7 @@ def _actor_for(user: User, *, source: str, authz: AuthorizationPort) -> Actor:
         role=user.role,
         source=source,  # type: ignore[arg-type]
         scopes=authz.scopes_for(user.role.value),
+        tenant_id=user.tenant_id,
     )
 
 

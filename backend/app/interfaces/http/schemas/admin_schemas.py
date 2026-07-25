@@ -24,6 +24,7 @@ from app.domain.entities.invitation import Invitation
 from app.domain.entities.model import Model, RuntimeKind
 from app.domain.entities.node import Node
 from app.domain.entities.routing_policy import RoutingPolicy
+from app.domain.entities.tenant import Tenant
 from app.domain.entities.user import User
 from app.domain.ports.infrastructure_ports import JobStatus
 
@@ -131,6 +132,34 @@ class InvitationResponse(BaseModel):
 class CreateUserResponse(BaseModel):
     user: UserResponse
     invitation: InvitationResponse
+
+
+# --- tenants -------------------------------------------------------------
+
+
+class TenantResponse(BaseModel):
+    id: str
+    name: str
+    created_at: datetime | None
+
+    @classmethod
+    def of(cls, tenant: Tenant) -> TenantResponse:
+        return cls(id=tenant.id, name=tenant.name, created_at=tenant.created_at)
+
+
+class CreateTenantRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    first_admin_login: EmailStr
+    """A tenant with no administrator cannot be populated, so creating one mints
+    its first admin's invitation. The login is globally unique, like every other."""
+
+    first_admin_display_name: str = Field(min_length=1, max_length=120)
+
+
+class CreateTenantResponse(BaseModel):
+    tenant: TenantResponse
+    invitation: InvitationResponse
+    """The first administrator's onboarding link, present here and nowhere else."""
 
 
 # --- authentication ------------------------------------------------------
@@ -291,6 +320,25 @@ class NodeResponse(BaseModel):
             total_memory_gb=node.total_memory_gb,
             runtimes=sorted(r.value for r in node.runtimes),
         )
+
+
+class CreateNodeRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    address: str = Field(min_length=1, max_length=255)
+    """A tailnet address. The authoritative check is the egress guard in the use
+    case (security.md §7.2); this bound only keeps an absurd value from reaching
+    it. Status is deliberately absent: it is observed by probing, never set from
+    the form."""
+
+    total_memory_gb: float = Field(gt=0)
+    runtimes: list[RuntimeKind] = Field(min_length=1)
+
+
+class UpdateNodeRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    address: str | None = Field(default=None, min_length=1, max_length=255)
+    total_memory_gb: float | None = Field(default=None, gt=0)
+    runtimes: list[RuntimeKind] | None = Field(default=None, min_length=1)
 
 
 class DownloadJobResponse(BaseModel):

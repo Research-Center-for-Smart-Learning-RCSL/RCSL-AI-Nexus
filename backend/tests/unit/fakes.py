@@ -19,11 +19,12 @@ from app.domain.entities.actor import Actor, Role
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.invitation import Invitation, InvitationPurpose, RecoveryCode
 from app.domain.entities.model import Model, ModelState, PullProgress
-from app.domain.entities.node import Node
+from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import RoutingPolicy
+from app.domain.entities.tenant import Tenant
 from app.domain.entities.usage import UsageRecord
 from app.domain.entities.user import User
-from app.domain.exceptions import InvalidModelReferenceError
+from app.domain.exceptions import InvalidModelReferenceError, InvalidNodeAddressError
 from app.domain.ports.infrastructure_ports import JobStatus
 
 
@@ -269,6 +270,54 @@ class FakeNodes:
 
     async def save(self, node: Node) -> None:
         self.rows[node.id] = node
+
+    async def set_status(self, node_id: str, status: NodeStatus) -> None:
+        self.rows[node_id] = replace(self.rows[node_id], status=status)
+
+    async def delete(self, node_id: str) -> None:
+        self.rows.pop(node_id, None)
+
+
+class FakeTenants:
+    def __init__(self, tenants: Sequence[Tenant] = ()) -> None:
+        self.rows: dict[str, Tenant] = {t.id: t for t in tenants}
+
+    async def get(self, tenant_id: str) -> Tenant | None:
+        return self.rows.get(tenant_id)
+
+    async def get_by_name(self, name: str) -> Tenant | None:
+        return next((t for t in self.rows.values() if t.name == name), None)
+
+    async def list_all(self) -> list[Tenant]:
+        return list(self.rows.values())
+
+    async def save(self, tenant: Tenant) -> None:
+        self.rows[tenant.id] = tenant
+
+
+class FakeEgressGuard:
+    """Records every address checked, and refuses those in `blocked` with the
+    domain error the real guard raises. A use case that forgets to run the guard
+    before storing an address then fails a test rather than passing silently."""
+
+    def __init__(self, blocked: frozenset[str] = frozenset()) -> None:
+        self.checked: list[str] = []
+        self._blocked = blocked
+
+    async def assert_node_address_allowed(self, address: str) -> None:
+        self.checked.append(address)
+        if address in self._blocked:
+            raise InvalidNodeAddressError(detail=f"blocked {address}")
+
+
+class FakeNodeHealth:
+    def __init__(self, status: NodeStatus = NodeStatus.ONLINE) -> None:
+        self.status = status
+        self.probed: list[str] = []
+
+    async def probe(self, node: Node) -> NodeStatus:
+        self.probed.append(node.id)
+        return self.status
 
 
 class FakePolicies:

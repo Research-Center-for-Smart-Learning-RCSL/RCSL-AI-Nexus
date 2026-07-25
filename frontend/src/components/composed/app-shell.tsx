@@ -23,7 +23,9 @@ import {
   KeyIcon,
   LogOutIcon,
   MessageSquareIcon,
+  Building2Icon,
   RouteIcon,
+  ServerIcon,
   UserCogIcon,
   UsersIcon,
 } from 'lucide-react';
@@ -68,6 +70,12 @@ const NAV: NavItem[] = [
     adminOnly: true,
   },
   {
+    href: '/nodes',
+    label: 'Nodes',
+    icon: <ServerIcon className="size-4" />,
+    adminOnly: true,
+  },
+  {
     href: '/api-keys',
     label: 'API keys',
     icon: <KeyIcon className="size-4" />,
@@ -76,6 +84,12 @@ const NAV: NavItem[] = [
     href: '/users',
     label: 'Users',
     icon: <UsersIcon className="size-4" />,
+    adminOnly: true,
+  },
+  {
+    href: '/tenants',
+    label: 'Tenants',
+    icon: <Building2Icon className="size-4" />,
     adminOnly: true,
   },
   {

@@ -24,6 +24,8 @@ from app.adapters.crypto.argon2_hasher import Argon2Hasher
 from app.adapters.crypto.pyotp_totp import PyotpTotp
 from app.adapters.crypto.secret_box import FernetSecretBox
 from app.adapters.crypto.zxcvbn_policy import ZxcvbnPasswordPolicy
+from app.adapters.http.egress_guard import TailnetEgressGuard
+from app.adapters.http.node_health import RuntimeNodeHealth
 from app.adapters.persistence.model_state import ModelStateCommitter
 from app.adapters.persistence.repositories import (
     PostgresApiKeyRepository,
@@ -31,12 +33,13 @@ from app.adapters.persistence.repositories import (
     PostgresModelRepository,
     PostgresNodeRepository,
     PostgresRoutingPolicyRepository,
+    PostgresTenantRepository,
     PostgresUsageRepository,
     PostgresUserRepository,
 )
 from app.adapters.runtime.mlx_adapter import MlxAdapter
 from app.adapters.runtime.ollama_adapter import OllamaAdapter
-from app.adapters.session.session_store import SessionStore
+from app.adapters.session.session_store import SessionData, SessionStore
 from app.application.use_cases.accept_invitation import AcceptInvitation
 from app.application.use_cases.authenticate_local import AuthenticateLocal
 from app.application.use_cases.bootstrap_first_admin import BootstrapFirstAdmin
@@ -44,12 +47,15 @@ from app.application.use_cases.download_model import DownloadModel
 from app.application.use_cases.issue_invitation import IssueInvitation
 from app.application.use_cases.manage_api_keys import ManageApiKeys
 from app.application.use_cases.manage_models import ManageModels
+from app.application.use_cases.manage_nodes import ManageNodes
 from app.application.use_cases.manage_own_account import ManageOwnAccount
 from app.application.use_cases.manage_routing_policies import ManageRoutingPolicies
+from app.application.use_cases.manage_tenants import ManageTenants
 from app.application.use_cases.manage_users import ManageUsers
 from app.application.use_cases.pending_enrolment import PendingEnrolment
 from app.application.use_cases.read_dashboard import ReadDashboard
 from app.application.use_cases.route_chat_request import RouteChatRequest
+from app.domain.entities.actor import Actor
 from app.domain.entities.model import RuntimeKind
 from app.domain.ports.infrastructure_ports import CachePort
 from app.domain.ports.model_runtime_port import ModelRuntimePort
@@ -190,8 +196,50 @@ def get_cache(request: Request) -> CachePort:
     return request.app.state.cache  # type: ignore[no-any-return]
 
 
+# --- identity seam -------------------------------------------------------
+#
+# `current_actor` and `current_session` live here, not in the identity
+# middleware, so that the tenant-scoped repository builders below can depend on
+# the actor without a circular import (identity imports di, so di must not import
+# identity). The middleware re-exports both and installs the real resolvers via
+# `dependency_overrides`; routers keep importing them from the middleware.
+
+
+def current_actor() -> Actor:
+    """Overridden per application by its identity resolver. Never called."""
+    raise NotImplementedError(
+        "No identity resolver installed. create_app must override current_actor."
+    )
+
+
+def current_session() -> SessionData | None:
+    """The caller's session, or None on an entrance that has none."""
+    return None
+
+
+def current_tenant_id(actor: Annotated[Actor, Depends(current_actor)]) -> str:
+    """The tenant a request acts within, for scoping repositories to it."""
+    return actor.tenant_id
+
+
+TenantIdDep = Annotated[str, Depends(current_tenant_id)]
+
+
+# --- repositories --------------------------------------------------------
+#
+# The tenant-scoped repositories come in two forms. The plain getters are
+# **unscoped**: they serve the identity resolvers and the gateway's key
+# authentication, which resolve a principal (by session id, login, or key handle)
+# before any tenant is known, and reading exactly the one row a unique handle
+# names is not a cross-tenant enumeration. The `*_scoped` getters and the use-case
+# builders below construct repositories bound to the actor's tenant, which is
+# where the §7.3 boundary is enforced.
+
+
 def get_api_key_repository(session: SessionDep) -> PostgresApiKeyRepository:
-    return PostgresApiKeyRepository(session)
+    """Unscoped: the gateway authenticates a key by its handle before its tenant
+    is known."""
+    return PostgresApiKeyRepository.unscoped(session)
 
 
 def get_usage_repository(session: SessionDep) -> PostgresUsageRepository:
@@ -200,12 +248,26 @@ def get_usage_repository(session: SessionDep) -> PostgresUsageRepository:
     They were previously conflated behind a `getattr` fallback that returned
     zero when the method was missing, so the quota check silently never ran
     against the real adapter while passing against a test stub.
+
+    Unscoped: the gateway path stamps the tenant onto the usage record from the
+    authenticated actor, so a filter here would be redundant, and the quota read
+    is by key handle.
     """
-    return PostgresUsageRepository(session)
+    return PostgresUsageRepository.unscoped(session)
 
 
 def get_user_repository(session: SessionDep) -> PostgresUserRepository:
-    return PostgresUserRepository(session)
+    """Unscoped, because the identity resolvers use it to look up the very user
+    that becomes the actor: there is no tenant to scope by yet."""
+    return PostgresUserRepository.unscoped(session)
+
+
+def get_user_repository_scoped(
+    session: SessionDep, tenant_id: TenantIdDep
+) -> PostgresUserRepository:
+    """Scoped to the caller's tenant, for handlers that enumerate users (the API
+    key list's owner names), so a tenant admin sees only their own."""
+    return PostgresUserRepository(session, tenant_id)
 
 
 def get_invitation_repository(session: SessionDep) -> PostgresInvitationRepository:
@@ -229,7 +291,9 @@ def build_route_chat_request(
         policies=PostgresRoutingPolicyRepository(session),
         models=PostgresModelRepository(session),
         nodes=PostgresNodeRepository(session),
-        usage=PostgresUsageRepository(session),
+        # Unscoped: RouteChatRequest stamps the record's tenant from the
+        # authenticated actor, so the write lands under the key's tenant.
+        usage=PostgresUsageRepository.unscoped(session),
         runtimes=request.app.state.runtimes,
         routing=RoutingService(),
         concurrency=request.app.state.concurrency,
@@ -292,7 +356,10 @@ def build_bootstrap_first_admin(
     request: Request, session: SessionDep, settings: SettingsDep
 ) -> BootstrapFirstAdmin:
     return BootstrapFirstAdmin(
-        users=PostgresUserRepository(session),
+        # Unscoped: bootstrap counts every user platform-wide (it is inert once
+        # any user exists anywhere) and creates the first admin in the default
+        # tenant the account already carries.
+        users=PostgresUserRepository.unscoped(session),
         audit=request.app.state.audit,
         authz=request.app.state.authz,
         bootstrap_login=settings.bootstrap_admin_login,
@@ -301,7 +368,9 @@ def build_bootstrap_first_admin(
 
 def build_authenticate_local(request: Request, session: SessionDep) -> AuthenticateLocal:
     return AuthenticateLocal(
-        users=PostgresUserRepository(session),
+        # Unscoped: login is globally unique and authentication resolves it
+        # before any tenant is known.
+        users=PostgresUserRepository.unscoped(session),
         hasher=request.app.state.hasher,
         totp=request.app.state.totp,
         invitations=PostgresInvitationRepository(session),
@@ -313,10 +382,12 @@ def build_authenticate_local(request: Request, session: SessionDep) -> Authentic
 
 
 def build_issue_invitation(
-    request: Request, session: SessionDep, settings: SettingsDep
+    request: Request, session: SessionDep, settings: SettingsDep, tenant: TenantIdDep
 ) -> IssueInvitation:
     return IssueInvitation(
-        users=PostgresUserRepository(session),
+        # Scoped: the invited account lands in the inviting admin's tenant, which
+        # the scoped repository stamps on write.
+        users=PostgresUserRepository(session, tenant),
         invitations=PostgresInvitationRepository(session),
         tokens=request.app.state.tokens,
         audit=request.app.state.audit,
@@ -330,7 +401,9 @@ def build_accept_invitation(
     request: Request, session: SessionDep, settings: SettingsDep
 ) -> AcceptInvitation:
     return AcceptInvitation(
-        users=PostgresUserRepository(session),
+        # Unscoped: the account being completed is identified by the invitation
+        # token, not by an authenticated actor, so there is no tenant to scope by.
+        users=PostgresUserRepository.unscoped(session),
         invitations=PostgresInvitationRepository(session),
         tokens=request.app.state.tokens,
         totp=request.app.state.totp,
@@ -381,11 +454,16 @@ def build_download_model(request: Request, session: SessionDep) -> DownloadModel
     )
 
 
-def build_manage_api_keys(request: Request, session: SessionDep) -> ManageApiKeys:
+def build_manage_api_keys(
+    request: Request, session: SessionDep, tenant: TenantIdDep
+) -> ManageApiKeys:
     return ManageApiKeys(
-        keys=PostgresApiKeyRepository(session),
-        users=PostgresUserRepository(session),
-        usage=PostgresUsageRepository(session),
+        # Scoped to the caller's tenant: an admin issues, lists, edits and
+        # revokes only their own tenant's keys, and a key is owned by a user in
+        # that same tenant.
+        keys=PostgresApiKeyRepository(session, tenant),
+        users=PostgresUserRepository(session, tenant),
+        usage=PostgresUsageRepository(session, tenant),
         service=request.app.state.api_key_service,
         authz=request.app.state.authz,
         audit=request.app.state.audit,
@@ -393,15 +471,52 @@ def build_manage_api_keys(request: Request, session: SessionDep) -> ManageApiKey
     )
 
 
-def build_manage_users(request: Request, session: SessionDep) -> ManageUsers:
+def build_manage_users(request: Request, session: SessionDep, tenant: TenantIdDep) -> ManageUsers:
     return ManageUsers(
-        users=PostgresUserRepository(session),
-        keys=PostgresApiKeyRepository(session),
+        users=PostgresUserRepository(session, tenant),
+        keys=PostgresApiKeyRepository(session, tenant),
         invitations=PostgresInvitationRepository(session),
         sessions=request.app.state.sessions,
         authz=request.app.state.authz,
         audit=request.app.state.audit,
         clock=SystemClock(),
+    )
+
+
+def build_manage_nodes(request: Request, session: SessionDep) -> ManageNodes:
+    """The egress guard and the health probe are both cheap and stateless, so
+    they are constructed here rather than held on `app.state`. The probe reads
+    the process-wide runtimes so it checks the same adapters inference uses."""
+    return ManageNodes(
+        nodes=PostgresNodeRepository(session),
+        models=PostgresModelRepository(session),
+        egress=TailnetEgressGuard(),
+        health=RuntimeNodeHealth(request.app.state.runtimes),
+        authz=request.app.state.authz,
+        audit=request.app.state.audit,
+    )
+
+
+def build_manage_tenants(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> ManageTenants:
+    """The invitation collaborator uses an *unscoped* user repository, because
+    creating a tenant's first admin writes into the new tenant, not the caller's,
+    so the tenant must be set explicitly rather than stamped from the actor."""
+    invite = IssueInvitation(
+        users=PostgresUserRepository.unscoped(session),
+        invitations=PostgresInvitationRepository(session),
+        tokens=request.app.state.tokens,
+        audit=request.app.state.audit,
+        authz=request.app.state.authz,
+        clock=SystemClock(),
+        ttl_seconds=settings.invitation_ttl_seconds,
+    )
+    return ManageTenants(
+        tenants=PostgresTenantRepository(session),
+        invite=invite,
+        authz=request.app.state.authz,
+        audit=request.app.state.audit,
     )
 
 
@@ -414,23 +529,28 @@ def build_manage_routing_policies(request: Request, session: SessionDep) -> Mana
     )
 
 
-def build_read_dashboard(request: Request, session: SessionDep) -> ReadDashboard:
+def build_read_dashboard(
+    request: Request, session: SessionDep, tenant: TenantIdDep
+) -> ReadDashboard:
     return ReadDashboard(
+        # Models and nodes are shared infrastructure, so their counts are
+        # platform-wide; keys, users and usage are the tenant's own.
         models=PostgresModelRepository(session),
         nodes=PostgresNodeRepository(session),
-        keys=PostgresApiKeyRepository(session),
-        users=PostgresUserRepository(session),
-        usage=PostgresUsageRepository(session),
+        keys=PostgresApiKeyRepository(session, tenant),
+        users=PostgresUserRepository(session, tenant),
+        usage=PostgresUsageRepository(session, tenant),
         authz=request.app.state.authz,
         clock=SystemClock(),
     )
 
 
 def build_manage_own_account(
-    request: Request, session: SessionDep, settings: SettingsDep
+    request: Request, session: SessionDep, settings: SettingsDep, tenant: TenantIdDep
 ) -> ManageOwnAccount:
     return ManageOwnAccount(
-        users=PostgresUserRepository(session),
+        # Scoped to the caller's own tenant; the account being managed is theirs.
+        users=PostgresUserRepository(session, tenant),
         invitations=PostgresInvitationRepository(session),
         tokens=request.app.state.tokens,
         totp=request.app.state.totp,
