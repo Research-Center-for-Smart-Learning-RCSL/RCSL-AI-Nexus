@@ -1,0 +1,12 @@
+# Load dashboards from files baked into the image mount, so the overview exists
+# on first boot rather than being drawn by hand and lost on a volume reset.
+apiVersion: 1
+
+providers:
+  - name: Nexus
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

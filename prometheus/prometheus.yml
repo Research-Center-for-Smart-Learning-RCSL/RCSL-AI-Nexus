@@ -1,0 +1,43 @@
+# Prometheus scrape configuration.
+#
+# Prometheus publishes no host port of its own (see docker-compose.yml): it is
+# reachable only by Grafana, over the internal metrics-viz network. It reaches
+# the gateway over metrics-gateway and the two admin entrances over
+# metrics-admin, and it is on all three so it can scrape each. It is not on any
+# network shared by the gateway and an admin entrance, so the invariant that
+# those two share nothing still holds: Prometheus is a scraper, not a router, and
+# issues only these fixed GET /metrics requests. See docs/architecture/security.md.
+#
+# Every target's /metrics is guarded by a bearer token. The token is the same
+# file secret each backend service reads as metrics_scrape_token, mounted here at
+# /run/secrets/metrics_scrape_token; both sides trim surrounding whitespace, so a
+# trailing newline cannot cause a mismatch.
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+
+scrape_configs:
+  - job_name: gateway
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/metrics_scrape_token
+    static_configs:
+      - targets: ["gateway:8000"]
+
+  - job_name: admin-tailnet
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/metrics_scrape_token
+    static_configs:
+      - targets: ["admin-tailnet:8001"]
+
+  - job_name: admin-public
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/metrics_scrape_token
+    static_configs:
+      - targets: ["admin-public:8002"]

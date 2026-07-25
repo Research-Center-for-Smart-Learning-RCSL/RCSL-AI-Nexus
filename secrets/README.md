@@ -68,6 +68,8 @@ openssl rand -base64 32        # for each password and each of the four below
 | `totp_encryption_key` | rotating it makes every stored TOTP secret undecryptable; do not |
 | `session_signing_key` | present for completeness; sessions are opaque Redis ids |
 | `proxy_shared_secret` | must match the value the nginx proxy sends |
+| `metrics_scrape_token` | bearer token for `/metrics`; the same file is mounted into Prometheus, so both sides use one value. Not needed if `METRICS_ENABLED=false` |
+| `grafana_admin_password` | Grafana's initial admin password, replacing its `admin`/`admin` default |
 
 `api_key_pepper_previous` is not shipped as a file because it is empty except
 during a pepper rotation. Add it as a secret (and mount it into the backend

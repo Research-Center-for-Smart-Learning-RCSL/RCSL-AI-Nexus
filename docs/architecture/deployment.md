@@ -14,6 +14,8 @@ The proxy host is maintained by another administrator. This project asks only th
 
 **Model runtimes are not containers.** Ollama and MLX run natively on macOS under launchd, bound to `127.0.0.1`, because Docker on macOS cannot reach the GPU. Containers connect through `host.docker.internal:11434`. Rationale in [../ARCHITECTURE.md](../ARCHITECTURE.md) §0.1; host-level hardening in [security.md](./security.md) §7.1(d).
 
+**Observability runs as two containers.** Prometheus scrapes the three applications' `/metrics` and Grafana reads Prometheus. Both are on internal-only networks: Prometheus publishes no host port, and Grafana binds `127.0.0.1:3002`, exposed to the tailnet through `tailscale serve --https 8443` for operators. Neither is reachable from the public entrance. See [security.md](./security.md) §6.
+
 ## 2. Domains
 
 DNS is hosted at **Gandi**, and a wildcard record already exists:
@@ -327,6 +329,7 @@ Non-secret values are environment variables; secrets are mounted files read thro
 | `MAX_CONCURRENT_INFERENCE` | `2` | Tune to model size |
 | `MAX_TOKENS_CEILING` | `4096` | |
 | `REQUEST_TIMEOUT_SECONDS` | `300` | |
+| `METRICS_ENABLED` | `true` | Exposes `/metrics`; off lifts the production requirement for a real `metrics_scrape_token` |
 
 **Secrets** (`/run/secrets`, never environment variables)
 
@@ -349,12 +352,14 @@ holds the setup. One file per credential, raw value, no trailing newline.
 | `totp_encryption_key` | Encrypts TOTP secrets at rest | backend services, `migrate` |
 | `session_signing_key` | Present for completeness; sessions are opaque Redis ids | backend services, `migrate` |
 | `proxy_shared_secret` | Matches `X-Nexus-Proxy` in nginx | backend services, `migrate` |
+| `metrics_scrape_token` | Bearer token for `/metrics`; the same file is mounted into Prometheus | backend services, `migrate`, `prometheus` |
+| `grafana_admin_password` | Grafana's initial admin password | `grafana` |
 | `qdrant_api_key`, `minio_root_password` | Phase 2 | not yet |
 
-The four crypto secrets are mounted into `migrate` as well, because it calls
-`get_settings()`, which refuses the shipped placeholders under `ENV=production`.
-`POSTGRES_USER` and `POSTGRES_DB` stay non-secret environment values, read by
-the Postgres container.
+The four crypto secrets, and `metrics_scrape_token` when metrics are enabled, are
+mounted into `migrate` as well, because it calls `get_settings()`, which refuses
+the shipped placeholders under `ENV=production`. `POSTGRES_USER` and `POSTGRES_DB`
+stay non-secret environment values, read by the Postgres container.
 
 `.env.example` lists every non-secret field with a development default, and
 documents the secrets as file mounts rather than listing them, since a value

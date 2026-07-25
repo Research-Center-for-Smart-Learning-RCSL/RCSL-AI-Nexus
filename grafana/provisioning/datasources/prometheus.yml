@@ -1,0 +1,13 @@
+# Grafana datasource, provisioned as code so the instance is reproducible and
+# nobody clicks it in by hand. Grafana reaches Prometheus by service name over
+# the internal metrics-viz network; Prometheus exposes no host port.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: nexus-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
