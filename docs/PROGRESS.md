@@ -17,6 +17,68 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-25
 
+### Logs UI and usage charts, and a chart library chosen by not choosing one (Phase 2)
+
+Two frontend Phase 2 items, both needing a backend read path first. Neither the
+audit log nor the usage table had one: auditing was write-only (its adapter
+commits each row in its own transaction so a failed request still leaves a
+trail), and usage had only the dashboard's 24-hour totals. So the work is a
+read path on each, then the screens.
+
+**The audit read is an ordinary scoped query, kept away from the writer.** A new
+`AuditEntry` entity and `PostgresAuditLogRepository` read the append-only table on
+the request session, tenant-scoped by the same `_scope` helper every other read
+uses, with `ReadAuditLog` behind `logs:read` (a scope that already existed in the
+enum, unused until now). The write side stays on `AuditPort` and its independent
+transaction: reading must not borrow that machinery. The page is bounded (a
+default 50, a hard 200) because an operator UI never needs the whole table and an
+unbounded limit is a memory lever on a table that only grows. The frontend
+`features/logs` is server-paged rather than a client-side table over one fetch,
+for the same reason, with action and outcome filters that reset to the first page
+so an offset cannot point past a smaller filtered set.
+
+**Usage analytics reads the accounting table, which is not what Grafana shows.**
+The distinction from the observability commit earlier today matters: Prometheus
+reports live operational state to an operator over Grafana; this reads
+`usage_records`, per tenant, for the management UI. Different audience, data, and
+access path. A `date_trunc` aggregation (`bucketed_usage`) groups by time bucket
+and capability in one query, and `ReadUsageAnalytics` (behind `usage:read_all`,
+the scope the dashboard totals already use) folds the rows into per-bucket totals
+and per-capability series. The window is a small closed set (24h, 7d, 30d) that
+fixes the bucket granularity with it, so the query's cardinality is bounded and
+the range picker maps to exactly three shapes; time comes from an injected clock
+so the windowing is testable.
+
+**The chart-library question, which the codebase had deliberately deferred, is
+settled: no library.** The `MetricChart` placeholder had recorded the open
+decision (Tremor had shifted to copy-in source with the §10 supply-chain caveat;
+Recharts was the fallback but a real dependency with a React 19 version
+constraint). The data these screens show is simple magnitude-over-time, so the
+charts are inline SVG instead: a component that draws lines and an area with axes
+and a hover tooltip, and the pure geometry (scales, path building, nice-max
+rounding) in `chart-geometry.ts` where it is unit-tested with no DOM. Series
+colours read the theme's computed `--chart-1..5` ramp through `currentColor`, so
+they follow light and dark without a second palette. The trade is that axes and
+the tooltip are ours to maintain; that is acceptable while the charts stay simple
+time series, and a richer visualisation would be the point to revisit it. One
+series renders as a filled area, several as plain lines with a legend.
+
+The dashboard's two chart placeholders now carry real 24-hour data from the same
+endpoint, and its note no longer promises Phase 2: it points at usage records for
+counts and at Grafana for the live operational metrics.
+
+Verified: 6 new backend unit tests (the two use cases' authorization, the page
+clamp, and the fold from buckets into totals and per-capability series) and 3
+integration tests against real Postgres (the audit read's tenant isolation and
+newest-first ordering, and that `date_trunc` buckets by hour and capability while
+excluding another tenant's rows); the full backend suite passes, mypy and ruff
+are clean. On the frontend, 9 new tests (the chart geometry and the two response
+schemas), `pnpm test`, `eslint`, and `next build` with the `/logs` and `/usage`
+routes generating. One small structural consequence worth noting: extending
+`UsageRepositoryPort` with `bucketed_usage` meant the `MeteredUsageRepository`
+decorator from this morning had to delegate it too, which mypy caught rather than
+leaving for runtime.
+
 ### Observability: the emission side, and the word "metrics" pulled apart (Phase 2)
 
 The Phase 2 item read "MetricsPort with Prometheus and Grafana; live metrics
