@@ -17,6 +17,77 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-25
 
+### The second runtime adapter, which is the real test of the layering (Phase 2)
+
+The first Phase 2 item, and the one worth doing first because it answers a
+question the rest of Phase 2 assumes: did the hexagonal layering actually buy
+what it was chosen for. The stated pass criterion was that adding a runtime
+touches no use case and no interface. It held. The diff is one adapter file
+(`adapters/runtime/mlx_adapter.py`), its per-runtime reference grammar
+(`adapters/runtime/hf_validation.py`), and three wiring points: one entry in
+`build_runtimes`, one setting, one Compose mount. `application/use_cases` and
+`interfaces` are untouched, and the domain is too, because `RuntimeKind.MLX`
+already existed. `route_chat_request` resolves the adapter from the model's
+`runtime` field through the same dict it always did.
+
+The value of the exercise was less the wiring than the three places MLX is
+genuinely unlike Ollama, each of which the port absorbed without bending, but
+only after a real decision.
+
+**MLX has no download-with-progress endpoint, and its download lands somewhere
+Ollama's never had to.** Ollama's daemon pulls on the host and streams NDJSON
+progress back, so the adapter only relays. MLX models are HuggingFace snapshots
+and `mlx_lm.server` downloads them lazily with no progress stream. So `pull`
+here does the download itself, via `huggingface_hub` in a worker thread, and
+reports real byte progress by polling the cache while it runs. The subtlety that
+forced a decision: a download run inside the container would land in the
+container filesystem, which the host-native server cannot read. The bytes have
+to reach the host cache. So HF_HOME is a bind mount onto the host's HuggingFace
+cache, and this is the one place in the deployment a container writes to a host
+path. That does not contradict the section 0.1 rule that runtimes are not
+containers: the rule is about GPU and compute, and a snapshot download is file
+I/O whose only constraint is where the bytes end up.
+
+**`mlx_lm.server` has no unload, so `unload` refuses rather than lying.**
+Reporting success would move the registry to DOWNLOADED while the weights are
+still resident on the host, and the memory budget would then stop counting a
+model that is still occupying memory, admitting a later load that should be
+refused. That is precisely the unified-memory over-commit the section 4.3 budget
+exists to prevent. The adapter raises `ModelStateConflictError`, and
+`ManageModels.unload` already does the right thing with it: the model is left
+LOADED, which is the truthful state, and the operator gets a 409 that says the
+runtime cannot evict. A silent no-op would have been the dangerous option, not
+the convenient one.
+
+**The token count is only authoritative at the end**, in the terminal usage
+frame, exactly like Ollama's `eval_count`. Chunks are counted one apiece as they
+stream so a disconnect still bills what was produced, and the final frame emits
+only the difference rather than the whole figure, which would double-count.
+
+The reference grammar is per-adapter, as `ModelRuntimePort.validate_ref` intends:
+a HuggingFace repository id, not Ollama's `namespace/name:tag`. It rejects `..`
+and anything that is not a plain repo id at the boundary, because the value
+reaches `snapshot_download(repo_id=...)` and a repo id carrying path traversal
+is the section 7.1 concern in a different runtime's clothing.
+
+Verified with 12 port-conformance tests against a stubbed transport and stubbed
+download seams, no MLX and no GPU in the loop: the OpenAI SSE stream maps to
+`CompletionChunk` and reconciles the token total, the upstream request is closed
+on client disconnect (the guarantee the streaming contract rests on), a bad
+reference is rejected before any network call, a stream that ends without a
+terminal frame raises rather than reporting a clean stop, `unload` refuses
+without touching the network, and `pull` climbs monotonically from starting to
+success. The full unit suite is 237 passing; ruff and mypy are clean.
+`huggingface_hub` is imported lazily inside the download seams only, so the
+inference path neither pays its import cost nor depends on the library being
+present, and the mypy override mirrors the existing zxcvbn one.
+
+What waits for the Mac Studio is real MLX inference and a real download, which
+need Apple Silicon and cannot run on the Windows dev machine, the same boundary
+Ollama inference has always had. The architecture claim itself does not wait for
+that: it is the zero use-case, zero-interface diff plus the port-conformance
+suite, and both are done now.
+
 ### A production smoke test on the dev machine, which moved the deploy risk down
 
 Ran the whole stack once on Windows under `ENV=production` with generated
