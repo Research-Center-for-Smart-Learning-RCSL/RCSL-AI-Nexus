@@ -9,6 +9,13 @@
 #  2. Inside a container uvicorn still binds 0.0.0.0, otherwise the published
 #     port forwards to nothing. Rule 1 is about the left of the colon only.
 #
+# Secrets are files, not environment variables (security.md sections 6, 8): a
+# value in `environment` or an `env_file` shows up in `docker inspect` and in
+# the process list, so every credential here is a Docker secret mounted under
+# /run/secrets and read through pydantic-settings `secrets_dir`. `.env` carries
+# only non-secret configuration. See docs/architecture/deployment.md section 10
+# and ./secrets/README.md.
+#
 # Model runtimes are absent on purpose: Ollama and MLX run natively on macOS
 # because containers there cannot reach the GPU. See docs/ARCHITECTURE.md 0.1.
 
@@ -31,6 +38,15 @@ x-backend: &backend
   depends_on:
     migrate:
       condition: service_completed_successfully
+
+# Every backend service and the migration job must be able to read the four
+# crypto secrets (api_key_pepper, totp_encryption_key, session_signing_key,
+# proxy_shared_secret); without them Settings refuses to start in production
+# (config.py `_refuse_placeholder_secrets_in_production`). They are listed
+# explicitly per service rather than shared through a YAML anchor, because a
+# `secrets` list is a sequence and an anchor splices in as one nested item, not
+# as flattened entries. Each service gets those four plus whatever its role
+# needs: a database URL, and redis for the two that hold sessions or counters.
 
 # The invariant these networks exist to hold: the gateway shares no network
 # with either admin entrance. The tailnet entrance trusts `Tailscale-User-Login`
@@ -65,25 +81,61 @@ volumes:
   postgres-data:
   redis-data:
 
+# Every secret is a file under ./secrets, git-ignored, populated per deployment.
+# The three database URLs each name a different least-privilege account
+# (security.md section 6): `owner` owns the schema and is used only by
+# `migrate`; `gateway` may read every table and write only `usage_records`;
+# `admin` has full DML and no DDL. `migrate` provisions the gateway and admin
+# roles from their URLs (app.infrastructure.db_roles), so those two files are
+# the single source of truth for each account's name and password.
+secrets:
+  owner_database_url:
+    file: ./secrets/owner_database_url
+  gateway_database_url:
+    file: ./secrets/gateway_database_url
+  admin_database_url:
+    file: ./secrets/admin_database_url
+  postgres_password:
+    file: ./secrets/postgres_password
+  redis_password:
+    file: ./secrets/redis_password
+  api_key_pepper:
+    file: ./secrets/api_key_pepper
+  totp_encryption_key:
+    file: ./secrets/totp_encryption_key
+  session_signing_key:
+    file: ./secrets/session_signing_key
+  proxy_shared_secret:
+    file: ./secrets/proxy_shared_secret
+
 services:
-  # --- one-shot schema migration -----------------------------------------
+  # --- one-shot schema migration and provisioning ------------------------
   # Not run from an application entrypoint: three containers start from the
-  # same image and would race each other.
+  # same image and would race each other. Connects as the schema owner (the
+  # only place that account is used), then creates the gateway and admin roles
+  # and their grants before any application starts.
   migrate:
     build:
       context: ./backend
     image: rcsl-ai-nexus:latest
-    # Provisioning runs here rather than in an application's startup, for the
-    # same reason the migration does: several containers start from one image
-    # and would race. It also keeps the applications free of any startup
-    # write, so they can be constructed without a database.
     command:
       - sh
       - -c
-      - "alembic upgrade head && python -m app.infrastructure.provision"
+      - "alembic upgrade head && python -m app.infrastructure.db_roles && python -m app.infrastructure.provision"
     env_file: [.env]
     networks: [admin-data]
     restart: "no"
+    secrets:
+      # Owner URL is what this job connects as; the other two are read to learn
+      # the gateway and admin account names and passwords (db_roles.py).
+      - source: owner_database_url
+        target: database_url
+      - gateway_database_url
+      - admin_database_url
+      - api_key_pepper
+      - totp_encryption_key
+      - session_signing_key
+      - proxy_shared_secret
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,6 +157,15 @@ services:
     # Deliberately not on any control network. The data plane reaches only the
     # database and the host runtime; it has no path to an admin entrance.
     networks: [gateway-egress, gateway-data]
+    secrets:
+      # The gateway account: reads every table, writes only usage_records.
+      - source: gateway_database_url
+        target: database_url
+      - redis_password
+      - api_key_pepper
+      - totp_encryption_key
+      - session_signing_key
+      - proxy_shared_secret
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
       interval: 30s
@@ -125,6 +186,14 @@ services:
     ports:
       - "127.0.0.1:8001:8001"
     networks: [control-tailnet, admin-data]
+    secrets:
+      - source: admin_database_url
+        target: database_url
+      - redis_password
+      - api_key_pepper
+      - totp_encryption_key
+      - session_signing_key
+      - proxy_shared_secret
 
   # --- control plane, public entrance -------------------------------------
   # A separate service, not a second port on the one above: the two trust
@@ -141,6 +210,14 @@ services:
     ports:
       - "${TAILNET_IP:?set TAILNET_IP in .env; an empty value publishes on 0.0.0.0}:8002:8002"
     networks: [control-public, admin-data]
+    secrets:
+      - source: admin_database_url
+        target: database_url
+      - redis_password
+      - api_key_pepper
+      - totp_encryption_key
+      - session_signing_key
+      - proxy_shared_secret
 
   # --- frontends ----------------------------------------------------------
   # One image, one instance per entrance, differing only in which admin API
@@ -175,8 +252,12 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-nexus}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      # File, not a value: the superuser password never enters the environment.
+      # The owner_database_url secret must carry this same password.
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB:-nexus}
+    secrets:
+      - postgres_password
     volumes:
       - postgres-data:/var/lib/postgresql/data
     # On both database segments. It accepts connections; it never opens one, so
@@ -192,17 +273,22 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    # Redis ships with no password at all. Even on an internal network this
-    # is set, because the gateway sits on redis's network legitimately (for
+    # Redis ships with no password at all. Even on an internal network this is
+    # set, because the gateway sits on redis's network legitimately (for
     # rate-limit counters), and a compromised gateway is the case the password
-    # defends against.
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}", "--appendonly", "yes"]
+    # defends against. Read from the mounted secret via a shell so the value
+    # never appears in `environment`; redis has no `_FILE` convention.
+    command:
+      - sh
+      - -c
+      - 'exec redis-server --requirepass "$(cat /run/secrets/redis_password)" --appendonly yes'
+    secrets:
+      - redis_password
     volumes:
       - redis-data:/data
     networks: [gateway-data, admin-data]
     healthcheck:
-      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$(cat /run/secrets/redis_password)\" ping"]
       interval: 10s
       timeout: 5s
       retries: 5
-

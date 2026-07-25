@@ -31,7 +31,7 @@ carries the checked control-by-control state.
 | Audit logging | Adapter written, and every administrative action records one |
 | Admin API: models, downloads, routing policies, API keys, users, dashboard, `/admin/chat` | Complete, exercised end to end against a real Postgres |
 | Node management | Read only. The single node is named in configuration; a write endpoint ships with the SSRF guard ([security.md](./architecture/security.md) §7.2) |
-| Database account split, Docker secrets in Compose | Not started |
+| Database account split, Docker secrets in Compose | Complete. Three least-privilege Postgres accounts provisioned by `migrate`; all credentials mounted as Docker file secrets. Unverified against a live stack (Mac Studio deploy pending) |
 | Frontend | Every screen now reaches a real backend. Vitest covers the security-critical logic units; no E2E runner yet |
 | Adversarial review of the admin API | Five independent reviews run; 28 findings verified and fixed across four commits, residuals recorded in [security.md](./architecture/security.md) §13.0 and §15.5 |
 
@@ -100,7 +100,7 @@ carries the checked control-by-control state.
 
 Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 
-[security.md](./architecture/security.md) §15.5 (the gateway forging an administrator identity to the tailnet entrance over a shared Docker network) is now closed: the data plane and control plane are on separate networks and share nothing. The remaining control-plane hardening item is the §6 per-service database credential split, still not implemented.
+[security.md](./architecture/security.md) §15.5 (the gateway forging an administrator identity to the tailnet entrance over a shared Docker network) is now closed: the data plane and control plane are on separate networks and share nothing. The §6 per-service database credential split is now implemented too, so a compromised gateway can neither reach the admin socket nor write `api_keys` or `users` directly. Both are verified only structurally so far (`docker compose config`, unit tests); the live grants are exercised at the first Mac Studio deploy.
 
 - [x] Public admin entrance strips every `Tailscale-*` header unconditionally
 - [x] Tailscale ACL including `tag:ntnu-proxy`, so members cannot bypass the proxy
@@ -113,8 +113,8 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 - [x] Invitation and reset links: single use, hashed at rest, expiring; the platform never transmits a password
 - [x] Server-side sessions in Redis, `__Host-` cookies, id rotation on login, invalidation on password change, CSRF double-submit
 - [x] First-admin bootstrap, tailnet entrance only, inert once users exist
-- [ ] Separate database accounts; gateway cannot write `api_keys` or `users`
-- [ ] Default credentials replaced: Redis, Qdrant, MinIO, Grafana, Postgres
+- [x] Separate database accounts; gateway cannot write `api_keys` or `users` (`infrastructure/db_roles.py`, provisioned by `migrate`)
+- [~] Default credentials replaced: Redis and Postgres now take real values from Docker file secrets; Qdrant, MinIO and Grafana arrive in Phase 2
 - [x] Model reference validation; no shell string construction anywhere
 - [ ] Host runtime hardening: service account, `127.0.0.1` binding, directory ownership
 - [ ] **Resource guardrails: concurrency cap, `max_tokens`, timeout, cancel on disconnect.** With no edge protection these are the only defence

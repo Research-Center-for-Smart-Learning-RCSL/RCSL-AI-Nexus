@@ -1,17 +1,15 @@
 """Database engine and session lifecycle.
 
-`DATABASE_URL` is per service, which is the hook the least-privilege split in
-docs/architecture/security.md section 6 would use.
+`DATABASE_URL` is per service, and that is the least-privilege split in
+docs/architecture/security.md section 6: each service mounts its own account's
+URL as the `database_url` secret. The gateway's account may read every table
+and INSERT only into `usage_records`; the two admin entrances share an account
+with full DML and no DDL; the `migrate` job connects as the schema owner and,
+via app.infrastructure.db_roles, creates the other two roles and their grants.
 
-**That split is not implemented.** Compose gives every backend service the
-same `env_file`, so the gateway, both admin entrances and the migration job
-all connect as one account with DDL rights. This comment previously described
-the split in the present tense, which is worse than silence: it reads as
-documentation of a shipped control and stops anyone looking for the risk.
-
-Implementing it means three roles with grants, three URLs, and a note that the
-gateway does need INSERT on `usage_records` even though it must not write
-`api_keys`, `routing_policies`, or `users`.
+This module is unaware of which account it holds: it is handed a URL and opens
+a pool. The privilege boundary lives in the grants, enforced by Postgres, not
+in application code that could forget it.
 """
 
 from __future__ import annotations

@@ -48,8 +48,12 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B", "S"]
 per-file-ignores = { "tests/*" = [
     "S101", # pytest relies on bare assert
+    "S105", # test fixtures hardcode obvious non-secret passwords
+    "S106",
 ], "alembic/versions/*" = [
     "E501", # machine-generated; hand-wrapping is undone on the next autogenerate
+], "app/infrastructure/db_roles.py" = [
+    "S608", # DDL cannot be parameterised; identifiers and literals are hand-quoted, see the module docstring
 ] }
 
 [tool.mypy]
