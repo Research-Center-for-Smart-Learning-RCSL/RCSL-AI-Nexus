@@ -32,7 +32,7 @@ carries the checked control-by-control state.
 | Admin API: models, downloads, routing policies, API keys, users, dashboard, `/admin/chat` | Complete, exercised end to end against a real Postgres |
 | Node management | Read only. The single node is named in configuration; a write endpoint ships with the SSRF guard ([security.md](./architecture/security.md) §7.2) |
 | Database account split, Docker secrets in Compose | Not started |
-| Frontend | Every screen now reaches a real backend. No test runner |
+| Frontend | Every screen now reaches a real backend. Vitest covers the security-critical logic units; no E2E runner yet |
 | Adversarial review of the admin API | Five independent reviews run; 28 findings verified and fixed across four commits, residuals recorded in [security.md](./architecture/security.md) §13.0 and §15.5 |
 
 ### Backend: hexagonal skeleton
@@ -76,6 +76,8 @@ carries the checked control-by-control state.
 - [x] `features/api-keys`
 - [x] `features/dashboard`: static data for now
 - [x] Markdown rendering sanitised, raw HTML disabled
+- [x] Vitest unit coverage of the logic where a defect is a security defect: `safe-redirect` (open redirect), the chat SSE schema and reader (envelope parsing, error and truncation frames), `api-client` (CSRF header, 401 handling, no `Authorization`), and the password schema
+- [ ] Component and E2E coverage (Playwright, listed in Phase 3): the sign-in and enrolment screens are not yet driven through a browser
 
 ### Infrastructure
 
