@@ -213,11 +213,27 @@ Being on the tailnet must not imply reaching everything. Note in particular that
       "users": ["ops"],
       "checkPeriod": "12h"
     }
+  ],
+  "tests": [
+    {
+      "src": "you@example.com",
+      "accept": ["tag:ai-server:443", "tag:ai-server:8443"],
+      "deny": ["tag:ai-server:8000", "tag:ai-server:8002", "tag:ai-server:3001"]
+    },
+    {
+      "src": "tag:ntnu-proxy",
+      "accept": ["tag:ai-server:8000", "tag:ai-server:8002", "tag:ai-server:3001"],
+      "deny": ["tag:ai-server:443", "tag:ai-server:8443"]
+    }
   ]
 }
 ```
 
 The proxy machine carries `tag:ntnu-proxy` and can reach only the three ports it needs. Human members reach only the `tailscale serve` endpoints on 443 and 8443. `"action": "check"` forces SSH re-authentication even from an enrolled device, which supports the "SSH is repair mode" posture.
+
+**The `tests` block is the part that keeps this true.** Tailscale runs it on every policy save and refuses a policy that fails one, so the `deny` lines are the no-bypass property asserted rather than described: a human member must not reach the data-plane ports, and the proxy must not reach the management endpoints. Without them the rules above are a claim that only holds until someone edits the file.
+
+**A tagged device is required, not incidental.** Every rule here has `tag:ai-server` on the destination side, so a server that joined the tailnet without `--advertise-tags` matches none of them — and since the default policy for a new tailnet is `{"src": ["*"], "dst": ["*"], "ip": ["*"]}`, the failure mode is not "nothing works" but "everything is reachable". The tag also disables Tailscale's default 180-day key expiry, which on a 24/7 server would otherwise take the tailnet down half a year after deployment.
 
 ## 4. Data Plane Hardening
 
