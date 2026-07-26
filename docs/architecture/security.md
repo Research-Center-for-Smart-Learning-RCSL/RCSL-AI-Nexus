@@ -636,6 +636,8 @@ The practical position:
 - Use `sudo fdesetup authrestart` for planned reboots, which unlocks once for the next boot.
 - Accept that unplanned power loss requires one manual unlock, and write that into the operations runbook.
 
+**Sequencing decision.** The first deployment runs with FileVault **off**, because the UPS above does not exist yet and the machine is headless: without the UPS, the manual-unlock cost is paid at every power cut rather than rarely. The position in this section is unchanged and the UPS is the trigger to act on it. Recorded with its compensating controls in §15.6.
+
 ### 9.4 Backups
 
 - Backups contain the knowledge base and database and therefore constitute **a complete copy of the research data**, so they must be encrypted. `restic` (built-in encryption and deduplication) or `age`.
@@ -843,6 +845,7 @@ looking for the risk. The state below is checked against the code.
 [ ] Full prompt logging disabled by default
 [ ] Backups encrypted and a restore actually rehearsed
 [ ] FileVault enabled; authrestart verified and documented in the runbook
+    (deliberately deferred until the UPS lands; §15.6 carries the interim controls)
 [ ] Confirmed with the proxy administrator: no request body logging, no Lua interception
 ```
 
@@ -896,3 +899,17 @@ Recorded explicitly so they are not later mistaken for oversights, with the cond
 **How it was closed.** The single `app` network was split so that the gateway shares no network with either admin entrance (§3.2). The data plane has its own database segment (`gateway-data`) and its own host-egress network (`gateway-egress`); the control plane has `admin-data` and a per-entrance control network. postgres and redis are dual-homed across the two database segments, which is safe because they accept connections and never open one. The invariant is verifiable from `docker compose config`: the intersection of the gateway's networks with each admin entrance's is empty. As a bonus of the same change, `frontend-public` — which faces the internet — can no longer reach `admin-tailnet` either.
 
 **Residual.** None from this vector, and the deeper defence has since landed too: the §6 per-service database credential split is now implemented, so a compromised gateway can neither forge a header to the admin socket (closed here) nor write `api_keys` or `users` directly (denied by its database grants).
+
+### 15.6 FileVault Deferred Until the UPS Lands
+
+**Situation.** The first deployment runs with FileVault off. On Apple Silicon the internal SSD is hardware-encrypted and fused to the Secure Enclave regardless, so the drive cannot be pulled and read elsewhere. What FileVault adds is binding the volume key to a user password. Without it, protection of the data at rest reduces to the macOS login and recoveryOS authentication rather than to cryptography, and the automatic login below removes the first of those.
+
+**Why accepted.** §9.3 argues for keeping FileVault on and that reasoning is unchanged; what changed is the sequencing. FileVault's cost is paid at every cold boot, because the pre-boot unlock needs a person at the machine and until it happens there is no network, no Tailscale, and no SSH, so the deployment cannot be recovered remotely. Two things bound that cost: a UPS, which makes unplanned power loss rare, and `fdesetup authrestart`, which covers planned reboots. The UPS is Phase 3 and does not exist yet. The machine is headless by design ([ARCHITECTURE.md](../ARCHITECTURE.md): SSH is reserved for repairs), so with no UPS an encrypted disk means every power cut takes the platform down until someone travels to it.
+
+**Compensating controls while it is off.**
+
+- Startup security left at Full Security, with recoveryOS reachable only by administrator authentication, so the machine cannot be booted from external media. Apple Silicon has no separate firmware password; Recovery Lock through MDM is the equivalent where one is available. §11 already requires this control, but with FileVault off it carries weight FileVault would otherwise have carried.
+- Physical placement in an access-controlled space, which becomes load-bearing rather than defence in depth.
+- Automatic login is enabled, which is what makes unattended reboot work at all. It is only tolerable because the disk is unencrypted anyway. Turning FileVault on later must disable it in the same change, and the FileVault unlock then doubles as the login, so the desktop session the Docker Desktop autostart depends on still comes up.
+
+**Reconsider when.** The UPS is installed. That is the trigger to enable FileVault, verify `authrestart`, disable automatic login, and write the unplanned-power-loss procedure into the operations runbook. Sooner if the platform starts handling personal or IRB-regulated data, where an unencrypted disk in a shared facility stops being acceptable whatever the reboot cost.

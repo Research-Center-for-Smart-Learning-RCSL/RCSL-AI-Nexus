@@ -15,6 +15,42 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-07-26
+
+### FileVault deferred, and the headless prerequisites the runbook was missing
+
+The Mac Studio was powered on for the first time, which turned the first-deploy
+runbook from a document into something being executed and immediately surfaced a
+decision the documents had stated but never sequenced.
+
+`security.md` §9.3 says to keep FileVault enabled and argues it well: physical
+theft in a shared facility is worth more than reboot convenience. What it
+assumed was the UPS that makes the reboot cost rare, and the UPS is Phase 3 and
+does not exist yet. On a headless machine with no UPS, an encrypted disk means
+every power cut takes the platform down until someone walks to it, because the
+pre-boot unlock happens before there is any network, Tailscale, or SSH. So
+FileVault is off for the first deployment, and the UPS is the trigger to turn it
+on. Recorded as an accepted risk in §15.6 rather than left as a silent
+divergence from §9.3, which still holds as a position.
+
+The decision has a consequence chain worth writing down, because two of its
+three links are invisible until something fails to come back after a reboot:
+FileVault off is what makes automatic login available, automatic login is what
+produces a logged-in desktop session, and that session is what Docker Desktop
+needs in order to autostart. Without it the containers' `restart: unless-stopped`
+never gets the chance to matter. Enabling FileVault later breaks the first link
+and restores the second by a different route, since the pre-boot unlock doubles
+as the login.
+
+Working the question through turned up three prerequisites the runbook did not
+have, all of which must happen before the monitor is removed rather than after:
+remote login, restart-after-power-failure, and startup security. The last one
+changes weight rather than appearing from nowhere. §11 already required Full
+Security, but with FileVault off it becomes the main control against booting
+from external media instead of a second layer behind encryption.
+
+---
+
 ## 2026-07-25
 
 ### Logs UI and usage charts, and a chart library chosen by not choosing one (Phase 2)

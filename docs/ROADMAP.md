@@ -143,7 +143,9 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 
 - [ ] Second compute node registered and serving
 - [ ] Automatic restart and health alerting
-- [ ] UPS, and the FileVault `authrestart` procedure documented in the runbook
+- [ ] UPS, and the FileVault `authrestart` procedure documented in the runbook.
+      FileVault is off until this lands and this item is the trigger to enable it
+      ([security.md](./architecture/security.md) §15.6)
 - [ ] SSH demoted to repair-only, verified by running normal operations entirely through the UI
 - [ ] Trivy, pip-audit, and pnpm audit in CI
 - [ ] Playwright coverage of critical paths: create an API key, edit a routing policy and observe gateway behaviour change, cancel a stream mid-generation
