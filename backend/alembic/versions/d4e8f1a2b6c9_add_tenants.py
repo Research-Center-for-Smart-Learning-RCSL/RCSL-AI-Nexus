@@ -64,8 +64,11 @@ def upgrade() -> None:
 
     for table in _ALL_TABLES:
         op.add_column(table, sa.Column("tenant_id", sa.String(length=36), nullable=True))
+        # S608: the only interpolation is a table name from _ALL_TABLES, a
+        # literal tuple in this module; the value is bound. ruff's heuristic
+        # cannot see that the loop variable is not caller input.
         op.execute(
-            sa.text(f"UPDATE {table} SET tenant_id = :tid").bindparams(tid=DEFAULT_TENANT_ID)
+            sa.text(f"UPDATE {table} SET tenant_id = :tid").bindparams(tid=DEFAULT_TENANT_ID)  # noqa: S608
         )
         op.alter_column(table, "tenant_id", nullable=False)
         op.create_index(f"ix_{table}_tenant_id", table, ["tenant_id"])

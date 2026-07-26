@@ -83,12 +83,17 @@ async def test_gateway_account_is_denied_writes_outside_usage_records(database_u
             await conn.execute(text("SELECT 1 FROM api_keys LIMIT 1"))
             await conn.execute(text("SELECT 1 FROM routing_policies LIMIT 1"))
 
-        # The one write it must have.
+        # The one write it must have. `tenant_id` is supplied because the
+        # multi-tenancy migration made it NOT NULL on this table; the row only
+        # has to be valid, so it uses the tenant that migration seeds. Without
+        # it the INSERT fails on the constraint before reaching the grant, and
+        # every denial below goes unasserted.
         await _allowed(
             gateway,
             "INSERT INTO usage_records "
-            "(id, actor_id, capability, model_alias, tokens, latency_ms, completed, at) "
-            "VALUES (:id, :actor, 'chat', 'm', 1, 1, true, :at)",
+            "(id, actor_id, tenant_id, capability, model_alias, tokens, latency_ms, "
+            "completed, at) "
+            "VALUES (:id, :actor, 'default', 'chat', 'm', 1, 1, true, :at)",
             id=str(uuid.uuid4()),
             actor=str(uuid.uuid4()),
             at=datetime.now(UTC),
@@ -110,8 +115,8 @@ async def test_gateway_account_is_denied_writes_outside_usage_records(database_u
         # unwritable.
         await _allowed(
             admin,
-            "INSERT INTO users (id, login, display_name, role) "
-            "VALUES (:id, :login, 'Test', 'admin')",
+            "INSERT INTO users (id, login, tenant_id, display_name, role) "
+            "VALUES (:id, :login, 'default', 'Test', 'admin')",
             id=str(uuid.uuid4()),
             login=f"{uuid.uuid4()}@example.com",
         )
