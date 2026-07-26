@@ -53,6 +53,67 @@ from external media instead of a second layer behind encryption.
 
 ## 2026-07-26
 
+### The stack is up on the Mac Studio, and the frontend could not reach its backend
+
+First full `docker compose up` on the target hardware. `migrate` exited 0 having
+logged `database roles provisioned: nexus_gateway(gateway), nexus_admin(admin)`,
+all ten containers came up, and the gateway's `/readyz` returned all three checks
+true — including `runtime`, which means the container reached the native Ollama
+through `host.docker.internal` for real rather than in a test.
+
+**The account split is now enforced by the deployed database, on this machine.**
+`pg_stat_activity` shows the gateway connected as `nexus_gateway` and the two
+admin entrances as `nexus_admin`. As `nexus_gateway`: `SELECT` on `api_keys` and
+`routing_policies` succeeds, `INSERT` into `usage_records` succeeds, and `INSERT`
+into `api_keys`, `users` and `audit_log` are each refused with `permission
+denied`. That is the §6 property proven where it finally matters. The published
+ports match §3.2 exactly: gateway and admin-public on the tailnet address only,
+admin-tailnet on loopback only, nothing on `0.0.0.0`.
+
+**Then the management UI turned out to be unreachable, for a reason that
+`docker inspect` actively hides.** Every `/admin/*` call from either frontend
+failed, the log reading `Failed to proxy http://localhost:8001/admin/me
+ECONNREFUSED`, while the container's environment plainly carried
+`ADMIN_API_URL=http://admin-tailnet:8001`. The rewrite lived in
+`next.config.js`, and `output: 'standalone'` serialises the resolved config into
+`.next/required-server-files.json` at build time — so `process.env.ADMIN_API_URL`
+was read during `pnpm build`, where the Dockerfile never sets it, and the
+`?? 'http://localhost:8001'` fallback was compiled into the image. Confirmed by
+grepping the shipped bundle: it contains `http://localhost:8001` and nothing
+else. The runtime variable was correct, present, and ignored.
+
+The fallback is what made it silent. Without it the build would have failed and
+the defect would have been caught on the machine that built the image; with it,
+the image builds clean, starts clean, reports healthy, and fails only when a
+human tries to sign in.
+
+The fix is `frontend/src/middleware.ts`, which resolves the destination per
+request. That was chosen over build args because the two entrances need
+different destinations while sharing one image, which is the arrangement
+`docker-compose.yml` documents; baking would have forced two images. The env is
+read inside the handler rather than at module scope, since module-scope access
+is the shape a bundler can constant-fold — the same failure in a different
+place. An unset variable now logs and returns 500 instead of defaulting.
+Verified: both entrances now reach their own admin API (401 and 400 from the
+backends respectively, not 500), with no ECONNREFUSED.
+
+**A tagged server cannot sign in to its own tailnet entrance.** Testing the
+bootstrap from the machine itself returns 401, and correctly so: `tag:ai-server`
+was applied earlier today, `tailscale whois` for the node lists Tags and no User,
+and the `Tailscale-User-Login` header `tailscale serve` injects is derived from
+the connecting node's owner. A tagged node has none. The runbook said to use
+"your device" without saying why the obvious first attempt cannot work, so it now
+says so, and gives the loopback curl that tests the backend directly.
+
+That curl also demonstrates §5.1 rather than describing it: adding the header by
+hand to a request against `127.0.0.1:8001` authenticates as an administrator,
+which is exactly why that entrance binds loopback and why a shared Docker network
+with the gateway was a defect worth the network split. It also bootstrapped the
+first administrator as a side effect — `users` now holds
+`leolove3very@gmail.com` as `admin` in the `default` tenant, and `audit_log`
+holds one `bootstrap.first_admin | success` row, which is §12's requirement
+observed on a live deployment rather than in a test.
+
 ### The tailnet ACL, which the runbook never told anyone to apply
 
 `ROADMAP.md` has carried a checked box reading "Tailscale ACL including
