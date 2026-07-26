@@ -51,6 +51,68 @@ from external media instead of a second layer behind encryption.
 
 ---
 
+## 2026-07-26
+
+### The Mac Studio exists, and a test that had stopped testing anything
+
+The deployment host is real now, and the first thing it did was falsify a claim
+this file has been making for a week.
+
+The machine is the one [ARCHITECTURE.md](./ARCHITECTURE.md) §0.2 describes: M4
+Max, 64 GB unified memory, macOS 26.5. It arrived bare, so this started at
+runbook §2 — Homebrew, then git, tailscale, ollama, uv, node and pnpm, then
+Docker Desktop. Compose parses against the real `.env` and the real file
+secrets, and the §1/§3.2 network invariant holds here as it did on the dev
+machine: the intersection of the gateway's networks with each admin entrance's
+is empty. `host.docker.internal` resolves from inside a container, which is the
+whole of §0.1's bet that runtimes stay native.
+
+**`test_db_role_grants.py` had been failing since 968b2ee, in the way that
+hides itself.** The integration suite runs only when `TEST_DATABASE_URL` is
+set, and nothing had set it since multi-tenancy landed, so the first full run
+here was the first run since. The test opens with the gateway's one legitimate
+write — an INSERT into `usage_records` — before asserting the six writes it
+must be denied. Multi-tenancy made `usage_records.tenant_id` NOT NULL and did
+not update that INSERT, so the test aborted on a constraint violation at its
+first statement and **none of the six denials was ever asserted**. The same
+staleness sat in the admin positive control on `users`.
+
+The property itself is sound: with `tenant_id` supplied, all six denials pass
+and the server refuses the gateway account an INSERT into `api_keys`, `users`,
+`routing_policies` and `audit_log`. So this was a test defect, not a security
+defect. What it cost was the evidence — and this file and `ROADMAP.md` have
+both been citing that evidence by name. The multi-tenancy entry below calls the
+account split "undisturbed" and reasons its way there correctly, but reasoning
+is the thing the test existed to replace. This is the drift the header of this
+file warns about, caught by the first machine that actually ran the suite.
+
+**Two toolchain divergences, from the same first run.** `uv` had no
+`.python-version` to read and `requires-python` says only `>=3.12`, so it built
+the environment on 3.14 while `backend/Dockerfile` ships `python:3.12-slim`:
+local verification and the deployed artifact were different interpreters. The
+pin is now `backend/.python-version` and the suite was re-run on 3.12.
+Separately, ruff 0.16.0 flags S608 on the tenant backfill's `UPDATE {table}`,
+where the only interpolation is a table name from a literal tuple in the same
+module and the value is bound. Suppressed inline with its reason rather than by
+widening the existing per-file ignore, so it stays greppable.
+
+Verified on this machine: 359 tests pass on Python 3.12 against a real Postgres
+17 (299 unit, 60 integration — the integration half for the first time on Apple
+Silicon), ruff and mypy clean over 127 files, `docker compose config` resolving
+the real secrets. What still waits is everything needing the stack actually up:
+GPU inference, MLX, `tailscale serve`, nginx, the GeoLite2 database, and the
+live free-memory figure the memory budget is still standing in for.
+
+**An operational note that is not a code change.** The host is configured as a
+personal computer rather than a server: FileVault on, which makes auto-login
+unavailable and stops an unattended reboot at the unlock screen; `pmset
+autorestart` off, so it does not come back after a power cut; and Docker
+Desktop's VM was sized at 8 GB against a memory budget whose 20% headroom is
+meant to cover the OS, the containers *and* inference working memory. The VM is
+now 4 GB. The rest is §15.6's sequencing decision and waits on the UPS.
+
+---
+
 ## 2026-07-25
 
 ### Logs UI and usage charts, and a chart library chosen by not choosing one (Phase 2)
@@ -1109,9 +1171,11 @@ entrances, and the management API are all built and tested, and every screen
 in the frontend now reaches a real backend. The remaining Phase 1 items are
 operational rather than functional.
 
-Nothing has run on the Mac Studio yet. Everything so far is verified on a
-Windows development machine, which means GPU inference, the tailnet entrance,
-and nginx behaviour are all unverified by construction.
+The Mac Studio is now the development machine as well as the deployment target,
+and the backend suite runs on it: 359 tests on Python 3.12 against a real
+Postgres 17. What that does *not* yet cover is anything requiring the stack to
+be up — GPU inference, the tailnet entrance, and nginx behaviour remain
+unverified by construction, and the runbook's first deploy has not been done.
 
 One thing still exists as an API with no dedicated UI: the download progress
 endpoint, which the models table polls but no page surfaces on its own. The
