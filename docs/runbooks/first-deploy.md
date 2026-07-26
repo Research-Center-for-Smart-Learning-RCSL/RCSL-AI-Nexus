@@ -121,6 +121,36 @@ tailnet 介面上服務，`tailscale serve` 的管理入口轉發的是 loopback
 **第一輪失敗的話：修好，然後從頭重跑第一輪。** 不要因為「知道原因了」就跳到第二輪——
 第二輪的前提是第一輪通過，而通過的定義是跑完整串、每一項都對。
 
+**實測記錄（2026-07-26，第二次跑）：通過，落在第二種結果。** 17:21:40 開機、放著不管，
+上面五項全過：tailnet 在線、Ollama 只聽 `127.0.0.1:11434`、9 個容器 running 且 `migrate`
+是 `Exited (0)`、readyz 200（三項檢查都 true）。第 7 部分的六個 binding requested 與
+actual 全部相符，其中 Grafana 的 `127.0.0.1:3002` 是這台機器**有史以來第一次**在開機時綁
+上。對帳 log 最後一行是 `all published bindings intact; nothing to do`——reconciler 在開機
+後 7 秒就跑了、等完三個前置條件、沒有東西要修。**修復路徑到目前為止還沒有被任何一次開機
+真的走過。**
+
+它贏得有多險，兩次開機的 log 對得出來：
+
+| 開機 | `tailscaled` 起 | 位址上 `utun0` | Docker `exposer.Add` | 餘裕 |
+|---|---|---|---|---|
+| 16:45（失敗） | 16:45:15 | 16:45:32 | 16:45:29 | **−3 秒** |
+| 17:21（通過） | 17:21:48 | 17:21:48 | 17:21:59 | **+11 秒** |
+
+差的那 17 秒有明確原因，不是隨機。失敗那次 `tailscaled` 一起來就卡在 logtail 的 bootstrap
+DNS 重試迴圈（`dial "log.tailscale.com:443" failed: no such host`，然後依序試 derp2d、
+derp7、derp4c、derp12c、derp10），因為當下還沒有 DNS。`NoState -> Starting` 要等那圈跑完
+才發生，位址也才跟著上來；第二次則是直接進 `Starting`，同一秒就有位址。
+
+位址本身不需要網路、也不需要 control plane：它是從 `/Library/Tailscale` 的快取還原的。
+第二次開機 17:21:48 `utun0` 就已經有位址，而 17:21:52 `tailscaled` 還在報
+`You are logged out ... failed to resolve controlplane.tailscale.com`，`en1` 的
+default route 到 17:21:53 才出現。所以決定勝負的只有「`tailscaled` 自己的啟動會不會在跑
+狀態機之前卡住」。
+
+**而「冷開機時 DNS 還沒好」正是那個迴圈會跑的條件——失敗那次才是常態路徑，這次是躲過
+了，設定裡沒有任何東西保證下次也躲得過。** 第一輪通過、第二輪的閘門開了；但要證明
+reconciler 有效，還是得重開到出現第一種結果為止。
+
 **第二輪：系統更新。** 第一輪通過之後才做，因為兩者一起做會讓失敗無法歸因——你分不出
 是更新的問題還是自動登入沒設好。
 

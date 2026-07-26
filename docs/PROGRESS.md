@@ -17,6 +17,72 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-26
 
+### Round one passed, and the margin it passed by turned out to be measurable
+
+§1.1 was re-run against the repaired chain: `sudo reboot` at 17:21:40, hands off,
+then the checks. **It passed**, every item. The tailnet was up, Ollama answered on
+`127.0.0.1:11434` and nothing on the tailnet address, nine containers were running
+with `migrate` at `Exited (0)`, and `/readyz` on the tailnet address returned 200
+with all three checks true. The full §7 port table was run rather than just the
+one `readyz`: all six bindings requested equal actual.
+
+**Grafana's `127.0.0.1:3002` bound at boot for the first time in the machine's
+life.** The backend log shows six clean `exposer.Add` lines at 17:21:59, no
+`can't assign requested address` anywhere, and Grafana's destination now
+`172.26.0.2:3000` where every previous attempt had been the invalid
+`127.0.0.1:0`. The `viz-ingress` change is proven by a boot rather than by hand.
+
+**The reconcile log's last line is `all published bindings intact; nothing to
+do`, which is the runbook's second outcome — the one it warns is luck rather than
+proof.** The daemon ran 7 seconds into the boot, waited out its three
+preconditions, found nothing to repair and exited 0. So the repair path has still
+never been walked by a boot, which remains the whole property being claimed.
+
+**How narrowly it passed is measurable, and the two boots bracket it:**
+
+| boot | `tailscaled` engine start | address on `utun0` | Docker's `exposer.Add` | margin |
+|---|---|---|---|---|
+| 16:45, failed | 16:45:15 | 16:45:32 | 16:45:29 | **−3s** |
+| 17:21, passed | 17:21:48 | 17:21:48 | 17:21:59 | **+11s** |
+
+The seventeen seconds between those two is identifiable rather than random. On the
+failing boot `tailscaled` entered a logtail bootstrap-DNS retry loop the moment it
+started — `dial "log.tailscale.com:443" failed: no such host`, then bootstrap
+attempts against derp2d, derp7, derp4c, derp12c and derp10 in turn — because no
+DNS was up yet. `NoState -> Starting` came only after that loop, at 16:45:32, and
+the address arrived with it. The second boot went straight to `Starting` and had
+the address in the same second.
+
+**The address needs neither the network nor the control plane, which is what makes
+the variance startup-side rather than reachability-side.** At 17:21:48 `utun0`
+already carried `100.108.250.62`, while at 17:21:52 `tailscaled` was still
+reporting `You are logged out ... failed to resolve controlplane.tailscale.com`
+and `en1`'s default route did not appear until 17:21:53. The address is restored
+from the cached prefs in `/Library/Tailscale`. So what decides the race is only
+whether `tailscaled`'s own startup stalls before it runs its state machine.
+
+**That makes the failing boot the ordinary cold-boot path, not an anomaly.** A
+cold boot with DNS not yet up is exactly the condition that runs the bootstrap
+loop. Nothing in the configuration made this boot skip it, so nothing guarantees
+the next one will. The reconciler stays load-bearing, and unproven at boot: round
+one has passed, and unattended recovery is an observed property of one boot rather
+than a guaranteed one.
+
+Two smaller things. **Nothing monitors any of this.** An outcome of `STILL
+UNBOUND`, or a daemon that never ran, would leave the platform down and silent,
+which is the property that made the original failure worst — and the only reason
+this boot's state is known is that someone sat and read four logs. Prometheus is
+already running, so a blackbox probe over the six bindings is the shape of the
+fix. And the 17:10 line in the reconcile log that lacks `container set settled` is
+not an anomaly: it is the first draft, run by hand before the third precondition
+was added, and it is what a check that could only produce one answer looks like in
+the log it left behind.
+
+Round two, the 26.5.2 update, is unblocked by the runbook's own gate. Whether to
+spend more reboots first, trying to force the `OK: all bindings restored` outcome,
+is a separate call — and the odds are not remote, since one of the two boots so
+far lost the race.
+
 ### The reboot test, which the chain failed in the one way nobody would notice
 
 §1.1 round one was run: `sudo reboot`, hands off, then the checks. **It failed.**
@@ -105,12 +171,14 @@ admin trust tiers and therefore the worst place to put it. Verified after the
 change: Grafana reaches `prometheus:9090`, Prometheus answers `Network is
 unreachable` to an off-host address, and 3002 returns 200.
 
-**Round one has not been re-run.** The fix is in place and tested by hand against
-a live fault, but the property being claimed is that a *reboot* recovers, and no
-reboot has happened since the reconciler was installed. Everything in the previous
-entry about a chain of individually correct settings not being evidence applies
-unchanged, and now with a worked example. Round two, the 26.5.2 update, stays
-blocked behind a passing round one.
+**Round one has not been re-run at the time of writing.** The fix is in place and
+tested by hand against a live fault, but the property being claimed is that a
+*reboot* recovers, and no reboot has happened since the reconciler was installed.
+Everything in the previous entry about a chain of individually correct settings not
+being evidence applies unchanged, and now with a worked example. Round two, the
+26.5.2 update, stays blocked behind a passing round one. *(It was re-run later the
+same day and passed without the reconciler having anything to repair; the entry
+above records the result and the margin.)*
 
 The runbook gains the check that would have caught this in section 7 — the six
 expected bindings, compared as requested-versus-actual rather than read off
