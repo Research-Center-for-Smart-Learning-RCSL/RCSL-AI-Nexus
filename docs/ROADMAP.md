@@ -146,8 +146,9 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 - [ ] UPS, and the FileVault `authrestart` procedure documented in the runbook.
       FileVault is off until this lands and this item is the trigger to enable it
       ([security.md](./architecture/security.md) §15.6)
-- [ ] SSH demoted to repair-only, verified by running normal operations entirely through the UI
+- [~] SSH demoted to repair-only, verified by running normal operations entirely through the UI. The transport half is done: Tailscale SSH only, gated by the §3.4 `ssh` block with 12-hour re-authentication, and macOS Remote Login is off so nothing answers on the LAN. What remains is the behavioural half — actually running operations through the UI rather than a shell, which cannot be claimed until there has been a period of operation to observe
 - [ ] Trivy, pip-audit, and pnpm audit in CI
+- [ ] **Scheduled GeoLite2 refresh.** Nothing in this repository or the runbook says the database has to be updated, and it was written as a one-time drop-in file. MaxMind publishes twice weekly and IP ranges move between countries, so a static copy misclassifies more as it ages — silently, and in both directions. Needs a scheduled download (the licence key is the long-lived credential for it, unlike the throwaway API tokens used during setup) plus a note on MaxMind's own terms about keeping the data current
 - [ ] Playwright coverage of critical paths: create an API key, edit a routing policy and observe gateway behaviour change, cancel a stream mid-generation
 - [ ] Periodic access review
 

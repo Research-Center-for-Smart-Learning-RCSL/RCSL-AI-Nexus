@@ -225,6 +225,58 @@ Ollama 預設會聽所有介面 (`0.0.0.0:11434`)。要把它綁回本機，只�
   之後在同一 tailnet 上開 `https://<你的主機>.ts.net:8443`，用 admin 加
   `grafana_admin_password` 登入。
 
+- [ ] **遠端存取：用 Tailscale SSH，不要用 macOS 的「遠端登入」。** 這台無頭運作，
+  你需要一條能進去做維護和開發的路。伺服器端一行：
+
+  ```sh
+  sudo tailscale up --ssh --advertise-tags=tag:ai-server
+  ```
+
+  `--advertise-tags` 一定要一起帶。tag 若是先前用 API 打上去的，本機 prefs 裡不會有
+  記錄，單獨跑 `tailscale up --ssh` 有可能把 tag 弄掉——而 tag 一掉，§3.4 的 ACL 全部
+  失效，變回全放行。
+
+  之後從**另一台在同一 tailnet 上、且屬於 `group:ai-admin` 的裝置**連：
+
+  ```sh
+  ssh <你的帳號>@<伺服器的 100.x.y.z>
+  ```
+
+  第一次會跳出瀏覽器要你確認身分（ACL 的 `action: check`，之後 12 小時內免確認）。
+  **不會問密碼、也不需要金鑰。**
+
+- [ ] 連得上之後，**把系統的「遠端登入」關掉**：系統設定 > 一般 > 共享 > 遠端登入。
+
+  macOS 的遠端登入綁在所有介面（含區網）且接受密碼登入，Tailscale SSH 則只在 tailnet
+  介面上服務。兩個都開等於白留一個攻擊面。關掉之後不用改任何 `sshd_config`，就滿足了
+  [security.md](../architecture/security.md) §11「只監聽 Tailscale 介面」的要求。
+
+  **關的時候不要關掉你當下那個 session。** 關完先開新視窗重連一次確認還進得去，再關舊
+  的——這是不把自己鎖在無頭機器外面的標準做法。驗證方式：
+
+  ```sh
+  nc -z -w2 127.0.0.1 22 && echo "系統 sshd 還開著" || echo "已關閉"
+  ```
+
+  Tailscale SSH 不綁 loopback，所以 loopback 沒有回應，正好證明停掉的是系統那個。
+
+### Tailscale SSH 連不上時，先看是哪一半沒設
+
+它需要兩個東西同時成立，而兩者失敗的樣子不一樣：
+
+| 症狀 | 缺的是 |
+|---|---|
+| `tailnet policy does not permit you to SSH to this node` | ACL 的 `ssh` 區塊。連線有到、授權沒過 |
+| 連線逾時、`TcpTestSucceeded : False` | `acls` 裡沒有 port 22。根本沒到伺服器 |
+
+兩者都缺會表現成後者。判斷方法是在伺服器上看
+`tail -f /opt/homebrew/var/log/tailscaled.log | grep ssh-conn`：**有 `handling conn`
+就代表連線到了伺服器**，那問題在授權；完全沒有新行，問題在網路層或客戶端。
+
+（順帶一提，Tailscale SSH 在 macOS 上是可以當伺服器用的。判斷它「有沒有啟動」不要去看
+`tailscale status --json` 裡的主機金鑰欄位——那個欄位不存在，怎麼查都會是空的。要看
+`tailscale debug prefs` 的 `RunSSH`。）
+
 ---
 
 ## 5. GeoLite2 國別資料庫（不放會起不來）
@@ -350,8 +402,46 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
   標頭是無條件信任的，任何能連上那個 socket 的東西都能偽造管理員身分（security.md
   §5.1）。
 
+- [ ] **幫自己補上公開入口的憑證。** 從 tailnet 身分 bootstrap 出來的第一個管理員，
+  `password_hash` 和 `totp_secret` 都是空的——tailnet 入口不需要它們，身分由
+  `tailscale serve` 提供。但公開入口要的是本地帳號加強制 TOTP，`can_use_public_entrance`
+  兩者都要。所以**不補的話，nginx 架好了你也登不進公開入口**，而那時候通常已經沒有人
+  記得這回事了。
+
+  做法：在 tailnet 入口的 Users 頁面幫自己發一張邀請，用那個連結設定密碼並掃 TOTP QR。
+  這件事不用等 nginx，現在就能做。確認方式：
+
+  ```sh
+  docker compose exec -T postgres psql -U nexus -d nexus -Ac \
+    "SELECT login, (password_hash IS NOT NULL) AS pw, (totp_secret IS NOT NULL) AS totp FROM users;"
+  ```
+
+  兩欄都要是 `t`。（`users` 上有 check constraint 要求這兩者同時存在或同時不存在，所以
+  不會出現只補一半的狀態。）
+
 - [ ] 登入後在管理 UI 裡：註冊一個模型、綁一條 routing policy、發一把 API key，確認
   gateway 真的能服務推論。
+
+  兩個呼叫端會踩到、但目前沒有文件的地方：
+
+  - **OpenAI 請求裡的 `model` 欄位放的是 capability，不是模型別名。** 送
+    `"model": "chat"`，不是 `"model": "qwen7b"`。`RouteChatRequest` 用 capability 查
+    routing policy，policy 才決定用哪顆模型。填模型別名會得到 `no_available_model`，
+    而那個訊息不會告訴你原因。
+  - **Production 下 gateway 拒絕沒有經過 proxy 的請求。** nginx 還沒架好時要自己模擬：
+
+    ```sh
+    curl -H "Authorization: Bearer <key>" \
+         -H "X-Nexus-Proxy: $(cat secrets/proxy_shared_secret)" \
+         -H "X-Forwarded-For: <一個台灣 IP>" \
+         -H "Content-Type: application/json" \
+         -d '{"model":"chat","messages":[{"role":"user","content":"hi"}],"stream":false}' \
+         http://<TAILNET_IP>:8000/v1/chat/completions
+    ```
+
+    少了 `X-Nexus-Proxy` 會得到 `untrusted_proxy`；少了 `X-Forwarded-For` 也一樣，因為
+    絕不退回連線來源位址是刻意的（否則每個呼叫端看起來都同一個來源，每把金鑰的 IP
+    允許清單就形同虛設）。
 
 ---
 
