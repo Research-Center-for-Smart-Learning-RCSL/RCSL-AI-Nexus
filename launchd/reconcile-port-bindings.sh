@@ -167,7 +167,16 @@ else
 
   # `up -d` returns once the containers are started, but a service that starts
   # and then dies would leave the same hole this branch exists to fill, so the
-  # result is read back rather than assumed. Bounded by the same deadline.
+  # result is read back rather than assumed.
+  #
+  # It gets its own budget rather than the remaining share of the original one,
+  # which can be nothing. DEADLINE is absolute, and one of the two ways into this
+  # branch is the settle loop timing out — the 19:10 boot's exact path. Reached
+  # that way there is no time left, so the first sample, taken in the moment
+  # between `up -d` returning and the containers being reported running, would
+  # print FATAL: "these services will not start", about a stack that is starting.
+  # A repair whose failure report is a race is not a repair anyone can act on.
+  DEADLINE=$((SECONDS + 120))
   while :; do
     MISSING="$(missing_services)"
     [ -z "$MISSING" ] && break
