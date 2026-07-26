@@ -563,6 +563,56 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
   tail -20 /opt/homebrew/var/log/nexus-reconcile.log
   ```
 
+- [ ] **裝健康監測的 LaunchDaemon（狀態變了會寄信）。** 上面那個 daemon 修的是開機那一
+  刻。它修不好、或者它自己沒跑的時候，狀態會跟 2026-07-26 那次一模一樣：容器 running、
+  gateway healthy、平台從 tailnet 打不到，而**沒有任何東西會說**。那次是靠人坐下來讀四份
+  log 才發現的，那不是可以依賴的偵測方式。
+
+  先準備寄件帳號。**建議另開一個專用 Gmail 帳號當寄件者，不要用你自己的那個。** app
+  password 會以明文放在 `secrets/` 底下，而這台機器的 FileVault 是關的（security.md
+  §15.6）；用自己的帳號等於把「收所有服務密碼重設信」的信箱鑰匙放進去，而
+  `leolove3very@gmail.com` 同時還是平台的第一個管理員。專用帳號被拿走，最多是有人能冒名
+  寄信。收件位址不是 secret，寫在腳本的 `ALERT_TO`，放著讓人 review。
+
+  在**寄件**帳號上：Google 帳號 → 安全性 → 兩步驟驗證（必須先開）→ 應用程式密碼，產生
+  一組 16 碼。然後：
+
+  ```sh
+  printf '%s' 'nexus-alerts@gmail.com' > secrets/alert_smtp_account
+  printf '%s' 'xxxxxxxxxxxxxxxx'       > secrets/alert_smtp_password
+  chmod 600 secrets/alert_smtp_account secrets/alert_smtp_password
+  bash launchd/check-platform-health.sh     # 先手動跑，確認信真的寄得出去
+  ```
+
+  ```sh
+  sudo install -o root -g wheel -m 644 \
+    launchd/online.rcsl.health-check.plist /Library/LaunchDaemons/
+  sudo launchctl load -w /Library/LaunchDaemons/online.rcsl.health-check.plist
+  ```
+
+  每五分鐘查七件事：`.env` 讀得到 `TAILNET_IP`、位址在介面上、docker 有回應、**預期清單裡
+  的九個服務都在跑**、每個要求了 host binding 的容器真的拿到了、六個入口都答得出來、Ollama
+  在 loopback 上而且**沒有**在 tailnet 位址上答話。第四項是跟一份寫死的清單比對而不是列舉
+  現有容器——不然整個消失的容器不會出現在列舉裡，掃過去會回報「一切正常」。那正是
+  reconciler 第三個前置條件在防的錯，也是 `tailscale status --json` 那次的錯。
+
+  只有狀態**改變**才寄信：壞了寄一封、同樣的壞法不再重複寄、修好寄一封。另外每天一封
+  heartbeat。
+
+  **它看得到什麼、看不到什麼。** 它跑在被它監測的機器上，所以它報得出「機器活著但服務不
+  通」——也就是實際發生過的那種故障——但報不出「機器關機了」。每天那封 heartbeat 就是補這
+  個：**信停了就是有事，即使一封告警都沒收到。** 這是唯一能讓沉默變成訊號的辦法。
+
+  第一次跑會寄一封 `monitoring started`，那封信本身就是在測 mail path，而 mail path 是整套
+  裡唯一沒辦法靠「看它有沒有動」來驗證的部分。
+
+  ```sh
+  tail -20 /opt/homebrew/var/log/nexus-health.log   # 只記事件，平常是空的
+  ls -l /opt/homebrew/var/nexus-health.state        # mtime 就是上次執行時間
+  ```
+
+  log 平常空著是正常的，所以「它到底有沒有在跑」不要從 log 判斷，看 state 檔的 mtime。
+
 - [ ] 首次建立管理員：用**另一台你自己的裝置**（筆電或手機，加入同一個 tailnet）瀏覽
   tailnet 入口 `https://<你的主機>.ts.net`。第一次登入會用你的 Tailscale 身分自動把你
   bootstrap 成第一個 admin（前提是 `BOOTSTRAP_ADMIN_LOGIN` 設成你的 Tailscale 身分，且

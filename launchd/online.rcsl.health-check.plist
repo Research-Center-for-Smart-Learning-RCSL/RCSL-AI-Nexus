@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>online.rcsl.health-check</string>
+
+	<!-- Watches for the platform being up but not serving, and mails when that
+	     changes. The reasoning, and what this can and cannot see, is at the top
+	     of the script. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/rcslmac1/dev/RCSL-AI-Nexus/launchd/check-platform-health.sh</string>
+	</array>
+
+	<!-- Same identity as the reconciler and for the same reason: the docker
+	     socket is the user's (~/.docker/run/docker.sock) and Docker Desktop runs
+	     in the user's session, so root would be the wrong identity even though
+	     this is a daemon. It also needs to read secrets/. -->
+	<key>UserName</key>
+	<string>rcslmac1</string>
+
+	<!-- Every five minutes. Not RunAtLoad: launchd starts this before Docker
+	     Desktop, tailscaled or any container exists, so a load-time run would
+	     find everything down and mail about it. The script additionally ignores
+	     the first five minutes of uptime, because that window belongs to
+	     reconcile-port-bindings.sh and a failure inside it is one that is about
+	     to be repaired. -->
+	<key>StartInterval</key>
+	<integer>300</integer>
+	<key>RunAtLoad</key>
+	<false/>
+
+	<!-- The log carries events only — a state change, a heartbeat, a mail that
+	     could not be sent — so reading it shows what happened rather than 288
+	     lines a day of nothing. "Did it run at all" is answered by the mtime of
+	     /opt/homebrew/var/nexus-health.state, which every run rewrites. -->
+	<key>StandardOutPath</key>
+	<string>/opt/homebrew/var/log/nexus-health.log</string>
+	<key>StandardErrorPath</key>
+	<string>/opt/homebrew/var/log/nexus-health.log</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/rcslmac1/dev/RCSL-AI-Nexus</string>
+</dict>
+</plist>

@@ -319,6 +319,8 @@ for c in $(docker compose ps -q); do
 done
 ```
 
+**And something has to run that check when nobody is looking.** The reconciler covers the boot; a reconcile that fails, or a daemon that never runs, leaves precisely the state above with nothing to announce it — the original fault was found only because a person read four logs by hand. `launchd/check-platform-health.sh` (runbook §7) runs every five minutes and mails on a change of state: the expected service list, requested-versus-actual bindings, the six entrances over their published ports, and Ollama answering on loopback but not on the tailnet address. Two properties are deliberate. It compares services against a fixed expected list rather than enumerating what is running, because a container that is entirely gone would otherwise not appear in the enumeration and the sweep would report success. And it sends a heartbeat daily even when nothing is wrong: a monitor on the host it watches can report "up but not serving" and can never report "powered off", so the only way silence becomes evidence is for something to be expected to break it.
+
 ## 10. Configuration and Secrets
 
 Non-secret values are environment variables; secrets are mounted files read through `secrets_dir` ([backend.md](./backend.md) §8).
