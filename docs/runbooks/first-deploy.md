@@ -845,11 +845,41 @@ Mac Studio 沒有 out-of-band 管理（沒有 IPMI/iDRAC 那類獨立於作業�
 - [ ] 啟動安全維持 Full Security，確認進 recoveryOS 需要管理員密碼。FileVault 關著的期間，
   這是擋住「從外接媒體開機」的主要控制而不是次要的。機器放在能上鎖的地方。
 
-- [ ] 斷電後自動重新啟動：系統設定 > 節能。跳電恢復後機器要自己開機。
+- [x] 斷電後自動重新啟動：系統設定 > 節能。跳電恢復後機器要自己開機。
 
-- [ ] 遠端登入 (SSH)：系統設定 > 一般 > 共享 > 遠端登入。**拔掉螢幕之前一定要先開**，否則
-  沒有救援管道。金鑰限定、禁 root、只聽 tailscale 介面等硬化要求見 security.md §11，可以
-  等第 4 部分 Tailscale 起來之後再套。
+  **2026-07-26 查出來是關的，當天開起來的**——這一項在清單上放了很久沒有人量過它。
+  沒有 out-of-band 管理的機器加上 `autorestart 0`，等於跳一次電就要有人走過去按電源鍵，
+  而那是這台機器唯一一個「完全遠端」會被物理事件切斷、又能用一行指令補掉的缺口：
+
+  ```sh
+  sudo pmset -a autorestart 1
+  pmset -g | grep autorestart      # 要看到 autorestart 1
+  ```
+
+  （同一條指令會把 `autorestartatconnect` 一起改成 0。那個鍵是給筆電接上電源用的，
+  桌機上沒有作用，記在這裡只是因為量到了。）
+
+- [x] 遠端登入 (SSH)：**保持關閉**，第 4 部分改用 Tailscale SSH。
+
+  **這一項原本寫的是「拔掉螢幕之前一定要先開，否則沒有救援管道」，那和 §11 的決定相反。**
+  macOS 的遠端登入綁在所有介面（含區網）而且接受密碼登入；Tailscale SSH 只在 tailnet
+  介面上服務、沒有密碼或金鑰可外洩、身分來自 tailnet，並且由 §3.4 ACL 的 `ssh` block 管、
+  `action: check` 每 12 小時強制重認證。所以「只監聽 Tailscale 介面」這個要求不是靠改
+  `sshd_config` 達成的，是靠**不跑第二個 SSH server**——見
+  [security.md](../architecture/security.md) §11 與下面第 4 部分那兩項。
+
+  **舊的寫法有一個真的顧慮，解法是順序而不是開它**：第 1 部分做完的時候 Tailscale 還沒
+  裝，這時候拔螢幕確實沒有路可以進去。所以**螢幕不要在第 4 部分的 Tailscale SSH 實際連
+  過一次之前拔掉**，而不是先開一個之後要關掉的 sshd。
+
+  驗證條件（2026-07-26 量過，成立）：`127.0.0.1:22` 沒有任何東西在聽，而 tailnet 的 SSH
+  仍然連得進去。Tailscale SSH 不綁 loopback，所以 loopback 的靜默正好證明停掉的是系統
+  那個 daemon：
+
+  ```sh
+  lsof -nP -iTCP -sTCP:LISTEN | grep ':22 '          # 要沒有輸出
+  launchctl print-disabled system | grep openssh     # 要是 => disabled
+  ```
 
 ---
 

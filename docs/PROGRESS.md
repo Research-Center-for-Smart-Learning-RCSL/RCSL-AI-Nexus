@@ -17,6 +17,41 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-26
 
+### Auditing "can this be run entirely remotely" found one real hole and one contradiction between two files
+
+**The question was whether the project can now be worked on entirely from off-site, and the
+answer is yes with one exception that had been sitting unmeasured on a checklist.** What holds:
+FileVault off, so a boot needs nobody at the screen; automatic login as `rcslmac1`, so the GUI
+session returns; Docker Desktop `AutoStart: true`, which needs that session; the Tailscale node
+key set to never expire, so the host cannot quietly fall off the tailnet; `sleep 0` and
+`womp 1`; and both reconciler and health-check daemons installed, with both repair paths now
+exercised at boot. The 21:51 reboot is the end-to-end evidence: the platform came back 51
+seconds in with nobody at the machine.
+
+**The hole was `pmset autorestart 0`.** Runbook §1's checklist has asked for "starts up again
+after a power failure" since the beginning and nothing had ever read the value back. On a
+machine with no out-of-band management that setting is the difference between a power blip and
+a trip to the building: `autorestart 1` now, verified. Setting it also flipped
+`autorestartatconnect` from 1 to 0, which is a laptop key with no effect on a desktop —
+recorded only because it was measured.
+
+**The contradiction: runbook §1 said turn macOS Remote Login on, security.md §11 says keep it
+off, and §11 is right.** The runbook item still carried the pre-Tailscale instruction — enable
+Remote Login before unplugging the monitor, harden it later per §11 — while §11 had since
+decided the requirement to listen only on the Tailscale interface is met by *not running a
+second SSH server at all*, since macOS Remote Login binds every interface including the LAN and
+accepts passwords. Following the runbook would have undone the decision. The old item did name
+a real problem — after Part 1 there is no way in yet — but the fix is ordering, not a daemon:
+do not unplug the monitor until Part 4's Tailscale SSH has actually connected once. Both items
+are now marked done with the verification §11 specifies, which was measured today and holds:
+nothing listening on `127.0.0.1:22`, `com.openssh.sshd => disabled`, tailnet SSH working.
+
+**This is the third time the two derived files have drifted from this one**, and the first two
+were caught the same way — by checking a claim against the machine rather than against another
+document.
+
+---
+
 ### The container bring-up path ran 51 seconds into the boot, and that same boot falsified a number the reboot argument rested on
 
 **§1.1b was run and it passed on the first attempt.** The script refused nothing, stopped the
