@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>online.rcsl.delay-tailscaled-once</string>
+
+	<!-- A TEST TOOL, NOT PART OF THE PLATFORM. Do not install this as part of a
+	     deploy; runbook §7 does not list it and must not. It holds the machine
+	     off the tailnet for ninety seconds at boot so that Docker Desktop binds
+	     its port forwards before the tailnet address exists, which is the one
+	     acceptance outcome that cannot be produced by waiting. The reasoning,
+	     the measurements behind the ninety seconds, and the risk are at the top
+	     of the script. Procedure: runbook §1.1a. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/rcslmac1/dev/RCSL-AI-Nexus/launchd/delay-tailscaled-once.sh</string>
+	</array>
+
+	<!-- root, unlike the other three daemons here. Those run as the operator
+	     because they talk to the user's docker socket; this one only talks to
+	     launchctl in the system domain, which is root's. -->
+
+	<!-- Once, at boot, and never again: the script deletes this file as its first
+	     action, before anything that can fail. So a crash, a SIGKILL or a walked
+	     -away-from test all resolve at the next boot rather than repeating. That
+	     is deliberate — it is the only thing standing between a test tool and a
+	     machine that takes itself off the network every time it starts. -->
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<false/>
+
+	<!-- launchd SIGTERMs a job before it SIGKILLs it, and the script's trap
+	     releases tailscaled on SIGTERM. This gives that trap room to finish,
+	     including the release's own wait for the address to come back. Without
+	     it the default twenty seconds could turn a shutdown during the hold into
+	     a machine that boots with no tailnet. -->
+	<key>ExitTimeOut</key>
+	<integer>120</integer>
+
+	<key>StandardOutPath</key>
+	<string>/opt/homebrew/var/log/nexus-delay-tailscaled.log</string>
+	<key>StandardErrorPath</key>
+	<string>/opt/homebrew/var/log/nexus-delay-tailscaled.log</string>
+</dict>
+</plist>

@@ -17,6 +17,135 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-26
 
+### Two more boots proved the lever cannot work, and the liveness record had a hole where it is read
+
+**Round one was run a fifth and sixth time, back to back, and both passed on the
+first outcome.** 20:24:21 and 20:28:58, 4m37s apart, hands off both times. Nine
+services running with `migrate` at `Exited (0)`, all six requested bindings equal
+to actual, all six entrances at 200, Ollama on `127.0.0.1:11434` and nothing on
+the tailnet address, `all expected services running` → `all published bindings
+intact` on both. The named-set precondition decided in sixteen seconds both times,
+the same as 19:43 — its cost is stable.
+
+**This was the runbook's own lever, pulled deliberately, and it failed.** The
+instruction was to reboot twice and watch the second, because a boot that loads
+the netmap cache does not rewrite it and hands the next boot the slow path. The
+mechanism worked exactly as described: 20:29 found no cache, waited 9 seconds for
+the address, and its margin fell from 8.3 seconds to 1.4. It still won.
+
+| boot | `tailscaled` start | address usable | Docker's `exposer.Add` | margin |
+|---|---|---|---|---|
+| 16:45, failed | 16:45:15 | 16:45:32 (+17s) | 16:45:29 | **−3s** |
+| 17:21, passed | 17:21:48 | 17:21:48 (+0s) | 17:21:59 | **+11s** |
+| 18:08, passed | 18:08:14 | 18:08:23 (+9s) | 18:08:25 | **+2s** |
+| 19:09, failed for another reason | 19:09:59 | 19:10:00 (+1s) | *never* | *no race* |
+| 19:43, passed | 19:43:28 | 19:43:37 (+9s) | 19:43:39.7 | **+2.7s** |
+| 20:24, passed | 20:24:22 | 20:24:24 (+2s, cache hit) | 20:24:32.3 | **+8.3s** |
+| 20:29, passed | 20:29:06 | 20:29:15 (+9s, cache miss) | 20:29:16.4 | **+1.4s** |
+
+**And the reason it will keep winning is now arithmetic rather than hope.** The
+claim that Docker is the stable side at 11 to 14 seconds was the small sample
+talking: the six boots where it bound are 14.0, 11.0, 11.0, 11.7, **10.3**, **10.4**
+seconds, and the two lowest are the two newest. Cache-miss boots, meanwhile, put
+the address up at exactly 9 seconds — three observations, zero spread. `10.3 − 9`
+is the entire protection, so the lever's ceiling is a 1.3-second margin and it
+cannot go negative. Only 16:45 ever lost, on a 17-second address that has not
+recurred in six boots. **Rebooting repeatedly is not a test, it is waiting for
+weather.**
+
+**The netmap model made its third and fourth predictions and both held, so the
+alternation is now seven boots with no exception.** 19:43 wrote, so 20:24 loaded
+(+2s) and logged no write in its session; 20:24 loaded without rewriting, so
+20:29 missed, waited 9 seconds and wrote at 20:29:15. Load-without-rewrite rests
+on three observations now (17:21, 19:09, 20:24). Next boot is a fast one.
+
+**So the blank row gets filled by injecting the fault.**
+`launchd/delay-tailscaled-once.sh` and its plist hold `tailscaled` down for 90
+seconds at boot — six times the margin Docker needs to lose by — so Docker binds
+before the address exists and the reconciler has to walk the binding repair path
+with everything else at boot moving at the same time, which is the part a hand
+test cannot reproduce. It is a test tool and is deliberately not in the runbook's
+install list. Two properties are the ones that matter: it deletes its own plist as
+its very first action, before anything that can fail, so whatever happens it
+affects exactly one boot; and it uses `launchctl bootout`/`bootstrap` rather than
+`tailscale down`/`up`, because `up` can reset prefs not named on the command line
+and the prefs here include Tailscale SSH — the remote access path. The residual
+risk is stated rather than engineered away: the release runs from a trap covering
+EXIT, INT, TERM and HUP but not SIGKILL, and during the hold the host is off the
+tailnet entirely, so this is a with-a-person-at-the-machine procedure. Runbook
+§1.1a.
+
+**Then the monitor's own liveness record turned out to have a hole exactly where
+the runbook reads it.** The state file's mtime is the only evidence the daemon is
+alive — the log is events-only — and the criterion is "under five minutes old".
+With the plist at `RunAtLoad=false` and a 300-second interval, *no run happened in
+the first five minutes of a boot*, so the freshest mtime in that window predated
+the boot: three to eight minutes old, depending only on where the reboot fell in
+the previous interval, against a five-minute criterion. The runbook tells the
+operator to wait two or three minutes after a reboot and then check exactly this.
+These two reboots demonstrate it: no run happened across either of them, and the
+20:26 check passed with thirteen seconds of margin, by luck. This is the second
+wrong version of this one criterion — the first said "mtime within ten minutes of
+boot" — and both were wrong in the same direction, describing when the file gets
+written rather than what the reader needs to know.
+
+`RunAtLoad` is now true, and the boot-time run is suppressed by the boot grace,
+which rewrites the state file verbatim and exits: the signature is unchanged
+because nothing was checked, so it cannot mail, and the only thing it updates is
+the one thing it is entitled to claim — *this ran, and deliberately asserted
+nothing*. If the file did not exist it writes the empty-signature sentinel, so the
+first real run still mails `baseline` and not a false `recovered`.
+
+**The boot grace it now relies on had never once fired.** It parsed
+`sysctl -n kern.boottime` — `{ sec = 1785068938, usec = 428375 } ...` — with
+`s/.*sec = \([0-9]*\).*/\1/`, whose leading `.*` is greedy and matched through to
+`usec`. `BOOT_SEC` was the microseconds field, uptime came out as the whole Unix
+epoch, and the comparison could only ever answer "not in grace". **That is the
+fourth instance of this log's recurring defect, and this time it was inside the
+check whose entire job was to have two answers.** It also put a nine-digit
+`uptime` line in every alert mail sent before the fix, including the 19:15 one.
+`RunAtLoad=false` had been load-bearing by accident: it was the only thing
+actually suppressing the boot-time run. The pattern is anchored at the start of
+the line now, and the grace is 240 rather than 300 so it sits clearly below the
+interval instead of on the boundary, where whether the first scheduled run of a
+boot evaluated or was skipped came down to how many seconds launchd took to load
+the job — a coin flip deciding whether the first real check is at five minutes or
+ten.
+
+All three paths were run rather than read: the grace path rewrites the file
+byte-identically with a fresh mtime and exits 0 silently; the normal path still
+evaluates fully and mails nothing when the signature is unchanged; and with no
+state file at all the grace path writes the `\n0\n` sentinel that reads back as
+"no previous state".
+
+**Two of those three were forced rather than observed, and the distinction is the
+same one §1.1 makes about the reconciler.** The grace path was exercised by running
+a copy with `BOOT_GRACE` raised past the current uptime, because the machine had
+been up for twenty minutes and there is no way to be five minutes into a boot
+without booting. The reload at 20:53 proved the other half: `bootstrap` fired the
+`RunAtLoad` run, it wrote the state file, and — uptime being well past 240 seconds
+— it correctly took the *full* path and mailed nothing. **What has not been
+observed is the two acting together at a real boot**: `RunAtLoad` firing inside the
+grace window, taking the silent rewrite, and the first scheduled run five minutes
+later evaluating for real. The prediction is a state mtime within seconds of boot
+and no mail, and the next reboot for any other reason will settle it. Until then
+this is a fix that has been tested in parts.
+
+**One check of the operator's own turned out to be scoped smaller than it looked.**
+`grep "can't assign requested address"` over `com.docker.backend.log` came back
+empty, which is true and covers only these two boots — Docker rotated that log at
+20:12:32. The original failure's three lines are in
+`com.docker.backend.log.20260726-172120.413` at 08:45:29Z, for `:8000`, `:3001`
+and `:8002`, which is the same three services the injector above is expected to
+break. Reading that grep as "this has never happened" would be the same shape of
+error as everything else on this page.
+
+**Six boots of round one, one failed round two, and the two outcomes worth having
+are still blank.** What changed is that one of them now has a procedure that can
+produce it instead of a lever that cannot, and the other — the container-restore
+path — still needs round two rerun, which is the most overdue test on the machine:
+the 19:09 boot is the reason that code exists and nothing has exercised it at boot.
+
 ### The fifth boot passed and proved nothing, and the two checks written that day could each only say yes
 
 **Round one was run a fourth time and passed.** Plain `sudo reboot` at 19:42:59,

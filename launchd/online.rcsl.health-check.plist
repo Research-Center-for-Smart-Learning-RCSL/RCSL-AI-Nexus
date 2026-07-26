@@ -21,16 +21,30 @@
 	<key>UserName</key>
 	<string>rcslmac1</string>
 
-	<!-- Every five minutes. Not RunAtLoad: launchd starts this before Docker
-	     Desktop, tailscaled or any container exists, so a load-time run would
-	     find everything down and mail about it. The script additionally ignores
-	     the first five minutes of uptime, because that window belongs to
-	     reconcile-port-bindings.sh and a failure inside it is one that is about
-	     to be repaired. -->
+	<!-- Every five minutes, and also once at load. The load-time run does not
+	     check anything: launchd starts this before Docker Desktop, tailscaled or
+	     any container exists, so it would find everything down and mail about a
+	     platform that is still coming up. The script's boot grace (240s, below
+	     the interval on purpose) suppresses it and the run rewrites the state
+	     file and exits.
+
+	     That is the whole reason RunAtLoad is true. The state file's mtime is the
+	     only record that this daemon is alive, and the runbook reads it as one.
+	     With RunAtLoad false the first write of a boot was the first scheduled
+	     fire, five minutes in, so for those five minutes the freshest mtime
+	     available predated the boot — and the runbook's "under five minutes old"
+	     criterion failed on a healthy machine, at exactly the point after a
+	     reboot where it tells the operator to look. The 2026-07-26 20:24 and
+	     20:29 reboots were 4m37s apart and no run happened across either.
+
+	     The grace could not have suppressed anything before 2026-07-26 either:
+	     it parsed kern.boottime with a greedy pattern that captured the usec
+	     field, so uptime came out as the Unix epoch and the check could only say
+	     "not in grace". RunAtLoad false was load-bearing by accident. -->
 	<key>StartInterval</key>
 	<integer>300</integer>
 	<key>RunAtLoad</key>
-	<false/>
+	<true/>
 
 	<!-- The log carries events only — a state change, a heartbeat, a mail that
 	     could not be sent — so reading it shows what happened rather than 288
