@@ -116,9 +116,19 @@ fi
 #
 # Compared against the list above rather than against whatever `ps` returns, so
 # a container that is entirely gone is a failure and not an absence.
+#
+# `--status running` is load-bearing. `docker compose ps` without it excludes
+# only *stopped* containers — `--all` is documented as adding those — so paused,
+# restarting and created ones are listed, and this check would have counted them
+# as running. Not hypothetical on this machine: Docker Desktop's Resource Saver
+# pauses containers, and the 2026-07-26 19:04 shutdown path issued an `/unpause`,
+# so it had done it. `postgres`, `redis` and `prometheus` have no probe in check
+# 6, which makes this their only coverage: paused, they would have been silent
+# here and silent everywhere. The reconciler already asked the question this way;
+# the two now agree.
 
 if [ "$DOCKER_UP" -eq 1 ]; then
-  RUNNING="$(docker compose ps --format '{{.Service}}' 2>/dev/null)"
+  RUNNING="$(docker compose ps --services --status running 2>/dev/null)"
   MISSING=""
   for svc in $EXPECTED_SERVICES; do
     if ! printf '%s\n' "$RUNNING" | grep -qx "$svc"; then

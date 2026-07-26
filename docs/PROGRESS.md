@@ -17,6 +17,115 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-26
 
+### The fifth boot passed and proved nothing, and the two checks written that day could each only say yes
+
+**Round one was run a fourth time and passed.** Plain `sudo reboot` at 19:42:59,
+machine back at 19:43:20, hands off. Nine services running with `migrate` at
+`Exited (0)`, all six requested bindings equal to actual, all six entrances at
+200, Ollama answering on `127.0.0.1:11434` and nothing on the tailnet address.
+The reconcile log reads `all expected services running` → `all published bindings
+intact`, which is the **first** of the runbook's six outcomes: Docker restored the
+stack itself and `tailscaled` won the race, so neither repair path was walked.
+**Five boots in, both of the outcomes worth having are still blank.**
+
+It did prove one thing that had no evidence behind it an hour earlier: the
+rewritten reconciler is what ran. The fix was committed at 19:41 (`4d8401c`) and
+the daemon executes the file in the working tree, so 19:43 is the first boot on
+which the named-set precondition, and not the count, decided anything. It decided
+correctly and cheaply — `docker daemon responding` at 19:43:39, the container set
+already complete, `all expected services running` at 19:43:55, sixteen seconds,
+which is three stable samples and no more.
+
+**The margin table gains a fifth row, and the netmap prediction held a second
+time — this time stated in advance.**
+
+| boot | `tailscaled` engine start | address usable | Docker's `exposer.Add` | margin |
+|---|---|---|---|---|
+| 16:45, failed | 16:45:15 | 16:45:32 (+17s) | 16:45:29 | **−3s** |
+| 17:21, passed | 17:21:48 | 17:21:48 (+0s) | 17:21:59 | **+11s** |
+| 18:08, passed | 18:08:14 | 18:08:23 (+9s) | 18:08:25 | **+2s** |
+| 19:09, failed for another reason | 19:09:59 | 19:10:00 (+1s) | *never* | *no race* |
+| 19:43, passed | 19:43:28 | 19:43:37 (+9s) | 19:43:39.7 | **+2.7s** |
+
+19:10 loaded the cache and never rewrote it; 19:43 found `netmap cache is not
+available` and wrote one at 19:43:38. **The rule that caches do not chain now
+rests on two observed load-without-write rather than one**, and the prediction it
+makes — the boot after a fast one is a slow one — was written down before this
+boot and held. Docker remains the stable side: 11.7 seconds from `tailscaled`
+start to the first `exposer.Add`, inside the same 11-to-14 band as the other four.
+
+**The lever this hands the acceptance test is weaker than it read.** The runbook
+says to reboot twice and watch the second, because the second has no cache. Both
+cache-miss boots on record now pass by roughly two seconds (18:08 +2s, 19:43
++2.7s); the 17-second address that produced the one real failure has not recurred.
+It is still the best available bet and it is not a reliable one — a +2s pass is
+what "the slow kind" now means.
+
+**The monitor's first real alert cycle is on the record, and it belongs to the
+19:10 failure rather than to a drill.** `failing` at 19:14:59, `recovered` at
+19:30:03, both mailed. What sat between them was a person: `migrate`'s `StartedAt`
+is 19:28:26, which is a hand-run `docker compose up -d` and nothing else. So the
+recovery on record is a human's, the reconciler's stack-up path was written after
+it, and five boots in that path has still never been walked by a boot. The monitor
+is the only part of the chain that has now been exercised end to end by a real
+failure rather than by a rehearsal.
+
+**Then both of the day's new checks were tested rather than read, and both had a
+defect of the shape this document keeps recording.**
+
+**1. `check-platform-health.sh` counted paused and restarting containers as
+running.** It asked `docker compose ps --format '{{.Service}}'`, and `--all` is
+documented as adding *stopped* containers — so paused, restarting and created ones
+were in the answer all along. Not academic on this host: Docker Desktop's Resource
+Saver pauses containers, and the 19:04:18 shutdown path issued an `/unpause`,
+which is how we know it had. `postgres`, `redis` and `prometheus` have no probe in
+check 6, so check 4 is their only coverage, and paused they would have been silent
+in the one place that could have said so. Demonstrated rather than argued: with
+`prometheus` paused, the old script exits 0 with the state file still reading `OK`
+and sends nothing; the fixed script logs `failing: services,` at 20:01:29 and
+mailed at 20:01:32. Unpaused, `recovered: OK` at 20:01:48, mailed at 20:01:51. The
+fix is `--services --status running`, which is the question the reconciler was
+already asking; the two now agree.
+
+**2. The reconciler's read-back could have no time left to read anything back.**
+`DEADLINE` is absolute, and one of the two ways into the repair branch is the
+settle loop timing out — the 19:10 boot's exact path. Reached that way, the loop
+that verifies `up -d` worked has zero budget, so the first sample, taken in the
+gap between `up -d` returning and Compose reporting the container running, prints
+`FATAL: still not running` about a stack that is starting. Shown with fault
+injection, one lagging sample in a copy of the script: without the fix,
+`FATAL: still not running after up -d: grafana` in the *same second* as
+`Container rcsl-ai-nexus-grafana-1 Started`, exit 1. With it, one retry and
+`stack up: all expected services running`, exit 0. The branch now takes 120
+seconds of its own rather than the remainder of a budget that may be spent.
+
+Both fixes are live rather than merely committed, and that was checked rather than
+assumed: the plists name the files in the working tree, and the health daemon's
+20:03:29 tick ran the fixed script under launchd — `OK`, no mail, nothing in the
+log, which is what a quiet tick is supposed to look like.
+
+**The stack-up path itself was walked by hand under normal timing too**, which is
+the closest thing to evidence available without a boot that needs it:
+`docker compose stop grafana`, then `not running: grafana` →
+`docker did not restore the stack; bringing it up` → `stack up: all expected
+services running` → `all published bindings intact`, sixteen seconds, exit 0.
+**And it restored the binding without recreating anything** — afterwards
+`127.0.0.1:3002` requested equals actual and `/login` returns 200. That refines
+the recreate rule rather than contradicting it: `up -d` is a no-op against a
+container that is already *running* with a stale forwarding table, which is the
+case that needs `--force-recreate`; against a *stopped* container it starts it,
+and the forward is established then. The two failure modes need the two different
+repairs, which is why the script has both.
+
+**What is still unproven, unchanged by all of this.** `OK: all bindings restored`
+has never been produced by a boot, and neither has `docker did not restore the
+stack; bringing it up`. Both now have hand tests and neither has a boot test, and
+a hand test cannot exercise the thing that makes boot hard, which is that nothing
+is holding still. One more thing worth knowing before the next run: a hand run of
+either script writes to the terminal, not to the log — the redirect lives in the
+plist — so `nexus-health.log` legitimately contains no trace of the drills above,
+and the state file and the mail are their record.
+
 ### Round two, the OS update: nothing brought the containers back, and the reconciler called that a success
 
 **Round two was run — the macOS 26.5.2 update — and it failed.** Legitimately run:
