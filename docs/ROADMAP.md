@@ -142,7 +142,7 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 ## Phase 3: Operations and Multi-Node
 
 - [ ] Second compute node registered and serving
-- [ ] Automatic restart and health alerting
+- [~] Automatic restart and health alerting. Alerting is done: `launchd/check-platform-health.sh` and its LaunchDaemon check seven properties every five minutes — expected services running, requested-versus-actual host bindings, all six entrances over their published ports, Ollama on loopback and not on the tailnet address — and mail on a change of state, with a daily heartbeat so that silence is also a signal ([deployment.md](./architecture/deployment.md) §9, runbook §7, the sending credential as an accepted risk in [security.md](./architecture/security.md) §15.7). Automatic restart is `restart: unless-stopped` plus `launchd/reconcile-port-bindings.sh`, which covers the boot race that the restart policy provably does not; §1.1 round one has passed but the repair path has not yet been exercised by a boot. **What is missing is an external dead-man's switch**: a monitor on the host it watches cannot report that the host is off, so the heartbeat currently relies on a person noticing a mail that did not arrive
 - [ ] UPS, and the FileVault `authrestart` procedure documented in the runbook.
       FileVault is off until this lands and this item is the trigger to enable it
       ([security.md](./architecture/security.md) §15.6)

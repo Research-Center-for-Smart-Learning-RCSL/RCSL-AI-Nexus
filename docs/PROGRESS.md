@@ -17,6 +17,83 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-26
 
+### Something now watches the state nothing was watching, and what it still cannot see
+
+The entry below ends on the observation that nothing monitored any of this: the
+only reason the boot's state was known is that four logs were read by hand. So
+`launchd/check-platform-health.sh` and `online.rcsl.health-check.plist`, running
+every five minutes and mailing on a change of state.
+
+Seven checks: `TAILNET_IP` readable from `.env`, the address on an interface, the
+daemon answering, every expected service running, every requested host binding
+actually bound, all six entrances answering over their published ports, and Ollama
+answering on loopback while *not* answering on the tailnet address.
+
+**The service check compares against a fixed list rather than enumerating what is
+running, and that is the whole design rather than a detail.** Enumerating would
+mean a container that is entirely gone never appears in the list being checked, so
+the sweep would look at what remained, find it healthy, and report success. That
+is the reconciler's missing third precondition again, and `tailscale status
+--json` answering "no SSH host keys" to a question it has no field for. Three
+times in two days the same shape. The Ollama check is likewise two assertions and
+not one: that it answers is availability, that it does not answer on the tailnet
+address is §7.1, and the value holding it on loopback lives in a plist that an
+upgrade could replace.
+
+Mail goes out on a change only — a failure once, the same failure never again, a
+recovery once — and any mail resets the heartbeat clock, so a recovery is not
+followed by a redundant "OK" the moment the old timestamp ages out. That is the
+shape that teaches people to filter the alerts.
+
+**The daily heartbeat is load-bearing, and it is also the weak point.** A monitor
+running on the host it watches can report "up but not serving", which is the
+failure that actually happened, and can never report "powered off". A mail
+expected daily is what makes silence mean something. But it relies on a person
+noticing a mail that did not arrive, and people are far worse at that than at
+noticing one that did. The real answer is an external dead-man's switch that
+notifies when a ping stops. Not built: it would be the only thing on this machine
+that initiates an outbound connection to a third party, which is a decision worth
+taking deliberately rather than as a side effect of wanting an alert.
+
+**Verified in that order, against the live stack, rather than assumed.** All seven
+pass in the current state. Stopping `grafana` produced `services` and
+`probe:grafana` with the detail naming both; an immediate re-run stayed silent;
+starting it produced the recovery; the next run was silent again. Then with the
+credentials in place the same drill was run for real and three mails were
+delivered — the baseline, the failure and the recovery — with the duplicate still
+suppressed. Then it was installed as a LaunchDaemon and left alone: the state file
+was rewritten at 18:01:38, 300 seconds after the load, by nothing anyone typed.
+
+**The log is events-only, so `did it run` is answered by the state file's mtime.**
+Right after installation the log was empty, which is simultaneously "nothing has
+gone wrong" and "this never ran" — exactly the ambiguity that made the original
+fault invisible, reappearing in the monitor built to catch it. The state file is
+rewritten every run precisely so those two readings separate.
+
+**Two things that would have cost an afternoon each.** A Google app password is
+displayed as four groups of four and the obvious thing is to paste what is shown;
+`tr -d '\r\n'` kept the spaces, and Gmail's answer to a wrong password is a bare
+rejection that names no cause. It strips all whitespace now, with a comment saying
+why that is right here and wrong in general. And the boot grace and the
+`StartInterval` are both 300 seconds, so at boot the first fire lands on the
+boundary and the first effective check may be the second one, ten minutes in. That
+is deliberate — the first five minutes belong to the reconciler, and alerting
+inside them would mail a failure that is about to be repaired — but it means "no
+mail eight minutes after a reboot" is not yet evidence of anything.
+
+**The sender is the operator's own Gmail account, which is not what the
+documentation recommends.** `secrets/README.md` says to use a dedicated sending
+account, because these files are plaintext on a host with FileVault off and that
+mailbox is both where every password-reset link arrives and the platform's first
+administrator. The deployment went with the personal account anyway, which is a
+reasonable call given that an app password cannot log into the web account and can
+be revoked on its own. It is recorded as an accepted risk in §15.7 rather than
+left as a silent divergence, which is the pattern this file has now warned about
+four times.
+
+What is still unproven is that the health daemon survives a reboot. It was
+installed after the last one.
+
 ### Round one passed, and the margin it passed by turned out to be measurable
 
 §1.1 was re-run against the repaired chain: `sudo reboot` at 17:21:40, hands off,

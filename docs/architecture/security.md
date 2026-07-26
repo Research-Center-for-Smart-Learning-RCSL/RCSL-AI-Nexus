@@ -876,6 +876,18 @@ looking for the risk. The state below is checked against the code.
 [ ] FileVault enabled; authrestart verified and documented in the runbook
     (deliberately deferred until the UPS lands; §15.6 carries the interim controls)
 [ ] Confirmed with the proxy administrator: no request body logging, no Lua interception
+
+--- Unattended recovery and alerting ---
+[ ] runbooks/first-deploy.md §1.1 round one has passed with the full check run, not just SSH
+[ ] The reconcile log has shown `OK: all bindings restored` at least once; `intact` is the
+    race not firing, which is luck rather than proof that the repair works (deployment.md §9)
+[ ] The health daemon mails: run check-platform-health.sh by hand once with the credentials
+    in place and confirm the mail arrives, because the mail path is the one part of the
+    monitor that cannot be verified by watching it work
+[ ] The alert is not filtered into spam and the daily heartbeat is not muted; the design
+    makes an absent mail the signal, so a filtered heartbeat silently removes the alarm
+[ ] /opt/homebrew/var/nexus-health.state has an mtime within the last five minutes. The
+    log is events-only and is empty both when nothing is wrong and when nothing ran
 ```
 
 ## 15. Accepted Risks
@@ -952,3 +964,15 @@ Recorded explicitly so they are not later mistaken for oversights, with the cond
 **That test has now been run twice: the chain failed round one, was repaired, and passed the re-run.** This matters here specifically, because the whole trade in this section — accept an unencrypted disk in exchange for a machine that recovers by itself — is only worth making if the second half is true. On 2026-07-26 the first reboot brought back automatic login, both LaunchDaemons, Docker Desktop and all nine containers, and still left the platform unreachable: Docker Desktop had bound its published ports before `tailscaled` had the tailnet address up, the binds failed, and nothing retried or restarted. A LaunchDaemon now reconciles that after boot (deployment.md §9), and the re-run later the same day passed every item of §1.1 with all six published ports bound.
 
 **What that re-run did not do is exercise the repair.** The reconciler ran, found nothing broken, and exited: on that boot `tailscaled` had the address on `utun0` eleven seconds before Docker bound, where on the failing boot it was three seconds late (deployment.md §9 has the measurement and its cause). The margin is what decides it, nothing in the configuration controls the margin, and the daemon that would cover a lost race has still never been through one at boot. So the exchange this section accepts has been received once. "This machine recovers unattended" is an observed property of a single boot rather than a demonstrated one, and it stays that way until §1.1 produces the `OK: all bindings restored` outcome at least once.
+
+### 15.7 The Alerting Credential Is the Operator's Own Mailbox
+
+**Situation.** `launchd/check-platform-health.sh` sends its alerts through Gmail's SMTP, authenticating with a Google app password held in plaintext at `secrets/alert_smtp_password`. The account it authenticates as is `leolove3very@gmail.com`, which is also the recipient, the platform's first administrator (`users`), and the mailbox where password-reset links for everything else would arrive. `secrets/README.md` recommends a dedicated sending account and the deployment did not use one.
+
+**Why accepted.** An app password is materially weaker than the account password in the ways that matter here: it cannot sign in to the web account, cannot change account settings or security options, cannot pass 2-Step Verification, and can be revoked individually without disturbing anything else. What it can do is send and read mail over SMTP and IMAP. That is not nothing — mail access alone is enough to drive a password reset on a third-party service — but the blast radius is a mailbox rather than an identity, and the alternative cost is maintaining a second Google account whose own recovery path then has to be looked after. Sending to oneself also removes a delivery hop and a spam-classification risk that a new, unknown sending address would introduce, which matters because this design makes an *absent* mail the alarm.
+
+**What carries the load.** The same controls §15.6 already names, because this file lives on the same unencrypted disk as the other eleven: Full Security startup, an access-controlled room, and no remote login path other than Tailscale SSH. Additionally the file is `0600` and git-ignored, and the recipient address is deliberately *not* a secret — it is a constant in the script, where a change to it is visible in review rather than sitting in an untracked file.
+
+**Reconsider when.** Any of: FileVault is enabled and this stops being a plaintext-on-an-unencrypted-disk question; a second person operates the platform, since a shared credential to one person's mailbox is a different proposition; or the alerting grows beyond the health daemon, at which point a dedicated account costs no more than the second consumer would. Rotating it is one revocation and one file, so this is cheap to reverse and should be reversed rather than argued about if the situation changes.
+
+**Status.** In force since 2026-07-26. Verified by delivering all three mail kinds — baseline, failure and recovery — to the live mailbox.
