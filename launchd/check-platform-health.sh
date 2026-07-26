@@ -267,7 +267,14 @@ if [ ! -r "$ACCOUNT_FILE" ] || [ ! -r "$PASSWORD_FILE" ]; then
 fi
 
 ACCOUNT="$(tr -d '[:space:]' < "$ACCOUNT_FILE")"
-PASSWORD="$(tr -d '\r\n' < "$PASSWORD_FILE")"
+
+# All whitespace, not just newlines. A Google app password is sixteen letters
+# with no spaces in it; the console displays it as four groups of four purely
+# for reading, and pasting what is shown gets the spaces too. Stripping a
+# password would normally be wrong — here the space is known not to be part of
+# the value, and the failure it causes otherwise is a bare authentication
+# rejection that says nothing about why.
+PASSWORD="$(tr -d '[:space:]' < "$PASSWORD_FILE")"
 
 RECONCILE_TAIL="$(tail -5 /opt/homebrew/var/log/nexus-reconcile.log 2>/dev/null)"
 
