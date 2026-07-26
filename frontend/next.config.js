@@ -1,10 +1,10 @@
 /** @type {import('next').NextConfig} */
 
-// Every API call must be same-origin so that the session cookie and the
-// Tailscale identity header behave identically to a direct backend call:
-// no CORS, no third-party cookie restrictions, no per-entrance API hostname.
-// See docs/architecture/frontend.md section 1.
-const ADMIN_API_URL = process.env.ADMIN_API_URL ?? 'http://localhost:8001';
+// The /admin proxy lives in src/middleware.ts, not here. A rewrites() entry is
+// resolved at build time and serialised into the standalone bundle, so the
+// destination cannot differ between the two entrances that share this image,
+// and an unset ADMIN_API_URL bakes in a fallback that fails at runtime rather
+// than at build. See the comment at the top of that file.
 
 // Standalone output is what the Dockerfile ships, but producing it requires
 // creating symlinks, which Windows refuses without Developer Mode. Gating it
@@ -15,11 +15,6 @@ const STANDALONE = process.env.NEXT_OUTPUT === 'standalone';
 const nextConfig = {
   ...(STANDALONE ? { output: 'standalone' } : {}),
   reactStrictMode: true,
-  async rewrites() {
-    return [
-      { source: '/admin/:path*', destination: `${ADMIN_API_URL}/admin/:path*` },
-    ];
-  },
 };
 
 module.exports = nextConfig;

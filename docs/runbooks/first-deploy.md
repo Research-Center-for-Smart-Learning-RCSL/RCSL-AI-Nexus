@@ -330,10 +330,25 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
   docker compose logs migrate
   ```
 
-- [ ] 首次建立管理員：用你的裝置（在同一個 tailnet 上）瀏覽 tailnet 入口
-  `https://<你的主機>.ts.net`。第一次登入會用你的 Tailscale 身分自動把你 bootstrap 成
-  第一個 admin（前提是 `BOOTSTRAP_ADMIN_LOGIN` 設成你的 Tailscale 身分，且 users 表還
-  是空的）。
+- [ ] 首次建立管理員：用**另一台你自己的裝置**（筆電或手機，加入同一個 tailnet）瀏覽
+  tailnet 入口 `https://<你的主機>.ts.net`。第一次登入會用你的 Tailscale 身分自動把你
+  bootstrap 成第一個 admin（前提是 `BOOTSTRAP_ADMIN_LOGIN` 設成你的 Tailscale 身分，且
+  users 表還是空的）。
+
+  **不能用伺服器自己測，這一步一定會失敗，而且看起來像壞掉。** 第 4 部分給這台打了
+  `tag:ai-server`，而 tagged 節點沒有使用者身分（`tailscale whois <ip>` 只會列出 Tags，
+  沒有 User 區塊）。`tailscale serve` 注入的 `Tailscale-User-Login` 是從連線來源節點的
+  擁有者取得的，所以從伺服器連自己，那個標頭根本不存在，入口回 401。這是設計的必然
+  結果，不是設定錯誤。要驗證後端本身沒問題，可以在伺服器上繞過 serve 直接打，手動補
+  上標頭：
+
+  ```sh
+  curl -H "Tailscale-User-Login: 你的@email" http://127.0.0.1:8001/admin/me
+  ```
+
+  順帶一提，這行指令能成功本身就說明了為什麼 tailnet 入口只綁 `127.0.0.1`：它對這個
+  標頭是無條件信任的，任何能連上那個 socket 的東西都能偽造管理員身分（security.md
+  §5.1）。
 
 - [ ] 登入後在管理 UI 裡：註冊一個模型、綁一條 routing policy、發一把 API key，確認
   gateway 真的能服務推論。
