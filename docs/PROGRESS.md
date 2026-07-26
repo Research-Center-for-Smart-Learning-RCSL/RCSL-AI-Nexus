@@ -53,6 +53,58 @@ from external media instead of a second layer behind encryption.
 
 ## 2026-07-26
 
+### Inference served end to end, and a model that could never leave its initial state
+
+`POST /v1/chat/completions` now works on the target hardware, streaming and not,
+from socket through key verification, quota, the trusted-proxy check, the country
+filter, the routing policy, the GPU, SSE framing, and back out to a usage record.
+That is Phase 1's stated goal observed rather than argued.
+
+Non-streaming returned in 0.51s with `finish_reason=stop`. Streaming produced
+twelve frames in the OpenAI envelope — a role frame, content deltas, a terminal
+frame carrying `finish_reason`, then `[DONE]` — and reassembled correctly.
+`usage_records` holds one row per successful request, stamped with the default
+tenant; the two requests that were refused earlier in the path recorded nothing,
+which is right, because neither reached the use case. The gateway's `/metrics`
+reports `nexus_inference_requests_total 2` and `nexus_inference_tokens_total 33`,
+matching the two completions exactly. The admin chat panel had produced two
+further usage rows and no gateway metrics, which is also right: it is served by
+the admin entrance, not the gateway.
+
+Two things about the request shape are worth writing down, because both looked
+like faults for a minute. The OpenAI `model` field carries the **capability**,
+not a model alias — `RouteChatRequest` resolves a policy by capability and the
+policy chooses the model, so `"model": "qwen7b"` is refused with
+`no_available_model` while `"model": "chat"` succeeds. And in production the
+gateway refuses anything that did not arrive through the proxy, so testing before
+nginx exists means presenting `X-Nexus-Proxy` and an `X-Forwarded-For`. Both
+refusals were the design working; neither is documented anywhere a caller would
+look, which the API reference should fix when it exists.
+
+**Before any of that, a registered model could not be downloaded at all.**
+`model-table.tsx` offered `Unload` when the state was `loaded` and `Load` in every
+other case — including `not_downloaded`, where the use case's precondition
+guarantees a 409. A freshly registered model was therefore a dead end: the only
+button available was the one that could not work. The backend endpoint, the
+`startDownload` client, the `useStartDownload` hook, the `useDownloadJob` poller
+and the `DownloadProgress` component all existed; the hook and the component were
+never referenced from anywhere. The whole download UI was built and never wired
+in, which is why `ROADMAP.md` could carry `features/models: download progress via
+useDownloadJob` as done, and why this file could claim the models table polls that
+endpoint. It does not; nothing did.
+
+The actions now mirror the use cases' own preconditions, so a button that is
+present is a button that can succeed: `Download` unless the model is loaded,
+`Load` only from `downloaded`, `Unload` only from `loaded`. The table also owns
+the job now, because `useDownloadJob` stops polling at a terminal state without
+telling anyone, so the row would otherwise sit at `downloading` until a reload.
+
+A measurement worth keeping: the loaded model is 5.7 GB resident against 4.7 GB of
+weights, where the same model measured 6.6 GB this morning under a hand-started
+`ollama serve`. The difference is `OLLAMA_KV_CACHE_TYPE=q8_0`, which the committed
+plist carries and an ad-hoc run does not — so the KV cache the memory budget's
+headroom has to absorb is about 1.0 GB here, not 1.9 GB.
+
 ### The stack is up on the Mac Studio, and the frontend could not reach its backend
 
 First full `docker compose up` on the target hardware. `migrate` exited 0 having

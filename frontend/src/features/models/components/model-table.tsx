@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { PlusIcon } from 'lucide-react';
 
@@ -11,11 +11,15 @@ import { ConfirmDialog } from '@/components/composed/confirm-dialog';
 import { useSession } from '@/lib/session';
 import {
   useDeleteModel,
+  useInvalidateModels,
   useLoadModel,
   useModels,
   useNodes,
+  useStartDownload,
   useUnloadModel,
 } from '@/features/models/hooks/use-models';
+import { useDownloadJob } from '@/features/models/hooks/use-download-job';
+import { DownloadProgress } from '@/features/models/components/download-progress';
 import { ModelFormDialog } from '@/features/models/components/model-form-dialog';
 import { RUNTIME_LABELS, type Model } from '@/features/models/schema';
 
@@ -26,10 +30,25 @@ export function ModelTable() {
   const load = useLoadModel();
   const unload = useUnloadModel();
   const remove = useDeleteModel();
+  const download = useStartDownload();
+  const invalidateModels = useInvalidateModels();
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Model | undefined>(undefined);
   const [deleting, setDeleting] = useState<Model | null>(null);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+
+  // The job is owned here rather than inside DownloadProgress, which only
+  // renders: the table is what has to refresh when the pull finishes, and
+  // useDownloadJob stops polling at a terminal state without telling anyone.
+  // Without this the row sits at `downloading` until the page is reloaded.
+  const job = useDownloadJob(activeJobId);
+  const jobState = job.data?.state;
+  useEffect(() => {
+    if (jobState === 'succeeded' || jobState === 'failed') {
+      void invalidateModels();
+    }
+  }, [jobState, invalidateModels]);
 
   const columns = useMemo<ColumnDef<Model>[]>(
     () => [
@@ -90,7 +109,28 @@ export function ModelTable() {
           if (!isAdmin) return null;
           return (
             <div className="flex justify-end gap-1">
-              {model.state === 'loaded' ? (
+              {/* The offered actions mirror the use cases' own preconditions,
+                  so a button that is present is a button that can succeed.
+                  Download is refused only for a loaded model (unload first)
+                  and the transient states; Load requires `downloaded`, and
+                  offering it on `not_downloaded` — as this table did until
+                  2026-07-26 — guarantees a 409 and leaves a freshly
+                  registered model with no way forward at all. */}
+              {model.state !== 'loaded' && (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  disabled={busy || download.isPending}
+                  onClick={() =>
+                    download.mutate(model.id, {
+                      onSuccess: (started) => setActiveJobId(started.job_id),
+                    })
+                  }
+                >
+                  {model.state === 'downloaded' ? 'Re-download' : 'Download'}
+                </Button>
+              )}
+              {model.state === 'loaded' && (
                 <Button
                   variant="outline"
                   size="xs"
@@ -99,7 +139,8 @@ export function ModelTable() {
                 >
                   Unload
                 </Button>
-              ) : (
+              )}
+              {model.state === 'downloaded' && (
                 <Button
                   variant="outline"
                   size="xs"
@@ -132,11 +173,13 @@ export function ModelTable() {
         },
       },
     ],
-    [isAdmin, load, unload],
+    [isAdmin, load, unload, download],
   );
 
   return (
     <>
+      {activeJobId && <DownloadProgress jobId={activeJobId} className="mb-3" />}
+
       <DataTable
         columns={columns}
         data={data}
