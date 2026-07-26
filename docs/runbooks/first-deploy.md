@@ -50,10 +50,13 @@ secrets 設定見 [secrets/README.md](../../secrets/README.md)。
   「插電就回到服務中」的必要環節。完整的鏈路是：
 
   ```
-  通電/重開 → 自動登入 → LaunchDaemon（Tailscale、Ollama、reconcile-port-bindings）
+  通電/重開 → 自動登入 → LaunchDaemon（Tailscale、Ollama、reconcile-port-bindings、
+                                       health-check）
            → Docker Desktop 自啟 → 9 個容器 restart: unless-stopped 回來
            → reconcile 等 utun0 有位址、docker 有回應、容器數穩定
            → 補上開機時綁失敗的 port forward
+           → health-check 每 5 分鐘複驗，狀態變了寄信（第六環，它不修東西，
+             它的工作是讓前面五環的失敗不再是無聲的）
   ```
 
   這條鏈**每一環都要成立**，少一環機器就回不到服務中，而且是無聲的——你只會發現「服務
@@ -91,11 +94,16 @@ ollama ps
 cd ~/dev/RCSL-AI-Nexus && docker compose ps
 tail -20 /opt/homebrew/var/log/nexus-reconcile.log
 curl -s -o /dev/null -w 'gateway readyz: %{http_code}\n' http://<TAILNET_IP>:8000/readyz
+ls -l /opt/homebrew/var/nexus-health.state
 ```
 
 通過的條件：tailnet 在線、Ollama 有回應、9 個容器 running（`migrate` 是 `Exited (0)`，
 它是一次性工作，不該重啟）、對帳 log 最後一行是 `all bindings restored` 或
-`all published bindings intact`、readyz 200。
+`all published bindings intact`、readyz 200、health state 檔的 mtime 在開機後十分鐘內
+（監測 daemon 自己也要撐過重開，它跟其他環一樣會無聲地不見）。
+
+**收不到信不算通過的證據。** 狀態沒變就不寄信，所以一切正常時信箱是空的；而監測 daemon
+自己沒起來的時候，信箱也是空的。這兩件事在信箱裡長得一模一樣，要分辨只能看 state 檔。
 
 **`readyz` 那一行是這串裡唯一不能省的。** 2026-07-26 第一次跑這個測試時，前面每一項都
 過了——tailnet 在線、9 個容器 running、gateway 標著 healthy——而 gateway、admin-public、
@@ -612,6 +620,11 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
   ```
 
   log 平常空著是正常的，所以「它到底有沒有在跑」不要從 log 判斷，看 state 檔的 mtime。
+
+  **重開機之後不要太早下結論。** boot grace 和 `StartInterval` 都是 300 秒，開機時第一次觸發
+  剛好落在邊界上，所以第一次真正有效的檢查可能是第二次觸發、也就是開機後約十分鐘。這是刻意
+  的——前五分鐘歸 reconciler，在那段時間告警等於寄出一個即將被修好的故障——但代價是「重開後
+  八分鐘沒收到信」還不能當成任何證據。看 state 檔的 mtime，不要看信箱。
 
 - [ ] 首次建立管理員：用**另一台你自己的裝置**（筆電或手機，加入同一個 tailnet）瀏覽
   tailnet 入口 `https://<你的主機>.ts.net`。第一次登入會用你的 Tailscale 身分自動把你
