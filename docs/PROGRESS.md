@@ -53,6 +53,52 @@ from external media instead of a second layer behind encryption.
 
 ## 2026-07-26
 
+### Remote access, and a diagnostic that invented the wrong conclusion
+
+The machine is headless, so it needs a way in. It is Tailscale SSH, gated by the
+`ssh` block that was already sitting in §3.4, with `action: check` forcing
+re-authentication every twelve hours. macOS Remote Login is off: `tailscaled`
+serves SSH on the Tailscale interface only, so §11's "listening on the Tailscale
+interface only" is satisfied by not running a second SSH server rather than by
+editing `sshd_config`, and there is no password or key that can leak. Remote
+Login had been enabled during the attempt and was binding every interface,
+including the LAN, accepting passwords — the exact shape §11 exists to prevent.
+Nothing answers on `127.0.0.1:22` now, which is the useful check precisely
+because Tailscale SSH does not bind loopback.
+
+**The detour is worth recording, because the wrong turn was mine and it was a
+measurement error.** Concluding that Tailscale SSH does not run on macOS, I read
+`tailscale status --json` for SSH host keys and found none. That field does not
+exist in the JSON, so the probe returned "absent" no matter what the truth was,
+and the conclusion followed confidently from a check that could only ever produce
+one answer. Acting on it, the `ssh` block was removed from the ACL — which was
+the only thing authorising SSH — and the next attempt failed with `tailnet policy
+does not permit you to SSH to this node`. The banner is precise and says exactly
+what happened; the earlier reasoning had made it look like confirmation of the
+platform theory instead. `RunSSH` in `tailscale debug prefs` is the field that
+answers the original question, and it had been `true` throughout.
+
+The generalisable part: a probe that cannot distinguish "absent" from "I asked
+the wrong question" is worse than no probe, because it converts uncertainty into
+false confidence. That is the same failure mode as the day's other six, arriving
+from the diagnostic side rather than the configuration side.
+
+**Two properties came out of it that are now in the documents.** Tailscale SSH
+needs both halves — port 22 in `acls` to carry the connection and the `ssh` block
+to authorise the session — and the two failures look nothing alike: without the
+port the connection never arrives, without the block `tailscaled` answers and
+refuses. The runbook now carries that split as a table, plus the log line that
+tells them apart (`handling conn` in `tailscaled.log` means the connection
+reached the server, so the problem is authorisation, not networking).
+
+And a tagged node has no user identity, which reaches past SSH: `tailscale whois`
+for `tag:ai-server` lists tags and no user, so `tailscale serve` has no
+`Tailscale-User-Login` to inject for a connection from the server itself. The
+tailnet management entrance cannot be exercised from the machine it runs on. That
+is a property of tagging rather than a misconfiguration, and it is now stated in
+both §3.4 and the runbook's bootstrap step, because the obvious first test is the
+one that cannot work.
+
 ### Inference served end to end, and a model that could never leave its initial state
 
 `POST /v1/chat/completions` now works on the target hardware, streaming and not,

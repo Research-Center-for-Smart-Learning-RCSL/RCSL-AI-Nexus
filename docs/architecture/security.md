@@ -202,7 +202,7 @@ Being on the tailnet must not imply reaching everything. Note in particular that
   },
   "acls": [
     { "action": "accept", "src": ["tag:ntnu-proxy"], "dst": ["tag:ai-server:8000,8002,3001"] },
-    { "action": "accept", "src": ["group:ai-admin"], "dst": ["tag:ai-server:443,8443"] },
+    { "action": "accept", "src": ["group:ai-admin"], "dst": ["tag:ai-server:443,8443,22"] },
     { "action": "accept", "src": ["group:ai-user"],  "dst": ["tag:ai-server:443"] }
   ],
   "ssh": [
@@ -234,6 +234,10 @@ The proxy machine carries `tag:ntnu-proxy` and can reach only the three ports it
 **The `tests` block is the part that keeps this true.** Tailscale runs it on every policy save and refuses a policy that fails one, so the `deny` lines are the no-bypass property asserted rather than described: a human member must not reach the data-plane ports, and the proxy must not reach the management endpoints. Without them the rules above are a claim that only holds until someone edits the file.
 
 **A tagged device is required, not incidental.** Every rule here has `tag:ai-server` on the destination side, so a server that joined the tailnet without `--advertise-tags` matches none of them — and since the default policy for a new tailnet is `{"src": ["*"], "dst": ["*"], "ip": ["*"]}`, the failure mode is not "nothing works" but "everything is reachable". The tag also disables Tailscale's default 180-day key expiry, which on a 24/7 server would otherwise take the tailnet down half a year after deployment.
+
+**Tailscale SSH needs both halves, and neither alone is enough.** Port 22 in the `acls` rule above carries the connection; the `ssh` block below authorises the session. With only the port, `tailscaled` answers and then refuses with `tailnet policy does not permit you to SSH to this node`; with only the `ssh` block, nothing reaches port 22 at all. The two failures look different and are equally easy to mistake for the SSH server being absent.
+
+**A tagged node has no user identity, and that has a consequence beyond SSH.** `tailscale whois` for `tag:ai-server` lists tags and no user, so `tailscale serve` has no `Tailscale-User-Login` to inject for a connection originating from the server itself. The tailnet management entrance therefore cannot be exercised from the machine it runs on — testing it needs a second, user-owned device. This is a property of tagging, not a misconfiguration.
 
 ## 4. Data Plane Hardening
 
@@ -676,7 +680,7 @@ The practical position:
 
 - FileVault, Gatekeeper, and SIP all remain enabled.
 - **Run Docker and the runtimes under dedicated service accounts, not the operator's everyday administrator login.**
-- SSH: keys only (`PasswordAuthentication no`), no root login, listening on the Tailscale interface only, combined with the ACL in §3.4.
+- SSH: **Tailscale SSH, with macOS Remote Login off.** `tailscaled` serves SSH on the Tailscale interface only, so the requirement to listen nowhere else is met by not running a second SSH server rather than by an `sshd_config` edit, and there is no password or key to leak: identity comes from the tailnet and the `ssh` block in §3.4 gates it, with `action: check` forcing re-authentication every 12 hours. Enable with `sudo tailscale up --ssh --advertise-tags=tag:ai-server` (carry the tags flag, or a bare `tailscale up` can drop the tag), then turn Remote Login **off** in System Settings. macOS Remote Login binds every interface including the LAN and accepts passwords, which is the shape this bullet used to describe hardening away; with Tailscale SSH there is no reason to run it at all. Verify by confirming nothing answers on `127.0.0.1:22` while a tailnet SSH session still connects — Tailscale SSH does not bind loopback, so loopback silence is the check that the system daemon is the one that stopped.
 - Disable unused services: screen sharing, file sharing, AirDrop, printer sharing.
 - Set a firmware password to prevent booting from external media.
 - Automatic screen lock; the machine lives in an access-controlled space.
