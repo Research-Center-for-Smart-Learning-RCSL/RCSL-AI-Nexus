@@ -98,14 +98,33 @@ networks:
   # holds: Prometheus is on both, but the gateway and the admin entrances never
   # share one. Prometheus is a scraper, not a router — it issues only the fixed
   # GET /metrics in prometheus/prometheus.yml — so a compromised gateway cannot
-  # use it to reach an admin entrance. All internal: nothing here is published.
+  # use it to reach an admin entrance. Both internal: Prometheus reaches its
+  # scrape targets and nothing else, and has no route off the machine.
   metrics-gateway:
     internal: true
   metrics-admin:
     internal: true
-  # Grafana to Prometheus only. Grafana is the sole member with a host port.
+  # Grafana to Prometheus only, and internal so that Prometheus — which is also
+  # on the two networks above, and is therefore the one container spanning the
+  # gateway and admin trust tiers — gains no egress from being reachable here.
   metrics-viz:
     internal: true
+  # Grafana's host port, and nothing else. Docker cannot publish a port into an
+  # internal network: with no gateway address there is no route from the host,
+  # and the daemon refuses with `no suitable container IP found` — which is a
+  # warning, not an error, so the container starts healthy and the port is
+  # simply absent. Grafana's 127.0.0.1:3002 had never once bound because of
+  # this; it was found on 2026-07-26 while investigating a separate reboot
+  # fault, not by anything noticing the port was missing.
+  #
+  # Publishing therefore requires a non-internal network, and a non-internal
+  # network necessarily grants that container egress — there is no Docker
+  # bridge configuration that gives one without the other. This exists so the
+  # cost is paid by Grafana alone rather than by dropping `internal` from
+  # metrics-viz, which would hand the same egress to Prometheus. Grafana's
+  # reasons to reach outward are already switched off above
+  # (GF_ANALYTICS_REPORTING_ENABLED, GF_ANALYTICS_CHECK_FOR_UPDATES).
+  viz-ingress:
 
 volumes:
   postgres-data:
@@ -379,11 +398,13 @@ services:
       # Loopback only, exposed to the tailnet through `tailscale serve --https
       # 8443 http://127.0.0.1:3002`. Never published on 0.0.0.0.
       - "127.0.0.1:3002:3000"
+    # viz-ingress carries the host port; metrics-viz carries the Prometheus
+    # datasource. See the networks block for why they have to be two.
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
-    networks: [metrics-viz]
+    networks: [metrics-viz, viz-ingress]
     secrets:
       - grafana_admin_password
     depends_on:
