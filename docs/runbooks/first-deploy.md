@@ -50,12 +50,21 @@ secrets 設定見 [secrets/README.md](../../secrets/README.md)。
   「插電就回到服務中」的必要環節。完整的鏈路是：
 
   ```
-  通電/重開 → 自動登入 → LaunchDaemon（Tailscale、Ollama）
+  通電/重開 → 自動登入 → LaunchDaemon（Tailscale、Ollama、reconcile-port-bindings）
            → Docker Desktop 自啟 → 9 個容器 restart: unless-stopped 回來
+           → reconcile 等 utun0 有位址、docker 有回應、容器數穩定
+           → 補上開機時綁失敗的 port forward
   ```
 
   這條鏈**每一環都要成立**，少一環機器就回不到服務中，而且是無聲的——你只會發現「服務
   沒了」，不會知道斷在哪。所以下面有驗收測試。
+
+  **最後那一環是 2026-07-26 第一次重開機測試打出來的，不是原本設計的。** 容器回來
+  ≠ 服務回來：Docker Desktop 還原容器的時間點早於 `tailscaled` 把位址掛上 `utun0`，
+  那些指名 tailnet 位址的 port forward 綁失敗，而 Docker **只記一行 warning、不重試**。
+  沒有東西退出，所以 `restart: unless-stopped` 永遠不會觸發。九個容器全部 running、
+  gateway 標著 healthy、而平台從 tailnet 完全打不到。第 7 部分裝的那個 LaunchDaemon
+  就是補這一環，它的安裝步驟在那裡。
 
 ### 1.1 無人復原驗收（等第 7 部分整套跑起來之後再做）
 
@@ -80,11 +89,37 @@ ssh <你的帳號>@<伺服器的 100.x.y.z>
 tailscale status | head -2
 ollama ps
 cd ~/dev/RCSL-AI-Nexus && docker compose ps
+tail -20 /opt/homebrew/var/log/nexus-reconcile.log
 curl -s -o /dev/null -w 'gateway readyz: %{http_code}\n' http://<TAILNET_IP>:8000/readyz
 ```
 
 通過的條件：tailnet 在線、Ollama 有回應、9 個容器 running（`migrate` 是 `Exited (0)`，
-它是一次性工作，不該重啟）、readyz 200。
+它是一次性工作，不該重啟）、對帳 log 最後一行是 `all bindings restored` 或
+`all published bindings intact`、readyz 200。
+
+**`readyz` 那一行是這串裡唯一不能省的。** 2026-07-26 第一次跑這個測試時，前面每一項都
+過了——tailnet 在線、9 個容器 running、gateway 標著 healthy——而 gateway、admin-public、
+frontend-public 三個 port 一個都沒綁，平台從 tailnet 完全打不到。`docker compose ps` 看
+起來完全正常，因為容器確實在跑；缺的是 host 這一側的轉發。第 7 部分的 port 對照表是它的
+完整版本，只看一個 readyz 也足以抓到。
+
+還有一件事會誤導你：**SSH 進得去不代表服務在。** Tailscale SSH 由 `tailscaled` 自己在
+tailnet 介面上服務，`tailscale serve` 的管理入口轉發的是 loopback，兩條都不經過會出事的
+那種 binding。所以你會順利登入、看到一切正常，而 gateway 是死的。
+
+**對帳 log 有四種結果，意思不一樣：**
+
+| `nexus-reconcile.log` 最後一行 | 意思 |
+|---|---|
+| `OK: all bindings restored` | 競態發生了，reconciler 補回來了。**這是最有價值的結果**——修復路徑被真的走過一次 |
+| `all published bindings intact; nothing to do` | 這次 `tailscaled` 比 Docker 快，競態沒觸發。算過，但**沒測到修復路徑**，不要據此認為問題解決了 |
+| `STILL UNBOUND after recreate: <服務>` | 有東西壞在 `--force-recreate` 修不了的地方（internal 網路、port 被佔）。看那個服務的 `docker inspect` 和 Docker backend log |
+| log 不存在或是空的 | daemon 根本沒跑。`sudo launchctl list \| grep reconcile` 看有沒有註冊，第二欄是上次結束狀態 |
+
+第二種結果要當心：它是運氣，不是證明。真要確認修復路徑有效，得重開到出現第一種為止。
+
+**第一輪失敗的話：修好，然後從頭重跑第一輪。** 不要因為「知道原因了」就跳到第二輪——
+第二輪的前提是第一輪通過，而通過的定義是跑完整串、每一項都對。
 
 **第二輪：系統更新。** 第一輪通過之後才做，因為兩者一起做會讓失敗無法歸因——你分不出
 是更新的問題還是自動登入沒設好。
@@ -460,6 +495,44 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
   docker compose logs migrate
   ```
 
+- [ ] **確認六個 port 真的綁上了。** 這一步不能只看 `docker compose ps` 顯示 `Up`——
+  容器可以健康地跑著、而 port 一個都沒綁。判準是 `PortBindings`（要求）和 `Ports`
+  （實際）要一致，實際那邊是 `[]` 就是掉了：
+
+  ```sh
+  for c in $(docker compose ps -q); do
+    printf '%-38s %s\n' "$(docker inspect $c --format '{{.Name}}')" \
+      "$(docker inspect $c --format '{{json .NetworkSettings.Ports}}')"
+  done
+  ```
+
+  應該看到 gateway `TAILNET_IP:8000`、admin-public `:8002`、frontend-public `:3001`、
+  admin-tailnet `127.0.0.1:8001`、frontend-tailnet `127.0.0.1:3000`、grafana
+  `127.0.0.1:3002`。postgres／redis／prometheus 顯示 `null` 是對的，它們本來就不發布。
+
+- [ ] **裝開機對帳的 LaunchDaemon。** Docker Desktop 開機時會在 `tailscaled` 把位址掛上
+  `utun0` 之前就還原容器，那些指名 tailnet 位址的 port forward 於是綁失敗，而它
+  **只記一行 warning、不重試**。容器照樣 running、healthy，`restart: unless-stopped`
+  因為沒有東西退出所以永遠不觸發——服務從 tailnet 消失，沒有任何東西會說。
+
+  ```sh
+  sudo install -o root -g wheel -m 644 \
+    launchd/online.rcsl.reconcile-port-bindings.plist /Library/LaunchDaemons/
+  sudo launchctl load -w /Library/LaunchDaemons/online.rcsl.reconcile-port-bindings.plist
+  ```
+
+  它等 `utun0` 有位址、docker 有回應（最多十分鐘），然後只對「要求了 binding 卻沒拿到」
+  的容器跑 `--force-recreate`，跑完再驗一次。**一定要 `--force-recreate`：** forward 是
+  容器*建立*時產生的，`docker compose up -d` 對已在跑且設定相符的容器是 no-op，
+  `docker compose restart` 沿用同一個容器、不會動到後端的轉發表。這兩個在這台機器上都
+  試過，都沒有恢復任何一個 binding。
+
+  對帳結果看這裡（它刻意不無限重試，修不好的東西要人看，不是一直重建）：
+
+  ```sh
+  tail -20 /opt/homebrew/var/log/nexus-reconcile.log
+  ```
+
 - [ ] 首次建立管理員：用**另一台你自己的裝置**（筆電或手機，加入同一個 tailnet）瀏覽
   tailnet 入口 `https://<你的主機>.ts.net`。第一次登入會用你的 Tailscale 身分自動把你
   bootstrap 成第一個 admin（前提是 `BOOTSTRAP_ADMIN_LOGIN` 設成你的 Tailscale 身分，且
@@ -579,6 +652,27 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
 - **服務起不來、log 提到 GeoLite2**：`data/GeoLite2-Country.mmdb` 沒放好（第 5 部分）。
 - **Docker Desktop 沒在跑**：macOS 上 `docker compose` 需要 Docker Desktop 開著（設成
   登入自動啟動）。
-- **重開機後服務沒回來**：確認 Docker Desktop 自動啟動、Ollama 的 launchd 服務有起、
+- **重開機後服務沒回來**：先分清楚是「容器沒回來」還是「容器回來了但 port 沒綁」，
+  這兩者的症狀完全不同，而後者比較常見也比較難認。
+
+  容器沒回來 → 確認自動登入、Docker Desktop 自動啟動、Ollama 的 launchd 服務有起、
   容器是 `restart: unless-stopped`（已預設）。
+
+  **容器回來了但打不到** → 這是 2026-07-26 實際發生的那一種。`docker compose ps` 顯示
+  九個 running、gateway 標 healthy，而 `curl http://<TAILNET_IP>:8000/readyz` 沒有回應。
+  `restart: unless-stopped` 對這種情況**完全無效**——綁定失敗不會讓容器退出，沒有東西
+  退出就沒有東西重啟。查法：
+
+  ```sh
+  tail -30 /opt/homebrew/var/log/nexus-reconcile.log   # 對帳 daemon 說了什麼
+  sudo launchctl list | grep reconcile                 # 它有沒有註冊、上次結束狀態
+  docker inspect <容器> --format '{{json .NetworkSettings.Ports}}'   # [] 就是掉了
+  ```
+
+  手動補救(注意**一定要 `--force-recreate`**，`up -d` 和 `restart` 都無效，原因見
+  第 7 部分)：
+
+  ```sh
+  docker compose up -d --force-recreate gateway admin-public frontend-public
+  ```
 - **Mac 上容器碰不到 GPU**：所以 Ollama 一定要原生跑，別想放進 Docker。

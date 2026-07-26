@@ -17,6 +17,107 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-26
 
+### The reboot test, which the chain failed in the one way nobody would notice
+
+§1.1 round one was run: `sudo reboot`, hands off, then the checks. **It failed.**
+Almost every link held — automatic login, both LaunchDaemons, Docker Desktop's
+autostart, nine containers running with `migrate` correctly at `Exited (0)`,
+`tailscale serve` config intact, Ollama on `127.0.0.1:11434`. What did not come
+back were four of the six published ports. `gateway`, `admin-public` and
+`frontend-public` had no host binding at all, so the platform was unreachable
+from the tailnet: `curl http://<TAILNET_IP>:8000/readyz` returned `000`.
+
+The cause, from the Docker backend log at 21 seconds after boot:
+
+```
+listen tcp4 100.108.250.62:8000: bind: can't assign requested address
+```
+
+Docker Desktop restores containers before `tailscaled` has put the address on
+`utun0`. The bind fails, **the backend logs one warning and does not retry**, and
+because nothing exited, `restart: unless-stopped` never fires. The container runs,
+reports healthy, and publishes nothing.
+
+**This is the exact failure the previous entry predicted, and it arrived with the
+one property that makes it worst: every casual check says fine.** SSH still
+worked, because Tailscale SSH is served by `tailscaled` on the tailnet interface
+and never touches a Docker binding. The tailnet admin UI still worked, because
+`tailscale serve` forwards to loopback and loopback binds reliably at boot. So
+you log in, run `docker compose ps`, see nine containers `Up` and the gateway
+marked `healthy`, and conclude the reboot was clean. Only something that actually
+crosses the published port finds out. The natural experiment is clean: every
+entrance reached through `serve` → loopback survived, 2 for 2; every entrance
+binding the tailnet address directly did not, 0 for 4.
+
+**Two proposed fixes were wrong before the third was right, and both were wrong
+in the same way — assumed rather than tested.** `docker compose up -d` is a no-op
+against a container already running with a matching config; it reported everything
+`Running` and restored nothing. `docker compose restart` reuses the container and
+leaves the backend's forwarding table alone; grafana came back still unbound. The
+forward is created when a container is *created*, so only `--force-recreate`
+re-establishes it — verified, and `/readyz` returned 200 immediately after. Had
+the reconciler been written to the first design, it would have run every boot,
+logged success, and fixed nothing.
+
+So `launchd/reconcile-port-bindings.sh` and its LaunchDaemon. It waits for three
+preconditions instead of racing them: the address actually on an interface
+(`ifconfig`, not `tailscale status`, because the bind needs the former), a
+responsive daemon, and the container count holding steady across two samples ten
+seconds apart. The third was missing from the first version and is the same error
+again, caught before the test rather than by it — the daemon answers well before
+the last container is restored, and at boot they come back one at a time, so
+checking on the daemon alone would enumerate only the containers that had already
+returned, find those intact, and exit reporting success without ever looking at
+the ones still to come. A check whose timing lets it produce only one answer.
+Waiting for the count to stop moving avoids picking a fixed delay, which would
+have been another guess. It then recreates only the containers whose requested
+`PortBindings` have an empty `NetworkSettings.Ports`, which is the precise
+signature of the dropped forward. It verifies once and stops. It is deliberately
+not `KeepAlive`: it exits non-zero when a binding is beyond repair, and under
+`KeepAlive` that would become a container recreated every few seconds forever.
+`TAILNET_IP` is read from the same `.env` compose interpolates, so the address it
+waits for cannot drift from the address it binds. Written for bash 3.2, which is
+what macOS ships — the first draft used `mapfile` and would have failed at boot.
+
+### Grafana's host port had never bound, and the reboot only made it visible
+
+Chasing the above turned up a fourth unbound port that was not a reboot fault at
+all. Grafana's `127.0.0.1:3002` had never worked once: the earliest log on the
+machine shows `exposer.Add(... 127.0.0.1:3002 -> 127.0.0.1:0)` followed
+immediately by `removing`, a forward to an invalid destination.
+
+`metrics-viz` is `internal: true`, and Docker cannot publish a host port into an
+internal network — no gateway address means no route from the host, and the
+daemon declines with `no suitable container IP found`. That is a *warning*, so
+the container starts, reports healthy, and the port is simply absent.
+`docker-compose.yml` stated the contradiction in two adjacent comment lines —
+"All internal: nothing here is published", then "Grafana is the sole member with
+a host port" — and neither the checklist nor anything else ever loaded that port,
+so nothing contradicted it.
+
+Publishing requires a non-internal network, and a non-internal network
+necessarily grants egress; no Docker bridge configuration gives one without the
+other. Grafana now has a dedicated `viz-ingress` for the host port and stays on
+`metrics-viz` for the datasource, so Grafana alone pays that cost. The one-line
+alternative — dropping `internal` from `metrics-viz` — would have handed the same
+egress to Prometheus, which is the single container spanning the gateway and
+admin trust tiers and therefore the worst place to put it. Verified after the
+change: Grafana reaches `prometheus:9090`, Prometheus answers `Network is
+unreachable` to an off-host address, and 3002 returns 200.
+
+**Round one has not been re-run.** The fix is in place and tested by hand against
+a live fault, but the property being claimed is that a *reboot* recovers, and no
+reboot has happened since the reconciler was installed. Everything in the previous
+entry about a chain of individually correct settings not being evidence applies
+unchanged, and now with a worked example. Round two, the 26.5.2 update, stays
+blocked behind a passing round one.
+
+The runbook gains the check that would have caught this in section 7 — the six
+expected bindings, compared as requested-versus-actual rather than read off
+`docker compose ps` — and §1.1 now says why `readyz` is the one line in the
+acceptance run that cannot be skipped, and why getting in over SSH proves nothing
+about whether the platform is serving.
+
 ### FileVault deferred, and the headless prerequisites the runbook was missing
 
 The Mac Studio was powered on for the first time, which turned the first-deploy
@@ -1475,23 +1576,55 @@ The backend suite runs here too: 359 tests on Python 3.12 against a real
 Postgres 17.
 
 What is still unverified, and by what: the **public entrance and nginx**, which
-wait on the NTNU proxy administrator; the **unattended-recovery chain**, which is
-built but has never seen a reboot (runbook §1.1); and **MLX**, which has an
-adapter and no model registered against it.
+wait on the NTNU proxy administrator; the **unattended-recovery chain**, which has
+now seen one reboot and *failed* it, been repaired, and not been re-tested
+(runbook §1.1); and **MLX**, which has an adapter and no model registered against
+it.
+
+**On the recovery chain specifically, because it is the item most likely to be
+misread.** The 2026-07-26 reboot found that Docker Desktop drops the port forwards
+naming the tailnet address — it restores containers before `tailscaled` has the
+address up, the bind fails, and the daemon logs one warning and never retries.
+Nothing exits, so `restart: unless-stopped` never fires; nine containers run,
+`healthy`, publishing nothing. A LaunchDaemon
+(`launchd/reconcile-port-bindings.sh`) now reconciles this after boot and has been
+tested by hand against a live fault. **It has not been tested by an actual
+reboot.** That is the whole point of the property, so until round one is re-run
+and passes, the chain is repaired-but-unproven, not proven.
 
 ### If you are picking this up cold
 
-Read this section, then the four 2026-07-26 entries above, then
+Read this section, then the 2026-07-26 entries above, then
 [runbooks/first-deploy.md](./runbooks/first-deploy.md) §1.1. The single most
-useful thing to know is that the day found **six defects of one kind**: a control
-designed, written down, marked done, and not actually in force — the account-split
-test asserting nothing, the Ollama bind not surviving a reboot, the pnpm
-allowlist inert, the tailnet ACL never applied, the frontend's admin URL baked at
-build time, and a registered model with no reachable download action. None looked
-wrong. Tests passed, images built clean, health checks were green. They surfaced
-only when someone walked the whole path for the first time. Assume the same class
-of thing remains in the parts that have not been walked yet — the public
-entrance, MLX, and anything the runbook has not made someone do end to end.
+useful thing to know is that the day found **eight defects of one kind**: a
+control designed, written down, marked done, and not actually in force — the
+account-split test asserting nothing, the Ollama bind not surviving a reboot, the
+pnpm allowlist inert, the tailnet ACL never applied, the frontend's admin URL
+baked at build time, a registered model with no reachable download action,
+Grafana's host port that had never once bound because it was declared on an
+`internal` network, and the unattended-recovery chain itself, where
+`restart: unless-stopped` was documented as what brings the platform back and does
+not restore a dropped port binding. None looked wrong. Tests passed, images built
+clean, health checks were green. They surfaced only when someone walked the whole
+path for the first time. Assume the same class of thing remains in the parts that
+have not been walked yet — the public entrance, MLX, and anything the runbook has
+not made someone do end to end.
+
+**Two of the eight were only found because a different investigation walked past
+them**, which is worth knowing about the remaining surface: Grafana's port was
+noticed while chasing the reboot fault, and the reboot fault itself was noticed
+only because §1.1 says to `curl` the gateway rather than trust
+`docker compose ps`. Nothing was monitoring either. There is no alerting on this
+platform yet, so "it looks fine" currently means "nobody has asked it a question
+it could fail."
+
+**A related habit the day kept punishing: checking in a way that can only return
+one answer.** Three times — the `tailscale status --json` probe for SSH host keys
+that read a nonexistent field, `docker compose up -d` assumed to rebuild a port
+forward when it is a no-op against a running container, and a first draft of the
+reconciler that would have enumerated containers before Docker finished restoring
+them. Each produced a confident wrong answer rather than an error. When a check
+passes, it is worth asking what a failure would have looked like.
 
 The machine has **no out-of-band management**. The dividing line for remote work
 is whether an action can affect the next boot; the runbook states this after §1.1.
@@ -1505,12 +1638,26 @@ routing policy editor now exists, so a policy is no longer curl-only.
 Four things are open as of the end of 2026-07-26, in the order they should be
 picked up.
 
-**1. Run the unattended-recovery acceptance test.** Two rounds, in
-[runbooks/first-deploy.md](./runbooks/first-deploy.md) §1.1: a clean reboot, then
-the pending macOS 26.5.2 update, separately so a failure is attributable. **A
-person must be at the machine.** Until this passes, nothing should be concluded
-about the platform surviving a power cut, and remote system updates should not be
-attempted. Automatic login is the last link and is set at the same time.
+**1. Re-run round one of the unattended-recovery acceptance test.**
+[runbooks/first-deploy.md](./runbooks/first-deploy.md) §1.1. Round one was run on
+2026-07-26 and **failed**: four of six published ports did not come back. The
+cause is understood and repaired (the reconcile LaunchDaemon, installed and
+registered; `sudo launchctl list | grep reconcile` confirms it), but the repair
+has only been exercised by hand against a live fault, never by a boot. **A person
+must be at the machine.**
+
+When reading the result, the outcome that proves the most is
+`OK: all bindings restored` in `/opt/homebrew/var/log/nexus-reconcile.log` — the
+race happened and the repair worked. `all published bindings intact` means
+`tailscaled` merely won the race that boot; it counts as a pass but exercises
+nothing, so do not read it as the problem being closed. §1.1 has all four outcomes
+and what each one means.
+
+Round two, the pending macOS 26.5.2 update, stays blocked until round one passes
+in full — and note that updates have been known to reset `autoLoginUser` and
+`pmset autorestart`, which are themselves links in this chain. Until both rounds
+pass, nothing should be concluded about the platform surviving a power cut, and
+remote system updates should not be attempted.
 
 **2. Give the first administrator public-entrance credentials.** The account
 bootstrapped from a tailnet identity carries no `password_hash` and no

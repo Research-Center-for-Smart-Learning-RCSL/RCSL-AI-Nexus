@@ -14,7 +14,7 @@ The proxy host is maintained by another administrator. This project asks only th
 
 **Model runtimes are not containers.** Ollama and MLX run natively on macOS under launchd, bound to `127.0.0.1`, because Docker on macOS cannot reach the GPU. Containers connect through `host.docker.internal:11434`. Rationale in [../ARCHITECTURE.md](../ARCHITECTURE.md) §0.1; host-level hardening in [security.md](./security.md) §7.1(d).
 
-**Observability runs as two containers.** Prometheus scrapes the three applications' `/metrics` and Grafana reads Prometheus. Both are on internal-only networks: Prometheus publishes no host port, and Grafana binds `127.0.0.1:3002`, exposed to the tailnet through `tailscale serve --https 8443` for operators. Neither is reachable from the public entrance. See [security.md](./security.md) §6.
+**Observability runs as two containers.** Prometheus scrapes the three applications' `/metrics` and Grafana reads Prometheus. Prometheus is on internal-only networks and publishes no host port. Grafana binds `127.0.0.1:3002`, exposed to the tailnet through `tailscale serve --https 8443` for operators, and therefore cannot be internal-only: Docker will not publish a host port into an `internal` network, so Grafana carries a dedicated non-internal `viz-ingress` alongside its internal link to Prometheus (§6 of security.md explains the trade and why Prometheus is deliberately not given the same). Neither is reachable from the public entrance. See [security.md](./security.md) §6.
 
 ## 2. Domains
 
@@ -296,9 +296,26 @@ docker compose up -d          # migrate runs first, then services restart
 docker compose ps             # confirm migrate exited 0 and services are healthy
 ```
 
+After any `up -d` that recreates containers, also confirm the published ports are actually bound — see the startup-ordering note below for why `docker compose ps` does not show this.
+
 **Rollback.** Check out the previous tag and rebuild. Alembic downgrades are written only where a migration is genuinely reversible; otherwise recovery is a database restore, which is why §9.4 of [security.md](./security.md) insists restores are rehearsed.
 
-**Startup ordering caveat.** `${TAILNET_IP}` must exist before Docker binds to it. If the Mac reboots and Docker starts before Tailscale has an address, those services fail to bind. Use `restart: unless-stopped` so they recover once the interface appears, and confirm the behaviour after an unplanned reboot rather than assuming it.
+**Startup ordering, and why `restart: unless-stopped` does not cover it.** `${TAILNET_IP}` must exist before Docker binds to it, and at boot it does not: Docker Desktop restored containers roughly 21 seconds in on 2026-07-26, before `tailscaled` had put the address on `utun0`, and every forward naming it failed with `listen tcp4 100.x.y.z:8000: bind: can't assign requested address`.
+
+This paragraph previously said to rely on `restart: unless-stopped` to recover once the interface appears, and told the reader to confirm rather than assume. The confirmation disproved it. **A failed bind does not stop the container.** Docker Desktop logs one warning, does not retry, and the container starts normally; with nothing exited, the restart policy has no event to act on. The result is nine containers `Up`, the gateway reporting `healthy`, and four of six published ports simply absent — a state in which `docker compose ps` looks entirely correct.
+
+The recovery is `launchd/reconcile-port-bindings.sh`, installed as a LaunchDaemon (runbook §7). It waits for the address to be on an interface, the daemon to answer, and the container count to stop changing, then recreates only the containers whose requested `PortBindings` have an empty `NetworkSettings.Ports`.
+
+**It must recreate, not restart.** The forward is established when a container is *created*: `docker compose up -d` is a no-op against a container already running with a matching config, and `docker compose restart` reuses the container and leaves the backend's forwarding table untouched. Both were tried on the target host and neither restored a single binding; only `--force-recreate` did.
+
+**Checking for this state.** `docker compose ps` cannot see it. Compare requested against actual — an empty list on the actual side is the signature, while `null` means the service never published anything:
+
+```bash
+for c in $(docker compose ps -q); do
+  printf '%-38s %s\n' "$(docker inspect $c --format '{{.Name}}')" \
+    "$(docker inspect $c --format '{{json .NetworkSettings.Ports}}')"
+done
+```
 
 ## 10. Configuration and Secrets
 

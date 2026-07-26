@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>online.rcsl.reconcile-port-bindings</string>
+
+	<!-- Repairs the port forwards Docker Desktop drops at boot. The reasoning
+	     for why this is needed, and why a recreate is the only thing that
+	     works, is at the top of the script. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/rcslmac1/dev/RCSL-AI-Nexus/launchd/reconcile-port-bindings.sh</string>
+	</array>
+
+	<!-- The docker socket is the user's
+	     (~/.docker/run/docker.sock), and Docker Desktop runs in the user's
+	     session, so root would be the wrong identity here even though this is
+	     a daemon. Same arrangement as online.rcsl.ollama. -->
+	<key>UserName</key>
+	<string>rcslmac1</string>
+
+	<!-- Once per boot, not KeepAlive. The script is a single reconcile pass
+	     that exits non-zero when a binding is beyond repair; under KeepAlive
+	     that exit would become a restart loop, recreating a container every
+	     few seconds forever. Anything it cannot fix is meant to be read in the
+	     log, not retried. -->
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<false/>
+
+	<!-- launchd starts this long before the things it depends on exist: no
+	     login yet, so no Docker Desktop, and tailscaled has not brought the
+	     address up. The script waits for both, up to ten minutes, which is why
+	     there is no attempt to order it after anything. -->
+	<key>StandardOutPath</key>
+	<string>/opt/homebrew/var/log/nexus-reconcile.log</string>
+	<key>StandardErrorPath</key>
+	<string>/opt/homebrew/var/log/nexus-reconcile.log</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/rcslmac1/dev/RCSL-AI-Nexus</string>
+</dict>
+</plist>
