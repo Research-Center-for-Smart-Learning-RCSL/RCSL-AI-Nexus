@@ -17,6 +17,108 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-26
 
+### The injected boot filled the row seven boots could not, and settled two things the last entry left open
+
+**§1.1a was run and it passed on the first attempt.** The plist went in, the machine
+rebooted at 21:02:36, and the injector deleted its own plist and held `tailscaled` down
+from 21:02:43. Docker Desktop bound at **21:02:56** — seventy-eight seconds before the
+address existed — and failed on exactly the three services that name it, `:8000`, `:3001`
+and `:8002`, no more and no fewer. The reconciler waited the hold out, saw the address at
+21:04:14 (one second after the release), found all three bindings dropped, and logged
+`recreating: admin-public frontend-public gateway` → **`OK: all bindings restored` at
+21:05:31**. Afterwards: nine services running with `migrate` at `Exited (0)`, all six
+requested bindings equal to actual, all six entrances at 200, Ollama on loopback and
+nothing on the tailnet address, and the plist gone. The row that stayed blank for seven
+boots is filled, and it is filled with manufactured weather rather than a boot that lost
+the race on its own — that second claim still rests only on 16:45.
+
+**The margin was −78 seconds against a natural ceiling of +1.3.** That is the ninety-second
+hold doing what it was sized to do, sixty times over, and it is the whole reason the row
+could be filled at all.
+
+**The repair costs about twice at boot what it costs by hand, which is the part the hand
+test could never have told us.** The named-set precondition took 27 seconds against a
+stable 16 on four healthy boots; the binding scan took 40, with twelve seconds between each
+of the three detections, where on a healthy boot the identical scan finishes inside one
+second. `broken_services()` has no sleep in it, so that is pure `docker inspect` latency on
+a machine that is still busy. Of the 77 seconds from address to restored, more than half
+was spent looking rather than repairing. "Its cost is stable at sixteen seconds" was a
+statement about healthy boots only.
+
+**The boot grace suppressed a real failure for the first time, and it was right to.** For
+the 2m35s between 21:02:56 and 21:05:31 the platform was genuinely broken and no mail went
+out, because all of it fell inside the window the reconciler owns. That is precisely the
+behaviour the grace was written for, and it had never once been exercised: before 20:45 the
+greedy `sed` meant it could not fire at all, and after the fix there had been no failing
+boot. Had the repair failed, the 21:07:43 run would have caught it — worst-case detection
+is ten minutes.
+
+**And the fix that was "tested in parts" is now tested whole — but not by the evidence the
+last entry said to look for.** That entry predicted "a state mtime within seconds of boot
+and no mail". The mtime half of that is unusable: `StartInterval` counts from load either
+way, so the first scheduled write lands at load+300 whether `RunAtLoad` fired or not, and it
+overwrites the boot-time write. The unified log does separate them — four spawn/exit pairs,
+21:02:43.356→.473, 21:07:43.678→44.286, 21:12:44.309→.838, 21:17:44.858→45.386. The first
+ran at an uptime of seven seconds and finished in **117 milliseconds** against 528–608ms for
+the three full-path runs, and the full path cannot be done in a tenth of a second: six curl
+probes, a `docker info`, a `docker compose ps` and ten `docker inspect` calls. Exit 0, no log
+line, no mail. `launchctl print`'s `runs` counter was the first instrument reached for and it
+is the wrong one — it carries no timestamp, so `runs = 3` cannot be distinguished from
+`RunAtLoad` plus two intervals without separately recovering when it was read.
+
+**The 240-second grace turned out to have been chosen with seven seconds to spare.** The
+first scheduled run of that boot fired at an uptime of 307 seconds. At the old grace of 300
+it would have evaluated by seven seconds; eight seconds more launchd latency on the same
+healthy machine and it would have been skipped, pushing the first real check to ten minutes.
+The coin flip that argument was built on has now been observed landing, close to its edge.
+
+**A check that came back clean was a false negative, for the third time in one day and the
+second time from log rotation.** `grep "can't assign requested address"` over
+`com.docker.backend.log` returned nothing, which reads as "the injection did not work". The
+three lines are in `com.docker.backend.log.20260726-210850.988`: Docker rotated the file at
+21:08:50 and the grep ran around 21:09. The runbook now specifies the glob. This is the same
+shape as the 20:12:32 rotation noted in the previous entry and as `tailscale status --json`
+answering a question it had no field for — a check whose scope is smaller than it looks,
+read as a statement about everything.
+
+**Finally, the netmap cache model took its first exception, from the rehearsal rather than
+the test.** Before injecting, `tailscaled` was restarted by hand to confirm §1.1a's recovery
+command works. It came up at 21:00:27 on `netmap cache is not available` — thirty-one minutes
+after the 20:29:15 write that the model says should have been waiting for it. A TTL does not
+explain it, because 18:08:23 wrote and 19:10:00 loaded sixty-one minutes later. The one clean
+distinction is that this was a daemon restart inside a running session and every recorded hit
+followed a reboot; so either the model is wrong or restart and boot are different events for
+this cache, each with one observation. Until they are separated the alternation applies to
+boots only. The standing prediction — that the boot after 20:29 would be fast — was never
+tested, because the injector held `tailscaled` down through it; the daemon that started at
+21:04:13 loaded the 21:00:30 cache and logged no rewrite, making load-without-rewrite four
+observations and predicting a **cache miss on the next boot**.
+
+**The injector misreported its own measurement, and that is now fixed.** It logged
+`tailnet address ... is back within 10s of the release` for an address the reconciler had
+independently seen one second after the release. It printed the loop counter times five,
+which charges the sleep *following* each check to the check itself — five seconds of
+off-by-one on top of five seconds of polling granularity. A tool whose entire purpose is
+measurement, wrong on the one line of it that is a number. It now measures elapsed seconds
+and polls every second; both branches, address-present and address-absent, were run rather
+than read.
+
+**Writing that count down found the runbook had been over-reporting it.** §1.1 said "round
+one has passed six times" in three places. Six is the number of *attempts* — 16:45, 17:21,
+18:08, 19:43, 20:24, 20:29 — and the first of them is the failure the whole reconciler exists
+because of, so it cannot also be a pass. Round one has passed **five** times out of six. The
+file could already have caught itself: it labels 19:43 "round one's fourth", which only adds
+up if 16:45 was the first. The error is small and it runs in the direction that flatters the
+record, which is the direction worth being suspicious of.
+
+**What is still blank.** The container bring-up path has never run at boot, and the injector
+cannot produce it — it withholds the address, not Docker Desktop's restore. That row needs
+round two rerun. Round one stands at five passes in six attempts; round two remains one run,
+failed. The injected boot is not a round-one pass: it is a boot deliberately made to fail,
+which then recovered.
+
+---
+
 ### Two more boots proved the lever cannot work, and the liveness record had a hole where it is read
 
 **Round one was run a fifth and sixth time, back to back, and both passed on the
