@@ -70,6 +70,17 @@ openssl rand -base64 32        # for each password and each of the four below
 | `proxy_shared_secret` | must match the value the nginx proxy sends |
 | `metrics_scrape_token` | bearer token for `/metrics`; the same file is mounted into Prometheus, so both sides use one value. Not needed if `METRICS_ENABLED=false` |
 | `grafana_admin_password` | Grafana's initial admin password, replacing its `admin`/`admin` default |
+| `alert_smtp_account` | the Gmail address `check-platform-health.sh` sends alerts *from*; not itself a secret, but kept beside the password because Gmail requires the envelope sender to be the account that authenticates |
+| `alert_smtp_password` | a Google app password for that account, not the account password. Needs 2-Step Verification enabled on it first |
+
+**Use a dedicated sending account, not the operator's own.** These two files sit
+in plaintext on a host whose FileVault is off ([security.md](../docs/architecture/security.md)
+§15.6), so whatever the credential can reach is reachable by anyone who reaches
+the disk. A throwaway account that only sends mail loses nothing; the operator's
+own mailbox is where every password-reset link for every other service arrives,
+and on this deployment it is also the platform's first administrator. The
+recipient address is not a secret and lives in the script, where it is
+reviewable. Neither file is needed if the health-check daemon is not installed.
 
 `api_key_pepper_previous` is not shipped as a file because it is empty except
 during a pepper rotation. Add it as a secret (and mount it into the backend
