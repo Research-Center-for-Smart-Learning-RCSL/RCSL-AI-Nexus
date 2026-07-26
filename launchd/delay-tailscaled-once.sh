@@ -24,6 +24,14 @@
 # weather instead: hold the address back long enough that Docker cannot win, and
 # the reconciler has to do the thing it was written for.
 #
+# It has been run once, on 2026-07-26 at 21:02, and it worked on the first pull.
+# Docker bound at 21:02:56, seventy-eight seconds before the address existed, and
+# failed on exactly the three services that name it; the reconciler logged
+# `OK: all bindings restored` at 21:05:31 and the full check passed afterwards.
+# Runbook §1.1a carries the record, including the two costs only a boot reveals:
+# the reconciler's named-set precondition took 27 seconds against a stable 16 on
+# healthy boots, and its binding scan took 40 against under one.
+#
 # What it proves that a hand test cannot. Stopping a container and running the
 # reconciler by hand is already recorded in the runbook, and it is a different
 # claim. At boot everything moves at once — Docker Desktop restoring containers,
@@ -104,13 +112,22 @@ release() {
   launchctl bootstrap system "$TS_PLIST" 2>&1 | sed 's/^/  /'
   # Report the address coming back rather than assuming it. This is the line that
   # says the machine is reachable again.
-  local i
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  #
+  # Elapsed seconds, measured — not the loop counter. The first version logged
+  # `i * 5`, which charges the sleep that comes *after* each check to the check
+  # itself and so overstates by a whole poll interval before granularity is even
+  # considered. On the 2026-07-26 21:02 injection it printed "within 10s" for an
+  # address the reconciler had independently seen at +1s: 5 seconds of off-by-one
+  # on top of 5 seconds of polling. That is this repository's recurring defect
+  # landing on the one line whose entire job is to be a number, in the tool whose
+  # entire job is measurement. Polling is every second for the same reason.
+  local start=$SECONDS
+  while [ $((SECONDS - start)) -lt 60 ]; do
     if ifconfig 2>/dev/null | grep -qw "$TAILNET_IP"; then
-      log "tailnet address $TAILNET_IP is back within $((i * 5))s of the release"
+      log "tailnet address $TAILNET_IP is back $((SECONDS - start))s after the release"
       return
     fi
-    sleep 5
+    sleep 1
   done
   log "WARNING: $TAILNET_IP did not come back within 60s of the release"
   log "recover at the machine: sudo launchctl bootstrap system $TS_PLIST"

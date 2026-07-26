@@ -878,11 +878,23 @@ looking for the risk. The state below is checked against the code.
 [ ] Confirmed with the proxy administrator: no request body logging, no Lua interception
 
 --- Unattended recovery and alerting ---
-[ ] runbooks/first-deploy.md §1.1 round one has passed with the full check run, not just SSH
-[ ] The reconcile log has shown `OK: all bindings restored` at least once; `intact` is the
+[x] runbooks/first-deploy.md §1.1 round one has passed with the full check run, not just SSH
+    — five passes on 2026-07-26 (17:21, 18:08, 19:43, 20:24, 20:29) out of six attempts; the
+    first, 16:45, is the failure the reconciler was written for. The 21:02 injected boot is
+    not counted: it was deliberately made to fail and then recovered, which is §1.1a's claim,
+    not round one's. This covers round one only — round two, the system update reboot, has
+    been run once and failed, so "this machine recovers unattended" as a whole is not
+    established. See §1.1's "both rounds" sentence
+[x] The reconcile log has shown `OK: all bindings restored` at least once; `intact` is the
     race not firing, which is luck rather than proof that the repair works (deployment.md §9).
-    Seven boots have all come out `intact`, and the margin measurements say rebooting cannot
-    produce it: inject the fault instead, per runbook §1.1a
+    Seven boots all came out `intact`, and the margin measurements say rebooting cannot
+    produce it, so the fault was injected instead, per runbook §1.1a: 2026-07-26 21:05:31,
+    three dropped bindings detected and recreated at boot. Checked with the qualification
+    that it was manufactured, not awaited — the race occurring unaided is a separate claim,
+    evidenced only by the 16:45 failure
+[ ] The reconciler's container bring-up path has run at boot. Still blank, and the injector
+    cannot reach it: it withholds the address, not Docker Desktop's restore. Only the 19:09
+    failure has ever produced this state and it was repaired by hand; it needs round two
 [ ] The health daemon mails: run check-platform-health.sh by hand once with the credentials
     in place and confirm the mail arrives, because the mail path is the one part of the
     monitor that cannot be verified by watching it work
@@ -892,7 +904,10 @@ looking for the risk. The state below is checked against the code.
     log is events-only and is empty both when nothing is wrong and when nothing ran.
     This is readable at any time, including immediately after a boot, only because the
     plist is RunAtLoad and the boot-grace path rewrites the file without checking anything;
-    before that fix the criterion was false for the first five minutes of every boot
+    before that fix the criterion was false for the first five minutes of every boot.
+    Confirmed at the 2026-07-26 21:02 boot — but not by this file, whose mtime cannot tell
+    the two designs apart. Use the unified log instead, and read run duration: the boot-time
+    grace run is ~117ms against 528-608ms for a full check (runbook §1.1)
 ```
 
 ## 15. Accepted Risks
