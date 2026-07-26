@@ -99,8 +99,12 @@ ls -l /opt/homebrew/var/nexus-health.state
 
 通過的條件：tailnet 在線、Ollama 有回應、9 個容器 running（`migrate` 是 `Exited (0)`，
 它是一次性工作，不該重啟）、對帳 log 最後一行是 `all bindings restored` 或
-`all published bindings intact`、readyz 200、health state 檔的 mtime 在開機後十分鐘內
-（監測 daemon 自己也要撐過重開，它跟其他環一樣會無聲地不見）。
+`all published bindings intact`、readyz 200、**health state 檔的 mtime 距離「你看的當下」
+不超過五分鐘**（監測 daemon 自己也要撐過重開，它跟其他環一樣會無聲地不見）。
+
+最後那一項的判準原本寫成「mtime 在開機後十分鐘內」，那是錯的：這個檔案每五分鐘被重寫
+一次，永遠如此，所以你開機三十五分鐘後去看，mtime 就是三十五分鐘後——照字面讀會判成
+失敗，而它是好的。要問的是「這個檔案夠不夠新」，不是「它是不是在開機那陣子寫的」。
 
 **收不到信不算通過的證據。** 狀態沒變就不寄信，所以一切正常時信箱是空的；而監測 daemon
 自己沒起來的時候，信箱也是空的。這兩件事在信箱裡長得一模一樣，要分辨只能看 state 檔。
@@ -124,7 +128,8 @@ tailnet 介面上服務，`tailscale serve` 的管理入口轉發的是 loopback
 | `STILL UNBOUND after recreate: <服務>` | 有東西壞在 `--force-recreate` 修不了的地方（internal 網路、port 被佔）。看那個服務的 `docker inspect` 和 Docker backend log |
 | log 不存在或是空的 | daemon 根本沒跑。`sudo launchctl list \| grep reconcile` 看有沒有註冊，第二欄是上次結束狀態 |
 
-第二種結果要當心：它是運氣，不是證明。真要確認修復路徑有效，得重開到出現第一種為止。
+第二種結果要當心：它是運氣，不是證明。真要確認修復路徑有效，得重開到出現第一種為止——
+而下面「快取不會接續」那段說明了怎麼提高機率：**連續重開兩次，盯第二次**。
 
 **第一輪失敗的話：修好，然後從頭重跑第一輪。** 不要因為「知道原因了」就跳到第二輪——
 第二輪的前提是第一輪通過，而通過的定義是跑完整串、每一項都對。
@@ -137,27 +142,62 @@ actual 全部相符，其中 Grafana 的 `127.0.0.1:3002` 是這台機器**有�
 後 7 秒就跑了、等完三個前置條件、沒有東西要修。**修復路徑到目前為止還沒有被任何一次開機
 真的走過。**
 
-它贏得有多險，兩次開機的 log 對得出來：
+**實測記錄（2026-07-26，第三次跑）：通過，一樣落在第二種結果。** 18:07:46 關機、
+18:08:06 起來、放著不管。六個 binding requested 與 actual 全部相符、六個入口全 200、
+Ollama 只 LISTEN 在 `127.0.0.1:11434`。**這次多證明了一件事：監測 daemon 自己撐過了重開。**
+它是 17:56 才裝的（在 17:21 那次開機之後），所以在這次之前，整條鏈裡它是唯一沒有任何
+證據的一環。`nexus-health.state` 在 18:43:17 被重寫，launchd 在 18:08:17 載入這個 job，
+`18:08:17 + 7×300 = 18:43:17` 剛好對上，代表它從 18:13:17 起就一直在跑。
 
-| 開機 | `tailscaled` 起 | 位址上 `utun0` | Docker `exposer.Add` | 餘裕 |
+它贏得有多險，三次開機的 log 對得出來：
+
+| 開機 | `tailscaled` 起 | 位址可用 | Docker `exposer.Add` | 餘裕 |
 |---|---|---|---|---|
-| 16:45（失敗） | 16:45:15 | 16:45:32 | 16:45:29 | **−3 秒** |
-| 17:21（通過） | 17:21:48 | 17:21:48 | 17:21:59 | **+11 秒** |
+| 16:45（失敗） | 16:45:15 | 16:45:32（+17 秒） | 16:45:29 | **−3 秒** |
+| 17:21（通過） | 17:21:48 | 17:21:48（+0 秒） | 17:21:59 | **+11 秒** |
+| 18:08（通過） | 18:08:14 | 18:08:23（+9 秒） | 18:08:25 | **+2 秒** |
 
-差的那 17 秒有明確原因，不是隨機。失敗那次 `tailscaled` 一起來就卡在 logtail 的 bootstrap
-DNS 重試迴圈（`dial "log.tailscale.com:443" failed: no such host`，然後依序試 derp2d、
-derp7、derp4c、derp12c、derp10），因為當下還沒有 DNS。`NoState -> Starting` 要等那圈跑完
-才發生，位址也才跟著上來；第二次則是直接進 `Starting`，同一秒就有位址。
+Docker 那一側是穩定的：三次都在 `tailscaled` 起來後 11～14 秒綁定。**全部的變數都在
+「位址多久上來」**——0、9、17 秒。預算大約十一秒。
 
-位址本身不需要網路、也不需要 control plane：它是從 `/Library/Tailscale` 的快取還原的。
-第二次開機 17:21:48 `utun0` 就已經有位址，而 17:21:52 `tailscaled` 還在報
-`You are logged out ... failed to resolve controlplane.tailscale.com`，`en1` 的
-default route 到 17:21:53 才出現。所以決定勝負的只有「`tailscaled` 自己的啟動會不會在跑
-狀態機之前卡住」。
+**這裡原本寫的原因是錯的，第三次開機把它推翻了。** 原本寫的是「失敗那次卡在 logtail 的
+bootstrap DNS 重試迴圈」。18:08 那次照樣跑完整個迴圈（12 個 derp 試 `log.tailscale.com`，
+18:08:20 還多跑一輪 `controlplane.tailscale.com`），然後贏了 2 秒。那個迴圈根本不慢：
+每一次嘗試都在同一秒內以 `network is unreachable` 或 `no route to host` 立即失敗，不是
+DNS timeout。log 裡四次開機每一次都跑了它。那是兩個資料點看出來的相關性被當成了因果。
 
-**而「冷開機時 DNS 還沒好」正是那個迴圈會跑的條件——失敗那次才是常態路徑，這次是躲過
-了，設定裡沒有任何東西保證下次也躲得過。** 第一輪通過、第二輪的閘門開了；但要證明
-reconciler 有效，還是得重開到出現第一種結果為止。
+**真正的變數是 netmap 磁碟快取。** `tailscaled.log` 裡所有相關的行，一行不漏：
+
+| 時間 | log | |
+|---|---|---|
+| 14:12:41 | `writing netmap to disk cache` | |
+| 14:42:24 | *（套用 tailnet ACL，commit `17939ed`）* | |
+| 15:53:06 | `netmap cache is not available` | 開機 |
+| 16:45:15 | `netmap cache is not available` | 開機，**失敗，−3 秒** |
+| 16:45:32 | `writing netmap to disk cache` | |
+| 17:21:48 | `Start: loaded netmap from disk cache; 1 peers` | 開機，**+11 秒** |
+| 18:08:14 | `netmap cache is not available` | 開機，**+2 秒** |
+| 18:08:23 | `writing netmap to disk cache` | |
+
+有快取時位址在 `tailscaled` 起來的同一秒就上來，因為它完全不需要 control plane：17:21:52
+時 `tailscaled` 還在報 `You are logged out ... failed to resolve
+controlplane.tailscale.com`，而位址早就在 `utun0` 上了。沒有快取，位址就得等 control——
+這次等了 9 秒，失敗那次等了 17 秒。
+
+**而快取不會接續。** 它是在 control 送來新 netmap 時才寫的，**讀了快取的那次開機不會重寫
+它**：17:21 讀了、沒寫，18:08 就沒得讀。所以贏了十一秒的那次開機，等於把下一次推進慢的
+那條路。唯一看起來的例外也符合同一條規則：14:12:41 寫了快取而 15:53 開機讀不到，中間
+14:42:24 套用了 tailnet ACL，那會改掉 netmap 帶的封包過濾規則。
+
+最後這一步只有一次「讀了但沒重寫」的觀察撐著，所以它是模型不是已證實的機制。但它給出一個
+不用花錢就能驗的預測：18:08:23 寫了快取，所以**下一次開機應該是快的那種，再下一次又是慢
+的**。餘裕如果照這樣交替，這個模型就是對的。
+
+**它同時第一次告訴你怎麼把驗收真正想要的那個結果逼出來。** `OK: all bindings restored`
+需要一次**輸掉**競態的開機，而輸的那些都是沒有快取的——也就是「剛讀過快取的那次開機的
+下一次」。所以要驗修復路徑，**連續重開兩次、盯第二次**，比一直重開碰運氣有效得多。
+
+第一輪已通過三次，第二輪的閘門是開的；但修復路徑仍未被任何一次開機真的走過。
 
 **第二輪：系統更新。** 第一輪通過之後才做，因為兩者一起做會讓失敗無法歸因——你分不出
 是更新的問題還是自動登入沒設好。
