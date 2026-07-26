@@ -892,9 +892,11 @@ looking for the risk. The state below is checked against the code.
     three dropped bindings detected and recreated at boot. Checked with the qualification
     that it was manufactured, not awaited — the race occurring unaided is a separate claim,
     evidenced only by the 16:45 failure
-[ ] The reconciler's container bring-up path has run at boot. Still blank, and the injector
-    cannot reach it: it withholds the address, not Docker Desktop's restore. Only the 19:09
-    failure has ever produced this state and it was repaired by hand; it needs round two
+[ ] The reconciler's container bring-up path has run at boot. Still blank: only the 19:09
+    failure has ever produced this state and it was repaired by hand. §1.1a's injector cannot
+    reach it — it withholds the address, not Docker Desktop's restore — so runbook §1.1b
+    injects it the other way, by stopping the stack before the reboot and letting
+    `restart: unless-stopped` keep it stopped. Written and its refuse paths tested; not yet run
 [ ] The health daemon mails: run check-platform-health.sh by hand once with the credentials
     in place and confirm the mail arrives, because the mail path is the one part of the
     monitor that cannot be verified by watching it work

@@ -194,7 +194,7 @@ tailnet 介面上服務，`tailscale serve` 的管理入口轉發的是 loopback
 |---|---|
 | `all expected services running` → `all published bindings intact` | Docker 自己把容器還原了，`tailscaled` 也比它快。兩條修復路徑都沒被走到。算過，但**什麼都沒測到** |
 | `all expected services running` → `OK: all bindings restored` | 競態發生了，reconciler 補回來了。**這是最有價值的結果**——binding 修復路徑被真的走過一次。2026-07-26 21:02 出現過一次，**是 §1.1a 注入出來的，不是等到的**；七次自然開機一次都沒等到 |
-| `docker did not restore the stack; bringing it up` → `stack up: all expected services running` | Docker 沒還原容器，reconciler 自己把整套拉起來了。**這也是有價值的結果**——2026-07-26 19:10 那次開機就是這個情況，而當時的 reconciler 還不會做這件事 |
+| `docker did not restore the stack; bringing it up` → `stack up: all expected services running` | Docker 沒還原容器，reconciler 自己把整套拉起來了。**這也是有價值的結果**——2026-07-26 19:10 那次開機就是這個情況，而當時的 reconciler 還不會做這件事。**仍然空白**（19:10 那次是人手救的），要填用 **§1.1b 的注入** |
 | `STILL UNBOUND after recreate: <服務>` | 有東西壞在 `--force-recreate` 修不了的地方（internal 網路、port 被佔）。看那個服務的 `docker inspect` 和 Docker backend log |
 | `FATAL: still not running after up -d: <服務>` | 容器起不來，不是沒被叫起來。`docker compose logs <服務>` 才是要看的地方，重跑 reconciler 不會有幫助 |
 | log 不存在或是空的 | daemon 根本沒跑。`sudo launchctl list \| grep reconcile` 看有沒有註冊，第二欄是上次結束狀態 |
@@ -430,8 +430,9 @@ sudo ls -l /Library/Tailscale/          # 那個目錄 root only
   （後者 16:45 已經證過了）。
 - **容器拉起路徑：還沒有。** 它是在 19:09 那次失敗之後才寫的，而 19:09 那次的復原是
   **人手跑的** `docker compose up -d`（`migrate` 的 `StartedAt` 是 19:28:26，那就是證據），
-  不是 reconciler。這一格只能靠第二輪重跑，注入逼不出它——注入壓的是位址，不是 Docker
-  Desktop 還原容器的能力。
+  不是 reconciler。填它的辦法是 **§1.1b 的注入**（停掉 stack 再重開，靠
+  `restart: unless-stopped` 的 `unless`），那個不需要人在現場；§1.1a 逼不出它，因為它壓的
+  是位址，不是 Docker Desktop 還原容器的能力。
 
 **兩條路徑各有一次手測，記在這裡，因為手測和開機測不是同一件事。** 停掉 `grafana` 再手跑
 reconciler：`not running: grafana` → `docker did not restore the stack; bringing it up` →
@@ -618,7 +619,106 @@ ls -l /Library/LaunchDaemons/online.rcsl.delay-tailscaled-once.plist   # 要是 
 **這一次注入證明什麼、不證明什麼。** 它證明 reconciler 在**開機那個所有東西同時在動的
 環境裡**能偵測到掉掉的 binding 並修回來——那正是手測補不上的部分。它不證明「那個競態會
 自己發生」，那件事 16:45 已經證明過了。它也不證明容器拉起路徑（第三種結果），那一格要
-靠第二輪重跑，而且**注入逼不出它**：注入壓的是位址，不是 Docker Desktop 還原容器的能力。
+靠 §1.1b 的另一種注入——**這一節的注入逼不出它**，因為它壓的是位址，不是 Docker Desktop
+還原容器的能力。
+
+---
+
+### 1.1b 故障注入：把容器拉起路徑逼出來（不用人在現場）
+
+§1.1a 填掉了第二種結果，第三種還是空白：`docker did not restore the stack; bringing it up`
+→ `stack up: all expected services running`。這一格只有 19:09 那次開機產生過，而**那次是人
+手救的**，reconciler 還來不及做。
+
+**這一節原本寫的是「只能靠第二輪重跑」，那是錯的。** 第三種結果也能注入，而且比 §1.1a
+便宜得多。
+
+**做法**：把整個 stack 停掉，然後重開機。機制就寫在 `docker-compose.yml` 裡——八個長期服務
+都是 `restart: unless-stopped`，而 **`unless` 就是全部的重點：被明確 stop 的容器，在 daemon
+回來時不會被拉起來。** 所以下一次開機時 Docker Desktop 面對九個它刻意不還原的容器，而
+reconciler 遇到的狀態和 19:09 那次留給它的一模一樣：`docker compose ps --services --status
+running` 是空的、東西都在、沒有一個在跑。
+
+**風險比 §1.1a 小一個數量級，這是它的主要優點：**
+
+| | §1.1a（位址注入） | §1.1b（容器注入） |
+|---|---|---|
+| 機器在 tailnet 上 | **90 秒完全離線** | 全程在線 |
+| 人要在現場 | **必須** | **不用**，可以遠端做 |
+| 出事時 | 只能走過去 | 從任何地方 `docker compose up -d` |
+
+代價是平台從執行腳本到下一次開機復原完成為止是停的（實測 §1.1a 那次是開機後約 3 分鐘），
+所以挑一個沒有人在用的時間。
+
+**它也沒有 plist，而且不該有。** §1.1a 需要 plist 是因為它的故障必須在**開機當下**注入；
+這個故障是在重開之前就設好的，會自己撐過重開，所以開機時再擺一個會動的東西進去，只是多
+一個沒事做的零件。
+
+**步驟**（`launchd/stop-stack-once.sh` 在 repo 裡，平常不執行）：
+
+```sh
+cd ~/dev/RCSL-AI-Nexus
+./launchd/stop-stack-once.sh
+```
+
+**它會先拒絕再動手。** 五個前置條件任何一個不成立，它什麼都不改就 exit 1：
+
+- §1.1a 的 plist 還裝著（兩個注入同時來，兩邊的救援路徑會互相擋住）
+- 九個服務沒有全部在跑（從壞的平台開始測復原，回不來的時候分不出是誰造成的）
+- 有 binding requested 但沒 actual（那是 §1.1a 的狀態，先修那個）
+- reconciler 的 plist 不在
+- **`nexus-reconcile.log` 裡最新的 `reconcile starting` 比這次開機還舊**
+
+最後那一項是最重要的，而且刻意不是「plist 檔案在不在」。**檔案在只是必要條件，它不證明
+launchd 真的載入了那個 job**——而「停掉 stack 重開、卻沒有東西會把它拉起來」正是這個注入
+變成停機事故的唯一途徑。log 回答的是真正該問的問題：這個 daemon 在**這一次開機**跑過嗎。
+那是證據，不是設定。
+
+前置條件過了之後它會把 pre-state 記下來（六個 requested binding），停掉 stack，**再讀回來
+確認九個都真的停了**——半停的 stack 是這裡最糟的結果，Docker 會還原還在跑的那些，reconciler
+會遇到一個既不空也不完整的集合，下一次開機印出來的東西會是在講一個沒有人設計過的故障。
+
+然後：
+
+```sh
+sudo reboot
+```
+
+**不要碰它，等三到五分鐘**，然後：
+
+```sh
+tail -40 /opt/homebrew/var/log/nexus-reconcile.log
+```
+
+通過的條件是依序出現這四行：
+
+```
+not running: <九個>
+docker did not restore the stack; bringing it up
+stack up: all expected services running
+all published bindings intact
+```
+
+那就是第三種結果。接著跑 §1.1 的完整檢查：九個服務、六個 binding requested 與 actual 相符、
+六個入口 200。
+
+**最後一行會是 `all published bindings intact` 而不是 `OK: all bindings restored`，這是對的。**
+reconciler 的第一個前置條件就是等位址上介面，所以它跑 `up -d` 的時候位址早就在了，轉發會
+在那時候正確建立。這個注入產生的是第三種結果，不會順便產生第二種——**兩種注入各測一條路，
+不能互相替代。**
+
+**這一次注入證明什麼、不證明什麼。** 它證明 reconciler 在開機那個所有東西同時在動的環境裡
+能把整個平台拉起來——手測補不上的正是這部分，而 §1.1a 已經量出那個差別有多大（同一段程式
+碼判定花 27 秒對 16 秒、掃描 40 秒對不到 1 秒）。它**不證明** Docker Desktop 的還原會自己
+失敗：那件事只發生過一次（19:10，26.5.2 更新之後），原因至今未明。**它重現的是狀態，不是
+原因**——跟 §1.1a 一模一樣的限制。
+
+**而它不能取代第二輪。** 第二輪測的是整個系統更新重開：自動登入有沒有被重置、`pmset
+autorestart` 還在不在、Docker Desktop 在更新重開後會怎麼做。§1.1b 只餵給 reconciler 一個
+狀態，那三件事一件都沒碰到。
+
+**跑完之後這一節要更新**，寫法照 §1.1a 的實測記錄：注入不是自然發生的，§1.1 的表上那一格
+要註明是注入出來的。
 
 ---
 
@@ -1057,9 +1157,11 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
   sudo launchctl bootstrap system /Library/LaunchDaemons/online.rcsl.health-check.plist
   ```
 
-  **這份 repo 裡還有一個 plist 刻意不在這個清單上：**
-  `online.rcsl.delay-tailscaled-once.plist`。它是 §1.1a 的故障注入工具，會在開機時把機器踢
-  下 tailnet 90 秒，**不是平台的一部分，不要當成部署步驟安裝**。
+  **這份 repo 裡還有兩個故障注入工具，都不是平台的一部分，不要當成部署步驟。**
+  `online.rcsl.delay-tailscaled-once.plist`（配 `delay-tailscaled-once.sh`）是 §1.1a 的，
+  會在開機時把機器踢下 tailnet 90 秒，**刻意不在上面這個安裝清單裡**。
+  `stop-stack-once.sh` 是 §1.1b 的，它**沒有 plist**（故障在重開之前就設好了，不需要開機時
+  的零件），平常不執行。
 
   每五分鐘查七件事：`.env` 讀得到 `TAILNET_IP`、位址在介面上、docker 有回應、**預期清單裡
   的九個服務都在跑**、每個要求了 host binding 的容器真的拿到了、六個入口都答得出來、Ollama

@@ -17,6 +17,59 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-26
 
+### The second repair path turned out to be injectable too, and the claim that it was not was mine
+
+**Yesterday's entry and three other files said the container bring-up path could only be
+filled by rerunning round two, because the injector "withholds the address, not Docker
+Desktop's restore". The first half of that is true and the conclusion does not follow.** The
+mechanism was sitting in `docker-compose.yml` the whole time: every long-lived service carries
+`restart: unless-stopped`, and the *unless* is the entire lever — a container that was
+explicitly stopped is not restored when the daemon comes back. Stop the stack, reboot, and
+Docker Desktop faces nine containers it will deliberately leave alone. The reconciler then
+wakes to exactly what the 19:09 boot left it: everything present, nothing running.
+
+**`launchd/stop-stack-once.sh` and runbook §1.1b.** It is a hand-run script with no plist, and
+that absence is deliberate: §1.1a needed a boot-time job because its fault had to be injected
+*during* boot, whereas this fault is set beforehand and simply persists, so a plist would be a
+moving part with nothing to do.
+
+**It is an order of magnitude cheaper than §1.1a, which is the point.** The host stays on the
+tailnet for the whole window — SSH, `tailscale serve`, everything — so no person has to be at
+the machine and a failed test is recoverable from anywhere with `docker compose up -d`. The
+cost is that the platform is down from the moment it runs until the next boot recovers it.
+
+**Most of the script is refusals, and one of them is the reason the rest can be trusted.** It
+declines to run if §1.1a's plist is installed (both faults at once blocks each one's recovery
+path), if the nine services are not all running, if any requested binding is already unbound,
+if the reconciler's plist is missing — and, the one that matters, **if the newest
+`reconcile starting` in the log is older than the current boot**. A plist on disk is a
+necessary condition that proves nothing about whether launchd loaded it, and rebooting with
+the stack down and nothing scheduled to raise it is the single way this injection becomes an
+outage rather than a test. The log answers the question actually being asked — did this daemon
+run on *this* boot — and that is evidence rather than configuration. After stopping it reads
+the result back, because a half-stopped stack would have Docker restoring some containers and
+the reconciler meeting a set that is neither empty nor complete: a fault nobody designed.
+
+**Eight branches were run rather than read**, against the live platform without ever stopping
+it: all five refusals fired, the healthy-precondition path passed, the success path printed
+its instructions, and the half-stopped guard caught a stop that had been replaced by a no-op.
+The one branch not separately exercised is the already-unbound refusal, which is the same six
+lines as in `check-platform-health.sh` and `reconcile-port-bindings.sh`.
+
+**What it will and will not prove, stated before it is run so the result cannot be read
+generously.** It will show the reconciler bringing the platform up at boot, with everything
+moving at once — the part a hand test cannot reproduce, and §1.1a measured how much that
+matters: the same code that settles in 16 seconds on a healthy boot took 27, and a scan that
+finishes inside a second took 40. It will *not* show that Docker Desktop's restore fails on
+its own; that happened once, after the macOS 26.5.2 update, and why is still unknown. It
+reproduces the state, not the cause — §1.1a's limit exactly. And it does not replace round
+two, which tests the update reboot as a whole: automatic login, `pmset autorestart`, and what
+Docker does afterwards. None of those are touched here. The expected outcome is the third row
+and only the third row: `all published bindings intact`, not `OK: all bindings restored`,
+because the reconciler waits for the address before it runs `up -d`.
+
+---
+
 ### The injected boot filled the row seven boots could not, and settled two things the last entry left open
 
 **§1.1a was run and it passed on the first attempt.** The plist went in, the machine
