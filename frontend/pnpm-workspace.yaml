@@ -1,3 +1,10 @@
+# pnpm 10 stopped reading these from the `pnpm` field in package.json. The
+# allowlist below lived there until 2026-07-26 and was being silently ignored,
+# which left the intent stated in one file and enforced nowhere (security.md
+# §10). Keep both lists here.
+onlyBuiltDependencies:
+  - esbuild
+
 ignoredBuiltDependencies:
   - sharp
   - unrs-resolver
