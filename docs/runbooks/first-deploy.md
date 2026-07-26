@@ -35,10 +35,88 @@ secrets 設定見 [secrets/README.md](../../secrets/README.md)。
   的主機名會用到。
 - [ ] 讓它不要睡：系統設定 > 顯示器或電池/電源，設定接電源時「永不睡眠」。這是 24/7
   伺服器，睡著了服務就斷了。
-- [ ] 自動登入：系統設定 > 使用者與群組 > 自動以你的帳號登入。這台無頭運作，自動登入是
-  「插電就回到服務中」的必要環節：開機 → 自動登入 → Docker Desktop 自啟 → 容器的
-  `restart: unless-stopped` 接手。FileVault 首次部署刻意不開，理由與補償控制見
+- [ ] 關閉 FileVault。首次部署刻意不開，理由與補償控制見
   [security.md](../architecture/security.md) §15.6；UPS 到位後要同時開 FileVault、關自動登入。
+
+  ```sh
+  sudo fdesetup disable      # 會問使用者名稱與密碼
+  fdesetup status            # 要等到顯示 FileVault is Off
+  ```
+
+  解密在背景進行，用量少的話很快（APFS 只處理已使用的區塊）。**必須等到 Off，下一步的
+  自動登入選項在那之前是灰的。**
+
+- [ ] 自動登入：系統設定 > 使用者與群組 > 自動以你的帳號登入。這台無頭運作，自動登入是
+  「插電就回到服務中」的必要環節。完整的鏈路是：
+
+  ```
+  通電/重開 → 自動登入 → LaunchDaemon（Tailscale、Ollama）
+           → Docker Desktop 自啟 → 9 個容器 restart: unless-stopped 回來
+  ```
+
+  這條鏈**每一環都要成立**，少一環機器就回不到服務中，而且是無聲的——你只會發現「服務
+  沒了」，不會知道斷在哪。所以下面有驗收測試。
+
+### 1.1 無人復原驗收（等第 7 部分整套跑起來之後再做）
+
+這是整份 runbook 裡唯一**必須人在機器旁邊**做的測試，而且必須做。在它通過之前，你沒有
+證據說這台機器能無人復原——你只有一串看起來正確的設定。
+
+**第一輪：乾淨重開。**
+
+```sh
+sudo reboot
+```
+
+**不要碰它。** 等 2～3 分鐘，從另一台裝置（同 tailnet）：
+
+```sh
+ssh <你的帳號>@<伺服器的 100.x.y.z>
+```
+
+進去後一次跑完：
+
+```sh
+tailscale status | head -2
+ollama ps
+cd ~/dev/RCSL-AI-Nexus && docker compose ps
+curl -s -o /dev/null -w 'gateway readyz: %{http_code}\n' http://<TAILNET_IP>:8000/readyz
+```
+
+通過的條件：tailnet 在線、Ollama 有回應、9 個容器 running（`migrate` 是 `Exited (0)`，
+它是一次性工作，不該重啟）、readyz 200。
+
+**第二輪：系統更新。** 第一輪通過之後才做，因為兩者一起做會讓失敗無法歸因——你分不出
+是更新的問題還是自動登入沒設好。
+
+```sh
+sudo softwareupdate -i -a --restart
+```
+
+更新完重跑上面同一串，另外**一定要多確認這兩項**：
+
+```sh
+defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser
+pmset -g | grep autorestart
+```
+
+macOS 更新重置這兩項是有前例的，而它們正好是無人復原鏈路上的兩個環節。被重置的話重新
+設定，然後再測一次。
+
+**兩輪都過，才代表這台機器經歷過真實的重開與系統更新並自己完整復原。** 在那之前不要遠端
+做系統更新——更新失敗停在互動畫面時，遠端修不了。
+
+---
+
+## 為什麼「人要在現場」這件事沒有替代方案
+
+Mac Studio 沒有 out-of-band 管理（沒有 IPMI/iDRAC 那類獨立於作業系統的遠端主控台）。
+所以任何可能讓機器開不起來、或停在需要人操作的畫面的變更，都是單向門：出事了就只能走
+過去。這一類至少包含 FileVault 開關、自動登入設定、系統大版本升級、以及任何會影響
+`tailscaled` 啟動的改動。
+
+反過來說，**不影響開機的事情都可以安心遠端做**：程式開發、平台管理、容器操作、ACL 與
+成員變更。分界線是「這個動作會不會影響下一次開機」。
 
 - [ ] 啟動安全維持 Full Security，確認進 recoveryOS 需要管理員密碼。FileVault 關著的期間，
   這是擋住「從外接媒體開機」的主要控制而不是次要的。機器放在能上鎖的地方。

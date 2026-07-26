@@ -53,6 +53,55 @@ from external media instead of a second layer behind encryption.
 
 ## 2026-07-26
 
+### FileVault off, and the unattended-recovery chain that is built but not yet proven
+
+§15.6's sequencing decision was acted on: `sudo fdesetup disable`, and
+`fdesetup status` now reports `FileVault is Off`. `supportsauthrestart` returned
+true beforehand, so the `authrestart` path exists whenever it goes back on.
+
+The decision was taken with the trade stated rather than assumed. What the
+machine now holds unencrypted is the eleven plaintext credential files under
+`secrets/`, the TOTP encryption key among them, and whatever research data passes
+through the platform; the protection of all of it now rests on Full Security
+startup and a locked room, which §15.6 already names as load-bearing rather than
+defence in depth.
+
+**Two things in that section's reasoning needed extending, and now say so.** It
+treats the UPS as the trigger and the bound on cold boots, which is true for
+power cuts and false for everything else that reboots a machine — a kernel panic,
+a watchdog reset, a failed update. Each of those lands at the pre-boot unlock
+screen just the same, so installing the UPS lowers the frequency of losing
+unattended recovery rather than restoring the property. There is no clean way to
+have both an encrypted volume and unattended recovery on hardware with no
+out-of-band management, and a Mac Studio has none. The second addition is that
+this is a constraint on remote operation and not only on data at rest: with
+FileVault on, remote access has no fault tolerance, and the one failure that ends
+it is the one nothing remote can repair.
+
+**The chain now exists end to end and is not yet proven.** Every link is in
+place — the two LaunchDaemons in `/Library/LaunchDaemons` starting without a
+login, Docker Desktop's start-at-login, `restart: unless-stopped` on all nine
+long-lived services with `migrate` correctly left at `no`, and `pmset autorestart
+1` — with automatic login the last piece. What has not happened is a reboot. A
+chain of individually correct settings is not evidence, and the failure mode is
+silent: the service is simply gone, with nothing to say which link broke.
+
+So the runbook gains §1.1, the one test in it that must be run with a person at
+the machine. Two rounds, deliberately separate: a clean reboot first, because it
+has one variable, and the pending macOS 26.5.2 update second, because combining
+them makes a failure unattributable. The post-update check includes re-reading
+`autoLoginUser` and `pmset autorestart`, since macOS updates have been known to
+reset exactly those, and they are two links of this chain. Until both rounds
+pass, remote system updates should not be attempted: an update that stops at an
+interactive screen cannot be cleared remotely.
+
+The runbook also now states the general rule the whole day kept running into.
+The dividing line for what is safe to do remotely is whether the action can
+affect the next boot. Development, platform administration, container
+operations, ACL and membership changes: all safe. FileVault, automatic login,
+major upgrades, anything touching `tailscaled`'s ability to start: one-way doors
+on a machine with no remote console.
+
 ### Remote access, and a diagnostic that invented the wrong conclusion
 
 The machine is headless, so it needs a way in. It is Tailscale SSH, gated by the
@@ -1416,11 +1465,36 @@ entrances, and the management API are all built and tested, and every screen
 in the frontend now reaches a real backend. The remaining Phase 1 items are
 operational rather than functional.
 
-The Mac Studio is now the development machine as well as the deployment target,
-and the backend suite runs on it: 359 tests on Python 3.12 against a real
-Postgres 17. What that does *not* yet cover is anything requiring the stack to
-be up — GPU inference, the tailnet entrance, and nginx behaviour remain
-unverified by construction, and the runbook's first deploy has not been done.
+**The Mac Studio is deployed and serving.** The first `docker compose up` ran on
+2026-07-26; `migrate` provisioned the two least-privilege roles and the live
+database enforces them, GPU inference runs at 100% GPU, and a chat completion
+goes end to end through key verification, quota, the proxy check, the country
+filter, the routing policy and back out to a usage record. The tailnet
+management entrance is reachable and every screen works against the real backend.
+The backend suite runs here too: 359 tests on Python 3.12 against a real
+Postgres 17.
+
+What is still unverified, and by what: the **public entrance and nginx**, which
+wait on the NTNU proxy administrator; the **unattended-recovery chain**, which is
+built but has never seen a reboot (runbook §1.1); and **MLX**, which has an
+adapter and no model registered against it.
+
+### If you are picking this up cold
+
+Read this section, then the four 2026-07-26 entries above, then
+[runbooks/first-deploy.md](./runbooks/first-deploy.md) §1.1. The single most
+useful thing to know is that the day found **six defects of one kind**: a control
+designed, written down, marked done, and not actually in force — the account-split
+test asserting nothing, the Ollama bind not surviving a reboot, the pnpm
+allowlist inert, the tailnet ACL never applied, the frontend's admin URL baked at
+build time, and a registered model with no reachable download action. None looked
+wrong. Tests passed, images built clean, health checks were green. They surfaced
+only when someone walked the whole path for the first time. Assume the same class
+of thing remains in the parts that have not been walked yet — the public
+entrance, MLX, and anything the runbook has not made someone do end to end.
+
+The machine has **no out-of-band management**. The dividing line for remote work
+is whether an action can affect the next boot; the runbook states this after §1.1.
 
 One thing still exists as an API with no dedicated UI: the download progress
 endpoint, which the models table polls but no page surfaces on its own. The
@@ -1428,24 +1502,49 @@ routing policy editor now exists, so a policy is no longer curl-only.
 
 ## What comes next
 
-The three Phase 1 finishing items are now done, each recorded in a dated entry
-above: a **frontend test runner** (Vitest over the units where a defect is a
-security defect), the **routing policy editor**, and the **database account
-split with secrets on file mounts**. Phase 1's functional and control-plane work
-is complete; what is left is verification that can only happen on the target
-hardware.
+Four things are open as of the end of 2026-07-26, in the order they should be
+picked up.
 
-The frontend test runner covers logic units only; component and browser (E2E,
-Playwright) coverage of the sign-in and enrolment screens is still the deferred
-increment, recorded in `ROADMAP.md` Phase 3. And the database split, the secret
-mounts, GPU inference, the tailnet entrance and nginx are all verified only
-structurally so far, which is what the Mac Studio deploy below is for.
+**1. Run the unattended-recovery acceptance test.** Two rounds, in
+[runbooks/first-deploy.md](./runbooks/first-deploy.md) §1.1: a clean reboot, then
+the pending macOS 26.5.2 update, separately so a failure is attributable. **A
+person must be at the machine.** Until this passes, nothing should be concluded
+about the platform surviving a power cut, and remote system updates should not be
+attempted. Automatic login is the last link and is set at the same time.
 
-### Then: deploy to the Mac Studio for the first time
+**2. Give the first administrator public-entrance credentials.** The account
+bootstrapped from a tailnet identity carries no `password_hash` and no
+`totp_secret` — the tailnet entrance does not need them. The public entrance
+requires both, so as things stand nobody can sign in there once nginx exists, and
+by then the reason will not be obvious. Fix from the Users page now; the runbook's
+§7 has the step and the SQL that confirms it.
 
-This is a milestone in its own right because several things can only be tested
-there, and because it needs another person. The step-by-step is in
-[runbooks/first-deploy.md](./runbooks/first-deploy.md); the essentials:
+**3. Send the proxy administrator their four items.** A drafted request with the
+real values is not in the repository (it names a person's mailbox and carries
+setup detail); the content is [deployment.md](./architecture/deployment.md) §5
+plus the runbook §8, and the tailnet is now ready for it — `tag:ntnu-proxy` will
+apply, which it would not have before the ACL was in place. The shared secret goes
+by a separate channel from the configuration. This unblocks the public entrance,
+which is the largest unverified surface left.
+
+**4. Then the roadmap.** Phase 2's remaining items are the knowledge base, prompt
+templates, logging boundaries, full audit coverage, backups, and the `MetricsPort`
+ingestion that now has a real number to be calibrated against (a loaded 7B model
+measured 5.7 GB resident against 4.7 GB of weights, with `OLLAMA_KV_CACHE_TYPE=q8_0`
+in the committed plist; without it the same model measured 6.6 GB).
+
+Two smaller things worth not losing: the GeoLite2 database has no refresh
+mechanism and nothing said so until today (`ROADMAP.md` Phase 3), and the
+frontend test runner still covers logic units only — Playwright over the sign-in
+and enrolment screens remains the deferred increment.
+
+### Done: the first Mac Studio deploy
+
+Carried out on 2026-07-26 and recorded in the dated entries above. The checklist
+below is kept because it is still the shape of the work, and because everything
+in it that has *not* been done is now visible by contrast: the proxy
+administrator's four items and the §14 pre-launch checks are still outstanding,
+and the runbook has gained the steps this deploy showed were missing from it.
 
 - Install Ollama natively under launchd as a dedicated service account, bound
   to `127.0.0.1`.
