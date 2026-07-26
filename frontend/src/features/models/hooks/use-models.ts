@@ -61,7 +61,7 @@ export function useModel(id: string | null) {
  * resynchronises from the server instead of keeping a second copy of the truth
  * (frontend.md section 5).
  */
-function useInvalidateModels() {
+export function useInvalidateModels() {
   const queryClient = useQueryClient();
   return () => queryClient.invalidateQueries({ queryKey: modelKeys.all });
 }

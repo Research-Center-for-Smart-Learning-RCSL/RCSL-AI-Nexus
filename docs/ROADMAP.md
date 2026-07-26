@@ -61,7 +61,7 @@ carries the checked control-by-control state.
 ### Frontend
 
 - [x] Next.js project plus `shadcn/ui init`
-- [x] `next.config.js` rewrites so `/admin/*` is same-origin
+- [x] `src/middleware.ts` proxies `/admin/*` so it is same-origin. Was a `next.config.js` rewrite until 2026-07-26, which `output: 'standalone'` resolves at build time, baking a localhost fallback into the deployed image
 - [x] `components/ui`: Button, Input, Table, Dialog, Badge, Tabs, Toast
 - [x] `features/models`: node selection, now that `GET /nodes` exists
 - [ ] `lib/generated`: `openapi-typescript` against the **admin** port (the gateway serves no schema)
@@ -69,7 +69,7 @@ carries the checked control-by-control state.
 - [x] `lib/session.tsx`: consumes `/admin/me`, exposes `auth_mode` through context
 - [x] `lib/api-client.ts`: `credentials: 'include'`, automatic CSRF header on mutations, 401 handling that branches on `auth_mode`
 - [x] `components/composed`: `DataTable`, `StatCard`, `FormField`, `ConfirmDialog`, `StatusBadge`, `StreamMessage`, `EmptyState`, `ErrorState`
-- [x] `features/models`: table, form dialog, download progress via `useDownloadJob`
+- [x] `features/models`: table, form dialog, download progress via `useDownloadJob` (the hook and `DownloadProgress` were built but never referenced from the table, so a registered model could not be downloaded at all until 2026-07-26 — see [PROGRESS.md](./PROGRESS.md))
 - [x] `features/chat`: SSE consumption with abort on unmount, terminal error frames surfaced
 - [x] `features/users`: list, invite (copyable single-use link), role change
 - [x] `features/auth`: two-step login, invitation acceptance with TOTP QR and recovery codes, password change
