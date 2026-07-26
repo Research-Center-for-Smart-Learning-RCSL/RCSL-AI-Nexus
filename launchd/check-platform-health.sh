@@ -55,11 +55,30 @@ STATE_FILE="/opt/homebrew/var/nexus-health.state"
 EXPECTED_SERVICES="postgres redis prometheus grafana gateway admin-public admin-tailnet frontend-public frontend-tailnet"
 
 # Boot grace. The reconciler owns the first minutes: it waits for the tailnet
-# address, the daemon, and the container count to settle, which can legitimately
+# address, the daemon, and the container set to settle, which can legitimately
 # take a couple of minutes. Alerting inside that window would mail out a failure
 # that is about to be repaired, and the first thing anyone would learn is to
 # ignore the alerts.
-BOOT_GRACE=300
+#
+# 240 rather than 300, and the difference is the whole point. The plist fires
+# this every 300 seconds, so a grace of 300 puts the first post-boot run exactly
+# on the boundary: whether it evaluates or is skipped comes down to how many
+# seconds launchd took to load the job. Either answer is defensible; a coin flip
+# between them is not, because it decides whether the first real check of a boot
+# happens at five minutes or at ten. 240 is below the interval by a clear margin,
+# so the boot-time run (RunAtLoad, added with this) is suppressed and every
+# scheduled run after it evaluates.
+#
+# This value had never once been read. `sysctl -n kern.boottime` prints
+# `{ sec = 1785068938, usec = 428375 } ...` and the expression that parsed it was
+# `s/.*sec = \([0-9]*\).*/\1/`, whose leading `.*` is greedy and therefore matched
+# through to `usec`. BOOT_SEC was the microseconds field, uptime came out as the
+# whole Unix epoch, and the comparison below could only ever say "not in grace" —
+# the same defect this repository keeps finding, in the check whose entire job was
+# to have two answers. It also put a nine-digit `uptime` line in every alert mail
+# sent before 2026-07-26 20:45. The anchor is what fixes it: the field wanted is
+# the one at the start of the line.
+BOOT_GRACE=240
 
 HEARTBEAT_INTERVAL=86400
 
@@ -76,13 +95,53 @@ fail() {
 "
 }
 
-# --- boot grace -------------------------------------------------------------
+# --- the previous state -----------------------------------------------------
+#
+# Read here, above the grace check, because that check exits early and still has
+# to leave the state file rewritten. The file's mtime is the only record that
+# this ran at all, and the runbook's acceptance criterion reads it as one: "mtime
+# is under five minutes old". A path that exits without touching it makes that
+# criterion false while nothing is wrong.
 
-BOOT_SEC="$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/.*sec = \([0-9]*\).*/\1/p')"
+PREV_SIGNATURE=""
+PREV_HEARTBEAT=0
+if [ -f "$STATE_FILE" ]; then
+  PREV_SIGNATURE="$(sed -n '1p' "$STATE_FILE")"
+  PREV_HEARTBEAT="$(sed -n '2p' "$STATE_FILE")"
+  case "$PREV_HEARTBEAT" in ''|*[!0-9]*) PREV_HEARTBEAT=0 ;; esac
+fi
+
+# --- boot grace -------------------------------------------------------------
+#
+# The anchored `^{ sec = ` is load-bearing; see BOOT_GRACE above for what the
+# unanchored version did.
+
+BOOT_SEC="$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/^{ sec = \([0-9]*\).*/\1/p')"
 NOW="$(date +%s)"
 if [ -n "$BOOT_SEC" ]; then
   UP=$((NOW - BOOT_SEC))
   if [ "$UP" -lt "$BOOT_GRACE" ]; then
+    # Rewrite the previous state verbatim rather than exiting silently. The
+    # signature is unchanged because nothing was checked, so this claims nothing
+    # and cannot mail; the only thing it changes is the mtime, which is exactly
+    # the claim being made — "this ran, and deliberately asserted nothing".
+    #
+    # Before this, the first five and a half minutes of every boot had no run at
+    # all: the plist was RunAtLoad=false with a 300-second interval, so the
+    # earliest write was the first scheduled fire. The runbook tells the operator
+    # to wait two or three minutes after a reboot and then check that the mtime is
+    # under five minutes old, and in that window the newest mtime available was
+    # from before the boot — between three and eight minutes old depending only on
+    # where the reboot fell in the previous interval. The criterion passed or
+    # failed by timing, on a healthy machine. Observed on the 2026-07-26 20:24 and
+    # 20:29 reboots, which were 4m37s apart: no run happened across either of
+    # them, and the 20:26 check passed with thirteen seconds to spare.
+    #
+    # If the file did not exist, this writes an empty signature line, which is the
+    # same "no previous state" sentinel an absent file produces — so the first
+    # real run still mails `baseline` and not a false `recovered`.
+    mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null
+    printf '%s\n%s\n' "$PREV_SIGNATURE" "$PREV_HEARTBEAT" > "$STATE_FILE"
     exit 0
   fi
 else
@@ -214,13 +273,8 @@ else
   SIGNATURE="$(printf '%s' "$FAILURES" | sort | tr '\n' ',')"
 fi
 
-PREV_SIGNATURE=""
-PREV_HEARTBEAT=0
-if [ -f "$STATE_FILE" ]; then
-  PREV_SIGNATURE="$(sed -n '1p' "$STATE_FILE")"
-  PREV_HEARTBEAT="$(sed -n '2p' "$STATE_FILE")"
-  case "$PREV_HEARTBEAT" in ''|*[!0-9]*) PREV_HEARTBEAT=0 ;; esac
-fi
+# PREV_SIGNATURE and PREV_HEARTBEAT were read above the grace check, which needs
+# them to rewrite the file on its way out.
 
 HOST="$(hostname -s)"
 SEND=0

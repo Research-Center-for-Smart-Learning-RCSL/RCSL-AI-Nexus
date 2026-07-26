@@ -880,14 +880,19 @@ looking for the risk. The state below is checked against the code.
 --- Unattended recovery and alerting ---
 [ ] runbooks/first-deploy.md §1.1 round one has passed with the full check run, not just SSH
 [ ] The reconcile log has shown `OK: all bindings restored` at least once; `intact` is the
-    race not firing, which is luck rather than proof that the repair works (deployment.md §9)
+    race not firing, which is luck rather than proof that the repair works (deployment.md §9).
+    Seven boots have all come out `intact`, and the margin measurements say rebooting cannot
+    produce it: inject the fault instead, per runbook §1.1a
 [ ] The health daemon mails: run check-platform-health.sh by hand once with the credentials
     in place and confirm the mail arrives, because the mail path is the one part of the
     monitor that cannot be verified by watching it work
 [ ] The alert is not filtered into spam and the daily heartbeat is not muted; the design
     makes an absent mail the signal, so a filtered heartbeat silently removes the alarm
 [ ] /opt/homebrew/var/nexus-health.state has an mtime within the last five minutes. The
-    log is events-only and is empty both when nothing is wrong and when nothing ran
+    log is events-only and is empty both when nothing is wrong and when nothing ran.
+    This is readable at any time, including immediately after a boot, only because the
+    plist is RunAtLoad and the boot-grace path rewrites the file without checking anything;
+    before that fix the criterion was false for the first five minutes of every boot
 ```
 
 ## 15. Accepted Risks
