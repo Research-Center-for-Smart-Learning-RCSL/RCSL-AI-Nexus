@@ -17,6 +17,92 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-26
 
+### Round two, the OS update: nothing brought the containers back, and the reconciler called that a success
+
+**Round two was run — the macOS 26.5.2 update — and it failed.** Legitimately run:
+round one had passed three times, which is the gate the runbook sets. Shutdown
+19:04:18, machine back at 19:08:46, `macOS 26.5.2` recorded in
+`/Library/Receipts/InstallHistory.plist` at 19:09:47, hands off. `docker compose
+ps` was empty. Not a dropped port forward this time: no containers at all.
+
+**The two checks round two exists for both passed.** `autoLoginUser` was still
+`rcslmac1` and `pmset autorestart` still 1 — the reset that has precedent did not
+happen. The failure was somewhere nobody had thought to look, which is the
+argument for running the test rather than reasoning about it.
+
+**They were not broken.** All ten are present under `docker compose ps -a`, each
+`Exited (0)` from a clean shutdown SIGTERM at 19:04:18, `restart: unless-stopped`
+still on every one of them. Docker Desktop simply did not restore them. The engine
+reported `running` at 19:10:37 and the backend log has **not one `exposer.Add`**
+after it — against a full nine at the same point in the 18:08 boot. Two boots kept
+the promise, this one did not. `restart: unless-stopped` is a promise the Docker
+daemon makes, and this is the entry that records it is not a property of the
+machine.
+
+**Nothing on this host was responsible for the stack being up.** That is the real
+finding, and it was true all day without anyone noticing, because Docker had
+always happened to do it. The reconciler's repair path fires only for containers
+that are *already running* with an empty `NetworkSettings.Ports`; `docker compose
+up` appears nowhere in launchd. The whole recovery chain was one layer thinner
+than it read.
+
+**And the reconciler reported success while standing in the middle of it.** Its
+third precondition waits for the container count to stop changing, and required
+`COUNT > 0` before it would settle — so with a count of zero it spun to its
+ten-minute deadline, logged `container set settled at 0 running`, swept zero
+containers for dropped bindings, found none, and printed `all published bindings
+intact; nothing to do` before exiting 0. A script written to repair boot,
+reporting a healthy platform at a moment when there was no platform. **This is the
+fourth instance of the day's recurring defect and the first one that was inside
+the code written to fix a previous instance**: a check whose scope lets it produce
+only one answer. Its own header comment warns about exactly this shape, one
+precondition earlier.
+
+**The monitor was the only thing in the chain that told the truth.** At 19:14:59
+`check-platform-health.sh` flagged all seven — six entrances plus `services` — and
+mailed at 19:15:02. It got that right for the reason recorded when it was written:
+it compares against a named expected list instead of enumerating what happens to be
+running, so a service that is entirely gone still appears. The reconciler had the
+opposite property, in the same repository, on the same day.
+
+**The fix is that the reconciler now waits for a named set rather than a count.**
+A count cannot tell "not restored yet" from "not coming back"; a list can, because
+an absent service is still in the list. Anything missing is brought up with
+`docker compose up -d`, the result is read back rather than assumed, and a platform
+that is still incomplete now exits non-zero even when every binding that does
+exist is correct — otherwise a true statement about part of the platform would go
+on standing in for a statement about the platform. Run by hand against the empty
+platform it took 28 seconds to bring nine services back with all six entrances at
+200, and a second run is a no-op. **That is a hand test, not a boot test.** The
+outcome that proves this path is `docker did not restore the stack; bringing it up`
+→ `stack up: all expected services running`; runbook §1.1 now lists all six
+outcomes and what each one means.
+
+**Why Docker did not restore is not established, and it is left that way on
+purpose.** The obvious reading is that an update reboot is not an ordinary reboot:
+the two boots that restored were plain reboots, this one carried an OS install
+across it, and an update reboot has its own staging rather than being one clean
+stop and start. A weaker second reading is in the logs — Docker Desktop appears to
+have been in Resource Saver pause when the shutdown began, since the shutdown path
+issued `/unpause` at 19:04:18.253 and the containers were SIGTERM'd 0.5 seconds
+later. Both are one correlation on one boot, the same size of evidence that
+produced the wrong logtail diagnosis recorded below, and neither has a mechanism
+anyone here has verified. **Nothing depends on choosing between them**, which is
+the point: the repair covers a stack that is not running, whatever stopped it from
+being restored. What follows from the update reading is only a test instruction —
+§1.1 has to be re-run in full after an update, not just the two settings checks —
+and that is worth doing whether or not the reading is right.
+
+**One thing this boot did prove, cheaply.** The netmap-cache model predicted the
+next boot would be a fast one, because 18:08:23 wrote the cache. It was:
+`Start: loaded netmap from disk cache` at 19:10:00, address up at +1 second, the
+widest margin of the four. The prediction has now held once, so the model has two
+observations behind it rather than one. It also means the *next* boot is the slow
+kind — the one most likely to force `OK: all bindings restored`, the last outcome
+still never produced by a boot. The same boot also showed the margin table's
+framing is only half right: it measures a race, and a race needs both runners.
+The address won by a mile and the platform was dead anyway.
+
 ### The third boot: the last unproven link, and the diagnosis that did not survive it
 
 §1.1 was run a third time — `sudo reboot` at 18:07:46, back at 18:08:06, hands
@@ -1832,21 +1918,35 @@ The backend suite runs here too: 359 tests on Python 3.12 against a real
 Postgres 17.
 
 What is still unverified, and by what: the **public entrance and nginx**, which
-wait on the NTNU proxy administrator; the **unattended-recovery chain**, which has
-now seen one reboot and *failed* it, been repaired, and not been re-tested
-(runbook §1.1); and **MLX**, which has an adapter and no model registered against
-it.
+wait on the NTNU proxy administrator; the **unattended-recovery chain**, where
+round one has passed three of four boots and **round two, the OS update, failed**
+(runbook §1.1) — repaired, and the repair not yet through a boot; and **MLX**,
+which has an adapter and no model registered against it.
 
 **On the recovery chain specifically, because it is the item most likely to be
-misread.** The 2026-07-26 reboot found that Docker Desktop drops the port forwards
-naming the tailnet address — it restores containers before `tailscaled` has the
-address up, the bind fails, and the daemon logs one warning and never retries.
-Nothing exits, so `restart: unless-stopped` never fires; nine containers run,
-`healthy`, publishing nothing. A LaunchDaemon
-(`launchd/reconcile-port-bindings.sh`) now reconciles this after boot and has been
-tested by hand against a live fault. **It has not been tested by an actual
-reboot.** That is the whole point of the property, so until round one is re-run
-and passes, the chain is repaired-but-unproven, not proven.
+misread.** Four boots on 2026-07-26 found two independent faults, and the second
+one is the reason the count above says "failed it" rather than "passed three
+times".
+
+The first: Docker Desktop drops the port forwards naming the tailnet address — it
+restores containers before `tailscaled` has the address up, the bind fails, and the
+daemon logs one warning and never retries. Nothing exits, so `restart:
+unless-stopped` never fires; nine containers run, `healthy`, publishing nothing.
+
+The second, on the 19:09 boot — which was round two, the macOS 26.5.2 update:
+Docker Desktop did not restore the containers at all, and **nothing on the host was
+responsible for the stack being up** — `docker compose up` appeared nowhere in
+launchd, because Docker had always happened to do it. Worse, the reconciler swept
+zero containers, found no dropped bindings, and exited 0 reporting an intact
+platform.
+
+`launchd/reconcile-port-bindings.sh` now covers both, and
+`check-platform-health.sh` mails on a state change and did correctly catch the
+second. **Neither repair path has been exercised by an actual reboot** — the
+binding path has never once been triggered by a boot, and the bring-up path was
+written after the boot that needed it. That is the whole point of the property, so
+until round one is re-run and passes, the chain is repaired-but-unproven, not
+proven.
 
 ### If you are picking this up cold
 
@@ -1894,30 +1994,39 @@ routing policy editor now exists, so a policy is no longer curl-only.
 Four things are open as of the end of 2026-07-26, in the order they should be
 picked up.
 
-**1. Force a boot that loses the port-binding race.**
-[runbooks/first-deploy.md](./runbooks/first-deploy.md) §1.1. Round one has now
-passed three times (16:45 failed, 17:21 and 18:08 passed), and every link in the
-recovery chain has been exercised by a boot except one: **the reconciler's repair
-path itself.** All three passes landed on `all published bindings intact` —
-`tailscaled` won the race — so the code that would actually restore a lost binding
-has only ever been run by hand against a fault someone induced. The outcome that
-proves it is `OK: all bindings restored` in
-`/opt/homebrew/var/log/nexus-reconcile.log`; §1.1 has all four outcomes and what
-each means. **A person must be at the machine.**
+**1. Re-run the reboot test, and force a boot that loses the port-binding race.**
+[runbooks/first-deploy.md](./runbooks/first-deploy.md) §1.1. Where it stands: round
+one passed three of four boots (16:45 failed, 17:21 and 18:08 passed), and **round
+two, the OS update, failed** — 19:09, Docker Desktop restored no containers and the
+reconciler reported success on an empty platform. That was a new fault rather than
+a recurrence, and it is not a round-one failure: the gate was correctly observed,
+round two just tested something the three passes could not. Both defects are fixed;
+neither fix has been through a boot.
 
-This is no longer a matter of rebooting and hoping. The losing boots are the ones
-that start without a netmap disk cache, and a boot that reads the cache does not
-rewrite it — so **reboot twice in a row and watch the second one**, which is the
-one that will have to wait for control before the address comes up. The evidence
-for that model, and the prediction it makes, is in the 2026-07-26 entry above; if
-the margin does not alternate the way it predicts, that is worth knowing too.
+Two of the six outcomes in §1.1 have never been produced by a boot, and each
+proves a different repair path. `docker did not restore the stack; bringing it up`
+→ `stack up: all expected services running` proves the bring-up path written after
+the 19:09 failure. `OK: all bindings restored` proves the binding path, which four
+boots have now failed to trigger because `tailscaled` won the race every time it
+was a race at all. **A person must be at the machine.**
 
-Round two, the pending macOS 26.5.2 update, is no longer gated — round one has
-passed — but note that updates have been known to reset `autoLoginUser` and
-`pmset autorestart`, which are themselves links in this chain, so §1.1's two extra
-checks after the update are not optional. Nothing should be concluded about the
-platform surviving a power cut until the repair path above has been walked by a
-real boot.
+The second of those is no longer a matter of rebooting and hoping. The losing boots
+are the ones that start without a netmap disk cache, and a boot that reads the
+cache does not rewrite it — so **reboot twice in a row and watch the second one**,
+which is the one that will have to wait for control before the address comes up.
+The model has now predicted correctly once (19:09 read the cache and won by the
+widest margin of the four), and by the same rule **the next boot is a slow one** —
+so the next reboot is already the high-probability attempt at the binding path,
+before any doubling up. If the margin stops alternating the way this predicts,
+that is worth knowing too.
+
+Round two no longer needs scheduling — 26.5.2 is installed — but it has to be
+*passed*, which means re-running §1.1 in full on the machine as it now is. The two
+settings checks that round two was written for (`autoLoginUser`, `pmset
+autorestart`) both survived the update; what did not survive was something nobody
+had listed, so after any future update the whole of §1.1 is the test, not those two
+lines. Nothing should be concluded about the platform surviving a power cut until
+both repair paths above have been walked by a real boot.
 
 **2. Give the first administrator public-entrance credentials.** The account
 bootstrapped from a tailnet identity carries no `password_hash` and no
