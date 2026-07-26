@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>online.rcsl.ollama</string>
+
+	<!-- OLLAMA_HOST lives here rather than in `launchctl setenv`, which is
+	     scoped to the boot session: after a reboot the variable is gone and
+	     ollama falls back to 0.0.0.0, publishing inference to the LAN with
+	     nothing to indicate it. security.md 7.1 requires the loopback bind,
+	     so the bind has to survive a reboot on its own.
+	     The other two carry over from the Homebrew formula's own plist. -->
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>OLLAMA_HOST</key>
+		<string>127.0.0.1</string>
+		<key>OLLAMA_FLASH_ATTENTION</key>
+		<string>1</string>
+		<key>OLLAMA_KV_CACHE_TYPE</key>
+		<string>q8_0</string>
+	</dict>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/homebrew/opt/ollama/bin/ollama</string>
+		<string>serve</string>
+	</array>
+
+	<!-- A daemon defaults to root, which would look for models in
+	     /var/root/.ollama and find none. Running as the operator keeps the
+	     existing ~/.ollama and avoids root at the same time. security.md
+	     7.1(d) wants a dedicated non-admin service account eventually; that
+	     is a later hardening step, and this key is where it lands. -->
+	<key>UserName</key>
+	<string>rcslmac1</string>
+
+	<!-- A LaunchDaemon, not a LaunchAgent: this machine is headless and runs
+	     24/7, so the runtime must come back after a power cut without anyone
+	     logging in. -->
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+
+	<key>StandardOutPath</key>
+	<string>/opt/homebrew/var/log/ollama.log</string>
+	<key>StandardErrorPath</key>
+	<string>/opt/homebrew/var/log/ollama.log</string>
+	<key>WorkingDirectory</key>
+	<string>/opt/homebrew/var</string>
+</dict>
+</plist>

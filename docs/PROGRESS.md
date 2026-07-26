@@ -53,6 +53,53 @@ from external media instead of a second layer behind encryption.
 
 ## 2026-07-26
 
+### GPU inference, verified at last, and two runbook steps that were quietly wrong
+
+Runbook §3 and §4 are done, and the claim the whole machine exists for is no
+longer a claim: `ollama ps` reports **100% GPU** for `qwen2.5:7b`, generating at
+91.7 tok/s with prompt evaluation at 180 tok/s, at the 32768 context that
+`MAX_CONTEXT_LENGTH` already configures. A container reaches it through
+`host.docker.internal` and gets a completion back, so §0.1's whole bet — runtimes
+native, containers calling out to them — is now measured rather than reasoned.
+
+**A number the memory budget will want.** The model's weights are 4.7 GB and its
+resident size while loaded is 6.6 GB; the difference is the KV cache at 32k
+context. `MemoryBudgetService` counts only `resource_profile.memory_gb`, which is
+the weights, and leaves the rest to the 20% headroom — so the headroom is
+carrying about 40% of weight size per loaded model at this context on this
+architecture. That ratio is not linear in model size and must not be extrapolated
+to the 51.2 GB the budget currently permits, but it is the first real measurement
+of the quantity §4.3 has been guessing at, and it is what the deferred
+`MetricsPort` ingestion should be calibrated against.
+
+**The runbook's Ollama service step was a silent security failure.** It said to
+run `launchctl setenv OLLAMA_HOST 127.0.0.1` and then `brew services start
+ollama`. `launchctl setenv` writes to the boot session domain and does not
+survive a reboot, and Homebrew's plist carries no `OLLAMA_HOST` of its own — so
+the first restart would drop Ollama back to its `0.0.0.0:11434` default and
+publish inference to the LAN, with nothing to indicate it had happened. The bind
+required by §7.1 has to survive a reboot without help, so the value now lives in
+a plist committed at `launchd/online.rcsl.ollama.plist`. Two further corrections
+came with it: a LaunchDaemon rather than Homebrew's LaunchAgent, because an agent
+waits for a login that a headless machine after a power cut will not get; and an
+explicit `UserName`, because a daemon defaults to root and would look for models
+in `/var/root/.ollama` and find none. §7.1(d)'s dedicated service account is the
+later hardening step, and that key is where it will land.
+
+**§4 had a smaller version of the same gap.** It opens with `sudo tailscale up`,
+but `brew install tailscale` starts no daemon, so the step fails with `failed to
+connect to local Tailscale service`. `sudo brew services start tailscale` comes
+first, and the `sudo` is load-bearing for the same reason it is on Ollama: it
+makes the difference between a system daemon that boots and a user agent that
+waits for a login.
+
+The machine is on the tailnet at `100.108.250.62`, MagicDNS
+`rcslmac1demac-studio.tail68e30b.ts.net`, and `.env` now carries that address and
+the bootstrap login with no placeholders left. `tailscale serve` waits for the
+frontend to exist. The only thing still blocking a first `docker compose up` is
+the GeoLite2 database, which `ENV=production` with a non-empty
+`ALLOWED_COUNTRIES` refuses to start without.
+
 ### The Mac Studio exists, and a test that had stopped testing anything
 
 The deployment host is real now, and the first thing it did was falsify a claim

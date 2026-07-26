@@ -103,15 +103,43 @@ Ollama 預設會聽所有介面 (`0.0.0.0:11434`)。要把它綁回本機，只�
   ollama run qwen2.5:7b "說一句話"
   ```
 
-- [ ] 設定成開機自動啟動、掛掉自動重啟。用 Homebrew 的 launchd 服務，並確保
-  `OLLAMA_HOST=127.0.0.1` 有帶進去：
+- [ ] 設定成開機自動啟動、掛掉自動重啟。**不要用 `brew services start ollama`**，
+  用 repo 裡的 [`launchd/online.rcsl.ollama.plist`](../../launchd/online.rcsl.ollama.plist)：
 
   ```sh
-  launchctl setenv OLLAMA_HOST 127.0.0.1
-  brew services start ollama
+  sudo cp launchd/online.rcsl.ollama.plist /Library/LaunchDaemons/
+  sudo chown root:wheel /Library/LaunchDaemons/online.rcsl.ollama.plist
+  sudo chmod 644 /Library/LaunchDaemons/online.rcsl.ollama.plist
+  sudo launchctl bootstrap system /Library/LaunchDaemons/online.rcsl.ollama.plist
   ```
 
-  重開機後用 `curl http://127.0.0.1:11434/api/tags` 確認它有起來。
+  Homebrew 的做法在這台機器上有兩個問題，其中一個是靜默的安全失效：
+
+  - **`launchctl setenv OLLAMA_HOST 127.0.0.1` 不會跨重開機存活。** 它寫的是
+    launchd 的 boot session domain。重開機後變數消失，而 Homebrew 的 plist 裡
+    沒有 `OLLAMA_HOST`，Ollama 就退回預設的 `0.0.0.0:11434`——推論端點對整個
+    區網敞開，而且沒有任何跡象。security.md §7.1 要求的 loopback 綁定必須自己
+    能撐過重開機，所以值要寫死在 plist 裡。
+  - **不加 sudo 的 `brew services` 是 LaunchAgent，要登入才啟動。** 這台無頭
+    運作，跳電重開後不會有人登入（FileVault 開著時更不可能），Ollama 就不會
+    回來，gateway 只會一直回「no available model」。所以是 LaunchDaemon。
+
+  plist 裡 `UserName` 設成操作者帳號而不是留給 root：daemon 預設以 root 執行，
+  會去找 `/var/root/.ollama` 而看不到已經拉好的模型。
+
+- [ ] 驗證（三件事都要對）：
+
+  ```sh
+  lsof -nP -iTCP:11434 -sTCP:LISTEN   # 只能有 127.0.0.1，不能有 * 或 0.0.0.0
+  launchctl getenv OLLAMA_HOST        # 要是空的：綁定來自 plist 而非 session
+  ollama list                         # 模型看得到 = 執行身分對
+  ```
+
+  再從容器打一次，確認 §0.1 的前提成立：
+
+  ```sh
+  docker run --rm alpine:3 sh -c 'apk add -q curl; curl -s http://host.docker.internal:11434/api/tags'
+  ```
 
 - [ ] （之後的硬化，非首次上線必須）改用一個專用、非管理員的服務帳號來跑 Ollama，
   模型目錄只給該帳號寫入。細節見 [security.md](../architecture/security.md) §7.1(d)。
@@ -120,6 +148,17 @@ Ollama 預設會聽所有介面 (`0.0.0.0:11434`)。要把它綁回本機，只�
 ---
 
 ## 4. Tailscale（tailnet）
+
+- [ ] 先啟動 `tailscaled`。`brew install tailscale` 只裝了 CLI 和 daemon，沒有啟動它，
+  少了這步下一行會直接回 `failed to connect to local Tailscale service`：
+
+  ```sh
+  sudo brew services start tailscale
+  ```
+
+  這裡的 `sudo` 是必要的而不是順手加的：加了才會註冊成系統層級的 LaunchDaemon，
+  開機就起、不需要有人登入；不加就是使用者層級的 LaunchAgent，跳電重開後在沒人
+  登入之前整條 tailnet 都是斷的。和上一節 Ollama 是同一個道理。
 
 - [ ] 登入並加入 tailnet：
 
