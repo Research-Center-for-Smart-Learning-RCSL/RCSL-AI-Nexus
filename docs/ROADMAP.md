@@ -103,7 +103,7 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 [security.md](./architecture/security.md) §15.5 (the gateway forging an administrator identity to the tailnet entrance over a shared Docker network) is now closed: the data plane and control plane are on separate networks and share nothing. The §6 per-service database credential split is now implemented too, so a compromised gateway can neither reach the admin socket nor write `api_keys` or `users` directly. Both are verified only structurally so far (`docker compose config`, unit tests); the live grants are exercised at the first Mac Studio deploy.
 
 - [x] Public admin entrance strips every `Tailscale-*` header unconditionally
-- [x] Tailscale ACL including `tag:ntnu-proxy`, so members cannot bypass the proxy
+- [x] Tailscale ACL including `tag:ntnu-proxy`, so members cannot bypass the proxy. Applied to the real tailnet on 2026-07-26, not merely written: the server carries `tag:ai-server`, and the no-bypass property is pinned by the `tests` block in [security.md](./architecture/security.md) §3.4, which Tailscale runs on every policy save. `tag:ntnu-proxy` itself waits for the proxy host to join
 - [x] Trusted-proxy client address resolution using the shared secret header, not peer IP
 - [x] Country filter on **both** the gateway and the public admin entrance
 - [x] Per-key CIDR allowlists

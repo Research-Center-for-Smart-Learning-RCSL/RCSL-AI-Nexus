@@ -168,6 +168,33 @@ Ollama 預設會聽所有介面 (`0.0.0.0:11434`)。要把它綁回本機，只�
 
   照終端機給的連結用瀏覽器登入。
 
+- [ ] **套用 ACL。這步不能跳過，也不能延後。** 新 tailnet 的預設政策是
+  `{"src": ["*"], "dst": ["*"], "ip": ["*"]}`——全放行。在那之下，任何加入 tailnet 的
+  裝置都能直接連 `100.x.y.z:8000` 和 `:8002`，繞過 proxy 上的每一道控制
+  （[security.md](../architecture/security.md) §3.4 開頭警告的就是這件事）。政策範本在
+  §3.4，把 `group:ai-admin` 換成你的登入身分後，貼到
+  https://login.tailscale.com/admin/acls/file 存檔。
+
+  順序是有意義的：`tagOwners` 必須先存在，下一步的 tag 才打得上去，第 8 部分請 NTNU
+  管理員打 `tag:ntnu-proxy` 也才會成功。先打 tag 再套 ACL 會失敗。
+
+- [ ] 給這台打上 `tag:ai-server`。§3.4 的規則全部掛在這個 tag 上，沒有 tag 就一條都
+  不會套用：
+
+  ```sh
+  sudo tailscale up --advertise-tags=tag:ai-server
+  ```
+
+  會再要一次瀏覽器確認，因為 tag 把裝置擁有權從你個人轉移到 tag。附帶好處是 tagged
+  裝置預設沒有金鑰過期；個人裝置預設 180 天過期，一台 24/7 伺服器的 tailnet 連線在
+  半年後自己斷掉是很難查的故障。
+
+  驗證：
+
+  ```sh
+  tailscale status --json | grep -A2 '"Tags"'    # 要看到 tag:ai-server
+  ```
+
 - [ ] 取得這台的 tailnet IP（`100.x.y.z`），記下來，第 6 部分的 `TAILNET_IP` 要用：
 
   ```sh

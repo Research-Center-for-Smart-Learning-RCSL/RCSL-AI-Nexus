@@ -53,6 +53,45 @@ from external media instead of a second layer behind encryption.
 
 ## 2026-07-26
 
+### The tailnet ACL, which the runbook never told anyone to apply
+
+`ROADMAP.md` has carried a checked box reading "Tailscale ACL including
+`tag:ntnu-proxy`, so members cannot bypass the proxy" since the architecture was
+written. It described a template in `security.md` §3.4. There was no tailnet to
+apply it to until today, and the runbook — which is the document that exists so
+nothing gets skipped — never mentions applying it or tagging the server at all.
+
+Following the runbook exactly therefore ends here: `sudo tailscale up` joins the
+tailnet under the default policy, which for a new tailnet is
+`{"src": ["*"], "dst": ["*"], "ip": ["*"]}`. Every rule in §3.4 hangs off
+`tag:ai-server`, and a device that joined without `--advertise-tags` carries no
+tag, so none of them matches. The failure mode is not that nothing works; it is
+that everything is reachable. Any device subsequently added to the tailnet could
+open `100.x.y.z:8000` or `:8002` directly and bypass every control the proxy
+applies — the exact sentence §3.4 opens with, latent for as long as the tailnet
+had one member and live the moment it had two.
+
+There is a sharper consequence downstream. §8 asks the NTNU proxy administrator
+to join under `tag:ntnu-proxy`, but a tag cannot be applied unless `tagOwners`
+already names it. Without the ACL step, that request fails on the other person's
+machine, for a reason nothing in the runbook explains.
+
+**Applied, and then pinned.** The policy is now live on the real tailnet, and the
+machine carries `tag:ai-server` with key expiry disabled — Tailscale's 180-day
+default would otherwise have dropped a 24/7 server off the tailnet half a year
+in. The part worth keeping is the `tests` block added to §3.4: Tailscale runs it
+on every policy save and rejects a policy that fails one, so "a human member
+cannot reach the data-plane ports" and "the proxy cannot reach the management
+endpoints" are now assertions rather than prose. Both pass. The runbook gained
+the two missing steps in the order they have to happen, since tagging before the
+ACL exists cannot work.
+
+The pattern is the same one this file recorded twice already today, and the
+header warns about generally: a control that was designed, written down, marked
+done, and never actually in force. The account-split test asserted nothing; the
+Ollama loopback bind would not have survived a reboot; the pnpm allowlist was
+inert; this ACL was a file nobody had applied. None of them looked wrong.
+
 ### GPU inference, verified at last, and two runbook steps that were quietly wrong
 
 Runbook §3 and §4 are done, and the claim the whole machine exists for is no
