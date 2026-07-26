@@ -17,6 +17,110 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-26
 
+### The third boot: the last unproven link, and the diagnosis that did not survive it
+
+§1.1 was run a third time — `sudo reboot` at 18:07:46, back at 18:08:06, hands
+off. **It passed.** The tailnet was up, nine containers running with `migrate` at
+`Exited (0)`, all six requested bindings equal actual, all six entrances returning
+200, and Ollama answering on `127.0.0.1:11434` with `lsof` confirming it listens
+nowhere else. The reconcile log's last line is `all published bindings intact;
+nothing to do` — the second outcome for the third boot running, so **the repair
+path has still never been walked by a boot.**
+
+**What is new is the one thing the entry below said had no evidence behind it at
+all: the health daemon survived a reboot.** It was installed at 17:56, after the
+17:21 boot, which made it the only link in the chain never exercised by one.
+`nexus-health.state` was rewritten at 18:43:17; launchd loaded the job at 18:08:17
+and `18:08:17 + 7×300 = 18:43:17` exactly, so it has been cycling on its interval
+since 18:13:17. The boundary worry recorded alongside it turns out not to apply:
+launchd cannot load the job before `kern.boottime`, so the first fire is always at
+uptime ≥ `BOOT_GRACE` and can never be the one that is skipped. This boot's was at
+311 seconds.
+
+**The daemon's own mail path is proven too, and it had not been.** Every mail so
+far — the baseline and the three from the `grafana` drill — came from a hand run:
+the heartbeat field in the state file read 17:55:30 and the plist was installed at
+17:56. Under launchd the environment is a different one (no TTY, no login session,
+`PATH` only what the script exports), and an unexercised link of exactly that shape
+is what this project keeps being caught by. Forced by ageing the heartbeat field to
+an old timestamp so the next tick would owe a heartbeat: the daemon fired at
+18:53:18 and logged `mailed heartbeat` at 18:53:20. Two seconds, and
+`nexus-health.log` has its first content since it was created.
+
+**The margin table gains a third row, and it is the narrowest pass yet:**
+
+| boot | `tailscaled` engine start | address usable | Docker's `exposer.Add` | margin |
+|---|---|---|---|---|
+| 16:45, failed | 16:45:15 | 16:45:32 (+17s) | 16:45:29 | **−3s** |
+| 17:21, passed | 17:21:48 | 17:21:48 (+0s) | 17:21:59 | **+11s** |
+| 18:08, passed | 18:08:14 | 18:08:23 (+9s) | 18:08:25 | **+2s** |
+
+Docker is the stable side: it binds 11 to 14 seconds after `tailscaled` starts, on
+all three. The entire variance is how long the address takes to arrive — 0, 9 and
+17 seconds. The budget is about eleven seconds.
+
+**The cause recorded for that variance was wrong, and this boot is what shows
+it.** The entry below and [deployment.md](./architecture/deployment.md) §9 both
+say the failing boot stalled in a logtail bootstrap-DNS retry loop while the
+passing one went straight to `Starting`. The 18:08 boot ran the full loop —
+twelve DERP hosts for `log.tailscale.com`, then a second round for
+`controlplane.tailscale.com` at 18:08:20 — and still won by two seconds. The loop
+is not slow: every attempt fails inside the same second with `network is
+unreachable` or `no route to host`, which return immediately instead of timing
+out. All four boots in the log ran it. It was correlation read as cause, from two
+data points.
+
+**The variable is the netmap disk cache.** Every mention of it in
+`tailscaled.log`, with nothing omitted:
+
+| time | line | |
+|---|---|---|
+| 14:12:41 | `writing netmap to disk cache` | |
+| 14:42:24 | *(the tailnet ACL is applied — commit `17939ed`)* | |
+| 15:53:06 | `netmap cache is not available` | boot |
+| 16:45:15 | `netmap cache is not available` | boot, **failed, −3s** |
+| 16:45:32 | `writing netmap to disk cache` | |
+| 17:21:48 | `Start: loaded netmap from disk cache; 1 peers` | boot, **+11s** |
+| 18:08:14 | `netmap cache is not available` | boot, **+2s** |
+| 18:08:23 | `writing netmap to disk cache` | |
+
+With the cache the address is up in the same second `tailscaled` starts, because
+it does not need control at all — at 17:21:52 it was still reporting `You are
+logged out ... failed to resolve controlplane.tailscale.com` with the address
+already on `utun0`. Without it, the address waits for control: 9 seconds on this
+boot, 17 on the failing one.
+
+**The rule the log supports is that caches do not chain.** The cache is written
+when a new netmap arrives from control, and a boot that loads it does not rewrite
+it — 17:21 loaded and never wrote, and 18:08 duly found nothing. So a boot that
+wins by eleven seconds leaves the next one with nothing and sets up a slow one.
+The single apparent exception fits the same rule: 14:12:41 wrote a cache and the
+15:53 boot found none, with the tailnet ACL applied at 14:42:24 in between, which
+changes the packet filter the netmap carries.
+
+That last step rests on one observed load-without-write, so it is a model rather
+than a proven mechanism — but it makes a prediction that costs nothing to check.
+18:08:23 wrote a cache, so the **next** boot should be the fast kind and the one
+after it slow again. If the margin alternates, this is right.
+
+**It is also the first thing that says how to force the outcome the acceptance
+test actually wants.** `OK: all bindings restored` needs a boot that *loses* the
+race, and the losing boots are the ones with no cache — which is to say the boot
+immediately following one that read the cache. Back-to-back reboots, watching the
+second, is a far better bet than rebooting repeatedly and hoping. Recorded in the
+runbook §1.1.
+
+Two smaller things. **The §1.1 pass criterion for the state file was written in a
+form that cannot be checked after the fact**: it said the mtime should be within
+ten minutes of boot, but the file is rewritten every five minutes forever, so at
+18:43 the mtime was 18:43 — thirty-five minutes after boot, which reads as a
+failure and is not one. What the check is actually asking is whether the mtime is
+recent, and it now says so. And `tailscaled.log` is being filled by the ASUS
+peer's Dropbox LAN-sync broadcast to port 17500, dropped by the ACL every 31
+seconds and logged each time — 389 lines and 111 KB already. The ACL is behaving
+correctly; the cost is to the readability of the log that the original fault was
+found by reading, so it is on the roadmap rather than ignored.
+
 ### Something now watches the state nothing was watching, and what it still cannot see
 
 The entry below ends on the observation that nothing monitored any of this: the
@@ -121,6 +225,13 @@ never been walked by a boot, which remains the whole property being claimed.
 |---|---|---|---|---|
 | 16:45, failed | 16:45:15 | 16:45:32 | 16:45:29 | **−3s** |
 | 17:21, passed | 17:21:48 | 17:21:48 | 17:21:59 | **+11s** |
+
+> **Superseded by the 18:08 boot — see the entry at the top of 2026-07-26.** The
+> two paragraphs below name the logtail bootstrap-DNS loop as the cause. A third
+> boot ran that loop in full and still passed with two seconds to spare; the loop
+> completes inside one second on every boot in the log. The actual variable is
+> whether the netmap disk cache loads. The timings and the conclusion that the
+> reconciler stays load-bearing are unaffected; the mechanism is not.
 
 The seventeen seconds between those two is identifiable rather than random. On the
 failing boot `tailscaled` entered a logtail bootstrap-DNS retry loop the moment it
@@ -1783,26 +1894,30 @@ routing policy editor now exists, so a policy is no longer curl-only.
 Four things are open as of the end of 2026-07-26, in the order they should be
 picked up.
 
-**1. Re-run round one of the unattended-recovery acceptance test.**
-[runbooks/first-deploy.md](./runbooks/first-deploy.md) §1.1. Round one was run on
-2026-07-26 and **failed**: four of six published ports did not come back. The
-cause is understood and repaired (the reconcile LaunchDaemon, installed and
-registered; `sudo launchctl list | grep reconcile` confirms it), but the repair
-has only been exercised by hand against a live fault, never by a boot. **A person
-must be at the machine.**
+**1. Force a boot that loses the port-binding race.**
+[runbooks/first-deploy.md](./runbooks/first-deploy.md) §1.1. Round one has now
+passed three times (16:45 failed, 17:21 and 18:08 passed), and every link in the
+recovery chain has been exercised by a boot except one: **the reconciler's repair
+path itself.** All three passes landed on `all published bindings intact` —
+`tailscaled` won the race — so the code that would actually restore a lost binding
+has only ever been run by hand against a fault someone induced. The outcome that
+proves it is `OK: all bindings restored` in
+`/opt/homebrew/var/log/nexus-reconcile.log`; §1.1 has all four outcomes and what
+each means. **A person must be at the machine.**
 
-When reading the result, the outcome that proves the most is
-`OK: all bindings restored` in `/opt/homebrew/var/log/nexus-reconcile.log` — the
-race happened and the repair worked. `all published bindings intact` means
-`tailscaled` merely won the race that boot; it counts as a pass but exercises
-nothing, so do not read it as the problem being closed. §1.1 has all four outcomes
-and what each one means.
+This is no longer a matter of rebooting and hoping. The losing boots are the ones
+that start without a netmap disk cache, and a boot that reads the cache does not
+rewrite it — so **reboot twice in a row and watch the second one**, which is the
+one that will have to wait for control before the address comes up. The evidence
+for that model, and the prediction it makes, is in the 2026-07-26 entry above; if
+the margin does not alternate the way it predicts, that is worth knowing too.
 
-Round two, the pending macOS 26.5.2 update, stays blocked until round one passes
-in full — and note that updates have been known to reset `autoLoginUser` and
-`pmset autorestart`, which are themselves links in this chain. Until both rounds
-pass, nothing should be concluded about the platform surviving a power cut, and
-remote system updates should not be attempted.
+Round two, the pending macOS 26.5.2 update, is no longer gated — round one has
+passed — but note that updates have been known to reset `autoLoginUser` and
+`pmset autorestart`, which are themselves links in this chain, so §1.1's two extra
+checks after the update are not optional. Nothing should be concluded about the
+platform surviving a power cut until the repair path above has been walked by a
+real boot.
 
 **2. Give the first administrator public-entrance credentials.** The account
 bootstrapped from a tailnet identity carries no `password_hash` and no
