@@ -887,16 +887,22 @@ looking for the risk. The state below is checked against the code.
     established. See §1.1's "both rounds" sentence
 [x] The reconcile log has shown `OK: all bindings restored` at least once; `intact` is the
     race not firing, which is luck rather than proof that the repair works (deployment.md §9).
-    Seven boots all came out `intact`, and the margin measurements say rebooting cannot
-    produce it, so the fault was injected instead, per runbook §1.1a: 2026-07-26 21:05:31,
+    Seven boots all came out `intact` and the margin measurements made rebooting for it a
+    bad bet, so the fault was injected instead, per runbook §1.1a: 2026-07-26 21:05:31,
     three dropped bindings detected and recreated at boot. Checked with the qualification
     that it was manufactured, not awaited — the race occurring unaided is a separate claim,
-    evidenced only by the 16:45 failure
-[ ] The reconciler's container bring-up path has run at boot. Still blank: only the 19:09
-    failure has ever produced this state and it was repaired by hand. §1.1a's injector cannot
-    reach it — it withholds the address, not Docker Desktop's restore — so runbook §1.1b
-    injects it the other way, by stopping the stack before the reboot and letting
-    `restart: unless-stopped` keep it stopped. Written and its refuse paths tested; not yet run
+    evidenced only by the 16:45 failure. ("Rebooting *cannot* produce it" was the wording
+    here and it was too strong: the 21:51 boot measured an 11-second address where the
+    argument assumed a constant 9, so the margin distribution is wider than it looked —
+    deployment.md §9. A bad bet, not an impossibility)
+[x] The reconciler's container bring-up path has run at boot — 2026-07-26 21:52:14, from
+    `not running:` all nine to the whole platform up 51 seconds into the boot. §1.1a's
+    injector cannot reach it — it withholds the address, not Docker Desktop's restore — so
+    runbook §1.1b injected it the other way, by stopping the stack before the reboot and
+    letting `restart: unless-stopped` keep it stopped, which it did completely: Docker
+    restored none of the nine. Checked with the same qualification as the row above — the
+    state was manufactured, not awaited. Docker Desktop's restore failing *unaided* remains
+    evidenced only by the 19:10 boot, whose cause is still unknown
 [ ] The health daemon mails: run check-platform-health.sh by hand once with the credentials
     in place and confirm the mail arrives, because the mail path is the one part of the
     monitor that cannot be verified by watching it work

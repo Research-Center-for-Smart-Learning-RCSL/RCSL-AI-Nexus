@@ -17,6 +17,88 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-26
 
+### The container bring-up path ran 51 seconds into the boot, and that same boot falsified a number the reboot argument rested on
+
+**§1.1b was run and it passed on the first attempt.** The script refused nothing, stopped the
+nine services at 21:50:38, the machine was rebooted by hand, and the reconciler brought the
+whole platform up on the boot that followed. The four expected lines came out in order and
+nothing else did. The row that seven natural boots and one address injection could not fill is
+filled.
+
+| Time | Event |
+|---|---|
+| 21:50:37 | preconditions pass; the guard reads the *previous* boot's reconcile correctly (`ran 7s into this boot`) |
+| 21:50:38 | nine services stopped, read back and confirmed |
+| 21:51:23 | boot (`kern.boottime`) |
+| 21:51:30 | `reconcile starting` — 7 seconds into the boot, the same as §1.1a |
+| 21:51:45 | `tailnet address present` (15s wait) |
+| 21:51:46 | `docker daemon responding` |
+| **21:52:01** | **`not running:` all nine → `docker did not restore the stack; bringing it up`** |
+| **21:52:14** | **`stack up: all expected services running` → `all published bindings intact`** |
+
+**Boot to recovered: 51 seconds.** Script to recovered, which is the real outage window: 1
+minute 36 seconds. §1.1a's was 2m55s from boot, and that comparison is the point of the whole
+exercise — this fault is cheaper in every dimension including the one that matters to whoever
+is using the platform.
+
+**Docker Desktop restored exactly zero of the nine, which is the mechanism the test rides on.**
+`restart: unless-stopped` promises this and the compose file has said so all along, but until
+now nothing had watched the *unless* survive a reboot on this machine. It did, completely: the
+missing set was all nine on the first sample and all nine on the last.
+
+**The settle loop hit its structural floor, and that retires a worry §1.1a raised.** It took 15
+seconds — four samples with three five-second sleeps between them, which is the minimum the loop
+can take and still be the loop. §1.1a measured 27 seconds for the same code against a healthy
+boot's 16, and the open question was whether the loop is expensive at boot. It is not: what was
+expensive was inspecting a *running* stack while everything else on the machine was moving.
+Against an empty one the four `docker compose ps` calls cost nothing measurable. The same
+contrast shows in the scan — 40 seconds in §1.1a, absent here because there were no running
+containers to sweep.
+
+**Of the 44 seconds the reconciler spent, 31 were waiting and 13 were working**: 15s for the
+address, 1s for the daemon, 15s for the settle loop, 13s for `up -d` to take nine services from
+nothing to all-running including the postgres health gate and `migrate` running to `Exited (0)`.
+The one hand test of this path took 16 seconds for a single already-imaged service, essentially
+all of it the settle loop; the bring-up itself is what boot conditions were never measured
+against, and it costs 13 seconds.
+
+**The last line was `all published bindings intact`, exactly as predicted before the run.** No
+`can't assign requested address` appears in the Docker backend log for this boot — the newest
+such lines are still §1.1a's trio at 21:02:56 — because the reconciler waits for the address
+first, so by the time `up -d` ran the address had been on the interface for 16 seconds and the
+forwards were built correctly the first time. The two injectors test two paths and neither
+substitutes for the other; this run is the evidence for that rather than the assertion of it.
+
+**The monitor stayed silent, and only half of that was by design.** Boot grace covered
+21:51:23–21:55:23, so the `RunAtLoad` run was suppressed and the 51-second recovery finished
+well inside it; the first real check was 21:56:30, which is also the worst-case detection
+latency had the reconciler failed — about five minutes, not the ten quoted for §1.1a, because a
+240-second grace against a 300-second interval suppresses exactly one run. But the platform was
+also down for the 45 seconds *before* the reboot, and nothing guarded that: the previous boot's
+schedule had fired at 21:47:43 and would have fired next at 21:52:43, by which time the machine
+was gone. **That was luck of timing, not a control.** Run the script a minute later in the
+interval and the monitor mails a true `failing` — correctly, since the platform really is down.
+The runbook now says so; it is not a failure of the test.
+
+**One accidental confirmation, recorded because it could otherwise be misread.** The full check
+was run by hand at 21:53:29, 126 seconds into the boot, and exited 0 having checked nothing —
+it took the boot-grace path and rewrote the state file, which is what that path is for. It was
+rerun at 21:56:35, outside the grace, and *that* is the pass: exit 0, nine services, six
+bindings requested-equals-actual, six entrances 200, no state change. An `exit 0` inside the
+grace window is not evidence about the platform.
+
+**The boot also settled an open prediction that had nothing to do with why it was run, and half of it was wrong.** The netmap alternation model predicted the next boot would miss the disk cache and take 9 seconds to bring the address up. It missed the cache — the fifth consecutive confirmed prediction, which is where load-without-rewrite stops being provisional — and the address took **11 seconds**, not 9 (`tailscaled` 21:51:30, `peerapi` on 100.108.250.62 at 21:51:41). Cache-miss boots therefore measure 9, 9, 9, 11, 17, not a constant, and the runbook's "no spread at all" was three samples mistaken for a value. That number was load-bearing: the argument for injecting rather than rebooting ran `10.3 − 9 = 1.3s` and concluded the margin *cannot* go negative. It can — though the honest version of the correction is weaker than the arithmetic suggests, because `10.3 − 11` subtracts the extremes of two distributions measured on different boots, and this boot produced no margin observation at all since Docker bound nothing. What survives: the margin distribution is wider than three samples made it look, 16:45's 17-second address is the top of that distribution rather than a retired outlier, and "rebooting cannot lose" was overstated. The conclusion is unchanged and better grounded — inject because a 90-second hold is repeatable, not because rebooting is guaranteed to win.
+
+**And the reconciler is not a stopwatch.** Its log says the address took 15 seconds; it samples every 5. Both this and §1.1a's off-by-one were the same mistake in different clothes — reading a number off an instrument built for a different question. Address timings belong to `tailscaled`'s log.
+
+**What this does not establish is unchanged from what was written before it ran.** It does not
+show Docker Desktop's restore failing on its own — that happened once, after the macOS 26.5.2
+update, and why is still unknown; the state is reproduced, not the cause. And it does not
+replace round two, which tests the update reboot as a whole: automatic login, `pmset
+autorestart`, and what Docker does afterwards. None of those were touched.
+
+---
+
 ### The second repair path turned out to be injectable too, and the claim that it was not was mine
 
 **Yesterday's entry and three other files said the container bring-up path could only be
