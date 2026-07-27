@@ -25,11 +25,16 @@ const nextConfig = {
     // exactly 30s, and the browser saw a 500 with no trace in the backend log
     // — the reset happened between the two containers. See PROGRESS 2026-07-27.
     //
-    // Sized above the backend's own generation_deadline_seconds (600), so the
-    // guardrail that fires is the one that can report a reason. This is a
-    // static value, unlike ADMIN_API_URL, so baking it in at build time is
+    // Sized above the backend's own GENERATION_DEADLINE_SECONDS, so the
+    // guardrail that fires is the one that can report a reason: this timeout
+    // resets the socket and says nothing, while the backend's deadline ends
+    // the stream with finish_reason=length. **Raise this whenever that one
+    // rises.** It went 600s→900s, so this went 660s→960s; if it had not, the
+    // silent cut would simply have moved from 30 seconds to 11 minutes.
+    //
+    // A static value, unlike ADMIN_API_URL, so baking it in at build time is
     // safe — that distinction is why the proxy itself lives in middleware.ts.
-    proxyTimeout: 660_000,
+    proxyTimeout: 960_000,
   },
 };
 

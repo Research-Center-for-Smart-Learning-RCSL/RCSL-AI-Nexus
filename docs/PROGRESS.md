@@ -126,6 +126,23 @@ rescue the non-converging case. A test that pinned the literal `2` for the slot 
 was changed to assert the configured value: it failed on a default move and said
 nothing about the gauge it was written to protect.
 
+**The wall-clock deadline followed, and it could not move alone.** 600 → 900 s,
+because at the measured throughput decay a full 16384-token generation takes roughly
+700 seconds and the deadline would have cut a legitimate long answer before its own
+ceiling did — a limit firing ahead of the one it backstops reports the wrong reason.
+
+But the frontend's `experimental.proxyTimeout` was deliberately set just above the
+old 600, so raising the deadline alone would have handed the cut back to the proxy:
+**the same silent reset that started all of this, moved from 30 seconds to 11
+minutes.** It went to 960 s with it. The ordering now has a test that reads both
+files — `next.config.js` and `.env.example` — and fails if the proxy's value drops
+below the deadline's, since a comment in each file cannot enforce an invariant that
+spans two languages. It was checked by breaking it: at 300 s the test fails.
+
+`GENERATION_DEADLINE_SECONDS` was also absent from `.env`, `.env.example` and the
+deployment table entirely, existing only as a code default — the same
+discoverability gap `OLLAMA_THINKING` had. All three now carry it.
+
 **What was decided against.** An automatic fallback — detect reasoning past a budget
 with no answer, then silently re-issue with `think: false` — was designed and
 dropped. Three reasons, and the second is the one that matters: it generalised from a

@@ -153,8 +153,18 @@ class Settings(BaseSettings):
     """
     max_context_length: int = 32768
     request_timeout_seconds: int = 300
-    generation_deadline_seconds: int = 600
+    generation_deadline_seconds: int = 900
     """Wall-clock ceiling on a single generation while it holds a concurrency slot.
+
+    Raised from 600 with the token ceiling, so that the ceiling is what binds a
+    long answer rather than this. Throughput decays badly with context on this
+    hardware — 60.8 tok/s at the start of a generation, 23.5 by the 16000th
+    token, measured — which puts a full 16384-token generation at roughly 700
+    seconds. At 600 this cut first, and a limit that fires before the one it is
+    meant to backstop reports the wrong reason.
+
+    It is still a real bound: fifteen minutes is the longest one caller can
+    hold one of four slots.
 
     Distinct from `request_timeout_seconds`, which is the per-read HTTP timeout:
     that bounds a stalled stream (no bytes for the interval), while this bounds a
