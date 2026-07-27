@@ -1478,6 +1478,33 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
 
 ## 附錄：新手常見卡點
 
+### `docker pull` / `docker compose build` 完全沒有輸出就卡住
+
+**症狀**：`docker pull hello-world` 連 `Pulling from` 都印不出來，`docker compose build`
+以 `DeadlineExceeded: context deadline exceeded` 失敗在 `load metadata`。但 `docker ps`
+正常、容器都在跑，容器內 `wget https://ghcr.io/v2/` 也通。
+
+**原因不在 Docker。** Docker CLI 在送出請求前會先解析 registry 憑證，而
+`~/.docker/config.json` 的 `credsStore: desktop` 會讓它去讀 macOS 鑰匙圈。這台機器是
+無頭運作的（螢幕關閉、從 SSH 進來），鑰匙圈需要一個能回應提示的 GUI 工作階段：
+
+```
+$ security show-keychain-info ~/Library/Keychains/login.keychain-db
+security: ... User interaction is not allowed.
+```
+
+沒有人能按那個對話框，所以 helper 永遠等下去。buildkit 的憑證也是由 CLI 端經 session
+提供的，所以 build 會用同樣的方式卡住。**重啟 Docker Desktop 沒有用**，壞的不是 Docker。
+
+**處理**：把 `credsStore` 從 `~/.docker/config.json` 拿掉。這個專案用到的映像全部是公開
+的，`auths` 本來就是空的，那個 helper 是在為了取得沒有東西而卡死。代價是：日後若
+`docker login` 到私有 registry，憑證會以 base64 存在該檔案而非鑰匙圈——但在這台機器上
+鑰匙圈那條路本來就不能用。
+
+**這是一類問題而不是單一問題。** 任何在這台機器上從非 GUI 情境碰鑰匙圈的工具，都會用
+同樣的方式卡住。遇到「某個指令莫名沒有輸出就停住」時，先想到這一條。
+
+
 - **`migrate` 沒有 `exited (0)`**：`docker compose logs migrate`。多半是 secrets 缺檔、
   帳號名不是小寫、或 `postgres_password` 跟 owner URL 裡的密碼不一致。
 - **`docker compose up` 起不來、抱怨 secret 檔不存在**：`./secrets` 底下每個檔都要建好

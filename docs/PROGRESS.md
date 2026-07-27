@@ -17,6 +17,37 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-27
 
+### The Docker build was blocked by a locked keychain, not by Docker
+
+The workaround recorded earlier — a `DOCKER_CONFIG` with no `credsStore` — turned out
+to be one instance of a class. The root cause:
+
+```
+security show-keychain-info login.keychain-db
+  → User interaction is not allowed.
+```
+
+`docker-credential-desktop` reads the macOS keychain, the keychain wants a GUI session
+to answer an unlock or allow prompt, and **this machine is headless by design** —
+display off, operator on SSH. Nobody can answer, so the helper waits forever. Buildkit
+takes its registry auth from the CLI over the session, which is why `build` failed the
+same way `pull` did, and why restarting Docker Desktop changed nothing.
+
+Fixed by removing `credsStore` from `~/.docker/config.json` (backed up alongside it).
+`auths` was empty and every image this project pulls is public, so the helper was
+hanging in order to return nothing. The cost is conditional and small: a future
+`docker login` to a private registry would store its credential base64-encoded in that
+file rather than in the keychain — but on this machine the keychain path does not work
+at all, so the real choice was plaintext or unusable, not plaintext or protected. Every
+actual secret continues to live in Docker file secrets under `./secrets`. Verified with
+no environment variables set: `docker pull` and `docker compose build` both complete.
+
+**The generalisation is the part worth keeping.** ARCHITECTURE.md's first paragraph
+says this Mac Studio is treated as a 24/7 server rather than a personal computer. Any
+tool that expects someone at the screen is structurally broken here, and it will not
+announce itself — it hangs. Recorded in the runbook's gotchas appendix, because the
+next occurrence will not look like Docker.
+
 ### Auditing the documents found four things that were already wrong
 
 Not drift from this week's work — drift that predated it and had never been caught,
