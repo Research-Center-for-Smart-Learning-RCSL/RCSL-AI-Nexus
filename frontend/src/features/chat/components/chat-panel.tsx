@@ -56,7 +56,8 @@ function Turn({ turn }: { turn: ChatTurn }) {
 export function ChatPanel() {
   const { turns, isStreaming, store, send, cancel, clear } = useChatStream();
   const [capability, setCapability] = useState<Capability>('chat');
-  // Defaults to on, meaning "send nothing and take the deployment default".
+  // Both positions are sent explicitly, so the box always describes what the
+  // request asked for rather than what a server-side default happens to be.
   // Turning it off is the lever for a question a thinking model will not stop
   // reasoning about: measured, the same prompt answered in 49 seconds with
   // thinking off after producing nothing in 23,632 tokens with it on.

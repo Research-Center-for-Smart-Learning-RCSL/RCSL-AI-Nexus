@@ -63,17 +63,25 @@ export function historyFor(turns: ChatTurn[], prompt: string): ChatMessage[] {
  * Exported for the same reason as `historyFor`: the rule below is invisible in
  * the UI and only shows up in what the server receives.
  *
- * Thinking-on sends **no field at all** rather than `think: true`. The two are
- * not equivalent — `true` pins the request to thinking even after an operator
- * turns the deployment default off, and the runtimes have no way to ask a model
- * to deliberate more anyway, so the only meaningful value to send is `false`.
+ * **The toggle's value is always sent, in both directions.** An earlier version
+ * omitted the field when thinking was on, reasoning that `true` should not
+ * override the deployment default — which had it backwards. With
+ * `OLLAMA_THINKING=false` the panel still drew the box checked, the request said
+ * nothing, the server applied its `false` default, and the control displayed the
+ * opposite of what happened with no way to correct it. A checked box means the
+ * caller wants thinking, so it says so.
+ *
+ * Sending `true` is safe end to end: the adapter maps it to sending no `think`
+ * field at all, which is what keeps a non-thinking model from being asked for
+ * something it refuses (`ollama_adapter.py`). The value the browser sends and
+ * the value that reaches the runtime are deliberately not the same thing.
  */
 export function chatRequestFor(
   capability: ChatRequest['capability'],
   messages: ChatMessage[],
   think?: boolean,
 ): ChatRequest {
-  return { capability, messages, ...(think === false ? { think: false } : {}) };
+  return { capability, messages, ...(think === undefined ? {} : { think }) };
 }
 
 export function useChatStream() {

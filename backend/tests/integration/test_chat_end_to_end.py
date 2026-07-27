@@ -56,12 +56,18 @@ class StubRuntime:
         self.cleaned_up = False
         self.seen_ref: str | None = None
         self.seen_max_tokens: int | None = None
+        self.seen_thinking: bool | None = None
 
     async def generate(
-        self, ref: str, messages: Sequence[Message], max_tokens: int | None = None
+        self,
+        ref: str,
+        messages: Sequence[Message],
+        max_tokens: int | None = None,
+        thinking: bool = True,
     ) -> AsyncIterator[CompletionChunk]:
         self.seen_ref = ref
         self.seen_max_tokens = max_tokens
+        self.seen_thinking = thinking
         try:
             for i in range(self._chunks):
                 yield CompletionChunk(delta=f"tok{i} ", token_count=1)

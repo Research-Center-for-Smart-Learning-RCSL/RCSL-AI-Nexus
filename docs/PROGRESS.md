@@ -17,6 +17,69 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-27
 
+### The wait before the reasoning appears was drawn as nothing at all
+
+Reported as "the pause before thinking shows up is too long". The pause is not long:
+a cold load of the 31.8 GB model measures **2.3 s** with the file in page cache. What
+was wrong is that the interval rendered **empty** — no placeholder, no cursor, no
+clock.
+
+The placeholder written for exactly this (`Thinking...`) is guarded by
+`status === 'streaming'`, and the store's status only left `idle` when the first
+delta arrived. So the one interval the placeholder existed for was the one interval
+it could not render in. Three seconds of an empty box reads as a hung application.
+`begin()` now marks the request in flight and stamps `startedAt`, so a placeholder
+and a running clock appear on submit. **This is the fourth instance of this file's
+recurring defect** — written, marked done, never reachable — and the first one on the
+frontend.
+
+The reasoning block became a **one-line ticker**: elapsed time and the tail of the
+current deliberation in the summary, full text behind the disclosure. A block that
+grows for four minutes pushes the page down for four minutes, and the reader's real
+decision during a long deliberation — stop and re-ask with thinking off — is answered
+better by a clock than by paragraphs. It shows elapsed seconds and not a token count,
+because the client can only count frames and 6625 frames measured 8192 tokens; a
+figure labelled "tokens" derived from frames would be precision that is not there.
+Still not markdown, deliberately: scratch work should not read with the authority of
+a conclusion.
+
+It also stopped snapping shut. `open` was a controlled prop derived from whether an
+answer had started, so the block closed in the reader's face on the first answer
+token.
+
+### Review found two live defects, and one hypothesis worth writing down as refuted
+
+**`StubRuntime` in the integration suite never grew the port's new argument.** Every
+fake in the unit suite did; this one is behind `skipif(not TEST_DATABASE_URL)`, so it
+passed by not running. Against a real Postgres it fails 7 of 12 with a `TypeError`
+inside `sse.prime`, surfacing as a 500. Fixed, and confirmed by running the suite
+both ways: 7 failed before, 12 pass after. A skipped test is not a passing test, and
+this repository's own history says so twice already.
+
+**The `Thinking` checkbox could not turn thinking on.** The request omitted `think`
+when the box was checked, on the reasoning that `true` should not override the
+deployment default. That is backwards: with `OLLAMA_THINKING=false` the panel drew
+the box checked, sent nothing, the server applied `false`, and the control displayed
+the opposite of what happened with no way to correct it. Both positions are now sent.
+Safe, because the asymmetry is one layer lower: the adapter maps `thinking=True` to
+sending *no* `think` field, so a caller's `true` never reaches a runtime as a demand.
+
+**Refuted: context shifting is not why the model fails to converge.** The proposal was
+that `num_ctx` is never sent, Ollama therefore serves a 4096-token window, and a
+16384-token generation silently discards its own earlier reasoning — which would
+explain the re-derivation the analysis above describes. It is a good hypothesis and
+the logs do not support it: `n_ctx_slot = 202752` on every load, `truncated = 0` on
+every release including the 23,632-token run (`n_tokens = 23746`), and **zero**
+context-shift events in the entire log. Ollama reads this model's own context length
+rather than a default. The non-convergence stands as measured.
+
+What the observation does leave standing is narrower and worth keeping: the platform
+does not *control* the window, so Ollama sizes the KV cache from the model rather
+than from `MAX_CONTEXT_LENGTH`, which is only a character bound on input. That is
+accounted for empirically today — the 38.3 GB resident figure includes it — but it is
+unbudgeted, and `n_slots = 1` is the only reason four concurrent requests do not
+multiply it.
+
 ### The first thinking model went in, and three layers written for non-thinking models all failed at once
 
 **GLM-4.7-Flash replaced nothing — it joined.** `glm-4.7-flash:q8_0` (31.8 GB, the
@@ -57,8 +120,8 @@ The failure was 0.8 seconds of margin away from never being noticed.
 `delta` at every layer: merging them would put the model's scratch work into the answer
 and then into the history a client sends back. It reaches the wire as `reasoning_content`
 inside the delta, the spelling DeepSeek and vLLM already use, so an OpenAI client that
-does not know it ignores an unrecognised key. The chat panel shows it in a block that
-is open while it is the only thing arriving and collapsed once the answer starts, and
+does not know it ignores an unrecognised key. The chat panel shows it in a block —
+which later the same day became a one-line ticker, see below — and
 `use-chat-stream` neither replays it as history nor sends the empty `content` of a turn
 that produced only reasoning. `proxyTimeout` is now 660 s, above the backend's own
 600-second generation deadline, so the guardrail that fires is the one that can report
