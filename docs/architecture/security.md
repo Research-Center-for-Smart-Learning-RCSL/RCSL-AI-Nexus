@@ -344,15 +344,24 @@ Critical on this hardware. Under unified memory, **unbounded concurrent inferenc
 
 | Guardrail | Setting | Why |
 |---|---|---|
-| Global inference concurrency | Semaphore sized to the loaded models | Queue rather than letting twenty requests contend for memory |
-| Per-request `max_tokens` | Hard cap, overriding larger client requests | Bounds a single runaway generation |
+| Global inference concurrency | Semaphore sized to the deployment (`4`) | Queueing depth rather than throughput: the GPU serves one generation at a time, so this decides whether a caller waits or is refused |
+| Per-request `max_tokens` | Hard cap (`16384`), overriding larger client requests | Bounds a single runaway generation. Counts a thinking model's reasoning as well as its answer, which is why it is not 4096 |
 | Per-request context length | Hard cap | Memory cost grows non-linearly |
 | Per-read request timeout | For example 300 s | A stalled upstream (no bytes for the interval) fails fast rather than holding a slot |
-| Wall-clock generation deadline | For example 600 s | Bounds a slow-but-steady stream that stays under the per-read timeout yet never reaches the token cap; on unified memory near swap it would otherwise hold a slot for hours |
+| Wall-clock generation deadline | `900` s | Bounds a slow-but-steady stream that stays under the per-read timeout yet never reaches the token cap; on unified memory near swap it would otherwise hold a slot for hours. Must stay **below** the frontend's `experimental.proxyTimeout`, or the cut arrives as a socket reset with no reason attached |
 | Cancel on client disconnect | Required | Otherwise generation continues for a departed client |
 | Model memory budget | Loaded total must stay under a fraction of node capacity | Checked before load, refuses with a message to unload first |
 
 The concurrency slot must be held for the entire generator lifetime, and disconnect cancellation must propagate all the way to the runtime adapter. Both are structural, not incidental; see [backend.md](./backend.md) §6.
+
+**A guardrail that cannot be reached does not exist.** Two of the values above were
+raised on 2026-07-27, and both changes were nearly inert. `MAX_TOKENS_CEILING` is
+pinned in `.env`, which Compose loads and which outranks the code default, so
+changing `config.py` alone would have shipped a fix that tested green and did
+nothing. And the generation deadline is only the binding limit while the frontend's
+proxy timeout sits above it; raising one without the other moves the failure to a
+layer that reports no reason. The ordering between those two is asserted by a test
+that reads both files, because a comment in each cannot enforce it.
 
 The memory budget in Phase 1 is **static**: `nodes.total_memory_gb` minus the sum of `resource_profile.memory_gb` over currently loaded models, all from the database. Live metrics through `MetricsPort` arrive in Phase 2, and this check must not wait for them.
 

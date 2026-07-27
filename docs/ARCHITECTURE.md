@@ -43,8 +43,11 @@ unified across CPU and GPU, which is why the memory budget (`MemoryBudgetService
 `NODE_TOTAL_MEMORY_GB=64`) governs model loads against a single figure rather
 than a separate VRAM pool; that setting must match this number, since too high
 drives the host into swap and too low refuses models that would fit. And the
-inference concurrency cap (`MAX_CONCURRENT_INFERENCE`) is sized for one 40-core
-GPU with no second compute node yet. The 10 Gb Ethernet is the wired path to the
+inference concurrency cap (`MAX_CONCURRENT_INFERENCE=4`) is sized for one 40-core
+GPU with no second compute node yet — it buys queueing depth rather than
+throughput, since that one GPU serves a single generation at a time, and the
+number tracks the peak number of simultaneous users rather than any property of
+the hardware. The 10 Gb Ethernet is the wired path to the
 NTNU proxy; the tailnet rides over it.
 
 ## 1. Layered Architecture

@@ -172,16 +172,24 @@ Ports are `Protocol` classes, so adapters satisfy them structurally without inhe
 ```python
 # domain/ports/model_runtime_port.py
 from typing import Protocol, AsyncIterator
-from app.domain.entities.model import CompletionChunk
+from app.domain.entities.chat import CompletionChunk
 
 class ModelRuntimePort(Protocol):
-    def generate(self, ref: str, messages: list[Message]) -> AsyncIterator[CompletionChunk]:
+    def generate(self, ref: str, messages: list[Message],
+                 max_tokens: int | None = None,
+                 thinking: bool = True) -> AsyncIterator[CompletionChunk]:
         """Stream completion chunks. Implementations are async generator functions.
 
         Declared with `def`, not `async def`: an async generator function is called
         without await and returns the iterator directly. Declaring it `async def`
         here would mean "await this to obtain an iterator", which no implementation
         actually does, and callers written against that signature crash at runtime.
+
+        `thinking` is per call rather than adapter state: one resident copy of a
+        model has to serve both kinds of request, because the registry cannot hold
+        the same weights twice and the memory budget would double-count them if it
+        could. `True` means "send nothing and let the model do what it does" — no
+        runtime offers a way to ask for *more* deliberation.
         """
 
     async def load(self, ref: str) -> None: ...
@@ -302,6 +310,16 @@ Streaming crosses every layer, and most of the subtle failure modes in this syst
 
 On the wire this is the `reasoning_content` key inside `choices[].delta`, alongside `content` and never in place of it, and a field of the same name on the non-streaming `CompletionMessage`. The spelling matches what DeepSeek and vLLM already emit; an OpenAI client that does not know the key ignores an unrecognised delta field, which is the correct outcome for one.
 
+**`think` is a request field, and the only value worth sending is `false`.** It is an extension to the OpenAI request schema — there is no standard field for this, and the alternative is a caller with no way to reach the behaviour at all. Omitted takes the deployment default (`OLLAMA_THINKING`).
+
+Three properties, each of which was arrived at by measurement rather than preference:
+
+- **`true` is never sent onward.** Ollama rejects `think: true` for a model that does not support thinking, failing the request outright, so a registry holding both kinds cannot ask for thinking globally. `true` therefore means "send nothing and let the model do what it does".
+- **There is no middle setting.** Ollama accepts `think: "low"` for a model that supports graded thinking and the behaviour is measurably identical to the default, so the graded values are deliberately not offered rather than passed through as a promise nothing keeps.
+- **It is per request, not per model, and cannot be otherwise.** `ix_models_node_ref` is unique on `(node_id, runtime, ref)`, so the same weights cannot be registered twice under two aliases; and if they could, `MemoryBudgetService` sums `memory_gb` over every loaded row and would see double what is resident, refusing the second load. One resident copy has to serve both kinds of request, so the decision travels with the request and the port takes it as an argument rather than holding it as adapter state.
+
+Unlike `max_tokens` it is not clamped. A caller asking a deliberating model to answer directly is asking for less hardware work, not more, so there is nothing to protect against.
+
 **Where framing happens.** `interfaces/http/routers/chat.py` converts chunks into `data: {...}\n\n` frames and terminates with `data: [DONE]`. `admin_chat.py` may use a simpler frame shape.
 
 **Non-streaming requests.** The port only offers a streaming interface. When a client sends `stream: false`, the router consumes the iterator to exhaustion and assembles a single response. There is exactly one execution path, which avoids the two implementations drifting apart.
@@ -312,7 +330,8 @@ On the wire this is the `reasoning_content` key inside `choices[].delta`, alongs
 # application/use_cases/route_chat_request.py
 class RouteChatRequest:
     async def execute(self, actor: Actor, capability: str,
-                      messages: list[Message]) -> AsyncIterator[CompletionChunk]:
+                      messages: list[Message], max_tokens: int | None = None,
+                      thinking: bool | None = None) -> AsyncIterator[CompletionChunk]:
         policy = await self._policies.get(capability)
         target = self._routing.select(policy, *await self._current_state())
         runtime = self._runtimes[target.runtime]
@@ -320,7 +339,10 @@ class RouteChatRequest:
         produced = 0
         async with self._concurrency.slot():         # released in finally, below
             try:
-                async for chunk in runtime.generate(target.ref, messages):
+                # `thinking=None` defers to the deployment default, which this
+                # use case owns so no adapter holds a second copy of it.
+                async for chunk in runtime.generate(target.ref, messages, ceiling,
+                                                    thinking):
                     produced += chunk.token_count
                     yield chunk
             finally:
