@@ -83,7 +83,16 @@ class OllamaAdapter:
             # model that does not support it — `"qwen2.5:7b" does not support
             # thinking` — so a registry holding both kinds cannot ask for
             # thinking at all. `True` here therefore means "send nothing and
-            # let the model do what it does", not "ask it to think".
+            # let the model do what it does", not "ask it to think". That
+            # asymmetry is what makes it safe for a caller to send `think: true`
+            # over the wire: it never reaches the runtime as a demand.
+            #
+            # The other direction was checked rather than assumed, because the
+            # asymmetry above gives no reason to expect it: `think: false`
+            # against `qwen2.5:7b`, which has no thinking capability, returns a
+            # normal completion rather than the error `true` earns. So a request
+            # that suppresses thinking is safe whichever model routing picks,
+            # including the non-thinking fallback.
             #
             # Graded values are not offered because they do not work: Ollama
             # accepts `think: "low"` for this model without error and the

@@ -73,20 +73,26 @@ describe('historyFor', () => {
 describe('chatRequestFor', () => {
   const messages = [{ role: 'user' as const, content: 'hi' }];
 
-  it('omits the field entirely when thinking is on', () => {
-    // Not `think: true`. Sending true would pin the request to thinking even
-    // after an operator turns the deployment default off, and no runtime can
-    // be asked to deliberate *more* anyway.
-    expect('think' in chatRequestFor('chat', messages, true)).toBe(false);
-    expect('think' in chatRequestFor('chat', messages, undefined)).toBe(false);
-  });
-
-  it('sends an explicit false when thinking is off', () => {
+  it('sends the toggle in both directions, so the control cannot lie', () => {
+    // Omitting the field when checked meant that under OLLAMA_THINKING=false
+    // the box read "on" while the server applied "off", with no way to correct
+    // it from the panel. Safe to send: the adapter maps `true` to sending no
+    // `think` field to the runtime, which is what protects a non-thinking model.
+    expect(chatRequestFor('chat', messages, true)).toEqual({
+      capability: 'chat',
+      messages,
+      think: true,
+    });
     expect(chatRequestFor('chat', messages, false)).toEqual({
       capability: 'chat',
       messages,
       think: false,
     });
+  });
+
+  it('omits the field only when the caller expressed no preference', () => {
+    expect('think' in chatRequestFor('chat', messages, undefined)).toBe(false);
+    expect('think' in chatRequestFor('chat', messages)).toBe(false);
   });
 
   it('carries the capability and messages through unchanged', () => {
