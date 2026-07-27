@@ -4,14 +4,23 @@ Extends [../ARCHITECTURE.md](../ARCHITECTURE.md). The management UI is mostly ta
 
 ## 1. Where the Frontend Runs
 
-The Next.js application is its **own container**, not static files served by FastAPI. It sits behind each admin entrance and proxies API calls to the corresponding backend using Next.js `rewrites`:
+The Next.js application is its **own container**, not static files served by FastAPI. It sits behind each admin entrance and proxies API calls to the corresponding backend from **middleware**, not from `next.config.js`:
 
 ```js
-// next.config.js
-async rewrites() {
-  return [{ source: '/admin/:path*', destination: `${process.env.ADMIN_API_URL}/admin/:path*` }]
+// src/middleware.ts
+export function middleware(request: NextRequest) {
+  const base = process.env.ADMIN_API_URL          // read per request, not at module scope
+  if (!base) return new NextResponse('admin API not configured', { status: 500 })
+  return NextResponse.rewrite(new URL(request.nextUrl.pathname + request.nextUrl.search, base))
 }
+export const config = { matcher: '/admin/:path*' }
 ```
+
+A `rewrites()` entry in `next.config.js` was the original shape and does not work for the deployed image: `output: 'standalone'` resolves the config at **build** time and serialises it, where `ADMIN_API_URL` is unset, so both frontends shipped pointing at `http://localhost:8001` — the container itself. Every admin call failed with `ECONNREFUSED` while `docker inspect` showed the correct value in the environment. Middleware runs per request, which is what lets one image serve two entrances with different destinations.
+
+**The proxy has a timeout, and it is not optional to think about.** Next applies a socket timeout to a proxied request — `proxyTimeout || 30000` in `server/lib/router-utils/proxy-request.js`. Thirty seconds is reasonable for an API call and wrong for an SSE generation, which is idle by design between tokens and can be idle for its whole length while a thinking model deliberates. At the default it cut a 93-second generation at exactly 30 s, and the browser saw a 500 with nothing in the backend log, because the reset happened between the two containers.
+
+So `experimental.proxyTimeout` is set explicitly, and **above the backend's `GENERATION_DEADLINE_SECONDS`**: whichever limit fires first decides the failure, and only the backend's can end the stream with a reason (`finish_reason=length`). Raising one without the other moves the silent cut rather than removing it. A test reads both files and fails if the ordering inverts. Unlike `ADMIN_API_URL` this is a static value, so baking it in at build time is safe — that distinction is exactly why the proxy itself lives in middleware.
 
 This makes every API call **same-origin**, which removes three problems at once: no CORS configuration, no third-party cookie restrictions on the session cookie, and no separate API hostname to configure per entrance.
 
@@ -151,6 +160,15 @@ The chat UI consumes SSE from `/admin/chat` ([backend.md](./backend.md) §6). Th
 - **Abort on unmount or user cancel.** The `AbortController` signal must reach `fetch`, otherwise the backend keeps generating and holds a concurrency slot. This is the client half of the disconnect guardrail.
 - **Terminal error frames.** Because the HTTP status is already sent, a mid-stream failure arrives as an error frame, not an HTTP error. The stream reader must recognise it and surface the message rather than silently truncating.
 - **Render incrementally without re-rendering the whole thread.** `stream-message.tsx` owns the accumulating buffer so that only the active message re-renders.
+
+**Reasoning is a second channel, not more text.** A thinking model sends its deliberation as `reasoning_content` inside the delta, separate from `content` ([backend.md](./backend.md) §6). The store accumulates the two separately and they stay separate to the render: `ReasoningBlock` shows the deliberation in a collapsible block, open while it is the only thing arriving so the model shows progress rather than an apparently stalled request, and collapsed once the answer starts.
+
+Two consequences are invisible in the UI and only appear in what the server receives, so both live in exported pure functions with tests rather than inside the component:
+
+- **Reasoning is never replayed as history.** It is the model's scratch work; sending it back multiplies the prompt on every later turn and is counted by the ceiling that truncates a generation.
+- **A turn with no content at all is kept on screen and dropped from the request.** A generation that spent its whole budget deliberating produced no answer; leaving the turn out would show the user nothing, and sending it would put `{"role":"assistant","content":""}` into the prompt template for that turn and every later one.
+
+**Thinking is a per-request choice.** The composer carries a `Thinking` toggle, because a model that will not stop deliberating cannot be fixed by any budget — measured, the same question produced nothing in 23,632 tokens with thinking on and a complete answer in 49 seconds with it off. Turning it **on sends no field at all** rather than `think: true`: `true` would pin the request even after an operator turns the deployment default off, and the runtimes reject it outright for models that do not support thinking.
 
 ## 7. Charts
 

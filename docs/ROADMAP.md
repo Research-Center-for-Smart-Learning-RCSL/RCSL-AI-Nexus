@@ -21,7 +21,7 @@ carries the checked control-by-control state.
 
 | Area | State |
 |---|---|
-| `/v1/chat/completions`, streaming and not | Complete, tested end to end against a real Postgres |
+| `/v1/chat/completions`, streaming and not | Complete, tested end to end against a real Postgres. Carries two non-OpenAI additions for thinking models: a `reasoning_content` delta key and a `think` request field ([backend.md](./architecture/backend.md) §6) |
 | Routing, registry, keys, usage: persistence | Complete, migrations tested |
 | Ollama adapter, reference validation | Complete |
 | Gateway security: scopes, quota, rate limit, CIDR, geo, guardrails | Complete |
@@ -124,7 +124,7 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 - [~] Default credentials replaced: Redis, Postgres and now Grafana take real values from Docker file secrets (Grafana with anonymous access and self-registration disabled); Qdrant and MinIO arrive with the knowledge base in Phase 2
 - [x] Model reference validation; no shell string construction anywhere
 - [ ] Host runtime hardening: service account, `127.0.0.1` binding, directory ownership
-- [x] **Resource guardrails: concurrency cap, `max_tokens`, context bound, per-read timeout, wall-clock generation deadline, cancel on disconnect.** With no edge protection these are the only defence. All enforced in `RouteChatRequest`; the concurrency slot spans the whole generator and disconnect cancellation propagates to the adapter (backend.md §6). The wall-clock deadline is the last piece: a slow-but-steady stream that stays under the per-read timeout yet never reaches the token cap would otherwise hold a slot for hours on unified memory near swap. Verified by unit tests against an injected clock; real GPU behaviour still waits for the Mac Studio, the same boundary inference has
+- [x] **Resource guardrails: concurrency cap, `max_tokens`, context bound, per-read timeout, wall-clock generation deadline, cancel on disconnect.** With no edge protection these are the only defence. All enforced in `RouteChatRequest`; the concurrency slot spans the whole generator and disconnect cancellation propagates to the adapter (backend.md §6). The wall-clock deadline is the last piece: a slow-but-steady stream that stays under the per-read timeout yet never reaches the token cap would otherwise hold a slot for hours on unified memory near swap. Verified by unit tests against an injected clock, and since 2026-07-27 against real GPU behaviour on the Mac Studio, which resized two of them: the token ceiling counts a thinking model's reasoning, and the wall-clock deadline has to stay below the frontend's proxy timeout or the cut arrives with no reason attached (see [PROGRESS.md](./PROGRESS.md) 2026-07-27)
 - [x] `AuditPort` adapter, and auditing for bootstrap, invitations, resets, credential changes, key issuance and revocation, model registration, download and load, role changes and account removal
 - [x] gitleaks pre-commit hook
 
