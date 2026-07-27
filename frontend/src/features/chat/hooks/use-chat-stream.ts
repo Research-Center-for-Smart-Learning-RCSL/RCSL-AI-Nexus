@@ -112,7 +112,10 @@ export function useChatStream() {
 
       const controller = new AbortController();
       controllerRef.current = controller;
-      store.reset();
+      // `begin`, not `reset`: the bubble is on screen from here, and the clock
+      // it shows has to start now rather than when the first token lands. The
+      // gap between the two is what a user reads as the app having hung.
+      store.begin();
       setIsStreaming(true);
 
       let finalError: string | undefined;
