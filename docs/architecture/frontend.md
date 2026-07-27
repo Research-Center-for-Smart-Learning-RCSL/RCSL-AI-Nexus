@@ -159,6 +159,7 @@ The chat UI consumes SSE from `/admin/chat` ([backend.md](./backend.md) §6). Th
 
 - **Abort on unmount or user cancel.** The `AbortController` signal must reach `fetch`, otherwise the backend keeps generating and holds a concurrency slot. This is the client half of the disconnect guardrail.
 - **Terminal error frames.** Because the HTTP status is already sent, a mid-stream failure arrives as an error frame, not an HTTP error. The stream reader must recognise it and surface the message rather than silently truncating.
+- **The terminal frame's `finish_reason`.** `length` is the platform's ceiling reporting itself, and a thinking model reaches it having produced no answer at all — measured at 16,384 tokens and eleven minutes. Reading it and discarding it, which the reader did, makes that outcome render identically to an ordinary empty completion. It travels to the turn along with the elapsed time, because the live message that was showing the clock is gone by the time the finished turn renders.
 - **Render incrementally without re-rendering the whole thread.** `stream-message.tsx` owns the accumulating buffer so that only the active message re-renders.
 
 **Reasoning is a second channel, not more text.** A thinking model sends its deliberation as `reasoning_content` inside the delta, separate from `content` ([backend.md](./backend.md) §6). The store accumulates the two separately and they stay separate to the render.

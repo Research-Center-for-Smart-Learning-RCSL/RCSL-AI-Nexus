@@ -26,6 +26,14 @@ export type ChatTurn = {
   content: string;
   /** A thinking model's deliberation. Never sent back as history below. */
   reasoning?: string;
+  /**
+   * The terminal frame's reason, kept so a turn with no answer can say why.
+   * `length` is the platform's ceiling, which a thinking model can reach having
+   * produced nothing at all.
+   */
+  finishReason?: string;
+  /** How long the generation ran, so the clock survives the live message. */
+  elapsedMs?: number;
   /** Set when the turn ended on a terminal error frame. */
   error?: string;
 };
@@ -143,7 +151,7 @@ export function useChatStream() {
               finalError = message;
               store.fail(message);
             },
-            onDone: () => store.finish(),
+            onDone: (finishReason) => store.finish(finishReason),
           },
           controller.signal,
         );
@@ -154,7 +162,7 @@ export function useChatStream() {
           store.fail(finalError);
         }
       } finally {
-        const { text: produced, reasoning } = store.getSnapshot();
+        const { text: produced, reasoning, finishReason, startedAt } = store.getSnapshot();
         // Whatever was produced is kept. A cancelled or failed generation still
         // shows its partial output, matching how usage is billed server-side.
         // Reasoning alone counts as output: a thinking model that spent its
@@ -168,6 +176,8 @@ export function useChatStream() {
               role: 'assistant',
               content: produced,
               reasoning: reasoning || undefined,
+              finishReason: finishReason ?? undefined,
+              elapsedMs: startedAt === null ? undefined : Date.now() - startedAt,
               error: finalError,
             },
           ]);

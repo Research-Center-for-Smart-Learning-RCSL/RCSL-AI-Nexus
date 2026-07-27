@@ -17,6 +17,30 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-27
 
+### A generation that answered nothing looked identical to a malfunction
+
+Reported live: reasoning finished, no reply came, and the clock vanished. The
+generation was real and so was the outcome — **16,384 tokens, 10m 53s, zero answer
+tokens, `completed = f`**. The raised ceiling did exactly what it was predicted to do
+for this class of question: it did not rescue it, it made it cost eleven minutes of a
+concurrency slot instead of four.
+
+The defect is that the screen could not say so. `readChatStream` read the terminal
+frame's `finish_reason`, branched on it, and **threw it away** — so `length`, the
+platform's own ceiling reporting itself honestly, never reached the UI. A truncated
+generation and an ordinary completion that happened to be empty rendered as the same
+blank bubble. The elapsed time disappeared too, because the live message carrying the
+clock is replaced by the finished turn, which had nowhere to put it.
+
+Both now travel with the turn, and an answerless turn says which of the two it was.
+The reason is passed to `onDone`, kept in the snapshot and on `ChatTurn`, and rendered
+as one line — including the suggestion that follows from the measurements, since
+`think: false` answers the same question in 49 seconds.
+
+Worth naming as a pattern rather than a bug: **the backend was honest and the
+interface discarded it.** `finish_reason` exists precisely so a client can tell
+"stopped early" from "finished"; the wire carried it correctly all along.
+
 ### The Docker build was blocked by a locked keychain, not by Docker
 
 The workaround recorded earlier — a `DOCKER_CONFIG` with no `credsStore` — turned out
