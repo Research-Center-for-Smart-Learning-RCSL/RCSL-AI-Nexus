@@ -17,6 +17,29 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-27
 
+### Auditing the documents found four things that were already wrong
+
+Not drift from this week's work — drift that predated it and had never been caught,
+because nobody re-reads a document to check it against the code:
+
+- `backend.md`'s port example imported `CompletionChunk` from `entities/model`, where
+  it has never lived, and its `generate` signature had neither `max_tokens` nor
+  `thinking`.
+- `frontend.md` §1 described the `/admin` proxy as a `next.config.js` `rewrites()`
+  entry. That was replaced by middleware on 2026-07-26 *because* standalone builds
+  bake it at build time — so anyone debugging the proxy from this document would have
+  opened a file that no longer does the job.
+- `security.md`'s guardrail table gave the deadline as "for example 600 s" and sized
+  concurrency by loaded model count rather than by users.
+- `ARCHITECTURE.md` and `ROADMAP.md` carried the same numbers a layer up.
+
+A second pass at the end of the day caught one more, this time genuinely fresh: both
+`frontend.md` and `backend.md` still described the `Thinking` toggle as omitting the
+field when checked, which is the behaviour the review had already overturned hours
+earlier. **The document was accurate when written and wrong by the time it shipped.**
+That is the argument for the cross-file test added alongside the proxy timeout: an
+invariant a comment cannot enforce should be asserted by something that runs.
+
 ### Ollama's five-minute timer had been overruling the registry all day
 
 `load` sends `keep_alive: 10m`. `generate` sent none — and Ollama applies its own
@@ -167,6 +190,11 @@ not support thinking` and fails the request. So the operator switch is one-direc
 by necessity: `OLLAMA_THINKING=false` sends `think: false`, and `true` sends no field
 at all. There is no way to ask for thinking globally while a non-thinking model is
 registered.
+
+This is about what reaches Ollama, not about what a caller may send. The API accepts
+`think: true` and the UI sends it — it resolves to "leave the model alone" one layer
+down. Conflating the two is what later made a checked box display the opposite of
+what it did.
 
 *The ceiling raise was almost inert.* `config.py` carries the default, but `.env`
 sets `MAX_TOKENS_CEILING` explicitly and compose loads it, so the code default is
