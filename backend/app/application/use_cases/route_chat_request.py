@@ -63,6 +63,7 @@ class RouteChatRequest:
         max_tokens_ceiling: int,
         max_context_chars: int = 4 * 32768,
         generation_deadline_seconds: int = 600,
+        thinking_default: bool = True,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._policies = policies
@@ -80,6 +81,11 @@ class RouteChatRequest:
         model's tokeniser here, and a rough bound applied before any work
         starts is worth more than an exact one applied later."""
         self._generation_deadline_seconds = generation_deadline_seconds
+        self._thinking_default = thinking_default
+        """What a request that expresses no preference gets. The default lives
+        here rather than in the adapter so there is one source for it: an
+        adapter holding its own default would disagree with this one the first
+        time either changed, and the disagreement would be invisible."""
         self._monotonic = monotonic
         """A monotonic elapsed-time source, injected so the deadline is testable
         without real waiting. Monotonic, not the wall-clock `Clock`, because an
@@ -91,7 +97,19 @@ class RouteChatRequest:
         capability: str,
         messages: Sequence[Message],
         max_tokens: int | None = None,
+        thinking: bool | None = None,
     ) -> AsyncGenerator[CompletionChunk, None]:
+        """`thinking=None` takes the configured default; True and False are the
+        caller's explicit choice.
+
+        Per request rather than per model, because one resident copy has to
+        serve both: the registry cannot hold the same weights under two aliases
+        (`ix_models_node_ref` is unique on node, runtime and ref), and if it
+        could, the memory budget would count 32 GB twice and refuse the second
+        load. Unlike `max_tokens` this is not clamped — it costs no hardware,
+        and a caller asking a deliberating model to answer directly is asking
+        for less work, not more.
+        """
         self._authz.require(actor, self.required_scope)
 
         # A ceiling on input as well as output. Context cost grows faster than
@@ -128,7 +146,15 @@ class RouteChatRequest:
             # would not run promptly. Splitting a generator in two reintroduces
             # this every time.
             async with aclosing(
-                self._generate(actor, capability, target, runtime, messages, max_tokens)
+                self._generate(
+                    actor,
+                    capability,
+                    target,
+                    runtime,
+                    messages,
+                    max_tokens,
+                    self._thinking_default if thinking is None else thinking,
+                )
             ) as generation:
                 async for chunk in generation:
                     yield chunk
@@ -141,6 +167,7 @@ class RouteChatRequest:
         runtime: ModelRuntimePort,
         messages: Sequence[Message],
         max_tokens: int | None,
+        thinking: bool,
     ) -> AsyncGenerator[CompletionChunk, None]:
         # The caller's request is honoured only where it is stricter than ours.
         # An unbounded generation is a hardware problem, not a client choice.
@@ -162,7 +189,9 @@ class RouteChatRequest:
             # request, so without this the runtime keeps generating tokens for
             # a client that already left. This is the same obligation placed
             # on consumers of this use case.
-            async with aclosing(runtime.generate(target.ref, messages, ceiling)) as upstream:
+            async with aclosing(
+                runtime.generate(target.ref, messages, ceiling, thinking)
+            ) as upstream:
                 async for chunk in upstream:
                     produced += chunk.token_count
                     if chunk.finish_reason:

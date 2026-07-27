@@ -16,9 +16,24 @@ class ModelRuntimePort(Protocol):
     """
 
     def generate(
-        self, ref: str, messages: Sequence[Message], max_tokens: int | None = None
+        self,
+        ref: str,
+        messages: Sequence[Message],
+        max_tokens: int | None = None,
+        thinking: bool = True,
     ) -> AsyncGenerator[CompletionChunk, None]:
         """Stream completion chunks. Implementations are async generators.
+
+        `thinking=False` asks a model that deliberates to answer directly. It
+        is a per-call argument rather than adapter state because one resident
+        copy of a model has to serve both kinds of request: the registry cannot
+        hold the same weights twice (`ix_models_node_ref` is unique on node,
+        runtime and ref) and the memory budget would count them twice if it
+        could. A runtime with no such notion ignores it.
+
+        Only ever expressed as suppression. Ollama refuses `think: true` for a
+        model that does not support thinking, so `True` here means "leave the
+        model alone", not "ask it to think".
 
         Declared with `def`, not `async def`. An async generator function is
         called without await and returns the iterator directly; annotating it

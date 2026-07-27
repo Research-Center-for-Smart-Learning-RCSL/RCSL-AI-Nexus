@@ -232,17 +232,23 @@ async def test_think_false_is_sent_only_when_thinking_is_disabled(patch_httpx) -
 
     patch_httpx(handler)
 
-    async with aclosing(
-        OllamaAdapter("http://ollama.invalid", thinking=True).generate("glm", MESSAGES)
-    ) as s:
+    adapter = OllamaAdapter("http://ollama.invalid")
+
+    async with aclosing(adapter.generate("glm", MESSAGES, thinking=True)) as s:
         async for _ in s:
             pass
     assert "think" not in seen, "asking for thinking breaks non-thinking models"
 
     seen.clear()
-    async with aclosing(
-        OllamaAdapter("http://ollama.invalid", thinking=False).generate("glm", MESSAGES)
-    ) as s:
+    async with aclosing(adapter.generate("glm", MESSAGES, thinking=False)) as s:
         async for _ in s:
             pass
     assert seen["think"] is False
+
+    # Per call, not per adapter: one resident copy serves both kinds of request,
+    # so the same instance must be able to answer either way in succession.
+    seen.clear()
+    async with aclosing(adapter.generate("glm", MESSAGES, thinking=True)) as s:
+        async for _ in s:
+            pass
+    assert "think" not in seen, "the previous call must not have changed the adapter"

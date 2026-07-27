@@ -44,7 +44,11 @@ class FakeRuntime:
         self.cleaned_up = False
 
     async def generate(
-        self, ref: str, messages: Sequence[Message], max_tokens: int | None = None
+        self,
+        ref: str,
+        messages: Sequence[Message],
+        max_tokens: int | None = None,
+        thinking: bool = True,
     ) -> AsyncIterator[CompletionChunk]:
         try:
             for i in range(self._chunks):
@@ -108,7 +112,11 @@ class SlowRuntime:
         self.cleaned_up = False
 
     async def generate(
-        self, ref: str, messages: Sequence[Message], max_tokens: int | None = None
+        self,
+        ref: str,
+        messages: Sequence[Message],
+        max_tokens: int | None = None,
+        thinking: bool = True,
     ) -> AsyncIterator[CompletionChunk]:
         try:
             i = 0
@@ -125,6 +133,7 @@ def build(
     limit: int = 1,
     ceiling: int = 1000,
     deadline: int = 600,
+    thinking_default: bool = True,
     monotonic: Callable[[], float] | None = None,
 ):
     model = Model(
@@ -157,6 +166,7 @@ def build(
         clock=FixedClock(datetime(2026, 1, 1, tzinfo=UTC)),
         max_tokens_ceiling=ceiling,
         generation_deadline_seconds=deadline,
+        thinking_default=thinking_default,
         **({"monotonic": monotonic} if monotonic is not None else {}),
     )
     return use_case, usage, limiter
@@ -274,3 +284,68 @@ async def test_deadline_disabled_by_non_positive_value() -> None:
 
     assert len(content) == 4, "no deadline, so only the token ceiling stops it"
     assert usage.records[0].tokens == 4
+
+
+class ThinkingRecordingRuntime:
+    """Records what the port was asked for, so the resolution order between a
+    request's preference and the deployment default can be pinned."""
+
+    def __init__(self) -> None:
+        self.seen: list[bool] = []
+
+    async def generate(
+        self,
+        ref: str,
+        messages: Sequence[Message],
+        max_tokens: int | None = None,
+        thinking: bool = True,
+    ) -> AsyncIterator[CompletionChunk]:
+        self.seen.append(thinking)
+        yield CompletionChunk(delta="hi", token_count=1, finish_reason="stop")
+
+
+async def _run(use_case, **kwargs) -> None:
+    async with aclosing(use_case.execute(ACTOR, "chat", MESSAGES, **kwargs)) as stream:
+        async for _ in stream:
+            pass
+
+
+async def test_request_thinking_preference_overrides_the_deployment_default() -> None:
+    """The whole point of the per-request switch.
+
+    It cannot be per model: the registry's unique index on (node, runtime, ref)
+    forbids registering the same weights twice, and the memory budget would
+    count them twice if it did not. So one loaded copy has to serve both, and
+    the decision travels with the request.
+    """
+    runtime = ThinkingRecordingRuntime()
+    use_case, _, _ = build(runtime, thinking_default=True)
+
+    await _run(use_case, thinking=False)
+    assert runtime.seen == [False], "an explicit false must reach the runtime"
+
+    await _run(use_case, thinking=True)
+    assert runtime.seen[-1] is True
+
+
+async def test_omitting_the_preference_takes_the_configured_default() -> None:
+    runtime = ThinkingRecordingRuntime()
+    use_case, _, _ = build(runtime, thinking_default=False)
+
+    await _run(use_case)
+    assert runtime.seen == [False], "None means defer, not 'think'"
+
+    # And the default does not override an explicit opposite.
+    await _run(use_case, thinking=True)
+    assert runtime.seen[-1] is True
+
+
+async def test_thinking_is_not_clamped_the_way_max_tokens_is() -> None:
+    """`max_tokens` is clamped because it costs hardware; asking a model not to
+    deliberate asks for less work, so there is nothing to protect against and
+    the caller's choice stands whatever the default says."""
+    runtime = ThinkingRecordingRuntime()
+    use_case, _, _ = build(runtime, thinking_default=True)
+
+    await _run(use_case, max_tokens=10**9, thinking=False)
+    assert runtime.seen == [False]

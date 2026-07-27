@@ -79,6 +79,62 @@ fix that did nothing and tested green. `.env`, `.env.example` and the deployment
 now agree. This is the same shape as the four controls recorded on 2026-07-26 —
 designed, written down, marked done, never actually in force.
 
+### Thinking became a per-request choice, after four attempts to make the model converge failed
+
+**Every lever that leaves the decision to the model does nothing.** Measured on the
+three-guards puzzle, which GLM-4.7-Flash will not stop reasoning about:
+
+| lever | result |
+|---|---|
+| ceiling raised to 24576 | 23,632 tokens, 20 minutes, **no answer** |
+| `think: "low"` | accepted by Ollama, **behaviour identical to the default** — 8192 tokens, 228.8 s, no answer |
+| a prompt-level reasoning budget ("limit deliberation to 800 characters, then answer") | **ignored**, 6144 tokens, no answer |
+| `think: false` | **49.5 s, 2532 tokens, a complete answer** |
+
+Graded thinking is a null option here: Ollama takes `low`/`medium`/`high` without
+error and nothing changes, so the adapter deliberately does not offer them.
+
+**It is not a loop, which rules out the obvious detector.** The 23,632-token
+reasoning was analysed: 93 sentences recur, some five times, but novelty across ten
+equal segments decays 100% → 78% → 55% → **39%** rather than to zero. The model is
+re-deriving the same sub-cases with variations, not cycling. Anything that cuts on
+"it started repeating" would never fire.
+
+**So the switch is per request, and per request is the only place it can live.**
+Not per model: `ix_models_node_ref` is unique on (node, runtime, ref), so the same
+weights cannot be registered twice under two aliases — and if they could, the memory
+budget counts each loaded row's `memory_gb` and would see 64 GB where 32 GB is
+resident, refusing the second load. One copy has to serve both kinds of request.
+
+`think` is on both request schemas, an extension on the OpenAI one because there is
+no standard field and the alternative is a caller who cannot reach the behaviour at
+all. It resolves request-over-default in the use case, which owns the default so no
+adapter holds a second copy of it. **Omitted means omitted**: a request with thinking
+on sends no `think` field at all rather than `true`, because `true` would pin the
+request even after an operator turns the deployment default off, and because Ollama
+refuses `true` outright for a model that does not support thinking.
+
+Verified on the deployed stack: `think: false` on the puzzle returns 1424 content
+frames, zero reasoning, `stop`, in 30.7 s; omitting the field on an ordinary question
+still produces 827 reasoning frames and an answer.
+
+**The guardrails were resized for the actual deployment** — a lab whose peak is four
+people. `MAX_CONCURRENT_INFERENCE` 2 → 4, which buys queueing depth rather than
+throughput since the GPU serves one generation at a time; `MAX_TOKENS_CEILING`
+8192 → 16384, which buys room for long legitimate answers and explicitly does not
+rescue the non-converging case. A test that pinned the literal `2` for the slot gauge
+was changed to assert the configured value: it failed on a default move and said
+nothing about the gauge it was written to protect.
+
+**What was decided against.** An automatic fallback — detect reasoning past a budget
+with no answer, then silently re-issue with `think: false` — was designed and
+dropped. Three reasons, and the second is the one that matters: it generalised from a
+single pathological prompt; it trades "no answer" for a *confident wrong* one, since
+the `think: false` answer to this puzzle does not actually close the random guard;
+and it puts a second upstream request inside one client request, in the function that
+owns the concurrency slot, the token ceiling, the deadline and the disconnect
+contract. The per-request switch gives the same capability with none of that.
+
 ### Deploying that fix cost a Docker Desktop restart, and the restart proved the 2026-07-26 failure repeats
 
 **The build was blocked by something that was not the build.** `docker compose build`

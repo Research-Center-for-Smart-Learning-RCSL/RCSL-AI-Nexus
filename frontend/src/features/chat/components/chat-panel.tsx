@@ -56,6 +56,11 @@ function Turn({ turn }: { turn: ChatTurn }) {
 export function ChatPanel() {
   const { turns, isStreaming, store, send, cancel, clear } = useChatStream();
   const [capability, setCapability] = useState<Capability>('chat');
+  // Defaults to on, meaning "send nothing and take the deployment default".
+  // Turning it off is the lever for a question a thinking model will not stop
+  // reasoning about: measured, the same prompt answered in 49 seconds with
+  // thinking off after producing nothing in 23,632 tokens with it on.
+  const [thinking, setThinking] = useState(true);
   const [prompt, setPrompt] = useState('');
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -68,7 +73,7 @@ export function ChatPanel() {
     const trimmed = prompt.trim();
     if (!trimmed || isStreaming) return;
     setPrompt('');
-    void send(capability, trimmed);
+    void send(capability, trimmed, thinking);
   }
 
   return (
@@ -113,6 +118,16 @@ export function ChatPanel() {
             ))}
           </SelectContent>
         </Select>
+
+        <label className="flex shrink-0 items-center gap-1.5 text-sm text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={thinking}
+            disabled={isStreaming}
+            onChange={(event) => setThinking(event.target.checked)}
+          />
+          Thinking
+        </label>
 
         <Input
           value={prompt}
