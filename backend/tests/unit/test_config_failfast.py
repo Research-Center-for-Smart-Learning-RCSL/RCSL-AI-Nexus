@@ -8,6 +8,7 @@ keys correctly.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -137,3 +138,39 @@ def test_the_schema_is_not_exposed_unless_explicitly_asked_for() -> None:
         ).expose_openapi
         is False
     ), "production wins over the flag"
+
+
+def test_the_proxy_timeout_stays_above_the_generation_deadline() -> None:
+    """Two files in two languages hold one ordering, and only a comment says so.
+
+    The frontend proxies /admin/* with `NextResponse.rewrite`, and Next applies
+    a socket timeout to a proxied request. Whichever of the two limits fires
+    first decides what the caller sees: the backend's deadline ends the stream
+    with `finish_reason=length`, while the proxy's resets the socket and leaves
+    nothing in any log — which is exactly how a 93-second generation once
+    surfaced in the browser as a 500 (PROGRESS, 2026-07-27).
+
+    So the proxy's value must stay above the backend's, and raising the
+    deadline without raising it would move that silent cut rather than remove
+    it. Asserted here because a comment in each file cannot enforce an
+    invariant that spans both.
+    """
+    root = Path(__file__).resolve().parents[3]
+
+    config = (root / "frontend" / "next.config.js").read_text()
+    match = re.search(r"proxyTimeout:\s*([\d_]+)", config)
+    assert match is not None, "proxyTimeout is gone; the 30s default is back"
+    proxy_seconds = int(match.group(1).replace("_", "")) / 1000
+
+    env = (root / ".env.example").read_text()
+    deadline_match = re.search(r"^GENERATION_DEADLINE_SECONDS=(\d+)", env, re.MULTILINE)
+    assert deadline_match is not None, "the deadline must stay discoverable in .env.example"
+    deadline = int(deadline_match.group(1))
+
+    assert proxy_seconds > deadline, (
+        f"proxyTimeout ({proxy_seconds}s) must exceed the generation deadline "
+        f"({deadline}s), or a cut arrives with no reason attached"
+    )
+    assert deadline >= Settings().generation_deadline_seconds, (
+        "the documented value must not be below the code default"
+    )
