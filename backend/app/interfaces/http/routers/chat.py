@@ -51,7 +51,9 @@ async def chat_completions(
     messages = _to_domain(body)
 
     if body.stream:
-        generation = use_case.execute(actor, body.model, messages, body.max_tokens)
+        generation = use_case.execute(
+            actor, body.model, messages, body.max_tokens, body.think
+        )
         first = await sse.prime(generation)
         return sse.streaming_response(
             completion_id=completion_id,
@@ -62,7 +64,7 @@ async def chat_completions(
         )
 
     return await _collect(
-        completion_id, created, body.model, actor, use_case, messages, body.max_tokens
+        completion_id, created, body.model, actor, use_case, messages, body.max_tokens, body.think
     )
 
 
@@ -74,6 +76,7 @@ async def _collect(
     use_case: RouteChatRequest,
     messages: list[Message],
     max_tokens: int | None,
+    thinking: bool | None,
 ) -> ChatCompletionResponse:
     """Non-streaming path.
 
@@ -85,7 +88,9 @@ async def _collect(
     tokens = 0
     finish_reason: str | None = None
 
-    async with aclosing(use_case.execute(actor, capability, messages, max_tokens)) as stream:
+    async with aclosing(
+        use_case.execute(actor, capability, messages, max_tokens, thinking)
+    ) as stream:
         async for chunk in stream:
             parts.append(chunk.delta)
             reasoning.append(chunk.reasoning)

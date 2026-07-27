@@ -90,7 +90,11 @@ class MlxAdapter:
         assert_valid_hf_repo_id(ref)
 
     async def generate(
-        self, ref: str, messages: Sequence[Message], max_tokens: int | None = None
+        self,
+        ref: str,
+        messages: Sequence[Message],
+        max_tokens: int | None = None,
+        thinking: bool = True,
     ) -> AsyncGenerator[CompletionChunk, None]:
         """Stream a completion over the OpenAI-compatible endpoint.
 
@@ -98,6 +102,13 @@ class MlxAdapter:
         without await. The `finally` the `async with` provides is what closes the
         upstream request when a client disconnects; without it the server keeps
         generating for someone who has already gone.
+
+        `thinking` is accepted and ignored. `mlx_lm.server` speaks the OpenAI
+        chat schema, which has no field for suppressing deliberation, and a
+        model that reasons does so inside `content` where this adapter cannot
+        separate it. Silently accepting the argument is deliberate: the caller
+        asks the port, not the runtime, and a runtime that cannot honour the
+        request is not a reason to refuse the generation.
         """
         assert_valid_hf_repo_id(ref)
         payload: dict[str, Any] = {

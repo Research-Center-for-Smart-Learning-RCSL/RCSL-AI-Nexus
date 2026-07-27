@@ -37,6 +37,20 @@ class ChatCompletionRequest(BaseModel):
             "client preference."
         ),
     )
+    think: bool | None = Field(
+        default=None,
+        description=(
+            "Not part of the OpenAI schema; an extension, because there is no "
+            "standard field for it and the alternative is a caller with no way "
+            "to reach the behaviour at all. Omit to take the deployment "
+            "default. `false` asks a deliberating model to answer directly, "
+            "which is the difference between an answer and none on a question "
+            "the model will not stop reasoning about. `true` means 'leave the "
+            "model alone' rather than 'think harder' — the runtimes offer no "
+            "way to ask for more deliberation, and the graded settings some "
+            "advertise measurably do nothing."
+        ),
+    )
 
 
 class AdminChatRequest(BaseModel):
@@ -51,6 +65,8 @@ class AdminChatRequest(BaseModel):
     capability: str = Field(min_length=1, max_length=64)
     messages: list[ChatMessageIn] = Field(min_length=1)
     max_tokens: int | None = Field(default=None, gt=0)
+    think: bool | None = Field(default=None)
+    """Omitted takes the deployment default. See `ChatCompletionRequest.think`."""
 
 
 class Delta(BaseModel):

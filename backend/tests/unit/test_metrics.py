@@ -81,12 +81,17 @@ def test_a_served_request_is_counted(app: FastAPI) -> None:
 
 
 def test_the_concurrency_slot_ceiling_is_reported(app: FastAPI) -> None:
-    """Every entrance can run inference, so all three carry the slot gauge. The
-    default ceiling is 2 (config.max_concurrent_inference)."""
+    """Every entrance can run inference, so all three carry the slot gauge.
+
+    Asserted against the configured value rather than a literal: this pinned
+    the number 2 and failed when the ceiling was raised for a four-person lab,
+    which told nobody anything about the gauge, only that a default had moved.
+    """
+    expected = get_settings().max_concurrent_inference
     with TestClient(app) as client:
         body = client.get("/metrics", headers=AUTH).text
 
-    assert "nexus_inference_slots_max 2.0" in body
+    assert f"nexus_inference_slots_max {float(expected)}" in body
     assert "nexus_inference_slots_in_use 0.0" in body
 
 

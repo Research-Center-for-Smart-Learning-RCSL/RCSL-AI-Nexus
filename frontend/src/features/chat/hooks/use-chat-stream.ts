@@ -57,6 +57,25 @@ export function historyFor(turns: ChatTurn[], prompt: string): ChatMessage[] {
   ];
 }
 
+/**
+ * The request body for one turn.
+ *
+ * Exported for the same reason as `historyFor`: the rule below is invisible in
+ * the UI and only shows up in what the server receives.
+ *
+ * Thinking-on sends **no field at all** rather than `think: true`. The two are
+ * not equivalent — `true` pins the request to thinking even after an operator
+ * turns the deployment default off, and the runtimes have no way to ask a model
+ * to deliberate more anyway, so the only meaningful value to send is `false`.
+ */
+export function chatRequestFor(
+  capability: ChatRequest['capability'],
+  messages: ChatMessage[],
+  think?: boolean,
+): ChatRequest {
+  return { capability, messages, ...(think === false ? { think: false } : {}) };
+}
+
 export function useChatStream() {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -77,7 +96,11 @@ export function useChatStream() {
   }, []);
 
   const send = useCallback(
-    async (capability: ChatRequest['capability'], prompt: string) => {
+    async (
+      capability: ChatRequest['capability'],
+      prompt: string,
+      think?: boolean,
+    ) => {
       if (isStreaming) return;
 
       const history = historyFor(turns, prompt);
@@ -96,7 +119,7 @@ export function useChatStream() {
 
       try {
         const response = await openChatStream(
-          { capability, messages: history },
+          chatRequestFor(capability, history, think),
           controller.signal,
         );
 

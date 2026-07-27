@@ -119,25 +119,37 @@ class Settings(BaseSettings):
 
     bootstrap_admin_login: str = ""
 
-    max_concurrent_inference: int = 2
-    max_tokens_ceiling: int = 8192
+    max_concurrent_inference: int = 4
+    """Sized to the deployment: a lab whose peak is four people at once.
+
+    Note what it does not buy. The GPU serves one generation at a time, so a
+    fourth slot is queueing depth, not throughput — it decides whether a fourth
+    caller waits or is refused, and waiting is the better answer at this size.
+    """
+
+    max_tokens_ceiling: int = 16384
     """Hard ceiling on tokens per generation, thinking included.
 
-    Raised from 4096 once a thinking model was registered. `eval_count` counts
-    reasoning, and a hard question can spend the whole budget deliberating: a
-    GLM-4.7-Flash answer to a three-guards logic puzzle produced 4096 tokens of
-    reasoning and no answer at all, truncated at the ceiling with nothing to
-    show for it. The number is a hardware guardrail, not a quality setting, so
-    it is sized to let a reasoning model finish rather than to bound the reply.
+    4096 → 8192 → 16384. `eval_count` counts reasoning, and a thinking model
+    can spend an entire budget deliberating: GLM-4.7-Flash produced 8192 tokens
+    of reasoning on a three-guards logic puzzle and no answer, twice.
+
+    Raising it does not fix that case and was not meant to — the same question
+    ran to 23,632 tokens without answering, so no affordable ceiling would.
+    What it buys is room for legitimate long answers now that reasoning shares
+    the budget. The case that will not converge is bounded by the wall-clock
+    deadline below and by `think: false`, which answered that same question in
+    49 seconds.
     """
 
     ollama_thinking: bool = True
-    """Whether models that support thinking are allowed to think.
+    """The default for a request that expresses no preference.
 
-    Only ever expressed as a suppression: `think: false` is sent when this is
-    off, and nothing is sent when it is on. Ollama rejects `think: true` for a
-    model that does not support it, so a registry holding both kinds cannot ask
-    for thinking globally — see adapters/runtime/ollama_adapter.py.
+    Per-request `think` overrides it (chat_schemas.py). Only ever expressed as
+    a suppression: `think: false` is sent when thinking is off, and nothing is
+    sent when it is on, because Ollama rejects `think: true` for a model that
+    does not support it. Graded values are not offered — `think: "low"` is
+    accepted by Ollama and measurably changes nothing.
     """
     max_context_length: int = 32768
     request_timeout_seconds: int = 300

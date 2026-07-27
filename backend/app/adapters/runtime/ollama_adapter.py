@@ -37,18 +37,8 @@ def _finish_reason(done_reason: str | None) -> str:
 
 
 class OllamaAdapter:
-    def __init__(
-        self, base_url: str, request_timeout_seconds: int = 300, thinking: bool = True
-    ) -> None:
+    def __init__(self, base_url: str, request_timeout_seconds: int = 300) -> None:
         self._base_url = base_url.rstrip("/")
-        # Only ever sent as `false`. Ollama refuses `think: true` for a model
-        # that does not support it — `"qwen2.5:7b" does not support thinking` —
-        # so asking for thinking on a mixed registry breaks every non-thinking
-        # model, while asking to suppress it is accepted by both kinds. The
-        # operator switch is therefore one-directional by necessity, not by
-        # preference: leaving it on means sending no `think` field at all and
-        # letting each model do what it does.
-        self._thinking = thinking
         # Generation legitimately takes minutes, so the read timeout is long,
         # but a host that is simply not there must fail fast rather than
         # holding a concurrency slot for the full request timeout.
@@ -64,7 +54,11 @@ class OllamaAdapter:
         assert_valid_model_ref(ref)
 
     async def generate(
-        self, ref: str, messages: Sequence[Message], max_tokens: int | None = None
+        self,
+        ref: str,
+        messages: Sequence[Message],
+        max_tokens: int | None = None,
+        thinking: bool = True,
     ) -> AsyncGenerator[CompletionChunk, None]:
         """Stream a completion.
 
@@ -84,7 +78,17 @@ class OllamaAdapter:
             # stream: the model stops generating rather than producing tokens
             # nobody reads.
             payload["options"] = {"num_predict": max_tokens}
-        if not self._thinking:
+        if not thinking:
+            # Only ever sent as `false`. Ollama refuses `think: true` for a
+            # model that does not support it — `"qwen2.5:7b" does not support
+            # thinking` — so a registry holding both kinds cannot ask for
+            # thinking at all. `True` here therefore means "send nothing and
+            # let the model do what it does", not "ask it to think".
+            #
+            # Graded values are not offered because they do not work: Ollama
+            # accepts `think: "low"` for this model without error and the
+            # behaviour is identical to the default — measured at 8192 tokens,
+            # same token count, same 228s, same empty answer.
             payload["think"] = False
 
         counted = 0

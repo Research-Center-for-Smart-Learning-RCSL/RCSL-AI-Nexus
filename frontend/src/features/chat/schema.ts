@@ -21,6 +21,13 @@ export const chatRequestSchema = z.object({
   messages: z.array(chatMessageSchema).min(1),
   /** Clamped server-side by the per-request hard cap (security.md 4.3). */
   max_tokens: z.number().int().positive().optional(),
+  /**
+   * Omitted takes the deployment default. `false` asks a deliberating model to
+   * answer directly — the difference between an answer and none on a question
+   * the model will not stop reasoning about. Not clamped server-side, unlike
+   * `max_tokens`: it asks for less work, not more.
+   */
+  think: z.boolean().optional(),
 });
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 

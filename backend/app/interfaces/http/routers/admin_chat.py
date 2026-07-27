@@ -39,7 +39,9 @@ async def admin_chat(
     """Always streaming. The panel has no non-streaming mode, and offering one
     would be a second path through the same use case for no caller."""
     messages = [Message(role=MessageRole(m.role), content=m.content) for m in body.messages]
-    generation = use_case.execute(actor, body.capability, messages, body.max_tokens)
+    generation = use_case.execute(
+        actor, body.capability, messages, body.max_tokens, body.think
+    )
 
     # Priming before the response exists is what keeps authorization and
     # routing failures reportable as status codes. See interfaces/http/sse.py.

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  chatRequestFor,
   historyFor,
   type ChatTurn,
 } from '@/features/chat/hooks/use-chat-stream';
@@ -66,5 +67,29 @@ describe('historyFor', () => {
     );
 
     expect(history).toEqual([{ role: 'user', content: 'next' }]);
+  });
+});
+
+describe('chatRequestFor', () => {
+  const messages = [{ role: 'user' as const, content: 'hi' }];
+
+  it('omits the field entirely when thinking is on', () => {
+    // Not `think: true`. Sending true would pin the request to thinking even
+    // after an operator turns the deployment default off, and no runtime can
+    // be asked to deliberate *more* anyway.
+    expect('think' in chatRequestFor('chat', messages, true)).toBe(false);
+    expect('think' in chatRequestFor('chat', messages, undefined)).toBe(false);
+  });
+
+  it('sends an explicit false when thinking is off', () => {
+    expect(chatRequestFor('chat', messages, false)).toEqual({
+      capability: 'chat',
+      messages,
+      think: false,
+    });
+  });
+
+  it('carries the capability and messages through unchanged', () => {
+    expect(chatRequestFor('code', messages)).toEqual({ capability: 'code', messages });
   });
 });
