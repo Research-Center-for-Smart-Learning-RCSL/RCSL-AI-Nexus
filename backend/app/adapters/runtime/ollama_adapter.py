@@ -24,7 +24,31 @@ from app.domain.exceptions import DomainError, ModelNotFoundError, NoAvailableMo
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_KEEP_ALIVE = "10m"
+DEFAULT_KEEP_ALIVE = "-1"
+"""Keep a loaded model resident until something asks otherwise.
+
+The registry already models residency: a row is `loaded`, the memory budget
+reserves its weights, and `unload` releases it. Leaving Ollama's own five-minute
+timer in charge lets a component with none of that information overrule all
+three, and it did — the model was reloaded 14 times in one day, and `load`'s own
+`10m` never took effect once, because `generate` sent no `keep_alive` and every
+generation reset the timer to the server default."""
+
+
+def _keep_alive(raw: str) -> str | int:
+    """Ollama takes a duration string (`10m`) or a number of seconds, where a
+    negative number means forever — but the *string* `"-1"` is refused with
+    `time: missing unit in duration "-1"`, so a numeric setting has to be sent
+    as a number rather than as the text the environment supplied.
+
+    Worth the conversion rather than a documented footgun: the rejection is a
+    400, which `_raise_for_status` maps to `NoAvailableModelError`, so a caller
+    would see "No model is currently available" and go looking at routing
+    policies. Verified against Ollama 0.32.4."""
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return raw
 
 # Ollama's done_reason vocabulary is its own. OpenAI clients branch on
 # finish_reason, and an unrecognised value ("load", "unload") reads to them as
@@ -37,8 +61,14 @@ def _finish_reason(done_reason: str | None) -> str:
 
 
 class OllamaAdapter:
-    def __init__(self, base_url: str, request_timeout_seconds: int = 300) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        request_timeout_seconds: int = 300,
+        keep_alive: str = DEFAULT_KEEP_ALIVE,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._keep_alive = _keep_alive(keep_alive)
         # Generation legitimately takes minutes, so the read timeout is long,
         # but a host that is simply not there must fail fast rather than
         # holding a concurrency slot for the full request timeout.
@@ -78,6 +108,11 @@ class OllamaAdapter:
             # stream: the model stops generating rather than producing tokens
             # nobody reads.
             payload["options"] = {"num_predict": max_tokens}
+        # Sent on generation as well as on load. Ollama applies its own default
+        # to any request that omits it, so a generate without this silently
+        # overwrites whatever `load` asked for — which is how a 10-minute
+        # setting became a 5-minute one nobody had chosen.
+        payload["keep_alive"] = self._keep_alive
         if not thinking:
             # Only ever sent as `false`. Ollama refuses `think: true` for a
             # model that does not support it — `"qwen2.5:7b" does not support
@@ -212,7 +247,7 @@ class OllamaAdapter:
         without generating anything.
         """
         assert_valid_model_ref(ref)
-        await self._post("/api/generate", {"model": ref, "keep_alive": DEFAULT_KEEP_ALIVE}, ref)
+        await self._post("/api/generate", {"model": ref, "keep_alive": self._keep_alive}, ref)
 
     async def unload(self, ref: str) -> None:
         """Evict immediately. `keep_alive: 0` is the documented signal."""

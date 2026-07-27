@@ -410,6 +410,7 @@ Non-secret values are environment variables; secrets are mounted files read thro
 | `BOOTSTRAP_ADMIN_LOGIN` | `you@example.com` | Inert once any user exists |
 | `MAX_CONCURRENT_INFERENCE` | `4` | Queueing depth, not throughput: the GPU serves one generation at a time |
 | `MAX_TOKENS_CEILING` | `16384` | Counts a thinking model's reasoning as well as its answer |
+| `OLLAMA_KEEP_ALIVE` | `-1` | Residency after a request. `-1` keeps the model loaded, making the registry's `loaded` state true; sent on every generation, since Ollama's own five-minute default applies to any request that omits it |
 | `OLLAMA_THINKING` | `true` | Default only; a request's `think` field overrides it. `false` suppresses thinking. Never sends `think: true`: Ollama refuses it for models that do not support thinking |
 | `REQUEST_TIMEOUT_SECONDS` | `300` | Per-read HTTP timeout to the runtime: bounds a *stalled* stream |
 | `GENERATION_DEADLINE_SECONDS` | `900` | Wall-clock bound on one generation. The frontend's `experimental.proxyTimeout` must stay above it, or a cut arrives with no reason attached |

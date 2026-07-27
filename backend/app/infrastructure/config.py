@@ -142,6 +142,20 @@ class Settings(BaseSettings):
     49 seconds.
     """
 
+    ollama_keep_alive: str = "-1"
+    """How long Ollama keeps a model resident after serving a request.
+
+    `-1` keeps it until something asks otherwise, which is what makes the
+    registry's `loaded` state true rather than aspirational: the row says
+    loaded, the memory budget reserves the weights, and `unload` is the release
+    path. A duration such as `10m` is also accepted.
+
+    Sent on every generation, not only on load. Ollama applies its own default
+    (five minutes) to any request that omits the field, so a generate without it
+    silently overwrites what `load` asked for — measured as 14 reloads in a day
+    while the configured value was `10m` and never once in force.
+    """
+
     ollama_thinking: bool = True
     """The default for a request that expresses no preference.
 
