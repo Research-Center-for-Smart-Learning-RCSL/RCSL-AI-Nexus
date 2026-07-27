@@ -252,3 +252,80 @@ async def test_think_false_is_sent_only_when_thinking_is_disabled(patch_httpx) -
         async for _ in s:
             pass
     assert "think" not in seen, "the previous call must not have changed the adapter"
+
+
+async def test_keep_alive_is_sent_on_generation_not_only_on_load(patch_httpx) -> None:
+    """The defect this fixes: `load` asked for one residency and the next
+    generation silently replaced it with Ollama's own default, because a request
+    that omits the field gets the server default rather than the previous value.
+    Fourteen reloads in a day, with a configured `10m` that never once applied.
+    """
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(
+            200, content=ndjson({"message": {"content": "hi"}, "done": True, "eval_count": 1})
+        )
+
+    patch_httpx(handler)
+    adapter = OllamaAdapter("http://ollama.invalid", keep_alive="10m")
+
+    async with aclosing(adapter.generate("glm", MESSAGES)) as s:
+        async for _ in s:
+            pass
+    assert seen["keep_alive"] == "10m", "a generation must not fall back to the server default"
+
+    seen.clear()
+    await adapter.load("glm")
+    assert seen["keep_alive"] == "10m", "load and generate must agree on residency"
+
+
+async def test_unload_still_evicts_immediately(patch_httpx) -> None:
+    """`unload` is the release path the registry depends on, so it keeps its
+    own value whatever residency is configured."""
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={})
+
+    patch_httpx(handler)
+    await OllamaAdapter("http://ollama.invalid", keep_alive="-1").unload("glm")
+    assert seen["keep_alive"] == 0
+
+
+async def test_a_numeric_keep_alive_is_sent_as_a_number(patch_httpx) -> None:
+    """Ollama parses a string as a Go duration, so `"-1"` is refused with
+    `missing unit in duration "-1"` while the number `-1` means forever.
+
+    The environment supplies strings, so the conversion has to happen here. It
+    is tested because the failure is invisible: the 400 becomes
+    `NoAvailableModelError`, and the caller reads "No model is currently
+    available" and goes looking at routing policies.
+    """
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(
+            200, content=ndjson({"message": {"content": "hi"}, "done": True, "eval_count": 1})
+        )
+
+    patch_httpx(handler)
+
+    async with aclosing(
+        OllamaAdapter("http://ollama.invalid", keep_alive="-1").generate("glm", MESSAGES)
+    ) as s:
+        async for _ in s:
+            pass
+    assert seen["keep_alive"] == -1
+    assert not isinstance(seen["keep_alive"], str), 'the string "-1" is refused by Ollama'
+
+    seen.clear()
+    async with aclosing(
+        OllamaAdapter("http://ollama.invalid", keep_alive=" 300 ").generate("glm", MESSAGES)
+    ) as s:
+        async for _ in s:
+            pass
+    assert seen["keep_alive"] == 300, "surrounding whitespace must not make it a duration"

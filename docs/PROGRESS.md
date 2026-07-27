@@ -17,6 +17,39 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-27
 
+### Ollama's five-minute timer had been overruling the registry all day
+
+`load` sends `keep_alive: 10m`. `generate` sent none — and Ollama applies its own
+default to any request that omits the field, so **every generation reset the model's
+residency to five minutes**, and the configured ten never took effect once. Measured:
+**14 loads in one day**, five of them in the last seventy minutes of use, each one a
+gap longer than five minutes.
+
+The cost per occurrence is small — a cold load of the 31.8 GB model is **2.3 s** with
+the file in page cache — but the shape is this file's recurring defect again, in its
+fifth instance: a setting that was chosen, written down, and silently overwritten by
+the next request the same component made.
+
+**The deeper issue is that `loaded` was never true.** The registry says a row is
+loaded, the memory budget reserves its weights, and `unload` is the release path —
+three components modelling residency, all of them overruled by a timer that knows
+none of it. `qwen7b` had read `loaded` for hours while absent from memory entirely.
+So the default is now `-1`: resident until something asks otherwise, which is what
+the other three already assume.
+
+**One trap worth the conversion code.** Ollama takes a duration string (`10m`) or a
+number of seconds, where negative means forever — but the *string* `"-1"` is refused
+with `time: missing unit in duration "-1"`. The environment supplies strings, so the
+adapter converts a numeric setting to a number before sending. Left alone it would
+have been a 400 mapped to `NoAvailableModelError`, i.e. an operator who set the value
+correctly reading "No model is currently available" and going to look at routing
+policies.
+
+**Not done, and deliberately.** Nothing reconciles the registry's state against what
+is actually resident, so `loaded` remains an assertion made once at load time. A
+reconciler belongs with the Phase 2 `MetricsPort` work, which has the same shape —
+reading real state back from the runtime — rather than as a half of it now.
+
 ### The wait before the reasoning appears was drawn as nothing at all
 
 Reported as "the pause before thinking shows up is too long". The pause is not long:
