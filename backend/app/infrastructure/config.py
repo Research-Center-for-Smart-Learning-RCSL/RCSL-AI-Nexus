@@ -120,7 +120,25 @@ class Settings(BaseSettings):
     bootstrap_admin_login: str = ""
 
     max_concurrent_inference: int = 2
-    max_tokens_ceiling: int = 4096
+    max_tokens_ceiling: int = 8192
+    """Hard ceiling on tokens per generation, thinking included.
+
+    Raised from 4096 once a thinking model was registered. `eval_count` counts
+    reasoning, and a hard question can spend the whole budget deliberating: a
+    GLM-4.7-Flash answer to a three-guards logic puzzle produced 4096 tokens of
+    reasoning and no answer at all, truncated at the ceiling with nothing to
+    show for it. The number is a hardware guardrail, not a quality setting, so
+    it is sized to let a reasoning model finish rather than to bound the reply.
+    """
+
+    ollama_thinking: bool = True
+    """Whether models that support thinking are allowed to think.
+
+    Only ever expressed as a suppression: `think: false` is sent when this is
+    off, and nothing is sent when it is on. Ollama rejects `think: true` for a
+    model that does not support it, so a registry holding both kinds cannot ask
+    for thinking globally — see adapters/runtime/ollama_adapter.py.
+    """
     max_context_length: int = 32768
     request_timeout_seconds: int = 300
     generation_deadline_seconds: int = 600

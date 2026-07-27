@@ -15,6 +15,162 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-07-27
+
+### The first thinking model went in, and three layers written for non-thinking models all failed at once
+
+**GLM-4.7-Flash replaced nothing — it joined.** `glm-4.7-flash:q8_0` (31.8 GB, the
+official Ollama library) registered as `glm47-flash`, downloaded and loaded in 14m25s
+end to end, and took `chat` at priority 200 with `qwen7b` left at 100 as a fallback.
+It is the best GLM this machine can hold: the flagship GLM-4.7's smallest quantisation
+on HuggingFace is 84.5 GB at one bit, above the 64 GB of physical memory, and Flash's
+own `bf16` at 59.9 GB would be refused by the budget (51.2 GB) and rightly so.
+
+**The measurements.** `ollama ps` reports 38.3 GB resident, all of it VRAM — 6.5 GB
+above the 32 GB registered, so the KV cache and overhead run about 20% of weights
+here, comfortably inside the 20% headroom. 60.8 tok/s generating, 117.9 tok/s prompt
+eval, against qwen2.5:7b's 91.7 — a model four times the size at two thirds the
+speed, which is what the MoE shape buys. Wired memory 40.6 GB of 64, swap untouched.
+
+**Then the first hard question came back as a 500, and the cause ran through three
+layers, none of which knew thinking models existed.**
+
+1. **The adapter dropped the reasoning.** Ollama puts a thinking model's deliberation
+   in `message.thinking` and leaves `message.content` empty until it is finished.
+   `ollama_adapter.py` read `content` only, so for 93 seconds it yielded no chunk at
+   all. A trivial question ("explain caching in one sentence") spends 800+ tokens
+   thinking; the three-guards logic puzzle spent all 4096 and produced no answer.
+2. **`sse.prime` pulls the first chunk before choosing a status code.** That is
+   deliberate and correct — it is what lets a routing failure be a 503 instead of a
+   200 containing an error frame — but combined with (1) it meant the response headers
+   were not sent for the whole generation.
+3. **Next.js applies a 30-second socket timeout to a proxied request.**
+   `server/lib/router-utils/proxy-request.js` resolves `proxyTimeout || 30000`, and
+   `/admin/*` is proxied by `middleware.ts` with `NextResponse.rewrite`. It cut the
+   idle socket at 30 seconds exactly; the browser saw a 500 and **the backend logged
+   nothing**, because the reset happened between the two containers.
+
+The earlier question in the same session — "who are you" — survived at **29.2 seconds**.
+The failure was 0.8 seconds of margin away from never being noticed.
+
+**What was changed.** `CompletionChunk` gained a `reasoning` field, kept separate from
+`delta` at every layer: merging them would put the model's scratch work into the answer
+and then into the history a client sends back. It reaches the wire as `reasoning_content`
+inside the delta, the spelling DeepSeek and vLLM already use, so an OpenAI client that
+does not know it ignores an unrecognised key. The chat panel shows it in a block that
+is open while it is the only thing arriving and collapsed once the answer starts, and
+`use-chat-stream` neither replays it as history nor sends the empty `content` of a turn
+that produced only reasoning. `proxyTimeout` is now 660 s, above the backend's own
+600-second generation deadline, so the guardrail that fires is the one that can report
+a reason. `MAX_TOKENS_CEILING` went 4096 → 8192, since `eval_count` counts thinking.
+
+**Three things worth keeping separate from the fix.**
+
+*`think: true` is unsendable on a mixed registry.* Ollama answers `"qwen2.5:7b" does
+not support thinking` and fails the request. So the operator switch is one-directional
+by necessity: `OLLAMA_THINKING=false` sends `think: false`, and `true` sends no field
+at all. There is no way to ask for thinking globally while a non-thinking model is
+registered.
+
+*The ceiling raise was almost inert.* `config.py` carries the default, but `.env`
+sets `MAX_TOKENS_CEILING` explicitly and compose loads it, so the code default is
+outranked in every real deployment. Changing the default alone would have shipped a
+fix that did nothing and tested green. `.env`, `.env.example` and the deployment table
+now agree. This is the same shape as the four controls recorded on 2026-07-26 —
+designed, written down, marked done, never actually in force.
+
+### Deploying that fix cost a Docker Desktop restart, and the restart proved the 2026-07-26 failure repeats
+
+**The build was blocked by something that was not the build.** `docker compose build`
+failed on `DeadlineExceeded` loading metadata for `node:22-alpine` and
+`ghcr.io/astral-sh/uv` alike, and `docker pull hello-world` produced *no output at
+all* — not even `Pulling from`. The daemon was healthy throughout: `docker ps`
+answered, containers ran, and a container in the VM fetched a ghcr token and manifest
+by hand.
+
+**The cause was `docker-credential-desktop`, which hangs.** Pulling through the daemon
+API directly — `curl --unix-socket … POST /images/create` — worked instantly, which
+put the fault on the CLI side of the socket. The CLI resolves registry credentials
+before issuing the request, so a hung helper produces exactly what was seen: silence
+with no output, and a buildkit metadata load that sits until its deadline (buildx
+takes its auth from the client over the session, which is why the build failed the
+same way). The workaround is a config with no `credsStore`:
+
+```
+DOCKER_CONFIG=/tmp/dockercfg DOCKER_HOST="unix://$HOME/.docker/run/docker.sock" \
+  docker compose build      # config.json is {}, cli-plugins symlinked from ~/.docker
+```
+
+Every image this project needs is public, so no credential is required at all. **This
+is worked around, not fixed** — a plain `docker compose build` still hangs.
+
+**One diagnostic step cost a false lead worth recording.** The helper was first probed
+with a `kill -9` after 15 seconds, and the wrapper's exit status was read as the
+helper's: it looked like a clean exit 0 and the credential path was wrongly cleared.
+It was only caught by timing three registries in a loop and having the loop itself
+time out. A probe that kills its subject cannot report on it.
+
+**The restart reproduced 2026-07-26 exactly: Docker Desktop came back with zero
+containers.** `restart: unless-stopped` restored nothing, which is the same failure
+that entry recorded and the reason the reconciler exists. `docker compose up -d`
+brought all nine back with port bindings byte-identical to the snapshot taken before
+the restart — tailnet addresses included — and `migrate` exited 0. So the repair path
+works; what does not work is anything that assumes the platform survives a Docker
+restart on its own. **This is now two for two, and it should stop being called a
+surprise.**
+
+### The fix, measured against the failure it was written for
+
+| | before | after |
+|---|---|---|
+| first byte, hard question | 93 s of silence, then a 500 at 30 s | **0.23 s** |
+| longest surviving generation | 29.2 s | **228 s**, `finish_reason: length` |
+| ordinary question | worked, blank for 29 s | 0.29 s to first byte, 773 reasoning + 32 content frames, `stop` |
+
+Usage rows are written for all of them, thinking tokens included, with `completed=f`
+on the truncated ones.
+
+**The ceiling raise did not rescue the question that started this.** Twice, at the
+full 8192, GLM-4.7-Flash produced 8192 tokens of reasoning about the three-guards
+puzzle and **zero tokens of answer**. 8192 is enough for the model not to be cut off
+mid-thought on ordinary work; it is not enough to make this model answer that
+question, and no ceiling this machine can afford would be. For that class of prompt
+the lever is `OLLAMA_THINKING=false`, which is why the switch exists.
+
+**One failure did not reproduce and is not explained.** The first long run ended, at
+6625 chunks and 230 s, with an `no_available_model` error frame instead of a finish
+reason — the adapter saw the upstream stream end without a `done` event, while Ollama
+logged that same request as 200 in 3m50s having generated its full 8192. The
+identical request 20 minutes later completed cleanly, and a direct 8192-token stream
+from Ollama ends with a proper `done_reason: length`, so Ollama is not the suspect.
+Worth noting for the next occurrence: the adapter's two failure modes — an `error`
+event mid-stream, and a stream that ends without `done` — both raise
+`NoAvailableModelError` and **neither logs anything**, so both reach the operator as
+"No model is currently available", which points at routing policies rather than at
+the transport. Neither is distinguishable after the fact. That is the thing to fix
+before trying to diagnose it again.
+
+---
+
+### A Claude Code session left running through screen-off was reachable again over a remote login, memory intact
+
+**This closes the loop the 2026-07-26 remote-operability audit opened.** That entry established the
+machine boots and recovers unattended; the open question was whether a long-lived interactive
+session — specifically a Claude Code CLI session, left running with the display off rather than
+the machine asleep — would still be there, and still be itself, when reached again from off-site.
+It was. The session had been started on 2026-07-26 with the screen turned off (not full system
+sleep, which would have suspended the process); today's remote login reconnected to it, and it
+answered with its prior conversation memory recalled correctly rather than starting cold.
+
+**What this does and does not prove.** It confirms display-off is a safe mode to leave an
+interactive Claude Code session in on this machine, and that a remote login is a working way back
+in — consistent with the SSH posture §11 already settled (tailnet-only, no second listener). It
+does not test full system sleep, which suspends processes and would be expected to behave
+differently, and it was one session over roughly a day, not a stress test of duration or of
+concurrent sessions.
+
+---
+
 ## 2026-07-26
 
 ### Auditing "can this be run entirely remotely" found one real hole and one contradiction between two files

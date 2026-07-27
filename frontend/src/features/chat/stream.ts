@@ -10,6 +10,7 @@
 
 import {
   frameFinishReason,
+  frameReasoning,
   frameText,
   streamFrameSchema,
   type StreamFrame,
@@ -19,6 +20,11 @@ export const DONE_SENTINEL = '[DONE]';
 
 export type StreamHandlers = {
   onDelta: (text: string) => void;
+  /**
+   * Reasoning from a thinking model. Optional, so a caller that has no place
+   * to show it simply drops it rather than mixing it into the answer.
+   */
+  onReasoning?: (text: string) => void;
   /** Terminal error frame, or a stream that ended without a done sentinel. */
   onError: (message: string) => void;
   onDone: () => void;
@@ -132,6 +138,9 @@ export async function readChatStream(
             handlers.onError(failure);
             return;
           }
+
+          const reasoning = frameReasoning(frame.data);
+          if (reasoning) handlers.onReasoning?.(reasoning);
 
           const delta = extractDelta(frame.data);
           if (delta) handlers.onDelta(delta);

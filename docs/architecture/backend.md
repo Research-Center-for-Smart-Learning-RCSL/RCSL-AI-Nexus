@@ -293,7 +293,14 @@ The admin API uses a plainer shape:
 
 Streaming crosses every layer, and most of the subtle failure modes in this system live here. The rules are fixed rather than left to each implementation.
 
-**What flows through the port.** The domain emits `CompletionChunk`, a dataclass with a text delta, an optional finish reason, and optional usage counts. It never emits SSE-formatted strings. Wire framing is an interface-layer concern, which is what lets the same use case serve the OpenAI-compatible gateway endpoint and the admin chat endpoint.
+**What flows through the port.** The domain emits `CompletionChunk`, a dataclass with a text delta, an optional finish reason, optional usage counts, and a separate `reasoning` string. It never emits SSE-formatted strings. Wire framing is an interface-layer concern, which is what lets the same use case serve the OpenAI-compatible gateway endpoint and the admin chat endpoint.
+
+**Reasoning is a distinct field, on the port and on the wire.** A thinking model leaves its answer empty and fills a reasoning channel until it is done, which for a hard question can be the entire generation. Two rules follow, and both are load-bearing:
+
+- It is never merged into `delta`. A client concatenating `content` into the reply would put the model's scratch work into the answer and then send it back as history on the next turn.
+- It is never dropped either. A chunk carrying only reasoning still has to be framed, because a stream that emits nothing while the model thinks is a silent socket, and any intermediary with an idle timeout will cut it. This is not hypothetical: it cut a 93-second generation at exactly 30 seconds and surfaced to the browser as a 500 with no trace in the backend log.
+
+On the wire this is the `reasoning_content` key inside `choices[].delta`, alongside `content` and never in place of it, and a field of the same name on the non-streaming `CompletionMessage`. The spelling matches what DeepSeek and vLLM already emit; an OpenAI client that does not know the key ignores an unrecognised delta field, which is the correct outcome for one.
 
 **Where framing happens.** `interfaces/http/routers/chat.py` converts chunks into `data: {...}\n\n` frames and terminates with `data: [DONE]`. `admin_chat.py` may use a simpler frame shape.
 

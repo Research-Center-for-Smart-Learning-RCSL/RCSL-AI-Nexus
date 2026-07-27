@@ -26,6 +26,11 @@ export type StreamStatus = 'idle' | 'streaming' | 'done' | 'error';
 export type StreamSnapshot = {
   /** Everything received so far, concatenated. */
   text: string;
+  /**
+   * A thinking model's deliberation, accumulated separately from `text`. Kept
+   * apart all the way to the render so it can never be mistaken for the answer.
+   */
+  reasoning: string;
   status: StreamStatus;
   /** Set when a terminal error frame arrived mid-stream. */
   error: string | null;
@@ -38,12 +43,18 @@ export type StreamStore = {
 
 export type MutableStreamStore = StreamStore & {
   append: (delta: string) => void;
+  appendReasoning: (delta: string) => void;
   fail: (message: string) => void;
   finish: () => void;
   reset: () => void;
 };
 
-const EMPTY: StreamSnapshot = { text: '', status: 'idle', error: null };
+const EMPTY: StreamSnapshot = {
+  text: '',
+  reasoning: '',
+  status: 'idle',
+  error: null,
+};
 
 /**
  * A minimal external store. Deliberately not React state: the producer is the
@@ -52,7 +63,7 @@ const EMPTY: StreamSnapshot = { text: '', status: 'idle', error: null };
  */
 export function createStreamStore(initial = ''): MutableStreamStore {
   let snapshot: StreamSnapshot = initial
-    ? { text: initial, status: 'idle', error: null }
+    ? { text: initial, reasoning: '', status: 'idle', error: null }
     : EMPTY;
   const listeners = new Set<() => void>();
 
@@ -69,16 +80,28 @@ export function createStreamStore(initial = ''): MutableStreamStore {
     getSnapshot: () => snapshot,
     append(delta) {
       if (!delta) return;
-      emit({ text: snapshot.text + delta, status: 'streaming', error: null });
+      emit({ ...snapshot, text: snapshot.text + delta, status: 'streaming', error: null });
+    },
+    appendReasoning(delta) {
+      if (!delta) return;
+      // Sets `streaming` exactly as `append` does. For a thinking model this is
+      // the only signal there is for as long as it deliberates, and a status
+      // that stayed `idle` through it would render as a stalled request.
+      emit({
+        ...snapshot,
+        reasoning: snapshot.reasoning + delta,
+        status: 'streaming',
+        error: null,
+      });
     },
     fail(message) {
       // Keeps whatever was produced. Truncated output with a visible reason is
       // strictly better than a blank bubble.
-      emit({ text: snapshot.text, status: 'error', error: message });
+      emit({ ...snapshot, status: 'error', error: message });
     },
     finish() {
       if (snapshot.status === 'error') return;
-      emit({ text: snapshot.text, status: 'done', error: null });
+      emit({ ...snapshot, status: 'done', error: null });
     },
     reset() {
       emit(EMPTY);
@@ -104,6 +127,37 @@ export const SanitisedMarkdown = memo(function SanitisedMarkdown({
   );
 });
 
+/**
+ * Reasoning, collapsed by default.
+ *
+ * Open while it is the only thing arriving, so a thinking model shows progress
+ * rather than a spinner, and closed once the answer starts: by then the answer
+ * is what the reader wants and the deliberation is reference material. `open`
+ * is passed rather than held as state so both callers stay stateless.
+ */
+export const ReasoningBlock = memo(function ReasoningBlock({
+  text,
+  open = false,
+}: {
+  text: string;
+  open?: boolean;
+}) {
+  if (!text) return null;
+  return (
+    <details
+      open={open}
+      className="rounded-md border border-dashed border-foreground/15 px-3 py-2"
+    >
+      <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+        Reasoning
+      </summary>
+      <p className="mt-2 text-xs whitespace-pre-wrap text-muted-foreground">
+        {text}
+      </p>
+    </details>
+  );
+});
+
 export type StreamMessageProps = {
   store: StreamStore;
   className?: string;
@@ -124,9 +178,11 @@ export function StreamMessage({
 
   return (
     <div data-slot="stream-message" className={cn('space-y-2', className)}>
+      <ReasoningBlock text={snapshot.reasoning} open={!snapshot.text} />
+
       {snapshot.text ? (
         <SanitisedMarkdown text={snapshot.text} />
-      ) : snapshot.status === 'streaming' ? (
+      ) : snapshot.status === 'streaming' && !snapshot.reasoning ? (
         <p className="text-sm text-muted-foreground">{placeholder}</p>
       ) : null}
 

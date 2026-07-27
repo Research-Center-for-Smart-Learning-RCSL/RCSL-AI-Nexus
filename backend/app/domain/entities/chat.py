@@ -33,3 +33,15 @@ class CompletionChunk:
     token_count: int = 0
     """Tokens represented by this chunk. Summed to record usage even when a
     stream ends early, so a client disconnect still bills what was produced."""
+
+    reasoning: str = ""
+    """Incremental reasoning from a thinking model, kept separate from `delta`.
+
+    Separate because it is not the answer: concatenating the two would put a
+    model's private deliberation into the reply, and into the conversation
+    history a client sends back on the next turn. It is a distinct field rather
+    than a dropped one because a thinking model can spend its entire token
+    budget here — a stream that carries reasoning and nothing else is the
+    normal case for a hard question, and a transport that emits nothing for it
+    is silent for as long as the model thinks. That silence is what an
+    intermediary's idle timeout kills. See docs/PROGRESS.md, 2026-07-27."""

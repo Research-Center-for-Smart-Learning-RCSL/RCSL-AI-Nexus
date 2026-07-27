@@ -409,7 +409,8 @@ Non-secret values are environment variables; secrets are mounted files read thro
 | `GEOIP_DB_PATH` | `/data/GeoLite2-Country.mmdb` | Refreshed monthly |
 | `BOOTSTRAP_ADMIN_LOGIN` | `you@example.com` | Inert once any user exists |
 | `MAX_CONCURRENT_INFERENCE` | `2` | Tune to model size |
-| `MAX_TOKENS_CEILING` | `4096` | |
+| `MAX_TOKENS_CEILING` | `8192` | Counts a thinking model's reasoning, which is why it is not 4096 |
+| `OLLAMA_THINKING` | `true` | `false` suppresses thinking. Never sends `think: true`: Ollama refuses it for models that do not support thinking |
 | `REQUEST_TIMEOUT_SECONDS` | `300` | |
 | `METRICS_ENABLED` | `true` | Exposes `/metrics`; off lifts the production requirement for a real `metrics_scrape_token` |
 

@@ -162,3 +162,87 @@ async def test_health_is_false_when_the_host_is_unreachable(patch_httpx) -> None
 
     patch_httpx(handler)
     assert await OllamaAdapter("http://ollama.invalid").health() is False
+
+
+async def test_thinking_is_streamed_as_reasoning_not_dropped(patch_httpx) -> None:
+    """The failure that made a 93-second answer look like a 500.
+
+    A thinking model leaves `content` empty and fills `thinking` until it is
+    done. Reading only `content` produced no chunk at all for the whole
+    deliberation, so nothing reached the client, the response headers were
+    never sent, and the proxy in front cut the idle socket. The stream has to
+    carry reasoning for that silence to end.
+    """
+    events = [
+        {"message": {"content": "", "thinking": "First, "}, "done": False},
+        {"message": {"content": "", "thinking": "then."}, "done": False},
+        {"message": {"content": "42"}, "done": False},
+        {"message": {"content": ""}, "done": True, "done_reason": "stop", "eval_count": 3},
+    ]
+    patch_httpx(lambda request: httpx.Response(200, content=ndjson(*events)))
+
+    chunks = []
+    async with aclosing(OllamaAdapter("http://ollama.invalid").generate("glm", MESSAGES)) as s:
+        async for chunk in s:
+            chunks.append(chunk)
+
+    assert "".join(c.reasoning for c in chunks) == "First, then."
+    assert "".join(c.delta for c in chunks) == "42", "reasoning must not leak into the answer"
+    assert sum(c.token_count for c in chunks) == 3, "eval_count covers thinking tokens too"
+
+
+async def test_a_generation_that_is_entirely_thinking_still_produces_chunks(patch_httpx) -> None:
+    """The exact shape of the 500: the budget is spent before an answer starts.
+
+    There is no answer to show, but chunks must still flow — both so the
+    connection stays alive and so the caller can report that the model
+    deliberated its way past the ceiling rather than returning a blank bubble.
+    """
+    events = [
+        {"message": {"content": "", "thinking": "still working"}, "done": False},
+        {"message": {"content": ""}, "done": True, "done_reason": "length", "eval_count": 4096},
+    ]
+    patch_httpx(lambda request: httpx.Response(200, content=ndjson(*events)))
+
+    chunks = []
+    async with aclosing(OllamaAdapter("http://ollama.invalid").generate("glm", MESSAGES)) as s:
+        async for chunk in s:
+            chunks.append(chunk)
+
+    assert len(chunks) >= 2, "a silent stream is what the proxy killed"
+    assert "".join(c.delta for c in chunks) == ""
+    assert chunks[-1].finish_reason == "length"
+
+
+async def test_think_false_is_sent_only_when_thinking_is_disabled(patch_httpx) -> None:
+    """`think: true` is never sent, at any setting.
+
+    Ollama refuses it for a model that does not support thinking, so sending it
+    to a registry holding both kinds breaks every non-thinking model. Absence
+    means "whatever the model does by default", which is the only safe way to
+    express "on" across a mixed registry.
+    """
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(
+            200, content=ndjson({"message": {"content": "hi"}, "done": True, "eval_count": 1})
+        )
+
+    patch_httpx(handler)
+
+    async with aclosing(
+        OllamaAdapter("http://ollama.invalid", thinking=True).generate("glm", MESSAGES)
+    ) as s:
+        async for _ in s:
+            pass
+    assert "think" not in seen, "asking for thinking breaks non-thinking models"
+
+    seen.clear()
+    async with aclosing(
+        OllamaAdapter("http://ollama.invalid", thinking=False).generate("glm", MESSAGES)
+    ) as s:
+        async for _ in s:
+            pass
+    assert seen["think"] is False

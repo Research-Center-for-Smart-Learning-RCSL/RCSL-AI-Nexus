@@ -122,3 +122,73 @@ describe('readChatStream', () => {
     expect(c.errors).toEqual(['The server sent no response body.']);
   });
 });
+
+describe('readChatStream with a thinking model', () => {
+  const reasoning = (text: string) =>
+    frame({ choices: [{ delta: { reasoning_content: text } }] });
+
+  /** Like collectingHandlers, plus the reasoning channel. */
+  function thinkingHandlers() {
+    const deltas: string[] = [];
+    const thoughts: string[] = [];
+    const errors: string[] = [];
+    const onDone = vi.fn();
+    return {
+      deltas,
+      thoughts,
+      errors,
+      done: () => onDone.mock.calls.length,
+      handlers: {
+        onDelta: (text: string) => deltas.push(text),
+        onReasoning: (text: string) => thoughts.push(text),
+        onError: (message: string) => errors.push(message),
+        onDone,
+      } satisfies StreamHandlers,
+    };
+  }
+
+  it('routes reasoning to its own handler and keeps it out of the answer', async () => {
+    const c = thinkingHandlers();
+    await readChatStream(
+      sseResponse([reasoning('let me think'), delta('42'), 'data: [DONE]\n\n']),
+      c.handlers,
+    );
+
+    expect(c.thoughts).toEqual(['let me think']);
+    expect(c.deltas).toEqual(['42']);
+    expect(c.done()).toBe(1);
+  });
+
+  it('reports a generation that produced only reasoning', async () => {
+    // The 2026-07-27 case: the whole token budget went to deliberation and the
+    // model never started an answer. That is a finished stream with no content,
+    // not an error, and the reasoning is the only thing there is to show.
+    const c = thinkingHandlers();
+    await readChatStream(
+      sseResponse([
+        reasoning('still working'),
+        frame({ choices: [{ delta: {}, finish_reason: 'length' }] }),
+      ]),
+      c.handlers,
+    );
+
+    expect(c.thoughts).toEqual(['still working']);
+    expect(c.deltas).toEqual([]);
+    expect(c.errors).toEqual([]);
+    expect(c.done()).toBe(1);
+  });
+
+  it('drops reasoning silently when the caller has nowhere to show it', async () => {
+    // onReasoning is optional, so the gateway-facing reader stays unchanged.
+    const deltas: string[] = [];
+    const onDone = vi.fn();
+    await readChatStream(sseResponse([reasoning('ignored'), delta('hi'), 'data: [DONE]\n\n']), {
+      onDelta: (text) => deltas.push(text),
+      onError: () => {},
+      onDone,
+    });
+
+    expect(deltas).toEqual(['hi']);
+    expect(onDone).toHaveBeenCalledOnce();
+  });
+});

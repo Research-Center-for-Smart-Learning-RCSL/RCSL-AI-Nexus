@@ -37,8 +37,18 @@ def _finish_reason(done_reason: str | None) -> str:
 
 
 class OllamaAdapter:
-    def __init__(self, base_url: str, request_timeout_seconds: int = 300) -> None:
+    def __init__(
+        self, base_url: str, request_timeout_seconds: int = 300, thinking: bool = True
+    ) -> None:
         self._base_url = base_url.rstrip("/")
+        # Only ever sent as `false`. Ollama refuses `think: true` for a model
+        # that does not support it — `"qwen2.5:7b" does not support thinking` —
+        # so asking for thinking on a mixed registry breaks every non-thinking
+        # model, while asking to suppress it is accepted by both kinds. The
+        # operator switch is therefore one-directional by necessity, not by
+        # preference: leaving it on means sending no `think` field at all and
+        # letting each model do what it does.
+        self._thinking = thinking
         # Generation legitimately takes minutes, so the read timeout is long,
         # but a host that is simply not there must fail fast rather than
         # holding a concurrency slot for the full request timeout.
@@ -74,6 +84,8 @@ class OllamaAdapter:
             # stream: the model stops generating rather than producing tokens
             # nobody reads.
             payload["options"] = {"num_predict": max_tokens}
+        if not self._thinking:
+            payload["think"] = False
 
         counted = 0
         saw_done = False
@@ -93,7 +105,14 @@ class OllamaAdapter:
                     if event.get("error"):
                         raise NoAvailableModelError(detail=f"ollama: {event['error']}")
 
-                    delta = (event.get("message") or {}).get("content", "")
+                    message = event.get("message") or {}
+                    delta = message.get("content") or ""
+                    # A thinking model puts its deliberation here and leaves
+                    # `content` empty until it is finished, which for a hard
+                    # question can be the whole generation. Dropping this field
+                    # made the adapter produce nothing at all for 93 seconds on
+                    # a question that used its entire token budget thinking.
+                    reasoning = message.get("thinking") or ""
 
                     if event.get("done"):
                         saw_done = True
@@ -117,14 +136,18 @@ class OllamaAdapter:
                             correction = 0
                         yield CompletionChunk(
                             delta=delta,
+                            reasoning=reasoning,
                             finish_reason=_finish_reason(event.get("done_reason")),
                             token_count=correction,
                         )
                         return
 
-                    if delta:
+                    if delta or reasoning:
+                        # Reasoning counts. Ollama's `eval_count` includes the
+                        # thinking tokens, so excluding them here would make the
+                        # end-of-stream correction re-bill every one of them.
                         counted += 1
-                        yield CompletionChunk(delta=delta, token_count=1)
+                        yield CompletionChunk(delta=delta, reasoning=reasoning, token_count=1)
 
                 if not saw_done:
                     # The stream ended without a terminal event: the model was

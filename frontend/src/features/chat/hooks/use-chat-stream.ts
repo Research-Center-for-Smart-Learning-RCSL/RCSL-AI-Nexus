@@ -24,9 +24,38 @@ export type ChatTurn = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  /** A thinking model's deliberation. Never sent back as history below. */
+  reasoning?: string;
   /** Set when the turn ended on a terminal error frame. */
   error?: string;
 };
+
+/**
+ * The messages sent for the next turn.
+ *
+ * Exported to be tested directly: both rules below are invisible in the UI and
+ * only show up in the prompt the model receives, which nothing else inspects.
+ *
+ * `content` only — a turn's reasoning is deliberately not replayed: it is the
+ * model's scratch work, it multiplies the prompt for every later turn, and the
+ * ceiling that truncates a generation counts it.
+ *
+ * Which leaves turns that have no content at all: a thinking model that spent
+ * its whole budget deliberating, or a generation that failed before its first
+ * token. Those stay in the transcript so the thread shows what happened, but
+ * sending one would put `{"role":"assistant","content":""}` into the prompt
+ * template, where it becomes an empty assistant turn for this request and every
+ * later one. Dropped here rather than at the display layer, because the two
+ * want opposite things from the same turn.
+ */
+export function historyFor(turns: ChatTurn[], prompt: string): ChatMessage[] {
+  return [
+    ...turns
+      .filter((turn) => turn.content)
+      .map((turn) => ({ role: turn.role, content: turn.content })),
+    { role: 'user' as const, content: prompt },
+  ];
+}
 
 export function useChatStream() {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
@@ -51,10 +80,7 @@ export function useChatStream() {
     async (capability: ChatRequest['capability'], prompt: string) => {
       if (isStreaming) return;
 
-      const history: ChatMessage[] = [
-        ...turns.map((turn) => ({ role: turn.role, content: turn.content })),
-        { role: 'user' as const, content: prompt },
-      ];
+      const history = historyFor(turns, prompt);
 
       setTurns((current) => [
         ...current,
@@ -78,6 +104,7 @@ export function useChatStream() {
           response,
           {
             onDelta: (delta) => store.append(delta),
+            onReasoning: (delta) => store.appendReasoning(delta),
             onError: (message) => {
               finalError = message;
               store.fail(message);
@@ -93,16 +120,20 @@ export function useChatStream() {
           store.fail(finalError);
         }
       } finally {
-        const produced = store.getSnapshot().text;
+        const { text: produced, reasoning } = store.getSnapshot();
         // Whatever was produced is kept. A cancelled or failed generation still
         // shows its partial output, matching how usage is billed server-side.
-        if (produced || finalError) {
+        // Reasoning alone counts as output: a thinking model that spent its
+        // whole budget deliberating produced no answer, and dropping the turn
+        // would leave the thread showing nothing at all for it.
+        if (produced || reasoning || finalError) {
           setTurns((current) => [
             ...current,
             {
               id: crypto.randomUUID(),
               role: 'assistant',
               content: produced,
+              reasoning: reasoning || undefined,
               error: finalError,
             },
           ]);
