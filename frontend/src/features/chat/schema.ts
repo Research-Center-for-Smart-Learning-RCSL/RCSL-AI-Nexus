@@ -50,6 +50,13 @@ const openAiChoiceSchema = z.object({
     .object({
       role: z.string().optional(),
       content: z.string().optional(),
+      /**
+       * A thinking model's deliberation, which the backend deliberately keeps
+       * out of `content`. Parsed as its own field for the same reason: it is
+       * shown separately and never becomes part of the reply that gets sent
+       * back as history.
+       */
+      reasoning_content: z.string().optional(),
     })
     .optional(),
   finish_reason: z.string().nullish(),
@@ -76,6 +83,11 @@ export type StreamFrame = z.infer<typeof streamFrameSchema>;
 export function frameText(frame: StreamFrame): string {
   const fromEnvelope = frame.choices?.[0]?.delta?.content;
   return fromEnvelope ?? frame.delta ?? frame.content ?? '';
+}
+
+/** Reasoning carried by a frame. Empty for every non-thinking model. */
+export function frameReasoning(frame: StreamFrame): string {
+  return frame.choices?.[0]?.delta?.reasoning_content ?? '';
 }
 
 export function frameFinishReason(frame: StreamFrame): string | null {

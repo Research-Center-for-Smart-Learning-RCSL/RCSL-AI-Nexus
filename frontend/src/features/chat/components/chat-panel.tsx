@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
+  ReasoningBlock,
   SanitisedMarkdown,
   StreamMessage,
 } from '@/components/composed/stream-message';
@@ -36,7 +37,12 @@ function Turn({ turn }: { turn: ChatTurn }) {
       {isUser ? (
         <p className="text-sm whitespace-pre-wrap">{turn.content}</p>
       ) : (
-        <SanitisedMarkdown text={turn.content} />
+        <div className="space-y-2">
+          {/* Open when there is no answer to show: a generation that spent its
+              whole budget thinking would otherwise render as an empty bubble. */}
+          <ReasoningBlock text={turn.reasoning ?? ''} open={!turn.content} />
+          <SanitisedMarkdown text={turn.content} />
+        </div>
       )}
       {turn.error ? (
         <p role="alert" className="mt-2 text-sm text-destructive">

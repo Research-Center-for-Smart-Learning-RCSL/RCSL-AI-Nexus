@@ -96,6 +96,7 @@ def build_runtimes(settings: Settings) -> dict[RuntimeKind, ModelRuntimePort]:
         RuntimeKind.OLLAMA: OllamaAdapter(
             base_url=settings.ollama_base_url,
             request_timeout_seconds=settings.request_timeout_seconds,
+            thinking=settings.ollama_thinking,
         ),
         RuntimeKind.MLX: MlxAdapter(
             base_url=settings.mlx_base_url,

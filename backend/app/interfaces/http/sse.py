@@ -103,6 +103,14 @@ async def _frames(
 
     def frames_for(chunk: CompletionChunk) -> list[str]:
         out = []
+        if chunk.reasoning:
+            # `reasoning_content` rather than `content`, because an OpenAI
+            # client must not paste a model's deliberation into the reply. It
+            # is the spelling DeepSeek and vLLM already use, and a client that
+            # does not know it ignores an unrecognised delta key — which is the
+            # correct behaviour for one, and better than the alternative of
+            # emitting nothing while the model thinks.
+            out.append(frame(envelope({"reasoning_content": chunk.reasoning}, None)))
         if chunk.delta:
             out.append(frame(envelope({"content": chunk.delta}, None)))
         if chunk.finish_reason:

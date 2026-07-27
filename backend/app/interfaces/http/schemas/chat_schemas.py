@@ -56,6 +56,10 @@ class AdminChatRequest(BaseModel):
 class Delta(BaseModel):
     content: str | None = None
     role: str | None = None
+    reasoning_content: str | None = None
+    """A thinking model's deliberation. Never merged into `content`: it is not
+    the answer, and a client echoing it back as history would feed the model
+    its own scratch work."""
 
 
 class StreamChoice(BaseModel):
@@ -75,6 +79,11 @@ class ChatCompletionChunk(BaseModel):
 class CompletionMessage(BaseModel):
     role: Literal["assistant"] = "assistant"
     content: str
+    reasoning_content: str | None = None
+    """Present only when the model produced reasoning. Carried on the
+    non-streaming path too, so `stream: false` against a thinking model does
+    not answer with an empty `content` and no indication of where the tokens
+    went."""
 
 
 class Choice(BaseModel):

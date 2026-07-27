@@ -81,12 +81,14 @@ async def _collect(
     exhaustion. One execution path means the two cannot drift apart.
     """
     parts: list[str] = []
+    reasoning: list[str] = []
     tokens = 0
     finish_reason: str | None = None
 
     async with aclosing(use_case.execute(actor, capability, messages, max_tokens)) as stream:
         async for chunk in stream:
             parts.append(chunk.delta)
+            reasoning.append(chunk.reasoning)
             tokens += chunk.token_count
             finish_reason = chunk.finish_reason or finish_reason
 
@@ -96,7 +98,10 @@ async def _collect(
         model=capability,
         choices=[
             Choice(
-                message=CompletionMessage(content="".join(parts)),
+                message=CompletionMessage(
+                    content="".join(parts),
+                    reasoning_content="".join(reasoning) or None,
+                ),
                 finish_reason=finish_reason or "stop",
             )
         ],
