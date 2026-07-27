@@ -161,7 +161,13 @@ The chat UI consumes SSE from `/admin/chat` ([backend.md](./backend.md) §6). Th
 - **Terminal error frames.** Because the HTTP status is already sent, a mid-stream failure arrives as an error frame, not an HTTP error. The stream reader must recognise it and surface the message rather than silently truncating.
 - **Render incrementally without re-rendering the whole thread.** `stream-message.tsx` owns the accumulating buffer so that only the active message re-renders.
 
-**Reasoning is a second channel, not more text.** A thinking model sends its deliberation as `reasoning_content` inside the delta, separate from `content` ([backend.md](./backend.md) §6). The store accumulates the two separately and they stay separate to the render: `ReasoningBlock` shows the deliberation in a collapsible block, open while it is the only thing arriving so the model shows progress rather than an apparently stalled request, and collapsed once the answer starts.
+**Reasoning is a second channel, not more text.** A thinking model sends its deliberation as `reasoning_content` inside the delta, separate from `content` ([backend.md](./backend.md) §6). The store accumulates the two separately and they stay separate to the render.
+
+`ReasoningBlock` is a **one-line ticker that expands**, not a growing wall of text: the summary carries elapsed time and the tail of the current reasoning, and the full text is behind the disclosure. Three reasons, none cosmetic. A block that grows for four minutes pushes the page down the whole time. The reader's actual decision during a long deliberation is whether to stop and re-ask with thinking off — this model has been measured producing 23,632 tokens of reasoning and no answer — and a clock answers that better than paragraphs do. And it is deliberately **not** rendered as markdown, unlike the answer: scratch work should not carry the same typographic authority as a conclusion.
+
+It stays collapsed unless the reader opens it. An earlier version passed `open` as a controlled prop derived from whether an answer had started, so the block snapped shut in the reader's face on the first answer token; `defaultOpen` seeds the initial state and nothing overrides it after.
+
+**The bubble must say something before the first byte.** `StreamStore.begin()` marks the request in flight and stamps `startedAt`, so the placeholder and the clock appear immediately. Without it the status stayed `idle` until the first delta arrived, which meant the placeholder — whose condition requires `streaming` — was unreachable during the only interval it existed for, and the wait rendered as a completely empty box. A few seconds of that reads as a hung application; a cold model load reads as a dead one.
 
 Two consequences are invisible in the UI and only appear in what the server receives, so both live in exported pure functions with tests rather than inside the component:
 
