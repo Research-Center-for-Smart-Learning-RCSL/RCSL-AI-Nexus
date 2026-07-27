@@ -27,7 +27,16 @@ export type StreamHandlers = {
   onReasoning?: (text: string) => void;
   /** Terminal error frame, or a stream that ended without a done sentinel. */
   onError: (message: string) => void;
-  onDone: () => void;
+  /**
+   * The reason carried by the terminal frame, when there was one.
+   *
+   * Passed on rather than discarded: `length` means the platform's ceiling cut
+   * the generation, and a thinking model can reach it having produced no answer
+   * at all. Dropping it made that outcome indistinguishable from a normal
+   * completion that happened to be empty — the same blank bubble either way,
+   * with nothing on screen to say the model was still working when it stopped.
+   */
+  onDone: (finishReason?: string | null) => void;
 };
 
 // Reading the envelope is the schema's job, so both spellings resolve here.
@@ -145,9 +154,10 @@ export async function readChatStream(
           const delta = extractDelta(frame.data);
           if (delta) handlers.onDelta(delta);
 
-          if (frameFinishReason(frame.data)) {
+          const finishReason = frameFinishReason(frame.data);
+          if (finishReason) {
             sawTerminator = true;
-            handlers.onDone();
+            handlers.onDone(finishReason);
             return;
           }
         }

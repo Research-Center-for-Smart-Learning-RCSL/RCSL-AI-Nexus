@@ -38,6 +38,12 @@ export type StreamSnapshot = {
    * an empty box, so it is the one the elapsed counter has to measure.
    */
   startedAt: number | null;
+  /**
+   * The terminal frame's reason, once one arrived. `length` means the platform
+   * cut the generation at its ceiling, which for a thinking model can happen
+   * with no answer produced at all — the case this exists to make visible.
+   */
+  finishReason: string | null;
   /** Set when a terminal error frame arrived mid-stream. */
   error: string | null;
 };
@@ -59,7 +65,7 @@ export type MutableStreamStore = StreamStore & {
   append: (delta: string) => void;
   appendReasoning: (delta: string) => void;
   fail: (message: string) => void;
-  finish: () => void;
+  finish: (finishReason?: string | null) => void;
   reset: () => void;
 };
 
@@ -68,6 +74,7 @@ const EMPTY: StreamSnapshot = {
   reasoning: '',
   status: 'idle',
   startedAt: null,
+  finishReason: null,
   error: null,
 };
 
@@ -78,7 +85,14 @@ const EMPTY: StreamSnapshot = {
  */
 export function createStreamStore(initial = ''): MutableStreamStore {
   let snapshot: StreamSnapshot = initial
-    ? { text: initial, reasoning: '', status: 'idle', startedAt: null, error: null }
+    ? {
+        text: initial,
+        reasoning: '',
+        status: 'idle',
+        startedAt: null,
+        finishReason: null,
+        error: null,
+      }
     : EMPTY;
   const listeners = new Set<() => void>();
 
@@ -117,9 +131,9 @@ export function createStreamStore(initial = ''): MutableStreamStore {
       // strictly better than a blank bubble.
       emit({ ...snapshot, status: 'error', error: message });
     },
-    finish() {
+    finish(finishReason = null) {
       if (snapshot.status === 'error') return;
-      emit({ ...snapshot, status: 'done', error: null });
+      emit({ ...snapshot, status: 'done', finishReason, error: null });
     },
     reset() {
       emit(EMPTY);
@@ -219,6 +233,28 @@ export const ReasoningBlock = memo(function ReasoningBlock({
   );
 });
 
+/**
+ * What to say when a generation ended with no answer to show.
+ *
+ * `length` is the platform's own ceiling reporting itself honestly
+ * (backend.md §6), and for a thinking model it is reachable with zero answer
+ * tokens produced — measured at 16,384 tokens and eleven minutes of pure
+ * deliberation. Without this the reader gets an empty bubble that looks
+ * identical to a malfunction, and the elapsed time disappears with the live
+ * message that was carrying it.
+ *
+ * Returns null when there is nothing to explain, so an ordinary empty turn
+ * stays quiet.
+ */
+export function describeEmptyOutcome(
+  finishReason: string | null,
+  elapsedMs: number | null,
+): string | null {
+  if (finishReason !== 'length') return null;
+  const took = elapsedMs === null ? '' : ` after ${formatElapsed(elapsedMs)}`;
+  return `Stopped at the token ceiling${took}: the model was still reasoning and never started an answer. Asking again with Thinking off gets a direct reply.`;
+}
+
 export type StreamMessageProps = {
   store: StreamStore;
   className?: string;
@@ -250,13 +286,18 @@ export function StreamMessage({
 
   const elapsed = snapshot.startedAt === null ? null : now - snapshot.startedAt;
   const waiting = running && !snapshot.reasoning && !snapshot.text;
+  const emptyOutcome = snapshot.text
+    ? null
+    : describeEmptyOutcome(snapshot.finishReason, elapsed);
 
   return (
     <div data-slot="stream-message" className={cn('space-y-2', className)}>
-      <ReasoningBlock text={snapshot.reasoning} elapsedMs={running ? elapsed : null} />
+      <ReasoningBlock text={snapshot.reasoning} elapsedMs={elapsed} />
 
       {snapshot.text ? (
         <SanitisedMarkdown text={snapshot.text} />
+      ) : emptyOutcome ? (
+        <p className="text-sm text-muted-foreground">{emptyOutcome}</p>
       ) : waiting ? (
         // Reached now. This branch required `streaming`, which used to arrive
         // only with the first token, so it never rendered during the wait.

@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
+  describeEmptyOutcome,
   ReasoningBlock,
   SanitisedMarkdown,
   StreamMessage,
@@ -39,9 +40,27 @@ function Turn({ turn }: { turn: ChatTurn }) {
       ) : (
         <div className="space-y-2">
           {/* Open when there is no answer to show: a generation that spent its
-              whole budget thinking would otherwise render as an empty bubble. */}
-          <ReasoningBlock text={turn.reasoning ?? ''} defaultOpen={!turn.content} />
-          <SanitisedMarkdown text={turn.content} />
+              whole budget thinking would otherwise render as an empty bubble.
+              The elapsed time comes with it, because the live message that was
+              showing it is gone by the time this renders. */}
+          <ReasoningBlock
+            text={turn.reasoning ?? ''}
+            defaultOpen={!turn.content}
+            elapsedMs={turn.elapsedMs ?? null}
+          />
+          {turn.content ? (
+            <SanitisedMarkdown text={turn.content} />
+          ) : (
+            (() => {
+              const outcome = describeEmptyOutcome(
+                turn.finishReason ?? null,
+                turn.elapsedMs ?? null,
+              );
+              return outcome ? (
+                <p className="text-sm text-muted-foreground">{outcome}</p>
+              ) : null;
+            })()
+          )}
         </div>
       )}
       {turn.error ? (

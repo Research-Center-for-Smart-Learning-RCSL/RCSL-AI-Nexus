@@ -192,3 +192,32 @@ describe('readChatStream with a thinking model', () => {
     expect(onDone).toHaveBeenCalledOnce();
   });
 });
+
+describe('the terminal frame reason', () => {
+  it('reaches onDone instead of being discarded', async () => {
+    // `length` is the platform's ceiling reporting itself. The reader read it,
+    // branched on it, and dropped it, so the UI could not tell a truncated
+    // generation from a complete one that produced nothing.
+    const reasons: (string | null | undefined)[] = [];
+    await readChatStream(
+      sseResponse([
+        delta('partial'),
+        frame({ choices: [{ delta: {}, finish_reason: 'length' }] }),
+      ]),
+      { onDelta: () => {}, onError: () => {}, onDone: (r) => reasons.push(r) },
+    );
+
+    expect(reasons).toEqual(['length']);
+  });
+
+  it('passes nothing when the stream ended on the done sentinel', async () => {
+    const reasons: (string | null | undefined)[] = [];
+    await readChatStream(sseResponse([delta('hi'), 'data: [DONE]\n\n']), {
+      onDelta: () => {},
+      onError: () => {},
+      onDone: (r) => reasons.push(r),
+    });
+
+    expect(reasons).toEqual([undefined]);
+  });
+});
