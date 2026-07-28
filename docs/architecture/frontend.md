@@ -50,6 +50,9 @@ frontend/
         stream-message.tsx      # incremental assistant output, see §6
         empty-state.tsx
         error-state.tsx
+        one-time-secret.tsx     # a value the server will never return again
+        secret-dialog.tsx       # cannot be dismissed by accident while one is shown
+        code-block.tsx          # a snippet meant to be copied rather than read
 
     features/
       models/
@@ -58,7 +61,12 @@ frontend/
         api.ts
         schema.ts             # zod, used for both validation and inferred types
       routing-policies/
-      api-keys/
+      api-keys/               # issue, edit, revoke; actions gated on the scopes
+                              #   the backend grants, so a member manages
+                              #   their own (security.md §5.2)
+      gateway/                # what an integrator needs: the base URL, the
+                              #   servable capabilities, the paste-ready
+                              #   snippets shown at issue, and the API reference
       users/
       chat/
       dashboard/
@@ -71,6 +79,9 @@ frontend/
     app/
       (dashboard)/
         models/page.tsx       # thin, assembles feature components
+        api-docs/page.tsx     # the public API documentation security.md §4.4
+                              #   promises in exchange for disabling
+                              #   /openapi.json on the gateway
         ...
       layout.tsx              # nav, theme provider, SessionProvider (see §3)
 

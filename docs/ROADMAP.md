@@ -47,7 +47,7 @@ carries the checked control-by-control state.
 - [x] `adapters/authz`, `adapters/audit`, `adapters/cache`, `adapters/crypto`, `adapters/session`
 - [x] `application/use_cases`: `RouteChatRequest`, `AuthenticateLocal`, `AcceptInvitation`, `IssueInvitation`, `ManageOwnAccount`, `BootstrapFirstAdmin`, `ManageModels`, `DownloadModel`, `ManageApiKeys`, `ManageUsers`, `ManageRoutingPolicies`, `ListCapabilities`, `ReadDashboard`
 - [x] `interfaces/http/errors.py`: single exception handler, OpenAI envelope on the gateway, plain shape on admin
-- [x] Routers: `chat` (`/v1/chat/completions` and `/v1/models`), `admin_chat`, `models`, `routing_policies`, `api_keys`, `gateway_info`, `users`, `auth`, `me`, `invitations`, `jobs`, `dashboard`, `health`
+- [x] Routers: `chat` (`/v1/chat/completions` and `/v1/models`), `admin_chat`, `models` (download progress included, rather than a separate `jobs` router as sketched), `routing_policies`, `api_keys`, `gateway_info`, `users`, `auth`, `me`, `invitations`, `tenants`, `dashboard`, `usage`, `logs`, `health`, `metrics`
 - [x] `interfaces/http/sse.py`: one framing implementation, so the gateway and the chat panel cannot drift into two envelope shapes
 - [x] **Three ASGI entry points**: `main_gateway`, `main_admin_tailnet`, `main_admin_public`, each installing its own identity resolver
 - [x] Streaming contract implemented as specified: concurrency slot spans the generator, `aclosing()` at every consumer, cancellation propagates to the adapter, usage recorded in `finally`

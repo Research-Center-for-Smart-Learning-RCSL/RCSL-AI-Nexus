@@ -21,14 +21,33 @@ drift: the individually named port files are consolidated into `repositories.py`
 `postgres_*_repository.py` files into a single `repositories.py`. The protocols
 and classes all exist under those names; only the file granularity differs.
 
-Everything under `application/use_cases/` other than `route_chat_request.py`
-and `authenticate_local.py` is unwritten, as is every router except `chat.py`
-and `health.py`. See [security.md](./security.md) §13.0 for the checked state.
+The third departure is naming. The use cases below were sketched one verb per
+file; they were written one *subject* per file, because the verbs share their
+guards — `ManageApiKeys` holds create, update and revoke together precisely so
+that the owner-permission check cannot be applied to two of them and forgotten
+on the third. So `create_api_key.py` and `revoke_api_key.py` are
+`manage_api_keys.py`, and the same for models, nodes, users, tenants and
+routing policies.
+
+This paragraph used to say that everything under `application/use_cases/` other
+than `route_chat_request.py` and `authenticate_local.py` was unwritten, and that
+every router except `chat.py` and `health.py` was too. That stopped being true
+during Phase 1 and was still here on 2026-07-28. What exists now is every use
+case and every router named below, plus these, which postdate the sketch:
+`manage_tenants.py`, `read_audit_log.py`, `read_usage_analytics.py`,
+`pending_enrolment.py`, `recovery_codes.py` and `list_capabilities.py`, and the
+`gateway_info.py`, `tenants.py`, `logs.py`, `usage.py` and `invitations.py`
+routers. There is no `jobs.py`: download progress is
+`GET /admin/models/download-jobs/{id}`, on the router that starts the download.
+[security.md](./security.md) §13.0 remains the checked control-by-control state.
 
 Present and not listed below: `app/shared/clock.py` (injected time, so expiry
 behaviour is testable), `domain/entities/chat.py` (`Message`,
-`CompletionChunk`), `domain/services/api_key_service.py`, and
-`adapters/persistence/mappers.py`.
+`CompletionChunk`), `domain/entities/capability.py` (`KNOWN_CAPABILITIES`, the
+one definition of what a capability may be named — it lived in a use case and
+two other places kept copies that had each drifted from it, see
+[PROGRESS.md](../PROGRESS.md) 2026-07-28),
+`domain/services/api_key_service.py`, and `adapters/persistence/mappers.py`.
 
 ```
 backend/
@@ -123,8 +142,10 @@ backend/
     interfaces/
       http/
         routers/
-          chat.py                   # POST /v1/chat/completions          (gateway)
+          chat.py                   # POST /v1/chat/completions,
+                                    #  GET /v1/models                    (gateway)
           admin_chat.py             # POST /admin/chat                   (admin)
+          gateway_info.py           # GET  /admin/gateway                (admin)
           models.py
           routing_policies.py
           api_keys.py
@@ -269,6 +290,7 @@ A single exception handler registered in `interfaces/http/errors.py` performs th
 | `NoAvailableModelError` | 503 | Never names the models that were considered |
 | `ModelStateConflictError` | 409 | For example, unloading a model that is not loaded |
 | `InsufficientMemoryError` | 409 | Returns required and available capacity |
+| `ContextTooLongError` | 413 | Input ceiling, checked before any token is produced |
 | `QuotaExceededError` | 429 | With `Retry-After` |
 | `RateLimitedError` | 429 | With `Retry-After` |
 | `CountryNotAllowedError` | 403 | Generic body, does not echo the detected country |
@@ -296,6 +318,10 @@ The admin API uses a plainer shape:
 ```
 
 `public_message` is the only text that crosses the boundary. As required by [security.md](./security.md) §4.4, error bodies never contain internal model names, node addresses, or stack traces. The full exception is written to the application log with the request ID so that an operator can correlate.
+
+**There is a third shape, and it is not ours.** `install_error_handlers` registers a handler for `DomainError` and nothing else, so a request the schema rejects never reaches it: FastAPI answers 422 with its own `{"detail": [...]}`. That is a reasonable place to stop — the body is about the request's structure, not about the platform, and it leaks nothing. But it means "every error carries `code`" is false, and a client written to that rule throws on the one failure it is most likely to hit while being written. The public API page documents the exception explicitly for that reason; anything else claiming the envelope is universal is wrong.
+
+**Two statuses carry two codes each, which is why clients must branch on the code.** 403 is both `not_authorized` (the key is valid but was not issued for this capability) and `country_not_allowed` (the geo filter, §4.1a); 429 is both `rate_limited` (retry, `Retry-After` is set) and `quota_exceeded` (retrying inside the same day cannot succeed). Treating either pair as one condition produces a client that retries forever or reissues keys forever.
 
 ## 6. The Streaming Contract
 
