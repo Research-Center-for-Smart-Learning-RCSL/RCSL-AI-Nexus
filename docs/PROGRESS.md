@@ -107,6 +107,50 @@ non-feature — revocation is immediate because every request re-reads the row �
 so a later reader could have "fixed" the missing drop by adding a revocation
 window.
 
+### What review found in the same day's work
+
+Two of its findings were defects in the thing just built, both in the same
+shape: **a control that could not do what its own copy said it was for.**
+
+The edit dialog resubmitted the expiry on every save. A date input holds a
+calendar day, so an untouched `18:00Z` expiry came back as midnight — every
+edit silently shortening the key by up to a day, and once that midnight had
+passed, refusing outright. Renaming a key that expired later the same day was
+impossible, and so was the "extend it before it lapses" workflow both the
+dialog and the API page advertise. The endpoint is a PATCH; the field is now
+sent only when it was actually changed, or when the key was already expired and
+the prefilled date is deliberately not the stored one.
+
+The capability picker disabled every capability no policy served, including
+ones a key already held. So a key issued for `vision` whose policy was later
+deleted could never have `vision` removed — precisely the narrowing the control
+exists for. Disabled now applies on the way in only.
+
+Three more were consequences of the day's own choices. `gatewayInfoSchema`
+parsed capabilities as the five-value enum while `ManageRoutingPolicies.save`
+accepted any string at all, so one policy named `summarise` would have thrown
+in the parse and taken out both the picker and the whole API page. That
+disagreement is the older bug: `KNOWN_CAPABILITIES` lived in
+`manage_api_keys.py` and was consulted only there, so a policy for `chatt`
+stored and audited cleanly while no key could ever be issued for it. The set
+now lives in `domain/entities/capability.py` and all three readers use it —
+including the gateway's scope mapping, which had been a third copy listing only
+`chat`. The frontend parses the list as plain strings regardless, because a
+display list must never be able to take down the page that documents the
+platform.
+
+The error table was wrong in two ways worth recording, since §4.4 makes that
+page the contract. It claimed 403 always means the key lacks the capability,
+but the geo filter raises `country_not_allowed` at 403 too — an integrator
+blocked by location would have reissued keys forever. And "every failure
+carries `error.code`" is false for a body the schema rejects: only `DomainError`
+has a handler, so a malformed request gets FastAPI's `{"detail": [...]}` at 422.
+
+Both were the same failure as the capability list itself: **documentation and
+controls describing an intent the code did not implement.** The tests added
+alongside them assert the behaviour rather than the intent, which is the only
+version that stays true.
+
 ### What is still not done
 
 `api_keys.debug_logging_until` remains a column nothing writes and nothing

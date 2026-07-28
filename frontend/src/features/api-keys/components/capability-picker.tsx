@@ -40,6 +40,13 @@ export function CapabilityPicker({
           // everything for a moment would make the form look broken, and the
           // selection is re-checked by the server regardless.
           const routable = isLoading || servable.has(option);
+          const selected = value.includes(option);
+          // Only ever disabled on the way *in*. A key already issued for a
+          // capability whose policy has since been deleted must still be
+          // narrowable — removing it is exactly what this control is for, and
+          // disabling a checked box makes the one capability nothing serves
+          // the one nobody can take away.
+          const locked = !routable && !selected;
           return (
             <label
               key={option}
@@ -49,8 +56,8 @@ export function CapabilityPicker({
             >
               <input
                 type="checkbox"
-                disabled={!routable}
-                checked={value.includes(option)}
+                disabled={locked}
+                checked={selected}
                 onChange={(event) => {
                   onChange(
                     event.target.checked

@@ -153,6 +153,12 @@ describe('toDateInput', () => {
     expect(toDateInput('2027-01-01T00:00:00Z')).toBe('2027-01-01');
   });
 
+  it('loses the time of day, which is why an unchanged expiry is not resent', () => {
+    // Round-tripping this value back would move the expiry to midnight, so the
+    // edit dialog sends the field only when it was actually changed.
+    expect(toDateInput('2027-01-01T18:30:00Z')).toBe('2027-01-01');
+  });
+
   it('returns empty for an unparsable value rather than a broken field', () => {
     expect(toDateInput('not a date')).toBe('');
   });

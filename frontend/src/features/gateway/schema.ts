@@ -1,7 +1,5 @@
 import { z } from 'zod';
 
-import { capabilitySchema } from '@/features/models/schema';
-
 /**
  * What an integrator needs in order to use a key: where to send it, and what
  * the `model` field of a request accepts.
@@ -14,14 +12,19 @@ import { capabilitySchema } from '@/features/models/schema';
  */
 export const gatewayInfoSchema = z.object({
   base_url: z.string(),
-  capabilities: z.array(capabilitySchema),
+  capabilities: z.array(z.string()),
+  /**
+   * Plain strings, not the `capabilitySchema` enum, even though the backend
+   * now refuses to store a policy for a name outside that set. These are
+   * whatever the deployment's routing policies are named — a row written
+   * before that check existed still reads back — and this list is only ever
+   * displayed or compared against. Parsing it as a closed enum would let one
+   * unexpected name throw, which disables every checkbox in the capability
+   * picker and collapses the API reference into an error box: a display list
+   * taking down the page that documents the platform.
+   */
 });
 export type GatewayInfo = z.infer<typeof gatewayInfoSchema>;
-
-/** Placed in the Authorization header, verbatim. */
-export function bearerHeader(plaintext: string): string {
-  return `Authorization: Bearer ${plaintext}`;
-}
 
 /**
  * The snippets shown beside a newly issued key.

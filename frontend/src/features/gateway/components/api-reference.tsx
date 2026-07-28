@@ -4,7 +4,6 @@ import Link from 'next/link';
 
 import { Badge } from '@/components/ui/badge';
 import { CodeBlock } from '@/components/composed/code-block';
-import { ErrorState } from '@/components/composed/error-state';
 import { useGatewayInfo } from '@/features/gateway/hooks/use-gateway';
 
 /**
@@ -24,16 +23,34 @@ import { useGatewayInfo } from '@/features/gateway/hooks/use-gateway';
 export function ApiReference() {
   const { data, isLoading, error, refetch } = useGatewayInfo();
 
-  if (error) {
-    return <ErrorState error={error} onRetry={() => void refetch()} />;
-  }
-
   const baseUrl = data?.base_url ?? 'https://<gateway>';
   const capabilities = data?.capabilities ?? [];
   const sample = capabilities[0] ?? 'chat';
 
   return (
     <div className="space-y-8">
+      {/* An inline notice, not an early return. Only the origin and the
+          capability badges come from the network; the header format, the
+          capability convention, the request fields and the error table are the
+          contract itself, and §4.4 traded `/openapi.json` away for them. They
+          must not disappear because one call failed. */}
+      {error ? (
+        <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+          <p className="text-sm">
+            The live endpoint and capability list could not be loaded, so the
+            origin below is a placeholder. Everything else on this page is
+            accurate.
+          </p>
+          <button
+            type="button"
+            onClick={() => void refetch()}
+            className="text-sm underline"
+          >
+            Try again
+          </button>
+        </div>
+      ) : null}
+
       <section className="space-y-3">
         <h2 className="font-heading text-base font-semibold">Endpoint</h2>
         <p className="text-sm text-muted-foreground">
@@ -131,10 +148,12 @@ export function ApiReference() {
       <section className="space-y-3">
         <h2 className="font-heading text-base font-semibold">Errors</h2>
         <p className="text-sm text-muted-foreground">
-          Every failure carries{' '}
+          Every failure the platform raises carries{' '}
           <code>{'{"error": {"code": "...", "message": "..."}}'}</code>. Branch
-          on the code, not the status: two different conditions share 429 and
-          need different handling.
+          on the code rather than the status: two different conditions share
+          429, and two share 403, and each pair needs different handling. The
+          one exception is a request the schema rejects before any of this runs
+          — see 422 below, which has the framework&apos;s shape instead.
         </p>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -162,6 +181,26 @@ export function ApiReference() {
                 <td>
                   The key is valid but was not issued for the capability you
                   asked for. Reissue or edit the key; retrying will not help.
+                </td>
+              </tr>
+              <tr>
+                <td>403</td>
+                <td className="font-mono text-xs">country_not_allowed</td>
+                <td>
+                  The request came from outside the countries this deployment
+                  accepts. Nothing about the key is wrong, so reissuing it
+                  changes nothing — this is the other 403, and the reason to
+                  read the code rather than the status.
+                </td>
+              </tr>
+              <tr>
+                <td>422</td>
+                <td className="font-mono text-xs">—</td>
+                <td>
+                  The request body did not match the schema. Raised by the
+                  framework before the platform sees it, so this one carries{' '}
+                  <code>{'{"detail": [...]}'}</code> rather than the envelope
+                  above. A missing <code>messages</code> array looks like this.
                 </td>
               </tr>
               <tr>

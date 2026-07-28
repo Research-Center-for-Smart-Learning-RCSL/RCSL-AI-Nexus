@@ -96,6 +96,10 @@ export function CreateApiKeyDialog({
     setPlaintext(null);
     setAcknowledged(false);
     form.reset();
+    // The mutation outlives the dialog's own state. Without this a rejected
+    // issue leaves its error banner above a pristine form the next time the
+    // dialog opens, reporting a refusal of something that was never submitted.
+    issue.reset();
   }
 
   return (

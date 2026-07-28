@@ -16,6 +16,7 @@ See docs/ARCHITECTURE.md section 2.4.
 from __future__ import annotations
 
 from app.domain.entities.actor import Actor, Scope
+from app.domain.entities.capability import KNOWN_CAPABILITIES
 from app.domain.entities.routing_policy import RoutingCandidate, RoutingPolicy
 from app.domain.exceptions import ModelNotFoundError, ModelStateConflictError
 from app.domain.ports.repositories import ModelRepositoryPort, RoutingPolicyRepositoryPort
@@ -57,6 +58,17 @@ class ManageRoutingPolicies:
         operator writing the policy is the one who can fix a typo.
         """
         self._authz.require(actor, Scope.ROUTING_WRITE)
+
+        # The same set `ManageApiKeys` checks issued capabilities against. The
+        # two write paths disagreed: a policy for `chatt` stored and audited
+        # cleanly, while a key for `chatt` was refused as an unknown
+        # capability — so nothing could ever route to it, and it was advertised
+        # as servable by `GET /v1/models` to every caller.
+        if capability not in KNOWN_CAPABILITIES:
+            raise ModelStateConflictError(
+                detail=f"unknown capability {capability!r}; expected one of "
+                f"{sorted(KNOWN_CAPABILITIES)}"
+            )
 
         if not candidates:
             raise ModelStateConflictError(detail=f"policy {capability} has no candidates")

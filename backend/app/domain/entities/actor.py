@@ -78,11 +78,14 @@ class Actor:
     """
 
     allowed_capabilities: frozenset[str] | None = None
-    """Which capabilities this credential may invoke, or None for none.
+    """Which capabilities this credential may invoke. `None` is unrestricted;
+    an empty set permits nothing.
 
-    `None` means "not restricted by capability" and belongs to a person on an
-    admin entrance, whose reach is decided by `scopes` alone. A set belongs to
-    an API key and is the list it was issued with.
+    `None` belongs to a person on an admin entrance, whose reach is decided by
+    `scopes` alone. A set belongs to an API key and is the list it was issued
+    with. The two ends are worth stating explicitly because they read alike and
+    mean opposite things: `may_use` returns True for `None` and False for
+    every capability when the set is empty.
 
     Separate from `scopes` because the two answer different questions.
     `Scope.CHAT_USE` answers "may this caller reach inference at all", and it

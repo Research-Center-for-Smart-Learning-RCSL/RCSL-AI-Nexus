@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CheckIcon, CopyIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -24,12 +24,23 @@ export function CodeBlock({
   label?: string;
 }) {
   const [copied, setCopied] = useState(false);
+  // Held so each copy restarts the two seconds rather than inheriting what was
+  // left of the previous one, and so the dialog this usually sits in can be
+  // dismissed inside that window without the timer firing on a dead component.
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, []);
 
   async function copy() {
     try {
       await navigator.clipboard.writeText(code);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       // Clipboard access can be denied; the text is selectable on screen.
       setCopied(false);
