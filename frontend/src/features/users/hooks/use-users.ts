@@ -22,8 +22,14 @@ export const userKeys = {
   list: () => [...userKeys.all, 'list'] as const,
 };
 
-export function useUsers() {
-  return useQuery({ queryKey: userKeys.list(), queryFn: listUsers });
+/**
+ * `enabled` exists because listing users needs `user:read`, which only an
+ * administrator holds. The API key dialog offers an owner picker to
+ * administrators and must not fire this for a member, whose own dialog works
+ * perfectly well without it and would collect a 403 for nothing.
+ */
+export function useUsers({ enabled = true }: { enabled?: boolean } = {}) {
+  return useQuery({ queryKey: userKeys.list(), queryFn: listUsers, enabled });
 }
 
 function useInvalidateUsers() {

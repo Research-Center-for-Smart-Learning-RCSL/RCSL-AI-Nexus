@@ -452,6 +452,23 @@ class IssuedApiKeyResponse(BaseModel):
     """Present in this response and in no other, ever."""
 
 
+# --- gateway information -------------------------------------------------
+
+
+class GatewayInfoResponse(BaseModel):
+    """What the UI needs in order to explain how to use a key."""
+
+    base_url: str
+    """Origin of the inference API, without a trailing slash. From
+    configuration, because the admin entrance answering this request is on a
+    different host from the one being described."""
+
+    capabilities: list[str]
+    """Capability names a routing policy currently serves, which is what the
+    `model` field of a request takes. A capability absent here can be issued
+    on a key but will answer `no_available_model` until a policy names it."""
+
+
 # --- routing policies ----------------------------------------------------
 
 

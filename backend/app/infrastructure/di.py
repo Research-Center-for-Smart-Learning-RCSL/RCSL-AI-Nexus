@@ -47,6 +47,7 @@ from app.application.use_cases.authenticate_local import AuthenticateLocal
 from app.application.use_cases.bootstrap_first_admin import BootstrapFirstAdmin
 from app.application.use_cases.download_model import DownloadModel
 from app.application.use_cases.issue_invitation import IssueInvitation
+from app.application.use_cases.list_capabilities import ListCapabilities
 from app.application.use_cases.manage_api_keys import ManageApiKeys
 from app.application.use_cases.manage_models import ManageModels
 from app.application.use_cases.manage_nodes import ManageNodes
@@ -318,6 +319,17 @@ def build_route_chat_request(
     )
 
 
+def build_list_capabilities(request: Request, session: SessionDep) -> ListCapabilities:
+    """Unscoped: routing policies are platform-global, like models and nodes.
+    Built for both entrances, since the gateway answers `GET /v1/models` from
+    the same use case the management UI reads."""
+    return ListCapabilities(
+        policies=PostgresRoutingPolicyRepository(session),
+        authz=request.app.state.authz,
+    )
+
+
+ListCapabilitiesDep = Annotated[ListCapabilities, Depends(build_list_capabilities)]
 RouteChatRequestDep = Annotated[RouteChatRequest, Depends(build_route_chat_request)]
 MemoryBudgetDep = Annotated[MemoryBudgetService, Depends(MemoryBudgetService)]
 

@@ -121,3 +121,27 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: list[Choice]
     usage: Usage
+
+
+class ModelCard(BaseModel):
+    """One entry of `GET /v1/models`.
+
+    `id` is a capability, which is what this platform's `model` field takes.
+    The shape is OpenAI's because client libraries parse it; the contents are
+    ours, and deliberately carry nothing about which model, runtime or node
+    serves the capability. That is the whole point of routing by capability,
+    and it is also what the gateway's error messages are careful not to leak.
+    """
+
+    id: str
+    object: Literal["model"] = "model"
+    created: int = 0
+    """Zero rather than a timestamp. A capability has no creation date, and
+    inventing one from the policy's would make it look like a version."""
+
+    owned_by: str = "rcsl-ai-nexus"
+
+
+class ModelListResponse(BaseModel):
+    object: Literal["list"] = "list"
+    data: list[ModelCard]

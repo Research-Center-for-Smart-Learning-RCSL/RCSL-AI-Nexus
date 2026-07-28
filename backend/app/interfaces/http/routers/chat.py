@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.domain.entities.actor import Actor
 from app.domain.entities.chat import Message, MessageRole
-from app.infrastructure.di import RouteChatRequestDep
+from app.infrastructure.di import ListCapabilitiesDep, RouteChatRequestDep
 from app.interfaces.http import sse
 from app.interfaces.http.middleware.api_key_auth import authenticate_api_key
 from app.interfaces.http.schemas.chat_schemas import (
@@ -25,12 +25,37 @@ from app.interfaces.http.schemas.chat_schemas import (
     ChatCompletionResponse,
     Choice,
     CompletionMessage,
+    ModelCard,
+    ModelListResponse,
     Usage,
 )
 
 router = APIRouter(prefix="/v1", tags=["inference"])
 
 ActorDep = Annotated[Actor, Depends(authenticate_api_key)]
+
+
+@router.get("/models")
+async def list_models(
+    actor: ActorDep,
+    capabilities: ListCapabilitiesDep,
+) -> ModelListResponse:
+    """What to put in the `model` field.
+
+    Every OpenAI-compatible client library calls this on startup, and until it
+    existed they all got a 404 from a gateway that mounts `/v1/chat/completions`
+    and nothing else. It matters more here than on a conventional provider,
+    because the field takes a *capability* rather than a model name — a
+    convention nobody can guess and, with `/openapi.json` disabled in
+    production, nothing else on the wire would have told them.
+
+    Authenticated like any other call, so it is subject to the same key
+    checks, source restriction and rate limit. An unauthenticated caller
+    learning what a deployment serves is a free reconnaissance answer.
+    """
+    return ModelListResponse(
+        data=[ModelCard(id=name) for name in await capabilities.execute(actor)]
+    )
 
 
 def _to_domain(request: ChatCompletionRequest) -> list[Message]:
@@ -51,9 +76,7 @@ async def chat_completions(
     messages = _to_domain(body)
 
     if body.stream:
-        generation = use_case.execute(
-            actor, body.model, messages, body.max_tokens, body.think
-        )
+        generation = use_case.execute(actor, body.model, messages, body.max_tokens, body.think)
         first = await sse.prime(generation)
         return sse.streaming_response(
             completion_id=completion_id,

@@ -101,7 +101,12 @@ async def _seed(plaintext_holder: dict) -> None:
                 digest=issued.digest,
                 name="e2e",
                 owner_id="u1",
-                scopes=frozenset({"chat"}),
+                # Broad on purpose. The gateway now refuses a capability the
+                # key was not issued for, so a fixture restricted to `chat`
+                # could not reach the "nothing serves this" path at all: the
+                # refusal would arrive first and hide it. Tests about the
+                # capability list mint their own narrow keys.
+                scopes=frozenset({"chat", "code", "vision"}),
                 expires_at=datetime.now(UTC) + timedelta(days=1),
             )
         )
@@ -128,21 +133,24 @@ async def _seed(plaintext_holder: dict) -> None:
                 resource_profile=ResourceProfile(memory_gb=8.0, context_length=32768),
             )
         )
-        await PostgresRoutingPolicyRepository(session).save(
-            RoutingPolicy(
-                capability="chat",
-                candidates=(
-                    RoutingCandidate(
-                        model_alias="primary",
-                        priority=100,
-                        require=Requirement(
-                            node_status=frozenset({NodeStatus.ONLINE}),
-                            model_state=frozenset({ModelState.LOADED}),
+        # Two capabilities served by the same model, which is what lets a test
+        # tell "this key may not ask for that" apart from "nothing serves it".
+        for capability in ("chat", "code"):
+            await PostgresRoutingPolicyRepository(session).save(
+                RoutingPolicy(
+                    capability=capability,
+                    candidates=(
+                        RoutingCandidate(
+                            model_alias="primary",
+                            priority=100,
+                            require=Requirement(
+                                node_status=frozenset({NodeStatus.ONLINE}),
+                                model_state=frozenset({ModelState.LOADED}),
+                            ),
                         ),
                     ),
-                ),
+                )
             )
-        )
         await session.commit()
     await engine.dispose()
 
@@ -319,6 +327,86 @@ async def test_a_key_without_the_chat_scope_is_refused(client) -> None:
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "not_authorized"
+
+
+async def test_models_lists_the_capabilities_this_key_can_call(client) -> None:
+    """Every OpenAI client library calls this on startup and used to get a 404.
+    It answers with capabilities, which is what the `model` field takes."""
+    test_client, _, _ = client
+
+    response = test_client.get("/v1/models")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["object"] == "list"
+    # `vision` is in the key's list but no policy serves it, so it is absent:
+    # the list answers "what can I call", not "what was I issued".
+    assert [entry["id"] for entry in body["data"]] == ["chat", "code"]
+    assert all(entry["object"] == "model" for entry in body["data"])
+    # Nothing about which model, runtime or node is behind the capability.
+    assert "qwen" not in json.dumps(body).lower()
+    assert "primary" not in json.dumps(body)
+
+
+async def test_models_is_narrowed_to_the_calling_key(client) -> None:
+    test_client, _, _ = client
+    token = await issue_key(scopes=frozenset({"code"}))
+    test_client.headers["Authorization"] = f"Bearer {token}"
+
+    response = test_client.get("/v1/models")
+
+    assert response.status_code == 200
+    assert [entry["id"] for entry in response.json()["data"]] == ["code"]
+
+
+async def test_models_requires_a_key(client) -> None:
+    """Otherwise what a deployment serves is a free answer to anyone asking."""
+    test_client, _, _ = client
+    del test_client.headers["Authorization"]
+
+    assert test_client.get("/v1/models").status_code == 401
+
+
+async def test_a_key_cannot_reach_a_capability_it_was_not_issued_for(client) -> None:
+    """The stored capability list decided only whether a key worked at all,
+    never which capability it could ask for, so a key issued for `chat` reached
+    every capability the deployment could route. The issuing form presents the
+    field as what the key may do.
+    """
+    test_client, _, _ = client
+    token = await issue_key(scopes=frozenset({"chat"}))
+    test_client.headers["Authorization"] = f"Bearer {token}"
+
+    response = test_client.post(
+        "/v1/chat/completions",
+        json={"model": "code", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "not_authorized"
+    # Not reported as a capacity problem: this one the caller can fix.
+    assert response.json()["error"]["code"] != "no_available_model"
+
+
+async def test_a_key_issued_for_one_capability_can_use_it(client) -> None:
+    """Only `chat` mapped onto a scope, so a key issued for `code` alone held
+    no scopes and was refused everything — a choice the form offered and the
+    gateway could not honour."""
+    test_client, _, _ = client
+    token = await issue_key(scopes=frozenset({"code"}))
+    test_client.headers["Authorization"] = f"Bearer {token}"
+
+    allowed = test_client.post(
+        "/v1/chat/completions",
+        json={"model": "code", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert allowed.status_code == 200, allowed.text
+
+    refused = test_client.post(
+        "/v1/chat/completions",
+        json={"model": "chat", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert refused.status_code == 403
 
 
 async def test_streaming_usage_is_persisted(client) -> None:

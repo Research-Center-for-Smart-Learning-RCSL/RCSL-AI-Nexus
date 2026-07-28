@@ -292,6 +292,117 @@ def test_an_expiry_in_the_past_is_refused(admin: TestClient) -> None:
     assert refused.status_code == 409
 
 
+def test_the_gateway_endpoint_tells_the_ui_where_to_send_a_key(admin: TestClient) -> None:
+    """A key with no endpoint to send it to is not a working key, and the UI
+    cannot read the origin off its own request: it is served from the admin
+    host, not the one being described."""
+    info = admin.get("/admin/gateway")
+
+    assert info.status_code == 200, info.text
+    assert info.json()["base_url"].startswith("http")
+    assert not info.json()["base_url"].endswith("/")
+    # Nothing is routable until a policy exists, which is the honest answer
+    # rather than the five names the issuing form knows how to spell.
+    assert info.json()["capabilities"] == []
+
+    admin.post(
+        "/admin/models",
+        json={
+            "alias": "chat-main",
+            "ref": "library/qwen2.5:7b",
+            "runtime": "ollama",
+            "node_id": NODE_ID,
+            "capabilities": ["chat"],
+            "resource_profile": {"memory_gb": 8.0, "context_length": 32768},
+        },
+    )
+    admin.put(
+        "/admin/routing-policies/chat",
+        json={"candidates": [{"model_alias": "chat-main", "priority": 1}]},
+    )
+
+    assert admin.get("/admin/gateway").json()["capabilities"] == ["chat"]
+
+
+def _issue_key(admin: TestClient, **overrides: object) -> dict:
+    users = admin.get("/admin/users").json()
+    body: dict[str, object] = {
+        "name": "editable",
+        "owner_id": users[0]["id"],
+        "scopes": ["chat"],
+        "rate_limit_rpm": 60,
+        "quota_tokens_per_day": 100000,
+        "allowed_cidrs": [],
+        "expires_at": "2027-01-01T00:00:00Z",
+    }
+    body.update(overrides)
+    issued = admin.post("/admin/api-keys", json=body)
+    assert issued.status_code == 201, issued.text
+    return issued.json()["key"]
+
+
+def test_a_key_can_be_edited_with_what_the_form_sends(admin: TestClient) -> None:
+    """The PATCH verb had no caller: the endpoint, the client function and the
+    hook all existed, and no component ever reached them, so this contract had
+    never been exercised over HTTP at all.
+
+    The payload here is the edit dialog's, field for field. In particular the
+    expiry is date-only, because the control is `<input type="date">` and can
+    emit nothing else — the same shape that made issuing a key a bare 500
+    until `UtcDatetime` was applied on the create path.
+    """
+    key_id = _issue_key(admin)["key_id"]
+
+    edited = admin.patch(
+        f"/admin/api-keys/{key_id}",
+        json={
+            "name": "renamed",
+            "scopes": ["chat", "code"],
+            "rate_limit_rpm": 30,
+            "quota_tokens_per_day": 5000,
+            "allowed_cidrs": ["10.0.0.7/24", "2001:db8::/32"],
+            "expires_at": "2026-12-31",
+        },
+    )
+
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["name"] == "renamed"
+    assert sorted(edited.json()["scopes"]) == ["chat", "code"]
+    assert edited.json()["rate_limit_rpm"] == 30
+    # Host bits are accepted as the network they mean, rather than refused.
+    assert edited.json()["allowed_cidrs"] == ["10.0.0.0/24", "2001:db8::/32"]
+    # The response must still parse as a key: the frontend re-parses it with
+    # the same schema it uses for the list, which requires `created_at`.
+    assert edited.json()["created_at"] is not None
+    assert "plaintext" not in edited.json()
+
+    # And it is what a reload shows, not just what the write echoed back.
+    listed = next(k for k in admin.get("/admin/api-keys").json() if k["key_id"] == key_id)
+    assert listed["name"] == "renamed"
+    assert listed["rate_limit_rpm"] == 30
+
+
+def test_editing_cannot_mint_an_unmetered_key(admin: TestClient) -> None:
+    """The create path refuses zero; the edit path is the other way to reach
+    the same column, and the gateway reads `rate_limit_rpm <= 0` as no limit."""
+    key_id = _issue_key(admin)["key_id"]
+
+    path = f"/admin/api-keys/{key_id}"
+
+    assert admin.patch(path, json={"rate_limit_rpm": 0}).status_code == 422
+    assert admin.patch(path, json={"quota_tokens_per_day": 0}).status_code == 422
+
+
+def test_editing_a_revoked_key_is_refused(admin: TestClient) -> None:
+    """Otherwise the result reads as active in the table and is not."""
+    key_id = _issue_key(admin)["key_id"]
+    assert admin.post(f"/admin/api-keys/{key_id}/revoke").status_code == 204
+
+    refused = admin.patch(f"/admin/api-keys/{key_id}", json={"name": "again"})
+
+    assert refused.status_code == 409
+
+
 def test_the_only_administrator_cannot_delete_themselves(admin: TestClient) -> None:
     """Two guards overlap here and both matter: self-deletion, and the last
     enabled administrator. Either one alone leaves a reachable way to lock

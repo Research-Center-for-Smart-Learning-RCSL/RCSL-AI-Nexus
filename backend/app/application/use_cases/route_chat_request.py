@@ -30,7 +30,7 @@ from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.chat import CompletionChunk, Message
 from app.domain.entities.model import Model, RuntimeKind
 from app.domain.entities.usage import UsageRecord
-from app.domain.exceptions import ContextTooLongError, NoAvailableModelError
+from app.domain.exceptions import ContextTooLongError, NoAvailableModelError, NotAuthorizedError
 from app.domain.ports.infrastructure_ports import ConcurrencyLimiterPort
 from app.domain.ports.model_runtime_port import ModelRuntimePort
 from app.domain.ports.repositories import (
@@ -111,6 +111,15 @@ class RouteChatRequest:
         for less work, not more.
         """
         self._authz.require(actor, self.required_scope)
+
+        # Which capability, as opposed to whether inference at all. An API key
+        # carries the list it was issued with; a person on an admin entrance
+        # carries None and is unrestricted here, their reach being decided by
+        # role. Refused rather than routed, and deliberately not folded into
+        # the "no available model" answer below: the caller can fix this one,
+        # and telling them it is a capacity problem sends them nowhere.
+        if not actor.may_use(capability):
+            raise NotAuthorizedError(detail=f"key {actor.display} is not issued for {capability}")
 
         # A ceiling on input as well as output. Context cost grows faster than
         # linearly on unified memory, so a single enormous prompt is a

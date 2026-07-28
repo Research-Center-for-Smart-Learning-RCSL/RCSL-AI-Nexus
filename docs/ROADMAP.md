@@ -45,9 +45,9 @@ carries the checked control-by-control state.
 - [x] `adapters/runtime/ollama_adapter.py` plus `validation.py` for model reference parsing
 - [x] `adapters/persistence/`: Postgres implementations, ORM models kept separate from entities
 - [x] `adapters/authz`, `adapters/audit`, `adapters/cache`, `adapters/crypto`, `adapters/session`
-- [x] `application/use_cases`: `RouteChatRequest`, `AuthenticateLocal`, `AcceptInvitation`, `IssueInvitation`, `ManageOwnAccount`, `BootstrapFirstAdmin`, `ManageModels`, `DownloadModel`, `ManageApiKeys`, `ManageUsers`, `ManageRoutingPolicies`, `ReadDashboard`
+- [x] `application/use_cases`: `RouteChatRequest`, `AuthenticateLocal`, `AcceptInvitation`, `IssueInvitation`, `ManageOwnAccount`, `BootstrapFirstAdmin`, `ManageModels`, `DownloadModel`, `ManageApiKeys`, `ManageUsers`, `ManageRoutingPolicies`, `ListCapabilities`, `ReadDashboard`
 - [x] `interfaces/http/errors.py`: single exception handler, OpenAI envelope on the gateway, plain shape on admin
-- [x] Routers: `chat`, `admin_chat`, `models`, `routing_policies`, `api_keys`, `users`, `auth`, `me`, `invitations`, `jobs`, `dashboard`, `health`
+- [x] Routers: `chat` (`/v1/chat/completions` and `/v1/models`), `admin_chat`, `models`, `routing_policies`, `api_keys`, `gateway_info`, `users`, `auth`, `me`, `invitations`, `jobs`, `dashboard`, `health`
 - [x] `interfaces/http/sse.py`: one framing implementation, so the gateway and the chat panel cannot drift into two envelope shapes
 - [x] **Three ASGI entry points**: `main_gateway`, `main_admin_tailnet`, `main_admin_public`, each installing its own identity resolver
 - [x] Streaming contract implemented as specified: concurrency slot spans the generator, `aclosing()` at every consumer, cancellation propagates to the adapter, usage recorded in `finally`
@@ -73,7 +73,8 @@ carries the checked control-by-control state.
 - [x] `features/chat`: SSE consumption with abort on unmount, terminal error frames surfaced
 - [x] `features/users`: list, invite (copyable single-use link), role change
 - [x] `features/auth`: two-step login, invitation acceptance with TOTP QR and recovery codes, password change
-- [x] `features/api-keys`
+- [x] `features/api-keys`: issue, edit, revoke, with actions gated on the scopes the backend actually grants so a member manages their own keys. The edit dialog closed a gap where `PATCH /api-keys/{key_id}`, its client function and its hook all existed with no component reaching any of them ([PROGRESS.md](./PROGRESS.md) 2026-07-28)
+- [x] `features/gateway` and the `/api-docs` page: the base URL, the capability convention, paste-ready snippets shown at issue, and the error code table. This is the "public API documentation written separately" that [security.md](./architecture/security.md) §4.4 promises in exchange for disabling `/openapi.json` and `/docs` on the gateway — a trade that was only a trade once the documentation existed
 - [x] `features/dashboard`: static data for now
 - [x] Markdown rendering sanitised, raw HTML disabled
 - [x] Vitest unit coverage of the logic where a defect is a security defect: `safe-redirect` (open redirect), the chat SSE schema and reader (envelope parsing, error and truncation frames), `api-client` (CSRF header, 401 handling, no `Authorization`), and the password schema
@@ -114,7 +115,7 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 - [x] Trusted-proxy client address resolution using the shared secret header, not peer IP
 - [x] Country filter on **both** the gateway and the public admin entrance
 - [x] Per-key CIDR allowlists
-- [x] API keys: HMAC with pepper, random `key_id` lookup, scopes, mandatory expiry, immediate revocation
+- [x] API keys: HMAC with pepper, random `key_id` lookup, scopes, mandatory expiry, immediate revocation. The capability list is enforced as of 2026-07-28 and was not before: `RouteChatRequest` checked `chat:use` and then routed on whatever the request named, so a key issued for `chat` reached every capability the deployment served, while a key issued for `code` alone mapped to no scope and was refused everything. Which capability now travels on `Actor.allowed_capabilities` and is checked where the capability is read; the scope table stays hardcoded so no stored list can promote a key into the control plane ([PROGRESS.md](./PROGRESS.md) 2026-07-28)
 - [x] Local accounts: argon2id, zxcvbn strength check, no user enumeration, escalating rate limits rather than hard lockout
 - [x] TOTP mandatory at enrolment, with counter replay prevention and single-use recovery codes
 - [x] Invitation and reset links: single use, hashed at rest, expiring; the platform never transmits a password

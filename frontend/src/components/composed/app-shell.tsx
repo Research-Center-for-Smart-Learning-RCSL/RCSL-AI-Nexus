@@ -19,6 +19,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   ActivityIcon,
+  BookOpenIcon,
   BoxIcon,
   GaugeIcon,
   KeyIcon,
@@ -93,6 +94,13 @@ const NAV: NavItem[] = [
     href: '/api-keys',
     label: 'API keys',
     icon: <KeyIcon className="size-4" />,
+  },
+  {
+    // Not adminOnly, for the same reason API keys is not: the people who need
+    // to know how to call the gateway are the ones holding a key.
+    href: '/api-docs',
+    label: 'API',
+    icon: <BookOpenIcon className="size-4" />,
   },
   {
     href: '/users',

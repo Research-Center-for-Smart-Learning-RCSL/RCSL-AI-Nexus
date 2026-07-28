@@ -77,5 +77,29 @@ class Actor:
     convention would be silently wrong the first time `display` changed.
     """
 
+    allowed_capabilities: frozenset[str] | None = None
+    """Which capabilities this credential may invoke, or None for none.
+
+    `None` means "not restricted by capability" and belongs to a person on an
+    admin entrance, whose reach is decided by `scopes` alone. A set belongs to
+    an API key and is the list it was issued with.
+
+    Separate from `scopes` because the two answer different questions.
+    `Scope.CHAT_USE` answers "may this caller reach inference at all", and it
+    is drawn from a hardcoded table so no database row can widen it. Which
+    *capability* is then asked for is data, chosen per request, and it has no
+    scope of its own — mapping capabilities onto scopes one-for-one would put
+    the stored list back in charge of the permission set, which §4.2 exists to
+    prevent. So the list travels here and is checked where the capability is
+    read. Empty means the key may reach nothing, which is what a key issued
+    with no capabilities should be.
+    """
+
     def has(self, scope: Scope) -> bool:
         return scope in self.scopes
+
+    def may_use(self, capability: str) -> bool:
+        """None is unrestricted; a set is exhaustive."""
+        if self.allowed_capabilities is None:
+            return True
+        return capability in self.allowed_capabilities

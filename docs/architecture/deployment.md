@@ -394,6 +394,7 @@ Non-secret values are environment variables; secrets are mounted files read thro
 | `AUTH_MODE` | `tailnet` / `local` / `dev` | `dev` refuses to start when `ENV=production` |
 | `TAILNET_IP` | `100.x.y.z` | Used for host-side port binding |
 | `PROXY_HOSTNAME` | `api.nexus.rcsl.online` | |
+| `GATEWAY_BASE_URL` | empty | Where callers reach the inference API, shown in the management UI beside a newly issued key. Empty derives `https://` plus `PROXY_HOSTNAME`; set it only when the public origin differs. It cannot be read off the request, because the entrance answering is the admin one, not the one being described |
 | `DATABASE_URL` | `postgresql+asyncpg://...` | Not an environment variable: mounted as the `database_url` secret, a different least-privilege account per service (§6) |
 | `REDIS_URL` | `redis://redis:6379/0` | The password is a separate `redis_password` secret |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Runtime on the host |

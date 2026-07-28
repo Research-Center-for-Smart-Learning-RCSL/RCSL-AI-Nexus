@@ -9,7 +9,10 @@ import {
   revokeApiKey,
   updateApiKey,
 } from '@/features/api-keys/api';
-import type { CreateApiKeyInput } from '@/features/api-keys/schema';
+import type {
+  CreateApiKeyPayload,
+  UpdateApiKeyPayload,
+} from '@/features/api-keys/schema';
 import { describeError } from '@/components/composed/error-state';
 
 export const apiKeyKeys = {
@@ -29,7 +32,7 @@ function useInvalidateApiKeys() {
 export function useIssueApiKey() {
   const invalidate = useInvalidateApiKeys();
   return useMutation({
-    mutationFn: (input: CreateApiKeyInput) => issueApiKey(input),
+    mutationFn: (input: CreateApiKeyPayload) => issueApiKey(input),
     onSuccess: async () => {
       await invalidate();
     },
@@ -40,7 +43,7 @@ export function useIssueApiKey() {
 export function useUpdateApiKey(keyId: string) {
   const invalidate = useInvalidateApiKeys();
   return useMutation({
-    mutationFn: (input: Partial<CreateApiKeyInput>) =>
+    mutationFn: (input: Partial<UpdateApiKeyPayload>) =>
       updateApiKey(keyId, input),
     onSuccess: async () => {
       await invalidate();

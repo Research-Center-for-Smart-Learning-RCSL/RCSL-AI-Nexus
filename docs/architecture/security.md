@@ -328,7 +328,7 @@ Bound metadata:
 
 | Field | Purpose |
 |---|---|
-| `scopes` | Allowed capabilities, minimal by default |
+| `scopes` | Allowed capabilities, minimal by default. Carried onto `Actor.allowed_capabilities` and checked against the capability each request names; a key is refused, as 403, any capability it does not hold. This description was aspirational until 2026-07-28: the list decided only whether a key worked at all, so a key issued for `chat` reached every capability the deployment served ([PROGRESS.md](../PROGRESS.md) 2026-07-28) |
 | `rate_limit_rpm` | Requests per minute |
 | `quota_tokens_per_day` | Daily token ceiling |
 | `allowed_cidrs` | Source restriction, §4.1(d) |
@@ -372,7 +372,7 @@ The Phase 2 observability stack (Prometheus and Grafana, §13.0) ships the *emis
 - No version numbers in responses; `debug=False`; error bodies never carry stack traces, internal model names, or node addresses. Enforced centrally by the error mapping in [backend.md](./backend.md) §5.
 - Strict CORS allowlist, never `*`. In practice the frontend is same-origin via Next.js rewrites ([frontend.md](./frontend.md) §1), so CORS should not be needed at all; if a configuration seems to require it, that is a signal something is misrouted.
 - Request body size limits, at both nginx and the application.
-- **`/openapi.json` and `/docs` are disabled on the gateway** and served only by the admin applications. Public API documentation is written separately rather than exposing internal schemas.
+- **`/openapi.json` and `/docs` are disabled on the gateway** and served only by the admin applications. Public API documentation is written separately rather than exposing internal schemas. That documentation now exists, as the `/api-docs` page of the management UI: the endpoint, the bearer header, the capability-rather-than-model convention, the request fields and the error code table. Until 2026-07-28 it did not, which made this a trade with nothing on the other side of it — an integrator had no description of the wire contract from any source. The page renders the live base URL and capability list rather than prose, so it cannot describe a deployment other than the one serving it. `GET /v1/models` answers the same question on the wire, for client libraries that ask before a person does.
 
 ## 5. Identity and Authorization
 
@@ -735,7 +735,7 @@ looking for the risk. The state below is checked against the code.
 | Unconditional `Tailscale-*` stripping on the public entrance | `main_admin_public.py` |
 | Network segmentation; nothing published on `0.0.0.0`; `TAILNET_IP` required | `docker-compose.yml` |
 | API keys: HMAC with pepper, `key_id` in the token, mandatory expiry, immediate revocation, staged pepper rotation | `domain/services/api_key_service.py` |
-| Scope enforcement on the inference path | `RouteChatRequest`, `adapters/authz/` |
+| Scope enforcement on the inference path, and the requested capability checked against the key's own list | `RouteChatRequest`, `adapters/authz/` |
 | Per-key CIDR allowlist, and per-key rate limiting | `middleware/api_key_auth.py` |
 | Country filter, refusing to start in production without its database | `middleware/geo_filter.py` |
 | Trusted-proxy resolution with a shared secret | `middleware/client_ip.py` |

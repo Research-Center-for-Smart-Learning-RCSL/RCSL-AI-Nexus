@@ -13,17 +13,27 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Form } from '@/components/ui/form';
-import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { FormField } from '@/components/composed/form-field';
 import { SecretDialog } from '@/components/composed/secret-dialog';
 import { OneTimeSecret } from '@/components/composed/one-time-secret';
 import { describeError } from '@/components/composed/error-state';
-import { capabilitySchema, type Capability } from '@/features/models/schema';
+import { CapabilityPicker } from '@/features/api-keys/components/capability-picker';
+import { useSession } from '@/lib/session';
+import { useUsers } from '@/features/users/hooks/use-users';
+import { IntegrationSnippet } from '@/features/gateway/components/integration-snippet';
 import { useIssueApiKey } from '@/features/api-keys/hooks/use-api-keys';
 import {
   createApiKeySchema,
   defaultExpiry,
   DEFAULT_EXPIRY_DAYS,
+  parseCidrText,
   type CreateApiKeyInput,
   type CreateApiKeyValues,
 } from '@/features/api-keys/schema';
@@ -35,12 +45,20 @@ export function CreateApiKeyDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Whose key this is by default: the caller's own. */
   ownerId: string;
 }) {
+  const { isAdmin } = useSession();
   const issue = useIssueApiKey();
+  // `api_key:write_any` is what lets an administrator issue on someone's
+  // behalf, and the endpoint has taken `owner_id` all along. Fetched only for
+  // them, because listing users needs a scope a member does not hold.
+  const owners = useUsers({ enabled: isAdmin && open });
   const [plaintext, setPlaintext] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
-  const [cidrText, setCidrText] = useState('');
+  // Captured at issue rather than read back off the form, which is reset when
+  // the dialog closes and would leave the sample naming the wrong capability.
+  const [issuedCapability, setIssuedCapability] = useState('chat');
 
   const form = useForm<CreateApiKeyInput, unknown, CreateApiKeyValues>({
     resolver: zodResolver(createApiKeySchema),
@@ -49,7 +67,7 @@ export function CreateApiKeyDialog({
       scopes: ['chat'],
       rate_limit_rpm: 60,
       quota_tokens_per_day: 1_000_000,
-      allowed_cidrs: [],
+      allowed_cidrs_text: '',
       expires_at: defaultExpiry(),
       owner_id: ownerId,
     },
@@ -58,11 +76,18 @@ export function CreateApiKeyDialog({
   const scopes = form.watch('scopes');
 
   async function onSubmit(values: CreateApiKeyValues) {
-    const cidrs = cidrText
-      .split(/[\s,]+/)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-    const result = await issue.mutateAsync({ ...values, allowed_cidrs: cidrs });
+    const result = await issue.mutateAsync({
+      name: values.name,
+      owner_id: values.owner_id,
+      scopes: values.scopes,
+      rate_limit_rpm: values.rate_limit_rpm,
+      quota_tokens_per_day: values.quota_tokens_per_day,
+      allowed_cidrs: parseCidrText(values.allowed_cidrs_text),
+      expires_at: values.expires_at,
+    });
+    // The first capability, which is what a one-capability key makes obvious
+    // and what a multi-capability key can reasonably start from.
+    setIssuedCapability(values.scopes[0] ?? 'chat');
     setPlaintext(result.plaintext);
   }
 
@@ -70,7 +95,6 @@ export function CreateApiKeyDialog({
     onOpenChange(false);
     setPlaintext(null);
     setAcknowledged(false);
-    setCidrText('');
     form.reset();
   }
 
@@ -88,20 +112,29 @@ export function CreateApiKeyDialog({
         <DialogHeader>
           <DialogTitle>Issue an API key</DialogTitle>
           <DialogDescription>
-            Scopes are minimal by default. Expiry is required, which is what
-            forces rotation.
+            Capabilities are minimal by default. Expiry is required, which is
+            what forces rotation.
           </DialogDescription>
         </DialogHeader>
 
         {plaintext ? (
           <>
-            <OneTimeSecret
-              title="The key, shown once"
-              description="Only a peppered hash is stored, so this cannot be retrieved later. If it is lost, revoke and issue a new one."
-              values={[plaintext]}
-              acknowledgement="I have saved this key"
-              onAcknowledgedChange={setAcknowledged}
-            />
+            <div className="max-h-[60vh] space-y-5 overflow-y-auto">
+              <OneTimeSecret
+                title="The key, shown once"
+                description="Only a peppered hash is stored, so this cannot be retrieved later. If it is lost, revoke and issue a new one."
+                values={[plaintext]}
+                acknowledgement="I have saved this key"
+                onAcknowledgedChange={setAcknowledged}
+              />
+              {/* Shown here rather than left to documentation, because this is
+                  the only moment the plaintext exists: a snippet the holder
+                  has to come back and fill in is one they fill in wrongly. */}
+              <IntegrationSnippet
+                plaintext={plaintext}
+                capability={issuedCapability}
+              />
+            </div>
             <DialogFooter>
               <Button disabled={!acknowledged} onClick={close}>
                 Done
@@ -124,36 +157,44 @@ export function CreateApiKeyDialog({
                   description="Shown alongside the key id for identification."
                 />
 
-                <div className="space-y-2">
-                  <Label>Scopes</Label>
-                  <div className="flex flex-wrap gap-3">
-                    {capabilitySchema.options.map((option) => (
-                      <label
-                        key={option}
-                        className="flex items-center gap-1.5 text-sm"
+                {isAdmin ? (
+                  <FormField
+                    control={form.control}
+                    name="owner_id"
+                    label="Owner"
+                    description="Who holds this key. Revoke it when they leave; deleting the account takes its keys with it."
+                    render={(field) => (
+                      <Select
+                        value={field.value as string}
+                        onValueChange={(value) => field.onChange(value)}
+                        disabled={owners.isLoading}
                       >
-                        <input
-                          type="checkbox"
-                          checked={scopes.includes(option)}
-                          onChange={(event) => {
-                            const next = event.target.checked
-                              ? [...scopes, option as Capability]
-                              : scopes.filter((scope) => scope !== option);
-                            form.setValue('scopes', next, {
-                              shouldValidate: true,
-                            });
-                          }}
-                        />
-                        {option}
-                      </label>
-                    ))}
-                  </div>
-                  {form.formState.errors.scopes ? (
-                    <p className="text-sm text-destructive">
-                      {form.formState.errors.scopes.message}
-                    </p>
-                  ) : null}
-                </div>
+                        <SelectTrigger className="w-full">
+                          <SelectValue
+                            placeholder={
+                              owners.isLoading ? 'Loading...' : 'Choose an owner'
+                            }
+                          />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(owners.data ?? []).map((user) => (
+                            <SelectItem key={user.id} value={user.id}>
+                              {user.display_name} ({user.login})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                ) : null}
+
+                <CapabilityPicker
+                  value={scopes}
+                  onChange={(next) =>
+                    form.setValue('scopes', next, { shouldValidate: true })
+                  }
+                  error={form.formState.errors.scopes?.message}
+                />
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <FormField
@@ -178,21 +219,27 @@ export function CreateApiKeyDialog({
                   description={`Required. Defaults to ${DEFAULT_EXPIRY_DAYS} days.`}
                 />
 
-                <div className="space-y-2">
-                  <Label htmlFor="allowed-cidrs">Allowed source CIDRs</Label>
-                  <textarea
-                    id="allowed-cidrs"
-                    value={cidrText}
-                    onChange={(event) => setCidrText(event.target.value)}
-                    rows={2}
-                    placeholder="203.0.113.0/24"
-                    className="w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                  />
-                  <p className="text-sm text-muted-foreground">
-                    One per line or comma separated. Leave empty for no source
-                    restriction.
-                  </p>
-                </div>
+                {/* A form field rather than local state. Held separately, the
+                    text was assembled after validation had already run against
+                    an array the form never contained, so the CIDR rule beside
+                    it could not fire and a typo surfaced as a server error. */}
+                <FormField
+                  control={form.control}
+                  name="allowed_cidrs_text"
+                  label="Allowed source CIDRs"
+                  description="One per line or comma separated. Leave empty for no source restriction."
+                  render={(field) => (
+                    <textarea
+                      id="allowed-cidrs"
+                      value={(field.value as string) ?? ''}
+                      onChange={(event) => field.onChange(event.target.value)}
+                      onBlur={field.onBlur}
+                      rows={2}
+                      placeholder="203.0.113.0/24"
+                      className="w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                    />
+                  )}
+                />
 
                 {issue.error ? (
                   <p role="alert" className="text-sm text-destructive">
