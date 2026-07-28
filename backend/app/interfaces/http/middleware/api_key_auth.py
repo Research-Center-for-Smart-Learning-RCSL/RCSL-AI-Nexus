@@ -33,7 +33,22 @@ from app.interfaces.http.middleware.client_ip import resolve_client_ip
 
 BEARER = "bearer "
 
-_CAPABILITY_SCOPES: dict[str, Scope] = {"chat": Scope.CHAT_USE}
+_CAPABILITY_SCOPES: dict[str, Scope] = {
+    "chat": Scope.CHAT_USE,
+    "code": Scope.CHAT_USE,
+    "vision": Scope.CHAT_USE,
+    "embedding": Scope.CHAT_USE,
+    "rerank": Scope.CHAT_USE,
+}
+"""Every inference capability grants the same scope, because there is one
+inference use case and `CHAT_USE` is the permission to reach it.
+
+Only `chat` was listed before, which made the other four inert: a key issued
+for `code` alone mapped to no scopes at all and was refused every request,
+while the form that issued it presented the choice as meaningful. The
+capability actually asked for is enforced separately, from
+`Actor.allowed_capabilities`.
+"""
 
 
 def _scopes_for(key: ApiKey) -> frozenset[Scope]:
@@ -129,4 +144,8 @@ async def authenticate_api_key(
         # The key's tenant, so usage is attributed to it and, once the knowledge
         # base exists, a key can only ever reach its own tenant's data.
         tenant_id=key.tenant_id,
+        # What the key was issued for, checked against the capability each
+        # request names. Without it the list was decorative: any valid key
+        # reached every capability the deployment could route.
+        allowed_capabilities=key.scopes,
     )

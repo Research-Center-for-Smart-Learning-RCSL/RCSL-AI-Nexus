@@ -15,6 +15,111 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-07-28
+
+### The key was issuable and unusable
+
+The question asked was whether the self-service path works: someone reads the
+site, issues a key, and wires it into their own application. Key *management*
+turned out to be in good shape. Everything after the clipboard was missing.
+
+The holder was handed a bare `nx_live_...` and nothing else. **No base URL
+appeared anywhere in the UI** — `PROXY_HOSTNAME` existed in configuration and
+was never shown. **No documentation existed either**: §4.4 disables
+`/openapi.json` and `/docs` on the gateway and says the public API is
+"documented separately", and separately was nowhere. And the field that decides
+what gets served, `model`, takes a **capability** rather than a model name,
+which is a convention nobody guesses and which nothing on the wire disclosed:
+the gateway mounts `/v1/chat/completions` and nothing else, so **`GET /v1/models`
+— the first call every OpenAI client library makes — returned 404**. Guessing
+wrong was punished with 503 `no_available_model`, deliberately made
+indistinguishable from every node being busy, so a typo in the model name read
+as a platform outage.
+
+A member could not even look the answer up: §5.2 withholds model, routing and
+node reads from them on purpose, because those let a member enumerate the
+registry and the node's tailnet address.
+
+Closed by giving each of those a home. `GET /v1/models` answers in OpenAI's
+shape with the capabilities a routing policy actually serves, narrowed to the
+calling key, and authenticated like everything else so that what a deployment
+serves is not a free answer to a stranger. `GET /admin/gateway` gives the UI the
+base URL (from configuration, since the admin origin cannot read the gateway's
+off its own request) and the same capability list, behind `chat:use` rather than
+`routing:read` so the people integrating can read it. The issue dialog now shows
+curl, Python and TypeScript with the real key and the real origin already in
+them, at the one moment the plaintext exists — a snippet somebody has to come
+back and fill in is one they fill in wrongly. Both are backed by a single
+`ListCapabilities` use case, because deriving the list twice is how the two
+would come to disagree.
+
+### The capability list on a key was decoration
+
+Found while making the issue form offer only capabilities that would work.
+There was no point gating the picker: **the stored list never restricted which
+capability a key could invoke.** `RouteChatRequest` checked `CHAT_USE` and then
+routed on whatever the body named, so a key issued for `chat` reached every
+capability the deployment could serve. Worse in the other direction —
+`_CAPABILITY_SCOPES` mapped only `chat` onto a scope, so a key issued for `code`
+alone held no scopes at all and was refused everything, a choice the form
+offered and the gateway could not honour. Both halves had been true since the
+field was introduced, and security.md §4.2 describes it as "allowed
+capabilities".
+
+The fix keeps the reason the mapping is hardcoded. Scopes still come from a
+fixed table so no database row can promote a key into the control plane;
+`Scope.CHAT_USE` now answers only "may this caller reach inference at all", and
+every inference capability grants it. *Which* capability is data, so it travels
+on `Actor.allowed_capabilities` and is checked where the capability is read.
+`None` there means a person on an admin entrance, unrestricted by capability
+because their role decides their reach. Refused as 403 rather than folded into
+the 503, because this is the one routing failure the caller can actually fix.
+
+That reordering broke two existing tests, which is the useful part: they asked
+for `vision` with a `chat`-only key and expected "nothing serves this". The
+refusal now arrives first and hides that path, so the fixture key was widened
+and the tests about the list mint their own narrow keys.
+
+### Smaller things found on the way
+
+**The edit endpoint had no caller.** `PATCH /api-keys/{key_id}`, the client
+function and the `useUpdateApiKey` hook all existed and no component reached
+any of them, so a key's limits, quota, sources and expiry could only be changed
+by hand. It had also never been exercised over HTTP — the payload the dialog
+sends, date-only expiry included, is now pinned by a test.
+
+**A member could not manage their own keys.** Every action was gated on
+`isAdmin` while the backend grants `api_key:write_own` to every role, and the
+navigation entry was not admin-only, so a member got a page that could only ever
+be empty and read-only. Gating now mirrors `_require_owner_permission`.
+
+**An administrator could not issue on someone's behalf**, though `owner_id` had
+been in the request body all along.
+
+**The CIDR rule in the issue form had never run.** The regex sat on an array the
+form never held while the text was split into the request after validation, so a
+typo surfaced as a server error instead of a field message. Both dialogs now
+validate the text they actually hold.
+
+**And one comment was actively misleading**: the revoke client said the backend
+"drops the Redis verification cache". §4.2 records that cache as a deliberate
+non-feature — revocation is immediate because every request re-reads the row —
+so a later reader could have "fixed" the missing drop by adding a revocation
+window.
+
+### What is still not done
+
+`api_keys.debug_logging_until` remains a column nothing writes and nothing
+reads. Pepper rotation still has no completion path: the previous pepper is
+accepted at verification, but nothing re-signs a key with the new one (the
+gateway account has no write on `api_keys`, so it could not), nothing reports
+which keys are still on the old one, and no runbook covers it. There is still
+no reissue-with-the-same-settings action, and `keyStatus` has no
+expiring-soon state, so rotation is still forced by expiry and unaided by the
+UI.
+
+---
+
 ## 2026-07-27
 
 ### A generation that answered nothing looked identical to a malfunction

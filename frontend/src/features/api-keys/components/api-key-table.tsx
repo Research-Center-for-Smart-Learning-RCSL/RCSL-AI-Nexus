@@ -14,7 +14,8 @@ import {
   useRevokeApiKey,
 } from '@/features/api-keys/hooks/use-api-keys';
 import { CreateApiKeyDialog } from '@/features/api-keys/components/create-api-key-dialog';
-import { keyStatus, type ApiKey } from '@/features/api-keys/schema';
+import { EditApiKeyDialog } from '@/features/api-keys/components/edit-api-key-dialog';
+import { canManageKey, keyStatus, type ApiKey } from '@/features/api-keys/schema';
 
 function formatDate(value: string | null): string {
   if (!value) return '-';
@@ -27,7 +28,20 @@ export function ApiKeyTable() {
   const revoke = useRevokeApiKey();
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<ApiKey | null>(null);
   const [revoking, setRevoking] = useState<ApiKey | null>(null);
+
+  /**
+   * What the caller may act on, matching the scopes the backend actually
+   * grants. A member holds `api_key:write_own` (security.md §5.2 grants them
+   * their own keys and nothing else), so gating every action on `isAdmin`
+   * offered them a page that could only ever be empty and read-only while the
+   * API would have accepted the request.
+   */
+  const viewer = useMemo(
+    () => ({ id: me?.id ?? null, isAdmin }),
+    [me?.id, isAdmin],
+  );
 
   const columns = useMemo<ColumnDef<ApiKey>[]>(
     () => [
@@ -91,9 +105,15 @@ export function ApiKeyTable() {
         enableHiding: false,
         cell: ({ row }) => {
           const key = row.original;
-          if (!isAdmin || key.revoked_at) return null;
+          // A revoked key is final, not editable: the backend refuses an edit
+          // on one, because the result would read as active in this table and
+          // not be. Reissue instead.
+          if (key.revoked_at || !canManageKey(key, viewer)) return null;
           return (
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-1">
+              <Button variant="ghost" size="xs" onClick={() => setEditing(key)}>
+                Edit
+              </Button>
               <Button
                 variant="ghost"
                 size="xs"
@@ -107,7 +127,7 @@ export function ApiKeyTable() {
         },
       },
     ],
-    [isAdmin],
+    [viewer],
   );
 
   return (
@@ -123,7 +143,10 @@ export function ApiKeyTable() {
         emptyDescription="Issue a key to let an application reach the gateway."
         getRowId={(row) => row.key_id}
         toolbar={
-          isAdmin ? (
+          // Anyone signed in may issue a key for themselves. Gated on the id
+          // rather than the role, because the dialog issues to `me.id` and
+          // without one the request carries an empty owner.
+          me?.id ? (
             <Button size="sm" onClick={() => setCreateOpen(true)}>
               <PlusIcon />
               Issue key
@@ -132,11 +155,26 @@ export function ApiKeyTable() {
         }
       />
 
-      <CreateApiKeyDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        ownerId={me?.id ?? ''}
-      />
+      {me?.id ? (
+        <CreateApiKeyDialog
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          ownerId={me.id}
+        />
+      ) : null}
+
+      {/* Mounted only while a key is selected, and keyed by it: the form reads
+          its defaults once, so a kept-alive instance would show stale values
+          after a second Edit. */}
+      {editing ? (
+        <EditApiKeyDialog
+          key={editing.key_id}
+          apiKey={editing}
+          onOpenChange={(open) => {
+            if (!open) setEditing(null);
+          }}
+        />
+      ) : null}
 
       <ConfirmDialog
         open={Boolean(revoking)}

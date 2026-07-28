@@ -49,6 +49,19 @@ class Settings(BaseSettings):
     link they cannot open.
     """
 
+    gateway_base_url_override: str = Field(default="", alias="GATEWAY_BASE_URL")
+    """Where callers reach the inference API, shown in the management UI beside
+    a newly issued key.
+
+    Set only when the public origin is not `https://` plus `PROXY_HOSTNAME` —
+    a different port in development, say. Empty means "derive it", so the two
+    cannot drift apart in the ordinary deployment where they agree.
+
+    It is configuration rather than something read off the request because the
+    UI asking is on the *admin* origin: the request that renders the snippet
+    arrives at a different host from the one the snippet must name.
+    """
+
     database_url: str = "postgresql+asyncpg://nexus:nexus@localhost:5432/nexus"
     db_pool_size: int = 20
     db_max_overflow: int = 10
@@ -243,6 +256,16 @@ class Settings(BaseSettings):
         deliberate `EXPOSE_OPENAPI=true` means forgetting fails closed.
         """
         return self.expose_openapi_flag and not self.is_production
+
+    @property
+    def gateway_base_url(self) -> str:
+        """The origin an integrator points a client library at.
+
+        Derived from `PROXY_HOSTNAME` unless overridden, so the ordinary
+        deployment configures the hostname once. No trailing slash: callers
+        append `/v1/...`, and the snippets shown in the UI are copied verbatim.
+        """
+        return (self.gateway_base_url_override or f"https://{self.proxy_hostname}").rstrip("/")
 
     @model_validator(mode="after")
     def _refuse_dev_auth_in_production(self) -> Settings:
