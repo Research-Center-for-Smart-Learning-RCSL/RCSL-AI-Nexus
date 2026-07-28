@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -324,6 +325,16 @@ def test_the_gateway_endpoint_tells_the_ui_where_to_send_a_key(admin: TestClient
     assert admin.get("/admin/gateway").json()["capabilities"] == ["chat"]
 
 
+def _in_days(days: int) -> str:
+    """A date the expiry rules will still accept when this is next run.
+
+    Absolute dates in these bodies are a test that starts failing on a calendar
+    day rather than on a change: expiry must be in the future and within a
+    year, so `2026-12-31` is a pass that expires.
+    """
+    return (datetime.now(UTC) + timedelta(days=days)).date().isoformat()
+
+
 def _issue_key(admin: TestClient, **overrides: object) -> dict:
     users = admin.get("/admin/users").json()
     body: dict[str, object] = {
@@ -333,7 +344,7 @@ def _issue_key(admin: TestClient, **overrides: object) -> dict:
         "rate_limit_rpm": 60,
         "quota_tokens_per_day": 100000,
         "allowed_cidrs": [],
-        "expires_at": "2027-01-01T00:00:00Z",
+        "expires_at": _in_days(180),
     }
     body.update(overrides)
     issued = admin.post("/admin/api-keys", json=body)
@@ -361,7 +372,7 @@ def test_a_key_can_be_edited_with_what_the_form_sends(admin: TestClient) -> None
             "rate_limit_rpm": 30,
             "quota_tokens_per_day": 5000,
             "allowed_cidrs": ["10.0.0.7/24", "2001:db8::/32"],
-            "expires_at": "2026-12-31",
+            "expires_at": _in_days(30),
         },
     )
 
@@ -391,6 +402,28 @@ def test_editing_cannot_mint_an_unmetered_key(admin: TestClient) -> None:
 
     assert admin.patch(path, json={"rate_limit_rpm": 0}).status_code == 422
     assert admin.patch(path, json={"quota_tokens_per_day": 0}).status_code == 422
+
+
+def test_an_edit_that_omits_the_expiry_leaves_it_alone(admin: TestClient) -> None:
+    """What the edit dialog sends when the operator changes only the name.
+
+    A date input holds a calendar day, so resubmitting an untouched expiry
+    rewrites an 18:00Z one to midnight — shortening the key by up to a day on
+    every edit, and refusing outright once that midnight is already past, which
+    makes renaming a key that expires later today impossible.
+    """
+    # Tomorrow rather than today, so the fixture is in the future whatever the
+    # hour: "today at 18:00Z" is itself a test that fails after 18:00Z. The
+    # time of day is the whole point — a resent date-only value would land on
+    # midnight and the assertion below would catch it.
+    issued = _issue_key(admin, expires_at=f"{_in_days(1)}T18:00:00Z")
+    before = issued["expires_at"]
+
+    renamed = admin.patch(f"/admin/api-keys/{issued['key_id']}", json={"name": "renamed"})
+
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["name"] == "renamed"
+    assert renamed.json()["expires_at"] == before
 
 
 def test_editing_a_revoked_key_is_refused(admin: TestClient) -> None:

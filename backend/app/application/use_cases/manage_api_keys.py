@@ -28,6 +28,7 @@ from ipaddress import IPv4Network, IPv6Network, ip_network
 
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.api_key import ApiKey
+from app.domain.entities.capability import KNOWN_CAPABILITIES
 from app.domain.exceptions import (
     InvalidCidrError,
     ModelStateConflictError,
@@ -43,10 +44,13 @@ from app.domain.ports.security_ports import AuditPort, AuthorizationPort
 from app.domain.services.api_key_service import ApiKeyService
 from app.shared.clock import Clock
 
-KNOWN_CAPABILITIES = frozenset({"chat", "code", "vision", "embedding", "rerank"})
 """Checked at issue so a typo becomes an error rather than a key that is
-silently powerless. The authoritative narrowing still happens at
-verification; this is about giving the operator an answer."""
+silently powerless. The authoritative narrowing still happens at verification;
+this is about giving the operator an answer.
+
+Imported from the domain rather than defined here: routing policies and the
+gateway's scope mapping need the same set, and the two that kept their own copy
+had each drifted from it. See `domain/entities/capability.py`."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -20,6 +20,7 @@ from app.adapters.persistence.repositories import (
 )
 from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.entities.api_key import ApiKey
+from app.domain.entities.capability import KNOWN_CAPABILITIES
 from app.domain.exceptions import NotAuthenticatedError, QuotaExceededError, RateLimitedError
 from app.domain.ports.infrastructure_ports import CachePort
 from app.domain.services.api_key_service import ApiKeyService
@@ -33,32 +34,25 @@ from app.interfaces.http.middleware.client_ip import resolve_client_ip
 
 BEARER = "bearer "
 
-_CAPABILITY_SCOPES: dict[str, Scope] = {
-    "chat": Scope.CHAT_USE,
-    "code": Scope.CHAT_USE,
-    "vision": Scope.CHAT_USE,
-    "embedding": Scope.CHAT_USE,
-    "rerank": Scope.CHAT_USE,
-}
-"""Every inference capability grants the same scope, because there is one
-inference use case and `CHAT_USE` is the permission to reach it.
-
-Only `chat` was listed before, which made the other four inert: a key issued
-for `code` alone mapped to no scopes at all and was refused every request,
-while the form that issued it presented the choice as meaningful. The
-capability actually asked for is enforced separately, from
-`Actor.allowed_capabilities`.
-"""
-
 
 def _scopes_for(key: ApiKey) -> frozenset[Scope]:
     """Map the key's stored capability names onto scopes.
 
-    A hardcoded mapping, not a lookup: a compromised database row must not be
-    able to promote a key into the control plane. The stored list can only
-    narrow what a key of this kind may ever hold.
+    Every inference capability grants the same scope, because there is one
+    inference use case and `CHAT_USE` is the permission to reach it. Which
+    capability was actually asked for is enforced separately, against
+    `Actor.allowed_capabilities`.
+
+    Still a fixed rule rather than a lookup: the stored list can only narrow
+    what a key of this kind may ever hold, so a compromised database row cannot
+    promote a key into the control plane. What it can no longer do is disagree
+    about which names exist. An explicit table here listed only `chat`, which
+    made a key issued for any of the other four powerless while the form
+    offering the choice presented it as meaningful; a table whose values were
+    then all identical would have carried no information and reintroduced that
+    bug the next time a capability was added.
     """
-    scopes = {_CAPABILITY_SCOPES[c] for c in key.scopes if c in _CAPABILITY_SCOPES}
+    scopes = {Scope.CHAT_USE for c in key.scopes if c in KNOWN_CAPABILITIES}
     if scopes:
         # Reading your own usage is implied by being able to consume anything.
         # Granted with the first real scope rather than unconditionally, so a

@@ -359,6 +359,22 @@ async def test_candidates_are_stored_in_priority_order() -> None:
     assert [c.model_alias for c in saved.candidates] == ["a", "b"]
 
 
+async def test_a_policy_for_an_unknown_capability_is_refused() -> None:
+    """The two write paths disagreed about what a capability name is. A policy
+    for `chatt` stored and audited cleanly while `ManageApiKeys` refused a key
+    for `chatt` as unknown, so nothing could ever route to it — and it was
+    advertised as servable by `GET /v1/models` to every caller."""
+    use_case = ManageRoutingPolicies(
+        policies=FakePolicies(),
+        models=FakeModels([_model("a")]),
+        authz=RoleAuthorization(),
+        audit=FakeAudit(),
+    )
+
+    with pytest.raises(ModelStateConflictError):
+        await use_case.save(ADMIN, "chatt", [RoutingCandidate("a", 1)])
+
+
 async def test_an_empty_policy_is_refused() -> None:
     """A capability with no candidates routes nowhere, which is the same as
     not having the policy at all but harder to notice."""

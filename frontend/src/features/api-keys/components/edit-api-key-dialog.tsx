@@ -54,6 +54,13 @@ export function EditApiKeyDialog({
 }) {
   const update = useUpdateApiKey(apiKey.key_id);
 
+  // Extending an expired key is the main reason to open this dialog, and
+  // resubmitting the date it already carries can only be refused for not being
+  // in the future. So an expired key opens on a date that works — which also
+  // means its prefilled value is deliberately not what is stored, and has to
+  // be sent even if the operator never touches the field.
+  const expired = keyStatus(apiKey) === 'expired';
+
   const form = useForm<UpdateApiKeyInput, unknown, UpdateApiKeyValues>({
     resolver: zodResolver(updateApiKeySchema),
     defaultValues: {
@@ -62,13 +69,7 @@ export function EditApiKeyDialog({
       rate_limit_rpm: apiKey.rate_limit_rpm,
       quota_tokens_per_day: apiKey.quota_tokens_per_day,
       allowed_cidrs_text: apiKey.allowed_cidrs.join('\n'),
-      // Extending an expired key is the main reason to open this dialog, and
-      // resubmitting the date it already carries can only be refused for not
-      // being in the future. So an expired key opens on a date that works.
-      expires_at:
-        keyStatus(apiKey) === 'expired'
-          ? defaultExpiry()
-          : toDateInput(apiKey.expires_at),
+      expires_at: expired ? defaultExpiry() : toDateInput(apiKey.expires_at),
     },
   });
 
@@ -82,7 +83,15 @@ export function EditApiKeyDialog({
         rate_limit_rpm: values.rate_limit_rpm,
         quota_tokens_per_day: values.quota_tokens_per_day,
         allowed_cidrs: parseCidrText(values.allowed_cidrs_text),
-        expires_at: values.expires_at,
+        // Sent only when it is actually meant to change, which is what the
+        // endpoint being a PATCH is for. A date input holds a calendar day, so
+        // resubmitting an untouched value rewrites an `18:00Z` expiry to
+        // midnight — every edit quietly shortening the key by up to a day, and
+        // a key expiring later today refusing every edit with "expiry is not
+        // in the future". Renaming a key must not depend on the clock.
+        ...(form.formState.dirtyFields.expires_at || expired
+          ? { expires_at: values.expires_at }
+          : {}),
       },
       // Closed only once the server has accepted it. A dialog that closes on a
       // rejected edit leaves the operator believing a limit was tightened.

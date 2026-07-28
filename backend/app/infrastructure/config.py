@@ -264,8 +264,16 @@ class Settings(BaseSettings):
         Derived from `PROXY_HOSTNAME` unless overridden, so the ordinary
         deployment configures the hostname once. No trailing slash: callers
         append `/v1/...`, and the snippets shown in the UI are copied verbatim.
+
+        A bare hostname in the override is completed rather than passed
+        through. `GATEWAY_BASE_URL=api.example.com` yields `api.example.com/v1`,
+        which no client library can use, and the failure appears in somebody
+        else's terminal long after the setting was written.
         """
-        return (self.gateway_base_url_override or f"https://{self.proxy_hostname}").rstrip("/")
+        origin = self.gateway_base_url_override.strip() or f"https://{self.proxy_hostname}"
+        if not origin.startswith(("http://", "https://")):
+            origin = f"https://{origin}"
+        return origin.rstrip("/")
 
     @model_validator(mode="after")
     def _refuse_dev_auth_in_production(self) -> Settings:
