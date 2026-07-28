@@ -60,7 +60,7 @@ NTNU proxy; the tailnet rides over it.
                             | HTTP (OpenAI-compatible + admin API)
 +---------------------------v-------------------------------+
 |  Gateway                                                    |
-|  - Unified public API (/v1/chat/completions, /v1/embeddings)|
+|  - Unified public API (/v1/chat/completions, /v1/models)    |
 |  - API key authentication, rate limiting, usage accounting  |
 |  - Selects a target runtime from capability + routing policy|
 +---------------------------+-------------------------------+
@@ -128,6 +128,12 @@ The distinction matters: routing policies bind to `alias` so that swapping the u
 
 The unit that applications call against, deliberately decoupled from any specific model: `chat`, `code`, `vision`, `embedding`, `rerank`. Each capability resolves through exactly one routing policy.
 
+The set is defined once, in `domain/entities/capability.py`. Three places have to agree on it — a key is issued for capabilities, a policy is written for one, and the gateway maps one onto the scope that reaches inference — and until 2026-07-28 each kept its own copy, which had drifted in both directions at once ([PROGRESS.md](./PROGRESS.md) 2026-07-28).
+
+**The name is what a caller puts in the `model` field**, which is the platform's one departure from the OpenAI convention and the thing an integrator is least able to guess. `GET /v1/models` exists to answer it, listing the capabilities a routing policy currently serves, narrowed to the calling key.
+
+**Only chat-shaped capabilities are reachable today.** The gateway mounts `/v1/chat/completions` and nothing else, so `embedding` and `rerank` can be named in a policy and issued on a key but have no endpoint whose request and response shapes fit them. They are part of the model, not yet part of the API; `/v1/embeddings` belongs with the knowledge base in Phase 2, which is the first thing that will need it.
+
 ### 2.4 Routing Policy
 
 Maps a capability to candidate models with priority and fallback.
@@ -155,6 +161,8 @@ Maps a capability to candidate models with priority and fallback.
 ### 2.5 API Key
 
 Issued to applications and users. Binds allowed capabilities, rate limit, quota, expiry, and source CIDRs. Full design in [security.md](./architecture/security.md) §4.2.
+
+The capability list is enforced against the capability each request names, and has been since 2026-07-28. Before that it decided only whether a key worked at all, so a key issued for `chat` reached every capability the deployment could route — the field read as a restriction and was not one. The names it may contain are `domain/entities/capability.py`, which is also what a routing policy is checked against, so a policy and a key cannot disagree about what a capability is called.
 
 ### 2.6 User
 
@@ -200,25 +208,35 @@ Phase 1 was **single tenant** and said so, deliberately: an earlier draft descri
 
 Frontend pages correspond to backend resources. Phase annotations show what actually exists when.
 
-**None of the admin API exists yet.** Both admin applications currently mount
-only `/healthz` and `/readyz`; the frontend for these modules is written and
-calls endpoints that return 404. The Phase column is a plan, not a status.
+This table said "None of the admin API exists yet" and marked almost every row
+"frontend only" until 2026-07-28, by which point all but the last two rows had
+been built and exercised against a real Postgres. The Phase column is a plan;
+the Built column is a status, and a status that is only ever written once is
+worse than none. [ROADMAP.md](./ROADMAP.md) and
+[PROGRESS.md](./PROGRESS.md) are the maintained versions.
 
 | Module | Backend resource | Phase | Built |
 |---|---|---|---|
-| Dashboard | `/admin/dashboard` | 1 (static data), 2 (real metrics) | frontend only |
-| Model Management | `/admin/models` | 1 | frontend only |
-| Routing Policy | `/admin/routing-policies` | 1 (API), 2 (UI editor) | no |
-| API Keys | `/admin/api-keys` | 1 | frontend only |
-| Users and roles | `/admin/users`, `/admin/me` | 1 | frontend only |
-| Chat | `/admin/chat` | 1 | frontend only |
+| Dashboard | `/admin/dashboard` | 1 (counts), 2 (real metrics) | yes; live metrics wait on hardware producing them |
+| Model Management | `/admin/models` | 1 | yes, end to end including download progress (`/admin/models/download-jobs/{id}`) |
+| Routing Policy | `/admin/routing-policies` | 1 (API), 2 (UI editor) | yes, both; the capability named is validated against `KNOWN_CAPABILITIES` |
+| API Keys | `/admin/api-keys` | 1 | yes, end to end: issue, edit, revoke |
+| Gateway information | `/admin/gateway` | 1 | yes; the base URL and servable capabilities the UI needs to explain a key |
+| Users and roles | `/admin/users`, `/admin/me` | 1 | yes, end to end |
+| Tenants | `/admin/tenants` | 2 | yes, create and list; no platform-super-admin split |
+| Chat | `/admin/chat` | 1 | yes, end to end |
 | Node management | `/admin/nodes` | 2 | yes, end to end (register/edit/delete/health, SSRF guard, heartbeat) |
-| Logs | `/admin/logs` | 2 | no |
-| Usage analytics | `/admin/usage` | 2 | no |
+| Logs | `/admin/logs` | 2 | yes, read-only audit view behind `logs:read` |
+| Usage analytics | `/admin/usage` | 2 | yes, aggregation and charts |
 | Knowledge base | `/admin/knowledge` | 2 | no |
 | Prompt templates | `/admin/prompt-templates` | 2 | no |
 
-The inference path (`/v1/chat/completions`) is complete and tested end to end.
+The inference path is complete and tested end to end. The gateway mounts
+`POST /v1/chat/completions` and `GET /v1/models`, and nothing else — the second
+because every OpenAI client library calls it at startup, and because `model`
+takes a capability rather than a model name, which is a convention no caller
+guesses and which `/openapi.json` cannot tell them either (it is disabled in
+production, [security.md](./architecture/security.md) §4.4).
 
 The chat interface lives on the admin API rather than calling the public gateway. It reuses the same `RouteChatRequest` use case but authorizes by user identity instead of an API key, so operators do not need to mint a key for themselves and admin traffic is not subject to the public geo and CIDR restrictions. The same resource guardrails still apply. See [security.md](./architecture/security.md) §5.2.
 

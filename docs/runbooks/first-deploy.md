@@ -1147,11 +1147,18 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
   | `TAILNET_IP` | 第 4 步取得的 `100.x.y.z` |
   | `PROXY_HOSTNAME` | `api.nexus.rcsl.online` |
   | `ADMIN_BASE_URL` | `https://ai.nexus.rcsl.online` |
+  | `GATEWAY_BASE_URL` | 留空（見下方註）|
   | `NODE_TOTAL_MEMORY_GB` | `64`（要對上這台的實際記憶體）|
   | `ALLOWED_COUNTRIES` | `TW,AU` |
   | `BOOTSTRAP_ADMIN_LOGIN` | 你的 Tailscale 登入身分（通常是 email）|
 
   `COOKIE_SECURE` 保持 `true`、`CACHE_BACKEND` 保持 `redis`。
+
+  註：`GATEWAY_BASE_URL` 是發卡畫面與 `/api-docs` 頁面上顯示給使用者複製的推論
+  端點。留空會從 `PROXY_HOSTNAME` 推導成 `https://api.nexus.rcsl.online`，這正是
+  本部署要的值，所以不用填。只有在對外 origin 與 `PROXY_HOSTNAME` 不同時才設它。
+  它不能從請求讀出來——渲染那段程式碼片段的請求打的是管理入口，不是被描述的那個
+  主機。填錯的後果是使用者拿到一段貼上去連不到的範例，而錯誤會出現在別人的終端機裡。
 
   註：兩個管理入口各自用自己的信任模型（tailnet 信任身分標頭、public 要求密碼+TOTP），
   這由兩個獨立的服務決定，**不是**由 `AUTH_MODE` 決定。`AUTH_MODE` 在 production 主要

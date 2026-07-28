@@ -151,6 +151,36 @@ controls describing an intent the code did not implement.** The tests added
 alongside them assert the behaviour rather than the intent, which is the only
 version that stays true.
 
+### The documentation audit that followed, and the two claims that had rotted
+
+Propagating the day's work turned up staleness older than any of it, in both
+places that describe what exists.
+
+[backend.md](./architecture/backend.md) §2 said "everything under
+`application/use_cases/` other than `route_chat_request.py` and
+`authenticate_local.py` is unwritten, as is every router except `chat.py` and
+`health.py`". Twenty use cases and eighteen routers later, it still said that.
+[ARCHITECTURE.md](./ARCHITECTURE.md) §3 was worse, because it was a table: "None
+of the admin API exists yet", with almost every module marked *frontend only*
+and routing policies, logs and usage marked *no*. All of them had been built and
+exercised against a real Postgres, several of them months of work ago.
+
+Both are the same failure and it is worth naming: **a status written once is
+worse than no status**, because it is read as current. The fix is not only to
+correct them but to say in each what happened, so the next reader knows the
+column drifts and where the maintained answer lives.
+
+Three smaller corrections came out of the same pass. The architecture diagram
+advertised `/v1/embeddings`, which has never existed — replaced with
+`/v1/models`, which now does, and §2.3 gained the honest version: `embedding`
+and `rerank` can be issued on a key and named in a policy, but the gateway
+mounts only `/v1/chat/completions`, so they have no endpoint whose shapes fit
+them. [backend.md](./architecture/backend.md) §5 gained the 422 case its own
+error table implied did not exist, the two statuses that carry two codes each,
+and `ContextTooLongError`. And a claim written during this very audit — that a
+`jobs.py` router exists — was wrong and caught before it landed; download
+progress is served by the router that starts the download.
+
 ### What is still not done
 
 `api_keys.debug_logging_until` remains a column nothing writes and nothing
