@@ -49,6 +49,22 @@ class ModelRuntimePort(Protocol):
         """
         ...
 
+    async def embed(self, ref: str, texts: Sequence[str]) -> list[list[float]]:
+        """Vectors for a batch of texts, in the order given.
+
+        On this port rather than a separate `EmbeddingPort` so that an embedding
+        model is registered, budgeted and routed exactly like a chat model: one
+        registry, one memory budget, and a routing policy on the `embedding`
+        capability decides which model answers. A second mechanism for naming a
+        model would be a second place for the registry to be wrong.
+
+        A runtime that cannot embed raises `RuntimeCapabilityError` rather than
+        returning something. Reporting a plausible vector would poison a
+        knowledge base silently, which is the same reasoning that makes the MLX
+        adapter refuse `unload` instead of claiming success.
+        """
+        ...
+
     def pull(self, ref: str) -> AsyncGenerator[PullProgress, None]:
         """Stream download progress. Also an async generator: Ollama's pull
         endpoint returns a stream of NDJSON progress objects, not a single

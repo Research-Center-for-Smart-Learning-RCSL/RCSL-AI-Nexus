@@ -8,7 +8,10 @@ attacker-controlled string.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol
+
+from app.domain.entities.knowledge import DocumentChunk, RetrievedPassage
 
 
 class DocumentStoragePort(Protocol):
@@ -62,5 +65,43 @@ class DocumentParserPort(Protocol):
         The filename is deliberately not a parameter: the parser selects by
         media type, which the upload path has already validated against an
         allowlist, so a crafted extension cannot steer it to a different parser.
+        """
+        ...
+
+
+class VectorStorePort(Protocol):
+    """The passage index.
+
+    Implementations are constructed with a tenant, like the repositories and the
+    document storage, and no method takes one. See
+    adapters/vector/qdrant_store.py for how the tenant is enforced twice over,
+    and docs/architecture/security.md section 7.3 for why the filter must not be
+    something a caller supplies.
+    """
+
+    async def ensure_ready(self, vector_size: int) -> None:
+        """Create this tenant's index if it is absent, sized for the embedding
+        model in use. Called before the first write rather than at startup,
+        because the vector size is a property of the routed embedding model and
+        is not known until one has been resolved."""
+        ...
+
+    async def upsert(self, chunks: Sequence[DocumentChunk]) -> None:
+        """Add or replace passages. Ids are derived from the document and the
+        passage index, so re-indexing a document overwrites its passages rather
+        than accumulating a second copy beside them."""
+        ...
+
+    async def delete_document(self, document_id: str) -> None:
+        """Remove every passage of one document. Idempotent: a document with no
+        passages indexed must still be deletable."""
+        ...
+
+    async def search(
+        self, vector: Sequence[float], *, limit: int, collection_id: str | None = None
+    ) -> list[RetrievedPassage]:
+        """Nearest passages within this tenant, optionally within one collection.
+
+        The result is untrusted document text; see `RetrievedPassage`.
         """
         ...

@@ -24,7 +24,11 @@ from app.domain.entities.actor import Role
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.audit import AuditEntry
 from app.domain.entities.invitation import Invitation
-from app.domain.entities.knowledge import KnowledgeCollection, KnowledgeDocument
+from app.domain.entities.knowledge import (
+    KnowledgeCollection,
+    KnowledgeDocument,
+    RetrievedPassage,
+)
 from app.domain.entities.model import Model, RuntimeKind
 from app.domain.entities.node import Node
 from app.domain.entities.routing_policy import RoutingPolicy
@@ -703,3 +707,41 @@ class IngestionJobResponse(BaseModel):
             progress=status.progress,
             message=status.message,
         )
+
+
+class KnowledgeSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    collection_id: str | None = None
+    top_k: int = Field(default=5, ge=1, le=20)
+    """Bounded here as well as in the use case: each passage becomes prompt
+    context on the chat path, and context cost grows faster than linearly."""
+
+
+class RetrievedPassageResponse(BaseModel):
+    """A passage from a document.
+
+    `text` is **untrusted document content**. Anything rendering it must treat
+    it as data: the frontend sanitises markdown with raw HTML disabled
+    (frontend.md 7), and prompt assembly marks it as data rather than
+    instructions (security.md 7.3).
+    """
+
+    document_id: str
+    collection_id: str
+    index: int
+    text: str
+    score: float
+
+    @classmethod
+    def of(cls, passage: RetrievedPassage) -> RetrievedPassageResponse:
+        return cls(
+            document_id=passage.document_id,
+            collection_id=passage.collection_id,
+            index=passage.index,
+            text=passage.text,
+            score=passage.score,
+        )
+
+
+class KnowledgeSearchResponse(BaseModel):
+    passages: list[RetrievedPassageResponse]

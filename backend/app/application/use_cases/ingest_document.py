@@ -9,10 +9,13 @@ waiting for it.
 as a class ("pdf: PdfReadError"), never as content, because the content is the
 sensitive half of this feature (security.md section 9.2).
 
-Ingestion is two stages. This module owns the first: the bytes go to the
-isolated parser and the extracted text is written back to storage, leaving the
-document `EXTRACTED`. Indexing into the vector store is the second, and it reads
-the stored text rather than parsing again.
+Ingestion is two stages and this module owns both, with a durable state between
+them. The bytes go to the isolated parser and the extracted text is written back
+to storage (`EXTRACTED`); then that text is chunked, embedded and indexed
+(`INDEXED`). The middle state is not bookkeeping: a failure while indexing
+leaves the extracted text in place, so a retry re-indexes from it rather than
+sending the document through the parser again. The parser is the component with
+the CVE history, and each run of it is an exposure worth not repeating.
 """
 
 from __future__ import annotations
@@ -20,10 +23,16 @@ from __future__ import annotations
 import logging
 from typing import Protocol
 
-from app.domain.entities.knowledge import DocumentStatus, KnowledgeDocument
+from app.application.use_cases.embed_texts import TextEmbedderPort
+from app.domain.entities.knowledge import DocumentChunk, DocumentStatus, KnowledgeDocument
 from app.domain.exceptions import DocumentNotFoundError, DocumentStateConflictError
 from app.domain.ports.infrastructure_ports import JobProgressPort, JobStatus
-from app.domain.ports.knowledge_ports import DocumentParserPort, DocumentStoragePort
+from app.domain.ports.knowledge_ports import (
+    DocumentParserPort,
+    DocumentStoragePort,
+    VectorStorePort,
+)
+from app.domain.services.chunking import chunk_text
 
 logger = logging.getLogger(__name__)
 
@@ -61,11 +70,15 @@ class IngestDocument:
         storage: DocumentStoragePort,
         parser: DocumentParserPort,
         jobs: JobProgressPort,
+        vectors: VectorStorePort,
+        embedder: TextEmbedderPort,
     ) -> None:
         self._state = state_committer
         self._storage = storage
         self._parser = parser
         self._jobs = jobs
+        self._vectors = vectors
+        self._embedder = embedder
 
     async def claim(self, document: KnowledgeDocument, job_id: str) -> JobStatus:
         """Move the document into `EXTRACTING` while the caller is still waiting.
@@ -126,16 +139,87 @@ class IngestDocument:
 
         await self._storage.put_text(document_id, text)
         await self._state.commit(document_id, DocumentStatus.EXTRACTED)
+
+        try:
+            chunk_count = await self._index(document, text, job_id)
+        except Exception as exc:
+            reason = f"{type(exc).__name__}"
+            logger.warning(
+                "indexing_failed document=%s job=%s reason=%s", document_id, job_id, reason
+            )
+            # EXTRACTED is not rolled back on this path. The text is genuinely
+            # extracted and stored, so a retry re-indexes from it rather than
+            # sending the document through the parser a second time; the status
+            # says ERROR because the document is not searchable.
+            await self._state.commit(document_id, DocumentStatus.ERROR, error=reason)
+            await self._fail(job_id, document_id, "Indexing failed.")
+            return
+
+        await self._state.commit(document_id, DocumentStatus.INDEXED, chunk_count=chunk_count)
         await self._jobs.set(
             JobStatus(
                 job_id=job_id,
                 state="succeeded",
                 target=document_id,
                 progress=1.0,
-                message="Extracted",
+                message=f"Indexed {chunk_count} passages",
             ),
             ttl_seconds=JOB_TTL_SECONDS,
         )
+
+    async def _index(self, document: KnowledgeDocument, text: str, job_id: str) -> int:
+        """Chunk, embed and store. Returns the number of passages indexed.
+
+        The embedding model is resolved once for the whole document rather than
+        per batch, because resolving it reads the routing policy, the registry
+        and the node table, and none of that changes mid-document.
+        """
+        await self._state.commit(document.id, DocumentStatus.INDEXING)
+        await self._jobs.set(
+            JobStatus(
+                job_id=job_id,
+                state="running",
+                target=document.id,
+                progress=0.5,
+                message="Indexing passages",
+            ),
+            ttl_seconds=JOB_TTL_SECONDS,
+        )
+
+        chunks = chunk_text(text)
+        if not chunks:
+            # A document that parsed to nothing: a scanned PDF with no text
+            # layer is the common case. Indexed with zero passages rather than
+            # failed, because nothing went wrong and an operator seeing a zero
+            # count learns more than one seeing an error.
+            return 0
+
+        target, runtime = await self._embedder.resolve()
+        vectors = await self._embedder.embed_with(runtime, [c.text for c in chunks], target.ref)
+
+        # The index is sized for the model that fills it, which is why this
+        # happens here rather than at startup: the vector size is a property of
+        # the routed model and is not known until one has been resolved.
+        await self._vectors.ensure_ready(len(vectors[0]))
+
+        # Replaces this document's passages rather than adding to them: point
+        # ids are derived from (document, index), so a re-index of a document
+        # that produced fewer chunks would leave the tail behind. Deleting
+        # first is what stops a stale passage being retrieved forever.
+        await self._vectors.delete_document(document.id)
+        await self._vectors.upsert(
+            [
+                DocumentChunk(
+                    document_id=document.id,
+                    collection_id=document.collection_id,
+                    index=chunk.index,
+                    text=chunk.text,
+                    vector=vector,
+                )
+                for chunk, vector in zip(chunks, vectors, strict=True)
+            ]
+        )
+        return len(chunks)
 
     async def _extract(self, document: KnowledgeDocument, job_id: str) -> str:
         await self._jobs.set(

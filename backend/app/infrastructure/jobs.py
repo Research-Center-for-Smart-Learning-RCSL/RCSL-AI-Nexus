@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from typing import Any, cast
 
 from fastapi import FastAPI
@@ -38,9 +39,12 @@ from app.adapters.persistence.model_state import ModelStateCommitter
 from app.adapters.storage.filesystem_documents import FilesystemDocumentStorage
 from app.application.use_cases.download_model import DownloadModel
 from app.application.use_cases.ingest_document import IngestDocument
+from app.domain.entities.model import Model, RuntimeKind
+from app.domain.ports.model_runtime_port import ModelRuntimePort
 from app.domain.ports.repositories import ModelRepositoryPort
 from app.infrastructure.config import get_settings
-from app.infrastructure.db import get_session_factory
+from app.infrastructure.db import get_session_factory, session_scope
+from app.infrastructure.di import build_embed_texts, build_vector_store
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +100,37 @@ async def _run_download(app: FastAPI, model_id: str, job_id: str) -> None:
         logger.exception("download_task_failed model=%s job=%s", model_id, job_id)
 
 
+class _DetachedEmbedder:
+    """`TextEmbedderPort` that holds no session between calls.
+
+    `resolve` opens a short transaction to read the routing policy, the registry
+    and the node table, and closes it before returning; `embed_with` talks only
+    to the runtime adapter and touches no database at all. So a document is
+    parsed and embedded without a connection pinned idle-in-transaction for the
+    duration, which is the hazard the download job was rewritten to avoid.
+    """
+
+    def __init__(self, runtimes: dict[RuntimeKind, ModelRuntimePort]) -> None:
+        self._runtimes = runtimes
+
+    async def resolve(self) -> tuple[Model, ModelRuntimePort]:
+        async with session_scope() as session:
+            return await build_embed_texts(self._runtimes, session).resolve()
+
+    async def embed_with(
+        self, runtime: ModelRuntimePort, texts: Sequence[str], ref: str | None = None
+    ) -> list[list[float]]:
+        if ref is None:
+            target, runtime = await self.resolve()
+            ref = target.ref
+        async with session_scope() as session:
+            return await build_embed_texts(self._runtimes, session).embed_with(runtime, texts, ref)
+
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        target, runtime = await self.resolve()
+        return await self.embed_with(runtime, texts, target.ref)
+
+
 async def _run_ingestion(app: FastAPI, document_id: str, job_id: str, tenant_id: str) -> None:
     """Never raises, for the reason `_run_download` does not: `run` writes every
     outcome to the job and to the document's state through its own short
@@ -107,6 +142,8 @@ async def _run_ingestion(app: FastAPI, document_id: str, job_id: str, tenant_id:
             storage=FilesystemDocumentStorage(settings.document_storage_path, tenant_id),
             parser=HttpDocumentParser(settings.parser_base_url, settings.parser_timeout_seconds),
             jobs=app.state.jobs,
+            vectors=build_vector_store(settings, tenant_id),
+            embedder=_DetachedEmbedder(app.state.runtimes),
         ).run(document_id, job_id)
     except Exception:
         logger.exception("ingestion_task_failed document=%s job=%s", document_id, job_id)

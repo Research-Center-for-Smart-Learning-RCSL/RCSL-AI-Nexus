@@ -46,11 +46,13 @@ from app.adapters.runtime.mlx_adapter import MlxAdapter
 from app.adapters.runtime.ollama_adapter import OllamaAdapter
 from app.adapters.session.session_store import SessionData, SessionStore
 from app.adapters.storage.filesystem_documents import FilesystemDocumentStorage
+from app.adapters.vector.qdrant_store import QdrantVectorStore
 from app.application.use_cases.accept_invitation import AcceptInvitation
 from app.application.use_cases.assist_operator import AssistOperator
 from app.application.use_cases.authenticate_local import AuthenticateLocal
 from app.application.use_cases.bootstrap_first_admin import BootstrapFirstAdmin
 from app.application.use_cases.download_model import DownloadModel
+from app.application.use_cases.embed_texts import EmbedTexts
 from app.application.use_cases.ingest_document import IngestDocument
 from app.application.use_cases.issue_invitation import IssueInvitation
 from app.application.use_cases.list_capabilities import ListCapabilities
@@ -67,6 +69,7 @@ from app.application.use_cases.read_audit_log import ReadAuditLog
 from app.application.use_cases.read_dashboard import ReadDashboard
 from app.application.use_cases.read_usage_analytics import ReadUsageAnalytics
 from app.application.use_cases.route_chat_request import RouteChatRequest
+from app.application.use_cases.search_knowledge import SearchKnowledge
 from app.domain.entities.actor import Actor
 from app.domain.entities.model import RuntimeKind
 from app.domain.ports.infrastructure_ports import CachePort
@@ -604,22 +607,70 @@ def build_manage_knowledge(
     return ManageKnowledge(
         knowledge=PostgresKnowledgeRepository(session, tenant),
         storage=FilesystemDocumentStorage(settings.document_storage_path, tenant),
+        vectors=build_vector_store(settings, tenant),
         authz=request.app.state.authz,
         audit=request.app.state.audit,
     )
 
 
+def build_vector_store(settings: Settings, tenant_id: str) -> QdrantVectorStore:
+    """Scoped to the tenant, like the repository and the document storage. The
+    tenant names the collection as well as the payload filter, so a search that
+    lost it asks for a collection that does not exist rather than reading
+    everyone's passages; see adapters/vector/qdrant_store.py."""
+    return QdrantVectorStore(
+        settings.qdrant_base_url,
+        settings.qdrant_api_key,
+        tenant_id,
+        timeout_seconds=settings.qdrant_timeout_seconds,
+    )
+
+
+def build_embed_texts(
+    runtimes: dict[RuntimeKind, ModelRuntimePort], session: AsyncSession
+) -> EmbedTexts:
+    """Resolves the `embedding` capability through the same routing policy,
+    registry and node table the chat path uses, so there is one mechanism for
+    naming a model rather than a second setting that could disagree with it.
+
+    Takes the runtimes and the session as plain arguments rather than a
+    `Request`, because the detached ingestion task has an app but no request and
+    opens a session of its own for each resolve (infrastructure/jobs.py).
+    """
+    return EmbedTexts(
+        policies=PostgresRoutingPolicyRepository(session),
+        models=PostgresModelRepository(session),
+        nodes=PostgresNodeRepository(session),
+        runtimes=runtimes,
+        routing=RoutingService(),
+    )
+
+
 def build_ingest_document(
-    request: Request, settings: SettingsDep, tenant: TenantIdDep
+    request: Request, session: SessionDep, settings: SettingsDep, tenant: TenantIdDep
 ) -> IngestDocument:
-    """No request session: `claim` writes through the committer's own
-    transaction, so the state change survives whatever the request does next,
-    and `run` is scheduled detached with the same construction (jobs.py)."""
+    """The state committer holds no request session: `claim` writes through its
+    own transaction, so the state change survives whatever the request does
+    next, and `run` is scheduled detached with the same construction (jobs.py).
+    The embedder does use the request session, because only `run` embeds and it
+    is constructed separately there."""
     return IngestDocument(
         state_committer=DocumentStateCommitter(get_session_factory(), tenant),
         storage=FilesystemDocumentStorage(settings.document_storage_path, tenant),
         parser=HttpDocumentParser(settings.parser_base_url, settings.parser_timeout_seconds),
         jobs=request.app.state.jobs,
+        vectors=build_vector_store(settings, tenant),
+        embedder=build_embed_texts(request.app.state.runtimes, session),
+    )
+
+
+def build_search_knowledge(
+    request: Request, session: SessionDep, settings: SettingsDep, tenant: TenantIdDep
+) -> SearchKnowledge:
+    return SearchKnowledge(
+        vectors=build_vector_store(settings, tenant),
+        embedder=build_embed_texts(request.app.state.runtimes, session),
+        authz=request.app.state.authz,
     )
 
 

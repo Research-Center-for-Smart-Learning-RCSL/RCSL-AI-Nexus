@@ -247,6 +247,12 @@ class Settings(BaseSettings):
 
     parser_timeout_seconds: int = 120
 
+    qdrant_base_url: str = "http://qdrant:6333"
+    qdrant_timeout_seconds: int = 30
+    """The passage index. Reached over its REST API rather than through
+    `qdrant-client`, which would pull grpcio and protobuf into an image that
+    needs neither; see adapters/vector/qdrant_store.py."""
+
     metrics_enabled: bool = True
     """Whether each application exposes `/metrics` for Prometheus. On by default;
     an operator who runs no Prometheus can turn it off, which also lifts the
@@ -261,6 +267,12 @@ class Settings(BaseSettings):
     totp_encryption_key: str = Field(default="dev-totp-key-not-for-production")
     session_signing_key: str = Field(default="dev-session-key-not-for-production")
     proxy_shared_secret: str = Field(default="dev-proxy-secret-not-for-production")
+    qdrant_api_key: str = Field(default="dev-qdrant-key-not-for-production")
+    """Qdrant ships with **no authentication at all** (security.md section 10),
+    and the whole knowledge base is readable to anything that reaches it. Set
+    through `QDRANT__SERVICE__API_KEY` on the service and read from the same
+    file secret here, so the two cannot drift."""
+
     metrics_scrape_token: str = Field(default="dev-metrics-token-not-for-production")
     """Bearer token Prometheus presents to `/metrics`. A secret, so it is a file
     mount like the rest; required to be a real value in production only when
@@ -344,6 +356,11 @@ class Settings(BaseSettings):
             # Included because the placeholder is embedded in a URL rather than
             # standing alone, which is exactly why it was missed before.
             "database_url": self.database_url,
+            # Unconditional, unlike the metrics token below: an unauthenticated
+            # Qdrant on the admin network is a full read of the knowledge base
+            # for anything that gets onto it, and there is no deployment shape
+            # in which the placeholder is acceptable.
+            "qdrant_api_key": self.qdrant_api_key,
         }
         # Only when metrics are actually exposed: a deployment that runs no
         # Prometheus has no token to protect and should not be forced to invent one.

@@ -43,6 +43,7 @@ from app.domain.exceptions import (
     NotAuthorizedError,
     QuotaExceededError,
     RateLimitedError,
+    RuntimeCapabilityError,
     RuntimeUnavailableError,
     TotpEnrolmentExpiredError,
     TotpRequiredError,
@@ -50,6 +51,7 @@ from app.domain.exceptions import (
     UploadRejectedError,
     UserAlreadyExistsError,
     UserNotFoundError,
+    VectorStoreError,
     WeakPasswordError,
 )
 
@@ -91,6 +93,8 @@ STATUS_MAP: dict[type[DomainError], int] = {
     # knows to send less rather than to send something different.
     UploadRejectedError: 413,
     DocumentParseError: 422,
+    RuntimeCapabilityError: 400,
+    VectorStoreError: 503,
 }
 
 OPENAI_ERROR_TYPES: dict[int, str] = {

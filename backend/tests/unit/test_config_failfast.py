@@ -22,6 +22,7 @@ REAL_SECRETS = {
     "session_signing_key": "real-session-key",
     "proxy_shared_secret": "real-proxy-secret",
     "metrics_scrape_token": "real-metrics-token",
+    "qdrant_api_key": "real-qdrant-key",
     "database_url": "postgresql+asyncpg://nexus:real@db:5432/nexus",
     "cache_backend": "redis",
 }
@@ -41,6 +42,7 @@ _AMBIENT = (
     "PROXY_SHARED_SECRET",
     "METRICS_SCRAPE_TOKEN",
     "METRICS_ENABLED",
+    "QDRANT_API_KEY",
     "ALLOWED_COUNTRIES",
     "EXPOSE_OPENAPI",
 )
@@ -110,6 +112,19 @@ def test_placeholder_metrics_token_is_rejected_only_when_metrics_are_enabled() -
 
     disabled = Settings(**{**base, "metrics_scrape_token": placeholder, "metrics_enabled": False})
     assert disabled.metrics_enabled is False
+
+
+def test_the_qdrant_key_is_required_unconditionally() -> None:
+    """Unlike the metrics token, there is no flag that makes this optional.
+
+    Qdrant ships with no authentication at all, so a placeholder key leaves the
+    whole knowledge base readable to anything that reaches the admin network.
+    There is no deployment shape in which that is the intended state, so there
+    is nothing to make it conditional on.
+    """
+    base = {**REAL_SECRETS, "env": "production", "auth_mode": "tailnet"}
+    with pytest.raises(ValidationError, match="qdrant_api_key"):
+        Settings(**{**base, "qdrant_api_key": "dev-qdrant-key-not-for-production"})
 
 
 def test_a_placeholder_hidden_inside_a_url_is_caught() -> None:

@@ -123,6 +123,19 @@ class DocumentParseError(DomainError):
     # document bytes, which is the sensitive part of this feature.
 
 
+class RuntimeCapabilityError(DomainError):
+    code = "runtime_capability_unsupported"
+    public_message = "That runtime cannot perform this operation."
+    # Distinct from RuntimeUnavailableError, which means no adapter exists at
+    # all. This one means the adapter exists and the runtime genuinely does not
+    # do the thing, so refusing is the honest answer rather than a gap to fill.
+
+
+class VectorStoreError(DomainError):
+    code = "vector_store_unavailable"
+    public_message = "The knowledge index is not available."
+
+
 class DocumentStateConflictError(DomainError):
     code = "document_state_conflict"
     public_message = "The document is not in a state that allows this operation."

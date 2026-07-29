@@ -28,7 +28,7 @@ from app.domain.exceptions import (
     DocumentStateConflictError,
     ModelStateConflictError,
 )
-from app.domain.ports.knowledge_ports import DocumentStoragePort
+from app.domain.ports.knowledge_ports import DocumentStoragePort, VectorStorePort
 from app.domain.ports.repositories import KnowledgeRepositoryPort
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
 from app.domain.services.upload_policy import assert_upload_allowed, sanitise_filename
@@ -47,11 +47,13 @@ class ManageKnowledge:
         self,
         knowledge: KnowledgeRepositoryPort,
         storage: DocumentStoragePort,
+        vectors: VectorStorePort,
         authz: AuthorizationPort,
         audit: AuditPort,
     ) -> None:
         self._knowledge = knowledge
         self._storage = storage
+        self._vectors = vectors
         self._authz = authz
         self._audit = audit
 
@@ -211,13 +213,15 @@ class ManageKnowledge:
     # --- internals -------------------------------------------------------
 
     async def _forget_document(self, document: KnowledgeDocument) -> None:
-        """Bytes first, then the row.
+        """Passages, then bytes, then the row.
 
-        A failure to remove the bytes must not leave a row the operator can no
-        longer see but whose file is still on disk: with the row present they
-        can retry, and `delete` on the storage port is idempotent so the retry
-        succeeds.
+        The row goes last so that a failure in either of the first two leaves a
+        document the operator can still see and retry. Both are idempotent, so
+        the retry succeeds. The reverse order would leave passages retrievable
+        from a document nothing lists, which is the worse failure: a deleted
+        document would keep answering questions.
         """
+        await self._vectors.delete_document(document.id)
         await self._storage.delete(document.id)
         await self._knowledge.delete_document(document.id)
 
