@@ -206,6 +206,31 @@ class OllamaAdapter:
                         detail=f"ollama stream for {ref} ended without a done event"
                     )
 
+    async def embed(self, ref: str, texts: Sequence[str]) -> list[list[float]]:
+        """Vectors for a batch, through Ollama's `/api/embed`.
+
+        The batching endpoint, not the older single-input `/api/embeddings`:
+        one round trip per passage would dominate the cost of indexing a
+        document. The response's `embeddings` is a list per input, in order.
+        """
+        assert_valid_model_ref(ref)
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
+            response = await client.post("/api/embed", json={"model": ref, "input": list(texts)})
+            if response.status_code == 404:
+                raise ModelNotFoundError(detail=f"{ref} is not present on this runtime")
+            if response.status_code >= 400:
+                raise NoAvailableModelError(
+                    detail=f"ollama /api/embed returned {response.status_code}"
+                )
+
+        embeddings = response.json().get("embeddings")
+        if not isinstance(embeddings, list):
+            # A model that is not an embedding model answers 200 with no
+            # `embeddings` key. Refusing here is what stops that becoming a
+            # knowledge base indexed with nothing.
+            raise NoAvailableModelError(detail=f"ollama returned no embeddings for {ref}")
+        return [[float(value) for value in vector] for vector in embeddings]
+
     # --- model lifecycle -------------------------------------------------
 
     async def pull(self, ref: str) -> AsyncGenerator[PullProgress, None]:

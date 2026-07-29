@@ -147,6 +147,10 @@ volumes:
   # unpublished research, so it is the volume that most needs to be in the
   # encrypted backup (security.md section 9.4).
   documents:
+  # The passage index. Rebuildable from `documents` by re-ingesting, so it is
+  # the one volume here that a backup could skip; kept as a named volume anyway
+  # because rebuilding it means embedding every document again.
+  qdrant-data:
 
 # Every secret is a file under ./secrets, git-ignored, populated per deployment.
 # The three database URLs each name a different least-privilege account
@@ -182,6 +186,21 @@ secrets:
   # Grafana's initial admin password, replacing its admin/admin default.
   grafana_admin_password:
     file: ./secrets/grafana_admin_password
+  # Qdrant ships with no authentication at all, so this is not a hardening step
+  # but the only thing standing between anything on the admin network and a full
+  # read of the knowledge base. One file, set on the service through
+  # QDRANT__SERVICE__API_KEY and read by the backends as qdrant_api_key, so the
+  # two cannot drift. Required to be a real value in production unconditionally
+  # (config.py); there is no deployment shape where the placeholder is intended.
+  qdrant_api_key:
+    file: ./secrets/qdrant_api_key
+  # Qdrant's read-only key, and the vector store's half of the section 6
+  # least-privilege split. The gateway retrieves passages to answer a request
+  # and must never be able to add, alter or delete one, exactly as it may read
+  # every table but write only `usage_records`. Mounted at the same target name,
+  # so the gateway's settings read a key that simply cannot write.
+  qdrant_read_only_api_key:
+    file: ./secrets/qdrant_read_only_api_key
 
 services:
   # --- one-shot schema migration and provisioning ------------------------
@@ -212,8 +231,9 @@ services:
       - session_signing_key
       - proxy_shared_secret
       # Read only so get_settings() does not trip the production placeholder
-      # check; this job scrapes nothing.
+      # check; this job scrapes nothing and indexes nothing.
       - metrics_scrape_token
+      - qdrant_api_key
     depends_on:
       postgres:
         condition: service_healthy
@@ -246,6 +266,11 @@ services:
       - session_signing_key
       - proxy_shared_secret
       - metrics_scrape_token
+      # The read-only key, mounted at the name the settings read. The gateway
+      # retrieves passages to answer a request and cannot write one, the same
+      # least-privilege split its database account has.
+      - source: qdrant_read_only_api_key
+        target: qdrant_api_key
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
       interval: 30s
@@ -284,6 +309,8 @@ services:
       - session_signing_key
       - proxy_shared_secret
       - metrics_scrape_token
+      # The full key: ingestion creates the collection and writes passages.
+      - qdrant_api_key
 
   # --- control plane, public entrance -------------------------------------
   # A separate service, not a second port on the one above: the two trust
@@ -313,6 +340,7 @@ services:
       - session_signing_key
       - proxy_shared_secret
       - metrics_scrape_token
+      - qdrant_api_key
 
   # --- document parser ----------------------------------------------------
   # The container that reads attacker-supplied bytes, and the only one this
@@ -412,6 +440,36 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nexus}"]
       interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # The passage index for the knowledge base. Like postgres and redis it sits on
+  # both database segments and initiates nothing, so being reachable from the
+  # gateway and from the admin plane does not make those two reachable to each
+  # other. Publishes no port: an unauthenticated Qdrant is a full read of the
+  # research data, and the key below is what makes it authenticated at all.
+  qdrant:
+    image: qdrant/qdrant:v1.13.0
+    restart: unless-stopped
+    environment:
+      # Read from the mounted files through a shell, so neither key appears in
+      # `environment` or in `docker inspect`. Qdrant has no `_FILE` convention,
+      # the same gap redis has.
+      QDRANT__SERVICE__ENABLE_STATIC_CONTENT: "false"
+    command:
+      - sh
+      - -c
+      - 'export QDRANT__SERVICE__API_KEY="$(cat /run/secrets/qdrant_api_key)" QDRANT__SERVICE__READ_ONLY_API_KEY="$(cat /run/secrets/qdrant_read_only_api_key)"; exec ./entrypoint.sh'
+    secrets:
+      - qdrant_api_key
+      - qdrant_read_only_api_key
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks: [gateway-data, admin-data]
+    healthcheck:
+      # /healthz needs no key; the data endpoints do.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:6333/healthz"]
+      interval: 15s
       timeout: 5s
       retries: 5
 

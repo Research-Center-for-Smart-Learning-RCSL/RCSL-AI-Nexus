@@ -49,6 +49,7 @@ from app.domain.exceptions import (
     ModelNotFoundError,
     ModelStateConflictError,
     NoAvailableModelError,
+    RuntimeCapabilityError,
 )
 
 logger = logging.getLogger(__name__)
@@ -224,9 +225,7 @@ class MlxAdapter:
             try:
                 # `shield` so a poll-window timeout does not cancel the download
                 # itself, only the wait on it.
-                await asyncio.wait_for(
-                    asyncio.shield(download), timeout=self._pull_poll_interval
-                )
+                await asyncio.wait_for(asyncio.shield(download), timeout=self._pull_poll_interval)
                 break
             except TimeoutError:
                 completed = await loop.run_in_executor(None, self._downloaded_bytes, ref)
@@ -250,6 +249,21 @@ class MlxAdapter:
             "/v1/chat/completions",
             {"model": ref, "messages": [{"role": "user", "content": "ok"}], "max_tokens": 1},
             ref,
+        )
+
+    async def embed(self, ref: str, texts: Sequence[str]) -> list[list[float]]:
+        """Not supported: `mlx_lm.server` serves completions only.
+
+        Refused rather than approximated, which is the same judgement `unload`
+        below makes. A plausible-looking vector from the wrong source would not
+        fail: it would index the knowledge base with values that retrieve
+        confidently and wrongly, and nothing downstream could tell. The routing
+        policy for the `embedding` capability should name an Ollama model until
+        there is an MLX embedding server to point at.
+        """
+        assert_valid_hf_repo_id(ref)
+        raise RuntimeCapabilityError(
+            detail=f"mlx_lm.server has no embeddings endpoint; {ref} cannot embed"
         )
 
     async def unload(self, ref: str) -> None:

@@ -18,14 +18,18 @@ from ipaddress import ip_network
 from app.domain.entities.actor import Actor, Role
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.invitation import Invitation, InvitationPurpose, RecoveryCode
-from app.domain.entities.knowledge import DocumentStatus
-from app.domain.entities.model import Model, ModelState, PullProgress
+from app.domain.entities.knowledge import DocumentChunk, DocumentStatus, RetrievedPassage
+from app.domain.entities.model import Model, ModelState, PullProgress, RuntimeKind
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.tenant import Tenant
 from app.domain.entities.usage import BucketUnit, UsageBucket, UsageRecord
 from app.domain.entities.user import User
-from app.domain.exceptions import InvalidModelReferenceError, InvalidNodeAddressError
+from app.domain.exceptions import (
+    InvalidModelReferenceError,
+    InvalidNodeAddressError,
+    VectorStoreError,
+)
 from app.domain.ports.infrastructure_ports import JobStatus
 
 
@@ -627,3 +631,83 @@ class FakeDocumentState:
         await self._knowledge.set_document_status(
             document_id, status, chunk_count=chunk_count, error=error
         )
+
+
+class FakeVectorStore:
+    """`VectorStorePort` over a dict keyed by (document_id, index).
+
+    Like `FakeKnowledge` it has no tenant filter, so it exercises the use cases'
+    ordering rather than the isolation. The tenant property of the real adapter
+    is the collection name it derives, which test_qdrant_store.py pins.
+    """
+
+    def __init__(self, *, fail_on_upsert: bool = False) -> None:
+        self.points: dict[tuple[str, int], DocumentChunk] = {}
+        self.deleted: list[str] = []
+        self.ready_for: list[int] = []
+        self.searches: list[tuple[int, str | None]] = []
+        self.results: list[RetrievedPassage] = []
+        self._fail_on_upsert = fail_on_upsert
+
+    async def ensure_ready(self, vector_size: int) -> None:
+        self.ready_for.append(vector_size)
+
+    async def upsert(self, chunks: Sequence[DocumentChunk]) -> None:
+        if self._fail_on_upsert:
+            raise VectorStoreError(detail="qdrant is down")
+        for chunk in chunks:
+            self.points[(chunk.document_id, chunk.index)] = chunk
+
+    async def delete_document(self, document_id: str) -> None:
+        self.deleted.append(document_id)
+        for key in [k for k in self.points if k[0] == document_id]:
+            del self.points[key]
+
+    async def search(
+        self, vector: Sequence[float], *, limit: int, collection_id: str | None = None
+    ) -> list[RetrievedPassage]:
+        self.searches.append((limit, collection_id))
+        return self.results[:limit]
+
+
+class FakeEmbedder:
+    """`TextEmbedderPort` producing deterministic vectors.
+
+    Each value carries the text's length, so a test can tell one passage's
+    vector from another's; that is what pins chunks and vectors staying paired
+    rather than merely being the same count.
+    """
+
+    def __init__(self, *, dimensions: int = 4, raises: Exception | None = None) -> None:
+        self.dimensions = dimensions
+        self.batches: list[list[str]] = []
+        self.resolutions = 0
+        self._raises = raises
+
+    async def resolve(self) -> tuple[Model, FakeRuntime]:
+        self.resolutions += 1
+        if self._raises is not None:
+            raise self._raises
+        return (
+            Model(
+                id="embed-1",
+                alias="embedder",
+                ref="nomic-embed-text",
+                runtime=RuntimeKind.OLLAMA,
+                node_id="node-1",
+                state=ModelState.LOADED,
+                capabilities=frozenset({"embedding"}),
+            ),
+            FakeRuntime(),
+        )
+
+    async def embed_with(
+        self, runtime: object, texts: Sequence[str], ref: str | None = None
+    ) -> list[list[float]]:
+        if self._raises is not None:
+            raise self._raises
+        self.batches.append(list(texts))
+        return [[float(len(t))] * self.dimensions for t in texts]
+
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        return await self.embed_with(None, texts)

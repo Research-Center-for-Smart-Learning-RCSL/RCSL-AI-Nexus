@@ -70,6 +70,8 @@ openssl rand -base64 32        # for each password and each of the four below
 | `proxy_shared_secret` | must match the value the nginx proxy sends |
 | `metrics_scrape_token` | bearer token for `/metrics`; the same file is mounted into Prometheus, so both sides use one value. Not needed if `METRICS_ENABLED=false` |
 | `grafana_admin_password` | Grafana's initial admin password, replacing its `admin`/`admin` default |
+| `qdrant_api_key` | Qdrant has **no authentication by default**, so this is the only thing between anything on the admin network and a full read of the knowledge base. Set on the Qdrant container and read by the admin entrances, which index documents |
+| `qdrant_read_only_api_key` | A **different** value from the one above. The gateway mounts this one (at the target name `qdrant_api_key`) so that retrieving a passage to answer a request cannot become writing one, the same least-privilege split its database account has. Generate it separately; reusing the full key silently removes the split |
 | `alert_smtp_account` | the Gmail address `check-platform-health.sh` sends alerts *from*; not itself a secret, but kept beside the password because Gmail requires the envelope sender to be the account that authenticates |
 | `alert_smtp_password` | a Google app password for that account, not the account password. Needs 2-Step Verification enabled on it first |
 
