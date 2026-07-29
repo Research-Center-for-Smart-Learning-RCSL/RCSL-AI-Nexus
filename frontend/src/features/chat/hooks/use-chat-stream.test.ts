@@ -1,10 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
 
 import {
   chatRequestFor,
   historyFor,
+  useChatStream,
   type ChatTurn,
 } from '@/features/chat/hooks/use-chat-stream';
+import { openChatStream } from '@/features/chat/api';
+
+vi.mock('@/features/chat/api', () => ({ openChatStream: vi.fn() }));
 
 const turn = (partial: Partial<ChatTurn> & Pick<ChatTurn, 'role'>): ChatTurn => ({
   id: crypto.randomUUID(),
@@ -97,5 +102,83 @@ describe('chatRequestFor', () => {
 
   it('carries the capability and messages through unchanged', () => {
     expect(chatRequestFor('code', messages)).toEqual({ capability: 'code', messages });
+  });
+});
+
+describe('clearing while a generation is running', () => {
+  /** A response whose body stays open until `push`/`close` are called. */
+  function controllable() {
+    let controller: ReadableStreamDefaultController<Uint8Array>;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c;
+      },
+    });
+    return {
+      response: new Response(body),
+      push: (text: string) => controller.enqueue(encoder.encode(text)),
+      close: () => controller.close(),
+    };
+  }
+
+  it('does not let the in-flight turn reappear in the thread it emptied', async () => {
+    // Clear is enabled mid-stream, so this is the ordinary path rather than a
+    // race, and what protects it is indirect enough to be worth pinning: the
+    // `finally` reads its content back out of the stream store, and `clear`
+    // resets that store before the aborted read resumes, so its guard is
+    // already false by the time it runs. `useAssistant` accumulates its answer
+    // in a local instead and is therefore *not* protected this way — it retires
+    // the generation explicitly. Change how this one obtains its content and
+    // the orphaned turn comes back.
+    const stream = controllable();
+    vi.mocked(openChatStream).mockResolvedValue(stream.response);
+
+    const { result } = renderHook(() => useChatStream());
+
+    await act(async () => {
+      void result.current.send('chat', 'hello');
+    });
+    await act(async () => {
+      stream.push('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+    });
+
+    expect(result.current.turns).toHaveLength(1);
+    expect(result.current.isStreaming).toBe(true);
+
+    await act(async () => {
+      result.current.clear();
+    });
+    await act(async () => {
+      stream.close();
+    });
+
+    expect(result.current.turns).toEqual([]);
+    expect(result.current.isStreaming).toBe(false);
+  });
+
+  it('still keeps a partial answer when the generation is merely stopped', async () => {
+    // The distinction that has to survive: Stop keeps what the hardware
+    // produced, because that is also what was billed. Only Clear discards it,
+    // and only because the user asked for an empty thread.
+    const stream = controllable();
+    vi.mocked(openChatStream).mockResolvedValue(stream.response);
+
+    const { result } = renderHook(() => useChatStream());
+
+    await act(async () => {
+      void result.current.send('chat', 'hello');
+    });
+    await act(async () => {
+      stream.push('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+    });
+    await act(async () => {
+      result.current.cancel();
+    });
+    await act(async () => {
+      stream.close();
+    });
+
+    expect(result.current.turns.map((t) => t.content)).toEqual(['hello', 'partial']);
   });
 });

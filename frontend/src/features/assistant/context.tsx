@@ -19,6 +19,15 @@
  * provider — including the drawer, mid-stream — for a value nothing reads until
  * a message is sent. The surface does live in state: it changes only when a
  * dialog opens or a route changes, and the drawer's header reads it.
+ *
+ * **Registrations are a stack, not a slot.** Screens genuinely nest: the key
+ * table publishes `api_keys.list` and stays mounted while a dialog on top of it
+ * publishes `api_keys.create`. With one slot the dialog's cleanup reset the
+ * surface to `other` on close, and the table underneath never re-registered —
+ * its effect dependencies had not changed — so closing a dialog silently took
+ * the assistant's context away from the screen still in front of the operator.
+ * The stack restores whatever is beneath, which is what the callers already
+ * assumed and said in their comments.
  */
 
 import {
@@ -41,8 +50,12 @@ export type AssistantRegistration = {
   surface: AssistSurface;
   /** Which key is being edited, on `api_keys.edit`. */
   keyId?: string;
-  /** Read at send time. Never state; see the module docstring. */
-  readDraft?: () => ApiKeyDraft;
+  /**
+   * Read at send time. Never state; see the module docstring. May return
+   * undefined, which is how a screen with no form differs from one whose form
+   * is open and empty — a distinction the system prompt makes.
+   */
+  readDraft?: () => ApiKeyDraft | undefined;
   /** Applies an accepted proposal to the live form. */
   applyPatch?: (patch: FormPatch) => void;
 };
@@ -59,41 +72,54 @@ type AssistantContextValue = {
 
 const AssistantContext = createContext<AssistantContextValue | null>(null);
 
+const NOTHING = { surface: 'other' as AssistSurface, keyId: undefined, canApply: false };
+
 export function AssistantContextProvider({ children }: { children: ReactNode }) {
-  const [surface, setSurface] = useState<AssistSurface>('other');
-  const [keyId, setKeyId] = useState<string | undefined>(undefined);
-  const [canApply, setCanApply] = useState(false);
-  const current = useRef<AssistantRegistration | null>(null);
+  const [active, setActive] = useState<{
+    surface: AssistSurface;
+    keyId: string | undefined;
+    canApply: boolean;
+  }>(NOTHING);
+  const stack = useRef<AssistantRegistration[]>([]);
 
-  const register = useCallback((registration: AssistantRegistration) => {
-    current.current = registration;
-    setSurface(registration.surface);
-    setKeyId(registration.keyId);
-    setCanApply(registration.applyPatch !== undefined);
-
-    return () => {
-      // Only if this registration is still the live one. A dialog closing after
-      // a newer screen has registered would otherwise reset the surface to
-      // `other` and take the assistant's context away from the screen that now
-      // owns it — unmount order is not something the caller controls.
-      if (current.current !== registration) return;
-      current.current = null;
-      setSurface('other');
-      setKeyId(undefined);
-      setCanApply(false);
-    };
+  const sync = useCallback(() => {
+    const top = stack.current.at(-1);
+    setActive(
+      top === undefined
+        ? NOTHING
+        : {
+            surface: top.surface,
+            keyId: top.keyId,
+            canApply: top.applyPatch !== undefined,
+          },
+    );
   }, []);
+
+  const register = useCallback(
+    (registration: AssistantRegistration) => {
+      stack.current = [...stack.current, registration];
+      sync();
+
+      return () => {
+        // Removed by identity rather than popped, so unmount order does not
+        // have to be the reverse of mount order — which is not something a
+        // caller controls, and which React's strict-mode double-invoke breaks
+        // on purpose. Whatever remains beneath becomes active again.
+        stack.current = stack.current.filter((entry) => entry !== registration);
+        sync();
+      };
+    },
+    [sync],
+  );
 
   const value = useMemo<AssistantContextValue>(
     () => ({
-      surface,
-      keyId,
-      canApply,
-      readDraft: () => current.current?.readDraft?.(),
-      applyPatch: (patch) => current.current?.applyPatch?.(patch),
+      ...active,
+      readDraft: () => stack.current.at(-1)?.readDraft?.(),
+      applyPatch: (patch) => stack.current.at(-1)?.applyPatch?.(patch),
       register,
     }),
-    [surface, keyId, canApply, register],
+    [active, register],
   );
 
   return (
@@ -143,7 +169,11 @@ export function useAssistantSurface(
     return register({
       surface,
       keyId,
-      readDraft: () => latest.current?.readDraft?.() ?? {},
+      // `undefined`, not `{}`, for a screen with no form. An empty object is
+      // indistinguishable from a form the operator has opened and not filled,
+      // and the backend would then describe an empty key form to the model
+      // while it is being asked about the documentation page.
+      readDraft: () => latest.current?.readDraft?.(),
       applyPatch: offersApply
         ? (patch) => latest.current?.applyPatch?.(patch)
         : undefined,

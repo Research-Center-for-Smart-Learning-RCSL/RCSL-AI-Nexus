@@ -224,3 +224,48 @@ def test_the_contract_describes_the_markers_the_reader_searches_for() -> None:
     because nothing was ever found to reject."""
     assert PROPOSAL_OPEN in PROPOSAL_CONTRACT
     assert PROPOSAL_CLOSE in PROPOSAL_CONTRACT
+
+
+# --- ordering on the wire ------------------------------------------------
+
+
+async def test_the_holdback_is_released_before_the_terminal_chunk() -> None:
+    """No content may follow the `finish_reason` frame.
+
+    A client is right to stop reading at the terminal frame, so anything after
+    it is written to nobody. Releasing the holdback in the flush *after* the
+    loop meant every answer lost its last nine characters to any reader that
+    did not opt into a trailer — including `readChatStream` without
+    `onTrailer`. The same mistake is recorded against `RouteChatRequest` in
+    docs/PROGRESS.md, 2026-07-27.
+    """
+    c = collector()
+
+    async def generation() -> AsyncIterator[CompletionChunk]:
+        yield CompletionChunk(delta="A narrow key is best here.")
+        yield CompletionChunk(delta="", finish_reason="stop")
+
+    seen: list[tuple[str, str | None]] = []
+    async for chunk in c.wrap(generation()):
+        seen.append((chunk.delta, chunk.finish_reason))
+
+    assert "".join(delta for delta, _ in seen) == "A narrow key is best here."
+    terminal = next(i for i, (_, reason) in enumerate(seen) if reason)
+    assert all(not delta for delta, _ in seen[terminal + 1 :])
+
+
+async def test_a_truncated_marker_at_the_end_is_not_shown_as_text() -> None:
+    """The other half of releasing the holdback. Once the generation is over
+    there is nothing left to disambiguate, but a tail that is a prefix of the
+    marker is a block the model began and did not finish — dropping it beats
+    printing `<propo` at the end of the answer."""
+    c = collector()
+
+    async def generation() -> AsyncIterator[CompletionChunk]:
+        yield CompletionChunk(delta="Use a narrow key.<propo")
+        yield CompletionChunk(delta="", finish_reason="length")
+
+    visible = "".join([chunk.delta async for chunk in c.wrap(generation())])
+
+    assert visible == "Use a narrow key."
+    assert await c.trailer() is None

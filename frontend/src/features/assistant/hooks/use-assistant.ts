@@ -21,11 +21,14 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { z } from 'zod';
 
 import { createStreamStore } from '@/components/composed/stream-message';
 import { describeError } from '@/components/composed/error-state';
 import { openAssistantStream } from '@/features/assistant/api';
 import {
+  assistRoleSchema,
+  proposalSchema,
   readProposalFrame,
   type AssistMessage,
   type Proposal,
@@ -47,24 +50,45 @@ const STORAGE_KEY = 'nexus:assistant:transcript';
 const MAX_TURNS = 40;
 
 /**
- * Loaded defensively. The value is whatever was in storage when this tab last
- * ran, which may be from an older build with a different shape, and a drawer
- * that throws on mount takes the whole shell down with it.
+ * What a restored turn has to satisfy to be replayed or rendered.
+ *
+ * Parsed rather than shape-checked, and every field rather than two. The stored
+ * value is whatever this tab wrote under some earlier build, so a turn can
+ * arrive carrying a `proposal` from a schema that has since changed — and
+ * `ProposalCard` reads `Object.entries(proposal.fields)`, which throws during
+ * render on a proposal missing `fields`. That is an exception inside the app
+ * shell with no error boundary above it: the whole dashboard fails to load,
+ * which is exactly the failure the loader exists to prevent. A bad `role` is
+ * the milder version — it replays into the request and 422s.
  */
-function loadTurns(): AssistantTurn[] {
+const storedTurnSchema = z.object({
+  id: z.string(),
+  role: assistRoleSchema,
+  content: z.string(),
+  proposal: proposalSchema.optional(),
+  finishReason: z.string().optional(),
+  error: z.string().optional(),
+});
+
+/**
+ * Loaded defensively. A drawer that throws on mount takes the shell down with
+ * it, so an unreadable entry is dropped rather than repaired.
+ *
+ * Exported to be tested directly, like `historyFor`: what it guards against is
+ * a value written by a build that no longer exists, which no test can produce
+ * by driving the hook normally.
+ */
+export function loadTurns(): AssistantTurn[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = window.sessionStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (turn): turn is AssistantTurn =>
-        typeof turn === 'object' &&
-        turn !== null &&
-        typeof (turn as AssistantTurn).id === 'string' &&
-        typeof (turn as AssistantTurn).content === 'string',
-    );
+    return parsed.flatMap((turn) => {
+      const result = storedTurnSchema.safeParse(turn);
+      return result.success ? [result.data] : [];
+    });
   } catch {
     return [];
   }
@@ -87,7 +111,13 @@ export function historyFor(
   return [
     ...turns
       .filter((turn) => turn.content)
-      .slice(-MAX_TURNS)
+      // Room for the question, which is appended below and counts against the
+      // same cap. Slicing to the full `MAX_TURNS` and then appending sent 41
+      // messages to a schema that accepts 40, so after twenty exchanges every
+      // further question was refused — permanently, since the transcript is
+      // restored from `sessionStorage` on the next load, and only the Clear
+      // button could recover it.
+      .slice(-(MAX_TURNS - 1))
       .map((turn) => ({ role: turn.role, content: turn.content })),
     { role: 'user' as const, content: question },
   ];
@@ -99,6 +129,12 @@ export function useAssistant() {
   const [isStreaming, setIsStreaming] = useState(false);
   const store = useMemo(() => createStreamStore(), []);
   const controller = useRef<AbortController | null>(null);
+  // Bumped by `clear`, and compared in the `finally` below. Clearing while an
+  // answer is streaming otherwise emptied the transcript and then let the
+  // in-flight request append its turn into the empty list, leaving one orphaned
+  // bubble — and writing it to `sessionStorage`. The Clear button is
+  // deliberately enabled mid-stream, so this is the ordinary path, not a race.
+  const generation = useRef(0);
 
   useEffect(() => {
     try {
@@ -133,6 +169,7 @@ export function useAssistant() {
       controller.current?.abort();
       const abort = new AbortController();
       controller.current = abort;
+      const mine = ++generation.current;
 
       // Read at send time rather than subscribed to, so a keystroke does not
       // re-render the drawer mid-stream. See `features/assistant/context.tsx`.
@@ -179,20 +216,32 @@ export function useAssistant() {
           abort.signal,
         );
       } catch (caught) {
-        failure = describeError(caught);
-        store.fail(failure);
+        // Pressing Stop before the response headers arrive rejects the fetch
+        // rather than ending the read, and a cancellation is a user action, not
+        // a failure. Reported as one it read "The answer stopped: signal is
+        // aborted without reason", which describes the implementation rather
+        // than anything the operator did.
+        if (!(caught instanceof DOMException && caught.name === 'AbortError')) {
+          failure = describeError(caught);
+          store.fail(failure);
+        }
       } finally {
-        setTurns((previous) => [
-          ...previous,
-          {
-            id: `a-${Date.now()}`,
-            role: 'assistant',
-            content: answer,
-            proposal: proposal ?? undefined,
-            finishReason,
-            error: failure,
-          },
-        ]);
+        // Nothing to show is nothing to record: cancelling before the first
+        // token would otherwise leave an empty Assistant bubble in the
+        // transcript, and in `sessionStorage`.
+        if (generation.current === mine && (answer || failure)) {
+          setTurns((previous) => [
+            ...previous,
+            {
+              id: `a-${Date.now()}`,
+              role: 'assistant',
+              content: answer,
+              proposal: proposal ?? undefined,
+              finishReason,
+              error: failure,
+            },
+          ]);
+        }
         setIsStreaming(false);
         store.reset();
         controller.current = null;
@@ -205,6 +254,9 @@ export function useAssistant() {
 
   const clear = useCallback(() => {
     controller.current?.abort();
+    // Retires whatever is in flight, so its `finally` does not append into the
+    // transcript this is emptying.
+    generation.current += 1;
     setTurns([]);
     store.reset();
   }, [store]);

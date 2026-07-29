@@ -43,10 +43,12 @@ routers. There is no `jobs.py`: download progress is
 
 Present and not listed below: `app/shared/clock.py` (injected time, so expiry
 behaviour is testable), `domain/entities/chat.py` (`Message`,
-`CompletionChunk`), `domain/entities/capability.py` (`KNOWN_CAPABILITIES`, the
-one definition of what a capability may be named — it lived in a use case and
-two other places kept copies that had each drifted from it, see
-[PROGRESS.md](../PROGRESS.md) 2026-07-28),
+`CompletionChunk`), `domain/entities/capability.py` (`ISSUABLE_CAPABILITIES`
+and `ROUTABLE_CAPABILITIES`, the one definition of what a capability may be
+named — it lived in a use case and two other places kept copies that had each
+drifted from it, see [PROGRESS.md](../PROGRESS.md) 2026-07-28, and it became two
+sets on 2026-07-29 so that every reader has to say whether it means "may be
+issued for" or "may be routed to"; [security.md](./security.md) §7.5.1),
 `domain/services/api_key_service.py`, and `adapters/persistence/mappers.py`.
 
 ```
