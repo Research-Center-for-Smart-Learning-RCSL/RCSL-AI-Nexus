@@ -172,12 +172,18 @@ def test_the_proxy_timeout_stays_above_the_generation_deadline() -> None:
     """
     root = Path(__file__).resolve().parents[3]
 
-    config = (root / "frontend" / "next.config.js").read_text()
+    # `encoding` is not optional here. `read_text()` without it decodes using
+    # the process locale, which on a Windows development machine set to
+    # Traditional Chinese is cp950, and both files carry UTF-8 punctuation in
+    # their comments. The test then died on a `UnicodeDecodeError` rather than
+    # on the invariant it exists to check, and only on machines whose locale
+    # happened not to be UTF-8.
+    config = (root / "frontend" / "next.config.js").read_text(encoding="utf-8")
     match = re.search(r"proxyTimeout:\s*([\d_]+)", config)
     assert match is not None, "proxyTimeout is gone; the 30s default is back"
     proxy_seconds = int(match.group(1).replace("_", "")) / 1000
 
-    env = (root / ".env.example").read_text()
+    env = (root / ".env.example").read_text(encoding="utf-8")
     deadline_match = re.search(r"^GENERATION_DEADLINE_SECONDS=(\d+)", env, re.MULTILINE)
     assert deadline_match is not None, "the deadline must stay discoverable in .env.example"
     deadline = int(deadline_match.group(1))
