@@ -74,7 +74,7 @@ answer and no block at all."""
 
 
 def _visible_prefix(buffer: str) -> str:
-    """The part of the accumulated answer that is safe to show.
+    """The part of the accumulated answer that is safe to show *so far*.
 
     Everything before the opening marker, or — while no marker has been seen —
     everything except a tail that could still turn out to be a partial one. The
@@ -86,6 +86,24 @@ def _visible_prefix(buffer: str) -> str:
     if cut >= 0:
         return buffer[:cut]
     return buffer[: max(0, len(buffer) - len(PROPOSAL_OPEN) + 1)]
+
+
+def _final_visible(buffer: str) -> str:
+    """The same answer once no more text can arrive, so nothing is held back.
+
+    The holdback exists only to disambiguate a marker still being typed. When
+    the generation is over there is nothing left to disambiguate, and a tail
+    that is a proper prefix of the marker is a block the model started and did
+    not finish — not text, so it is dropped rather than shown.
+    """
+    cut = buffer.find(PROPOSAL_OPEN)
+    if cut >= 0:
+        return buffer[:cut]
+
+    for length in range(len(PROPOSAL_OPEN) - 1, 0, -1):
+        if buffer.endswith(PROPOSAL_OPEN[:length]):
+            return buffer[:-length]
+    return buffer
 
 
 class ProposalCollector:
@@ -121,7 +139,20 @@ class ProposalCollector:
         async with aclosing(generation) as stream:
             async for chunk in stream:
                 self._buffer += chunk.delta
-                visible = _visible_prefix(self._buffer)
+                # The holdback is released *on* the terminal chunk rather than
+                # after it. Flushing afterwards put a content frame behind the
+                # `finish_reason` frame, and a client is right to stop reading
+                # there — so every answer silently lost its last nine
+                # characters to anything that did not opt into a trailer,
+                # including this repository's own reader. The identical mistake
+                # is recorded against `RouteChatRequest` in docs/PROGRESS.md,
+                # 2026-07-27; it is easy to make twice because the frame that
+                # ends a stream is not the last one the code writes.
+                visible = (
+                    _final_visible(self._buffer)
+                    if chunk.finish_reason
+                    else _visible_prefix(self._buffer)
+                )
                 # The chunk is passed through with its delta rewritten rather
                 # than dropped when nothing is visible: `finish_reason` and
                 # `reasoning` ride on the same chunk, and swallowing one would
@@ -131,11 +162,10 @@ class ProposalCollector:
                 self._emitted = len(visible)
                 yield replace(chunk, delta=out)
 
-        # Flush what the holdback was still sitting on. There is nothing left to
-        # disambiguate once the stream has ended, so the tail is either the rest
-        # of the answer or, if a marker did arrive, already accounted for.
-        cut = self._buffer.find(PROPOSAL_OPEN)
-        final = self._buffer if cut < 0 else self._buffer[:cut]
+        # Reached when the upstream ended without a terminal chunk at all — a
+        # disconnect, or a runtime that simply stops. The branch above has
+        # already flushed every stream that ended properly.
+        final = _final_visible(self._buffer)
         if len(final) > self._emitted:
             yield CompletionChunk(delta=final[self._emitted :], finish_reason=None, token_count=0)
             self._emitted = len(final)

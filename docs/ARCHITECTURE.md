@@ -219,7 +219,7 @@ worse than none. [ROADMAP.md](./ROADMAP.md) and
 |---|---|---|---|
 | Dashboard | `/admin/dashboard` | 1 (counts), 2 (real metrics) | yes; live metrics wait on hardware producing them |
 | Model Management | `/admin/models` | 1 | yes, end to end including download progress (`/admin/models/download-jobs/{id}`) |
-| Routing Policy | `/admin/routing-policies` | 1 (API), 2 (UI editor) | yes, both; the capability named is validated against `KNOWN_CAPABILITIES` |
+| Routing Policy | `/admin/routing-policies` | 1 (API), 2 (UI editor) | yes, both; the capability named is validated against `ROUTABLE_CAPABILITIES`, the wider of the two sets — a policy may be written for something no key can be issued for ([security.md](./architecture/security.md) §7.5.1) |
 | API Keys | `/admin/api-keys` | 1 | yes, end to end: issue, edit, revoke |
 | Gateway information | `/admin/gateway` | 1 | yes; the base URL and servable capabilities the UI needs to explain a key |
 | Users and roles | `/admin/users`, `/admin/me` | 1 | yes, end to end |
