@@ -290,6 +290,9 @@ Every application service declares `depends_on: { migrate: { condition: service_
 **Routine upgrade**
 
 ```bash
+docker tag rcsl-ai-nexus:latest rcsl-ai-nexus:rollback-$(date +%Y%m%d)
+docker tag rcsl-ai-nexus-frontend:latest rcsl-ai-nexus-frontend:rollback-$(date +%Y%m%d)
+
 git pull
 docker compose build
 docker compose up -d          # migrate runs first, then services restart
@@ -298,7 +301,13 @@ docker compose ps             # confirm migrate exited 0 and services are health
 
 After any `up -d` that recreates containers, also confirm the published ports are actually bound — see the startup-ordering note below for why `docker compose ps` does not show this.
 
+**Deploy from a commit, not from a working tree.** The rollback path below is a git one, so an image built from uncommitted changes corresponds to nothing and can only be rolled back to whatever image tag happens to survive.
+
 **Rollback.** Check out the previous tag and rebuild. Alembic downgrades are written only where a migration is genuinely reversible; otherwise recovery is a database restore, which is why §9.4 of [security.md](./security.md) insists restores are rehearsed.
+
+The `rollback-YYYYMMDD` image tags above are the faster path when the rebuild itself is what you want to skip, and the convention is that **they name the last build known to be good, not simply the previous one**. Re-tagging before every build would overwrite a good target with a bad one on exactly the deploy that is fixing something: on 2026-07-29 the second deploy of the day was replacing a build with a known wire-protocol defect, so `rollback-20260729` was deliberately left pointing at the build before *both*. A tag that means "whatever ran last" is worth nothing at the moment it is needed.
+
+**Some changes cannot be deployed in either order.** A routing policy for a capability the running image does not know is refused by `ManageRoutingPolicies`, so the code that widens the capability set has to ship before the policy that uses it can be written. Expect a deploy followed by a configuration step rather than a single atomic change; the first-deploy runbook §7 carries the `assist` case.
 
 **Startup ordering, and why `restart: unless-stopped` does not cover it.** `${TAILNET_IP}` must exist before Docker binds to it, and at boot it does not: Docker Desktop restored containers roughly 21 seconds in on 2026-07-26, before `tailscaled` had put the address on `utun0`, and every forward naming it failed with `listen tcp4 100.x.y.z:8000: bind: can't assign requested address`.
 

@@ -652,7 +652,7 @@ Three readers ask the narrow question (`ManageApiKeys` at issue and at edit, and
 
 Two places needed the distinction re-applied by hand, and both are easy to miss:
 
-- **`ListCapabilities` derives its answer from the policies that exist**, not from either constant. It is the one reader the split does not reach on its own, and it feeds both `GET /v1/models` and the key-issuing form. Without an explicit filter, pointing `assist` at a model — the entirely ordinary act of making the assistant work — would publish it to every integrator.
+- **`ListCapabilities` derives its answer from the policies that exist**, not from either constant. It is the one reader the split does not reach on its own, and it feeds both `GET /v1/models` and the key-issuing form. Without an explicit filter, pointing `assist` at a model — the entirely ordinary act of making the assistant work — would publish it to every integrator. Verified against the running deployment on 2026-07-29 rather than only by unit test, because a filter and the act that would defeat it now both exist: an `assist` policy is in the database and `GET /admin/gateway` answers `["chat"]`. That check belongs in the first-deploy runbook §7 and is there.
 - **`api_key_auth` intersects the stored list** rather than passing it through. `_scopes_for` was already a fixed rule so that no database row could promote a key into the control plane, but `Actor.allowed_capabilities` took `key.scopes` verbatim, so a single direct write to `api_keys` would have let a gateway key reach `assist`. Narrowing there restores the property the surrounding code already claimed.
 
 ## 8. Secrets and Configuration

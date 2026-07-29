@@ -124,10 +124,127 @@ that once made the chat panel render every reply as nothing at all.
 Model output is stripped from the visible answer as it streams, which needs a
 holdback: the `<proposal>` marker arrives split across chunks at whatever
 boundary the tokeniser chose, and a partial `<propo` cannot be taken back once
-it has been streamed. Flushed at the end, or every reply that recommended
-nothing would silently lose its last nine characters.
+it has been streamed. Flushed at the end — which turned out to be the wrong
+place, and is the first finding of the review below.
 
 353 backend tests and 135 frontend tests, up from 318 and 116.
+
+### Deployed, and the two prerequisites that were not remote after all
+
+Recorded as operator work "on the Mac Studio" while the development machine was
+assumed to be somewhere else. It is not: this repository is checked out on the
+Mac Studio, and the stack had been up for twelve hours. Worth writing down
+because the claim was made twice in the same session, confidently, from
+`README.md`'s statement that the development machine *need not* be the target.
+A `hostname` would have settled it.
+
+`qwen2.5:7b` was already registered as `qwen7b` and already loaded, and Ollama
+reports its capabilities as `completion,tools` with **no** `thinking` — exactly
+what the drawer needs. `glm-4.7-flash` is the other resident model and reports
+`thinking`; it also holds `chat` at priority 200 against `qwen7b`'s 100, so the
+`chat` capability resolves to the deliberating model. That is the measured case
+from 2026-07-27 and the reason `assist` is a separate capability rather than a
+setting.
+
+Deploy was the routine upgrade from [deployment.md](./architecture/deployment.md)
+§9: tag the running images, `docker compose build`, `docker compose up -d`,
+confirm `migrate` exited 0 and that the ports are *bound* rather than merely
+`Up`. Then the `assist` policy — which the previous image would have refused,
+since its `KNOWN_CAPABILITIES` had no such name, so the policy and the code that
+permits it could not be deployed in either order separately.
+
+**The `ListCapabilities` filter was then confirmed against the live system**,
+which is the check the whole two-set split exists for: an `assist` policy exists
+and `GET /admin/gateway` still answers `["chat"]`. End to end, the drawer
+answered in **6.6 seconds** against the same hardware that spent 10m53s
+answering nothing through `chat`.
+
+One thing about how the policy was written is worth being explicit about. The
+tailnet entrance trusts its identity header outright and is protected by binding
+to loopback, so an operator on the host can present any login they like. The
+policy was written that way rather than through a browser, and the audit row
+therefore reads `leolove3very@gmail.com / tailnet / routing_policy.saved`. The
+identity is the authorising person's own and the action was theirs, but the
+hands were not: that is a limit of what an audit log can record, and it is
+better stated here than discovered later. Direct SQL would have been worse — it
+bypasses the capability validation *and* leaves no row at all.
+
+The `models.capabilities` column for `qwen7b` still reads `["chat"]` although it
+now serves `assist`. `RoutingService` never reads that field — it matches on
+`model_state`, `node_status` and free memory only — so this is a label on the
+models screen rather than a fault. Left alone deliberately, and noted here so
+the next person to read that column knows it is not authoritative for routing.
+
+### What the review found, and the one it was wrong about
+
+Eight findings against the assistant commit, all of them behaviour no existing
+test covered. Two changed what reaches a screen or a wire.
+
+**The holdback was released after the terminal frame.** The flush ran in the
+code after the loop, which is after the chunk carrying `finish_reason` has
+already been framed — so every answer's last nine characters arrived behind the
+frame that ends the stream, and any client that stops reading there loses them.
+That includes this repository's own `readChatStream` whenever `onTrailer` is
+absent. The identical mistake is recorded against `RouteChatRequest` earlier in
+this file, on 2026-07-27, and it is easy to make twice for the same reason both
+times: **the frame that ends a stream is not the last one the code writes.**
+Now released *on* the terminal chunk, with a tail that is a proper prefix of the
+marker dropped rather than shown, since a block the model began and did not
+finish is not text.
+
+**The page-context registry was a slot rather than a stack.** Screens nest — the
+key table stays mounted while a dialog on top of it registers — so closing the
+dialog reset the surface to `other`, and the table beneath never re-registered
+because its effect dependencies had not changed. Both call sites carried
+comments asserting the opposite behaviour, which is the part worth noticing: a
+comment describing an intention reads exactly like a comment describing a
+guarantee.
+
+The rest: `historyFor` sliced to the full cap and *then* appended the question,
+sending 41 messages to a schema that accepts 40 — so after twenty exchanges every
+further question was refused, and permanently, because the transcript is
+restored from `sessionStorage`; a restored turn was shape-checked on two fields,
+so a proposal from an older build with no `fields` reached `Object.entries` and
+took the whole shell down on load, which is precisely what the loader's own
+docstring claimed it prevented; clearing mid-stream let the in-flight turn
+reappear in the transcript it had emptied; an abort before the response headers
+was reported as a failure reading "signal is aborted without reason"; a screen
+with no form published `{}` rather than undefined, making the system prompt's
+"no form is open" branch unreachable and describing an empty key form to the
+model while it was being asked about the documentation page; and two documents
+still named `KNOWN_CAPABILITIES`.
+
+**One finding was wrong, and it was accepted before being checked.**
+`useChatStream` was reported as sharing the clear-mid-stream defect, and it was
+repeated onward as fact without verification. It does not: its `finally` reads
+the answer back out of the stream store, and `clear` resets that store before
+the aborted read resumes, so the guard is already false. `useAssistant`
+accumulates into a local, which the reset cannot reach — that difference is the
+whole of it. The fix that had been written for the chat hook was reverted: dead
+code defending an unreachable case, carrying a comment that explained a bug
+which had never existed. The behaviour is now pinned by a test instead, because
+the protection is indirect enough to be broken by an unrelated change.
+
+### Removing each fix to see whether its test notices
+
+Every fix in the round above has a test, and each test was checked by putting
+the defect back. That caught one that did not work: the `AbortError` exemption
+had a test that passed with the exemption removed, because the mock resolved
+immediately and the abort therefore reached the reader rather than `fetch`. The
+branch being "fixed" was never executed. Rewriting the mock to reject is what
+made the test mean anything.
+
+Both lessons point the same way and neither is about this feature. A test
+written after a fix passes for the same reason the code does, and reading your
+own code confirms what you meant rather than what you wrote. The mistake with
+`useChatStream` was the same failure without the test: a claim that matched the
+shape of a real bug, asserted without executing anything.
+
+355 backend tests and 155 frontend tests. `vitest.setup.ts` gained
+`afterEach(cleanup)` on the way, since these are the repository's first
+component tests and Testing Library does not auto-clean without Vitest's
+globals — the symptom is "found multiple elements", which reads as a broken
+assertion rather than as missing setup.
 
 ---
 
