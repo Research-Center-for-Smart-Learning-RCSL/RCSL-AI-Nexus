@@ -73,7 +73,10 @@ frontend/
                               #   page publishes a surface and, on the key
                               #   forms, a draft — and there is no field an
                               #   issued key's plaintext could travel in
-                              #   (security.md §7.5)
+                              #   (security.md §7.5). Registrations are a
+                              #   *stack*: screens nest, so a dialog closing has
+                              #   to restore the page underneath rather than
+                              #   clear the registry, which a single slot did
       users/
       chat/
       dashboard/
@@ -209,13 +212,32 @@ Model output and, in Phase 2, knowledge base excerpts are untrusted input. Markd
 
 ## 9. Testing
 
-**There is no frontend test runner yet.** No Vitest, no Storybook, no
-Playwright. The frontend is currently checked by the TypeScript compiler and
+**Vitest is in place; Storybook and Playwright are not.** For a while there was
+no runner at all and the frontend was checked by the TypeScript compiler and
 ESLint only, which is how an open redirect, an unreachable frame schema, and a
-comparison between a UUID and an email address all shipped at once. Closing
-this is the highest-value frontend work outstanding; the plan below is
-unchanged.
+comparison between a UUID and an email address all shipped at once. Coverage is
+now deliberately uneven rather than absent: the logic where a defect *is* a
+security defect is covered, and presentation is not.
 
-- **Storybook plus Vitest** for `components/ui` and `components/composed`. The composed layer is reused across eleven modules, so a break there is expensive; stories cover loading, empty, error, and large-dataset states.
-- **Vitest with Testing Library** for `features/*/hooks`, mocking the API client.
-- **Playwright** for a small set of critical paths (create an API key, edit a routing policy and confirm gateway behaviour changes, stream a chat response and cancel mid-stream). Not every module needs an end-to-end test.
+Currently 155 tests across 16 files — the SSE reader and frame schema, the API
+client's CSRF and 401 handling, `safe-redirect`, the password schema, the key
+form's own rules, and the assistant's proposal parsing, transcript handling and
+page-context registry.
+
+Two things about the setup are worth knowing before adding to it. Vitest's
+`globals` are **not** enabled, so every test imports what it uses — and
+Testing Library therefore does not auto-clean, which is why `vitest.setup.ts`
+registers `afterEach(cleanup)` explicitly. Without it a second `render` in one
+file fails with "found multiple elements", which reads as a broken assertion
+rather than as missing setup.
+
+**A test written after a fix passes for the same reason the code does.** Put
+the defect back and confirm the test notices. That has already caught a test
+which passed either way, because its mock resolved immediately and the branch
+being fixed was never executed (see [PROGRESS.md](../PROGRESS.md) 2026-07-29).
+
+What is still outstanding:
+
+- **Storybook** for `components/ui` and `components/composed`. The composed layer is reused across eleven modules, so a break there is expensive; stories cover loading, empty, error, and large-dataset states. Not started.
+- **Vitest with Testing Library** across the remaining `features/*/hooks`. Started: `useChatStream` and `useAssistant` are driven through `renderHook` with the API module mocked, which is the pattern the rest should follow.
+- **Playwright** for a small set of critical paths (create an API key, edit a routing policy and confirm gateway behaviour changes, stream a chat response and cancel mid-stream). Not every module needs an end-to-end test. Not started.

@@ -1434,6 +1434,38 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
     絕不退回連線來源位址是刻意的（否則每個呼叫端看起來都同一個來源，每把金鑰的 IP
     允許清單就形同虛設）。
 
+- [ ] **給 `assist` 綁一條 routing policy，否則管理助手不會動。** 側邊那個助手抽屜走的
+  是 `assist` 這個 capability，不是 `chat`。沒有策略的話它會回
+  `assistant_unavailable`，訊息本身就寫了修法。
+
+  **要指向一顆不會思考的模型。** 會思考的模型在設定表單旁邊產生的不是慢的答案，而是
+  沒有答案——實測 16,384 tokens、10 分 53 秒、零個答案 token（[PROGRESS.md](../PROGRESS.md)
+  2026-07-27）。先問 Ollama 誰不會思考：
+
+  ```sh
+  curl -s http://127.0.0.1:11434/api/tags | \
+    python3 -c "import json,sys; [print(m['name'], m.get('capabilities')) for m in json.load(sys.stdin)['models']]"
+  ```
+
+  `capabilities` 裡沒有 `thinking` 的那顆就是。在 Routing 頁面替 `assist` 建一條策略指
+  向它即可（別名，不是模型檔名）。
+
+  確認方式有兩個，第二個比第一個重要：
+
+  ```sh
+  # 1. 助手真的會回話
+  # 在管理 UI 右下角打開抽屜問一句，幾秒內要有回應。
+
+  # 2. assist 沒有外洩到可簽發清單
+  curl -H "Tailscale-User-Login: 你的@email" http://127.0.0.1:8001/admin/gateway
+  ```
+
+  第二個要回 `["chat"]` 之類、**不含 `assist`** 的清單。`assist` 可路由但不可簽發——
+  對外簽出去的金鑰不該買到內部管理介面的入場券。這一步之所以要驗，是因為
+  `ListCapabilities` 是從「現存的 routing policy」推導清單的，不是讀常數，所以它是整個
+  可簽發／可路由拆分裡唯一要手動套過濾的地方（[security.md](../architecture/security.md)
+  §7.5.1）。建了策略卻在這裡看到 `assist`，就是那道過濾掉了。
+
 ---
 
 ## 8. 外部協調：NTNU proxy 管理員的四件事（可並行）
