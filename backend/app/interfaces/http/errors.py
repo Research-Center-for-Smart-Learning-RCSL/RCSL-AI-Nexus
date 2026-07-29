@@ -18,9 +18,13 @@ from fastapi.responses import JSONResponse
 
 from app.domain.exceptions import (
     AssistantUnavailableError,
+    CollectionNotFoundError,
     ContextTooLongError,
     CountryNotAllowedError,
     CsrfValidationError,
+    DocumentNotFoundError,
+    DocumentParseError,
+    DocumentStateConflictError,
     DomainError,
     InsufficientMemoryError,
     InvalidCidrError,
@@ -43,6 +47,7 @@ from app.domain.exceptions import (
     TotpEnrolmentExpiredError,
     TotpRequiredError,
     UntrustedProxyError,
+    UploadRejectedError,
     UserAlreadyExistsError,
     UserNotFoundError,
     WeakPasswordError,
@@ -79,6 +84,13 @@ STATUS_MAP: dict[type[DomainError], int] = {
     UserNotFoundError: 404,
     LastAdministratorError: 409,
     NoLocalCredentialsError: 409,
+    CollectionNotFoundError: 404,
+    DocumentNotFoundError: 404,
+    DocumentStateConflictError: 409,
+    # 413, not 400: the common rejection is size, and a caller that sees 413
+    # knows to send less rather than to send something different.
+    UploadRejectedError: 413,
+    DocumentParseError: 422,
 }
 
 OPENAI_ERROR_TYPES: dict[int, str] = {
@@ -148,6 +160,11 @@ def error_response(
             }
         elif isinstance(exc, WeakPasswordError):
             body["details"] = {"reason": exc.reason}
+        elif isinstance(exc, UploadRejectedError) and exc.public_detail:
+            # The one detail string that goes outward, and it describes the
+            # caller's own file: an operator who is told only "this file cannot
+            # be accepted" has no way to tell a size limit from a type one.
+            body["details"] = {"reason": exc.public_detail}
 
     return JSONResponse(status_code=status, content=body, headers=headers)
 

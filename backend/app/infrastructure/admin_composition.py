@@ -46,6 +46,7 @@ from app.interfaces.http.routers import (
     gateway_info,
     health,
     invitations,
+    knowledge,
     logs,
     me,
     metrics,
@@ -155,6 +156,7 @@ def mount_admin_routers(app: FastAPI) -> None:
         dashboard.router,
         usage.router,
         logs.router,
+        knowledge.router,
         admin_chat.router,
         # Admin entrances only, and deliberately not mounted on the gateway:
         # `assist` is routable but not issuable, so no API key can name it, and

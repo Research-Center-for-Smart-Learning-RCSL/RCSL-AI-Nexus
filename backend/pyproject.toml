@@ -29,6 +29,15 @@ dependencies = [
     # path neither pays its import cost nor depends on it.
     "huggingface-hub>=0.27",
     "prometheus-client>=0.21",
+    # Multipart body parsing, required by FastAPI for the one endpoint that
+    # accepts a file (the knowledge base upload).
+    "python-multipart>=0.0.20",
+    # Document parsing. These two are the CVE surface security.md 7.3 is about,
+    # and they are imported *only* by app/parser/, which runs in a container
+    # with no credentials, no volumes and no network route out. Nothing in the
+    # application imports them.
+    "pypdf>=5.1",
+    "python-docx>=1.1",
 ]
 
 [dependency-groups]
@@ -57,6 +66,8 @@ per-file-ignores = { "tests/*" = [
     "S106",
 ], "alembic/versions/*" = [
     "E501", # machine-generated; hand-wrapping is undone on the next autogenerate
+    "S608", # a migration interpolates its own hardcoded table names into DDL and
+            # backfill statements; no value there comes from outside the file
 ], "app/infrastructure/db_roles.py" = [
     "S608", # DDL cannot be parameterised; identifiers and literals are hand-quoted, see the module docstring
 ] }
@@ -82,4 +93,10 @@ ignore_missing_imports = true
 # huggingface_hub ships no stubs and is imported lazily inside the MLX adapter's
 # download seams only. Those are covered by tests that replace them.
 module = "huggingface_hub.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# python-docx ships no stubs. Imported only inside app/parser/extract.py, where
+# every attribute read is a string off a paragraph or cell.
+module = "docx.*"
 ignore_missing_imports = true

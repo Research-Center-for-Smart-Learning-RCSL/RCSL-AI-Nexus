@@ -26,6 +26,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from app.domain.entities.tenant import DEFAULT_TENANT_ID
 from app.infrastructure.db_roles import RoleSpec, apply_statements, build_statements
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
@@ -105,10 +106,20 @@ async def test_gateway_account_is_denied_writes_outside_usage_records(database_u
         await _denied(gateway, "UPDATE api_keys SET name = 'x'")
         await _denied(gateway, "DELETE FROM api_keys")
         await _denied(gateway, "INSERT INTO users (id) VALUES (:id)", id=str(uuid.uuid4()))
-        await _denied(
-            gateway, "INSERT INTO routing_policies (capability) VALUES ('chat')"
-        )
+        await _denied(gateway, "INSERT INTO routing_policies (capability) VALUES ('chat')")
         await _denied(gateway, "INSERT INTO audit_log (id) VALUES (:id)", id=str(uuid.uuid4()))
+        # The knowledge base is the team's unpublished research (security.md
+        # 9.1). The gateway reads it to answer a retrieval-augmented request and
+        # must never be able to add, alter or remove a document.
+        await _denied(
+            gateway,
+            "INSERT INTO knowledge_collections (id) VALUES (:id)",
+            id=str(uuid.uuid4()),
+        )
+        await _denied(
+            gateway, "INSERT INTO knowledge_documents (id) VALUES (:id)", id=str(uuid.uuid4())
+        )
+        await _denied(gateway, "DELETE FROM knowledge_documents")
 
         # Positive control: the admin account has the write the gateway lacks,
         # so the denials above are the grant working, not the table being
@@ -119,6 +130,16 @@ async def test_gateway_account_is_denied_writes_outside_usage_records(database_u
             "VALUES (:id, :login, 'default', 'Test', 'admin')",
             id=str(uuid.uuid4()),
             login=f"{uuid.uuid4()}@example.com",
+        )
+        # The admin account owns the knowledge base, which is the other half of
+        # the control: the gateway's refusals above are the grants, not the
+        # tables being unwritable by anyone.
+        await _allowed(
+            admin,
+            "INSERT INTO knowledge_collections (id, tenant_id, name) VALUES (:id, :tenant, :name)",
+            id=str(uuid.uuid4()),
+            tenant=DEFAULT_TENANT_ID,
+            name=f"collection-{uuid.uuid4()}",
         )
     finally:
         await gateway.dispose()

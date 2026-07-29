@@ -13,6 +13,11 @@ from typing import Protocol
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.audit import AuditEntry
 from app.domain.entities.invitation import Invitation, InvitationPurpose, RecoveryCode
+from app.domain.entities.knowledge import (
+    DocumentStatus,
+    KnowledgeCollection,
+    KnowledgeDocument,
+)
 from app.domain.entities.model import Model, ModelState
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import RoutingPolicy
@@ -234,6 +239,57 @@ class UsageRepositoryPort(Protocol):
         folds the rows into per-bucket totals and per-capability series. Scoped,
         so a tenant's charts show only its own traffic.
         """
+        ...
+
+
+class KnowledgeRepositoryPort(Protocol):
+    """Collections and documents, tenant-scoped like the rest of the tenant's
+    own data. The scoped adapter filters every read and stamps every write, so
+    a use case here never names a tenant. See security.md section 7.3."""
+
+    async def get_collection(self, collection_id: str) -> KnowledgeCollection | None: ...
+    async def get_collection_by_name(self, name: str) -> KnowledgeCollection | None: ...
+    async def list_collections(self) -> list[KnowledgeCollection]: ...
+    async def save_collection(self, collection: KnowledgeCollection) -> None: ...
+
+    async def delete_collection(self, collection_id: str) -> None:
+        """Only ever called once the collection's documents are gone: the use
+        case removes each document's stored bytes first, which the database
+        cannot do for it, so a cascade here would orphan files on the volume."""
+        ...
+
+    async def get_document(self, document_id: str) -> KnowledgeDocument | None: ...
+
+    async def list_documents(
+        self, *, collection_id: str | None = None, limit: int, offset: int
+    ) -> list[KnowledgeDocument]: ...
+
+    async def count_documents(self, *, collection_id: str | None = None) -> int: ...
+
+    async def save_document(self, document: KnowledgeDocument) -> None: ...
+
+    async def set_document_status(
+        self,
+        document_id: str,
+        status: DocumentStatus,
+        *,
+        chunk_count: int | None = None,
+        error: str | None = None,
+    ) -> None:
+        """A targeted status write, for the same reason `set_status` exists on
+        nodes: the ingestion task read the row long before it writes, and a
+        full-row save would carry a stale filename or collection back over a
+        concurrent edit."""
+        ...
+
+    async def delete_document(self, document_id: str) -> None: ...
+
+    async def reconcile_transient_documents(self, error: str) -> int:
+        """Move every `extracting` or `indexing` row to `error`, returning the
+        count. The ingestion task does not survive a restart, and every
+        operation refuses a transient state, so without this a crash mid-ingest
+        leaves a row nothing can move. The model registry has the same
+        backstop for the same reason."""
         ...
 
 

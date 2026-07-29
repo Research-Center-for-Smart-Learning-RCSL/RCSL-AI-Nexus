@@ -40,6 +40,8 @@ from app.adapters.persistence.sqlalchemy_models import (
     ApiKeyRow,
     AuditLogRow,
     InvitationRow,
+    KnowledgeCollectionRow,
+    KnowledgeDocumentRow,
     ModelRow,
     NodeRow,
     RecoveryCodeRow,
@@ -52,6 +54,12 @@ from app.domain.entities.actor import Role
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.audit import AuditEntry
 from app.domain.entities.invitation import Invitation, InvitationPurpose, RecoveryCode
+from app.domain.entities.knowledge import (
+    TRANSIENT_DOCUMENT_STATES,
+    DocumentStatus,
+    KnowledgeCollection,
+    KnowledgeDocument,
+)
 from app.domain.entities.model import Model, ModelState
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import RoutingPolicy
@@ -643,6 +651,152 @@ class PostgresUsageRepository(_TenantScoped):
             )
             for start, capability, requests, tokens in rows
         ]
+
+
+class PostgresKnowledgeRepository(_TenantScoped):
+    """Collections and documents.
+
+    Both tables carry `tenant_id` and both are filtered on it directly rather
+    than a document being scoped through its collection. The redundancy is the
+    point: a document read is correctly scoped without a join, so there is no
+    query shape in which forgetting the join silently widens the boundary.
+    """
+
+    # --- collections -----------------------------------------------------
+
+    async def get_collection(self, collection_id: str) -> KnowledgeCollection | None:
+        stmt = self._scope(
+            select(KnowledgeCollectionRow).where(KnowledgeCollectionRow.id == collection_id),
+            KnowledgeCollectionRow.tenant_id,
+        )
+        row = await self._session.scalar(stmt)
+        if row is None:
+            return None
+        return m.collection_to_domain(row, await self.count_documents(collection_id=row.id))
+
+    async def get_collection_by_name(self, name: str) -> KnowledgeCollection | None:
+        stmt = self._scope(
+            select(KnowledgeCollectionRow).where(KnowledgeCollectionRow.name == name),
+            KnowledgeCollectionRow.tenant_id,
+        )
+        row = await self._session.scalar(stmt)
+        return m.collection_to_domain(row) if row else None
+
+    async def list_collections(self) -> list[KnowledgeCollection]:
+        # One grouped count for every collection rather than a query per row:
+        # the listing renders a document count beside each name.
+        rows_by_collection = await self._session.execute(
+            self._scope(
+                select(KnowledgeDocumentRow.collection_id, func.count()).group_by(
+                    KnowledgeDocumentRow.collection_id
+                ),
+                KnowledgeDocumentRow.tenant_id,
+            )
+        )
+        counts: dict[str, int] = {
+            str(collection_id): int(count) for collection_id, count in rows_by_collection.all()
+        }
+        stmt = self._scope(
+            select(KnowledgeCollectionRow).order_by(KnowledgeCollectionRow.name),
+            KnowledgeCollectionRow.tenant_id,
+        )
+        rows = (await self._session.scalars(stmt)).all()
+        return [m.collection_to_domain(r, counts.get(r.id, 0)) for r in rows]
+
+    async def save_collection(self, collection: KnowledgeCollection) -> None:
+        row = m.collection_to_row(collection)
+        if self._tenant_id is not None:
+            # Stamp rather than trust the entity, as every scoped write here does.
+            row.tenant_id = self._tenant_id
+        await self._session.merge(row)
+        await self._session.flush()
+
+    async def delete_collection(self, collection_id: str) -> None:
+        stmt = self._scope(
+            delete(KnowledgeCollectionRow).where(KnowledgeCollectionRow.id == collection_id),
+            KnowledgeCollectionRow.tenant_id,
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    # --- documents -------------------------------------------------------
+
+    async def get_document(self, document_id: str) -> KnowledgeDocument | None:
+        stmt = self._scope(
+            select(KnowledgeDocumentRow).where(KnowledgeDocumentRow.id == document_id),
+            KnowledgeDocumentRow.tenant_id,
+        )
+        row = await self._session.scalar(stmt)
+        return m.document_to_domain(row) if row else None
+
+    async def list_documents(
+        self, *, collection_id: str | None = None, limit: int, offset: int
+    ) -> list[KnowledgeDocument]:
+        stmt = self._scope(select(KnowledgeDocumentRow), KnowledgeDocumentRow.tenant_id)
+        if collection_id is not None:
+            stmt = stmt.where(KnowledgeDocumentRow.collection_id == collection_id)
+        stmt = stmt.order_by(KnowledgeDocumentRow.uploaded_at.desc()).limit(limit).offset(offset)
+        rows = await self._session.scalars(stmt)
+        return [m.document_to_domain(row) for row in rows]
+
+    async def count_documents(self, *, collection_id: str | None = None) -> int:
+        stmt = self._scope(
+            select(func.count()).select_from(KnowledgeDocumentRow),
+            KnowledgeDocumentRow.tenant_id,
+        )
+        if collection_id is not None:
+            stmt = stmt.where(KnowledgeDocumentRow.collection_id == collection_id)
+        return int(await self._session.scalar(stmt) or 0)
+
+    async def save_document(self, document: KnowledgeDocument) -> None:
+        row = m.document_to_row(document)
+        if self._tenant_id is not None:
+            row.tenant_id = self._tenant_id
+        await self._session.merge(row)
+        await self._session.flush()
+
+    async def set_document_status(
+        self,
+        document_id: str,
+        status: DocumentStatus,
+        *,
+        chunk_count: int | None = None,
+        error: str | None = None,
+    ) -> None:
+        # `error` is always written, cleared to NULL when not supplied: a
+        # document that fails, is retried and succeeds must not keep displaying
+        # the reason it failed the first time.
+        values: dict[str, Any] = {"status": status.value, "error": error}
+        if chunk_count is not None:
+            values["chunk_count"] = chunk_count
+        stmt = self._scope(
+            update(KnowledgeDocumentRow)
+            .where(KnowledgeDocumentRow.id == document_id)
+            .values(**values),
+            KnowledgeDocumentRow.tenant_id,
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def delete_document(self, document_id: str) -> None:
+        stmt = self._scope(
+            delete(KnowledgeDocumentRow).where(KnowledgeDocumentRow.id == document_id),
+            KnowledgeDocumentRow.tenant_id,
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def reconcile_transient_documents(self, error: str) -> int:
+        """Deliberately unscoped by tenant: this runs at deploy, on behalf of no
+        caller, and a crash strands rows in every tenant. It is constructed
+        unscoped for that reason (infrastructure/provision.py)."""
+        result = await self._session.execute(
+            update(KnowledgeDocumentRow)
+            .where(KnowledgeDocumentRow.status.in_([s.value for s in TRANSIENT_DOCUMENT_STATES]))
+            .values(status=DocumentStatus.ERROR.value, error=error)
+        )
+        await self._session.flush()
+        return cast("CursorResult[Any]", result).rowcount
 
 
 class PostgresAuditLogRepository(_TenantScoped):
