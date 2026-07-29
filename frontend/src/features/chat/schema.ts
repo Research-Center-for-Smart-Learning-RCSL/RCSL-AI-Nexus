@@ -1,6 +1,9 @@
 import { z } from 'zod';
 
-import { capabilitySchema } from '@/features/models/schema';
+// The chat panel offers what a caller may ask for, which is the issuable
+// set: `assist` is routable but belongs to the assistant drawer, and offering
+// it here would put an internal surface in a general-purpose picker.
+import { issuableCapabilitySchema } from '@/features/models/schema';
 
 export const chatRoleSchema = z.enum(['system', 'user', 'assistant']);
 export type ChatRole = z.infer<typeof chatRoleSchema>;
@@ -17,7 +20,7 @@ export type ChatMessage = z.infer<typeof chatMessageSchema>;
  * names a capability rather than a model.
  */
 export const chatRequestSchema = z.object({
-  capability: capabilitySchema,
+  capability: issuableCapabilitySchema,
   messages: z.array(chatMessageSchema).min(1),
   /** Clamped server-side by the per-request hard cap (security.md 4.3). */
   max_tokens: z.number().int().positive().optional(),
@@ -32,7 +35,7 @@ export const chatRequestSchema = z.object({
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 
 export const composerSchema = z.object({
-  capability: capabilitySchema,
+  capability: issuableCapabilitySchema,
   prompt: z.string().min(1, 'Say something.'),
 });
 export type ComposerInput = z.infer<typeof composerSchema>;

@@ -1,7 +1,10 @@
 'use client';
 
 import { Label } from '@/components/ui/label';
-import { capabilitySchema, type Capability } from '@/features/models/schema';
+import {
+  issuableCapabilitySchema,
+  type IssuableCapability,
+} from '@/features/models/schema';
 import { useGatewayInfo } from '@/features/gateway/hooks/use-gateway';
 
 /**
@@ -9,8 +12,8 @@ import { useGatewayInfo } from '@/features/gateway/hooks/use-gateway';
  *
  * Two things are true at once and the control has to show both. The five names
  * are what a key *can* be issued for, fixed in the backend's
- * `KNOWN_CAPABILITIES`. What a request will actually be *served* depends on a
- * routing policy existing, and a key issued for a capability nothing routes
+ * `ISSUABLE_CAPABILITIES`. What a request will actually be *served* depends on
+ * a routing policy existing, and a key issued for a capability nothing routes
  * authenticates perfectly and then answers `no_available_model` forever — an
  * error deliberately indistinguishable from every node being busy, so the
  * holder has no way to tell it was never going to work.
@@ -18,14 +21,21 @@ import { useGatewayInfo } from '@/features/gateway/hooks/use-gateway';
  * So the unrouted ones are shown, disabled, and labelled. Hiding them would
  * make the list look like the whole set and leave an administrator wondering
  * where `vision` went; offering them would keep selling keys that cannot work.
+ *
+ * The reverse case never reaches this control. `assist` has a routing policy
+ * and is still not offered, because it is not in the issuable set at all — and
+ * `useGatewayInfo` does not return it either, since `ListCapabilities` filters
+ * what it derives from the policy table. Two independent reasons, which is
+ * deliberate: this component enumerates a hardcoded list, and a list that
+ * silently gained a name would otherwise start selling it.
  */
 export function CapabilityPicker({
   value,
   onChange,
   error,
 }: {
-  value: Capability[];
-  onChange: (next: Capability[]) => void;
+  value: IssuableCapability[];
+  onChange: (next: IssuableCapability[]) => void;
   error?: string;
 }) {
   const { data, isLoading } = useGatewayInfo();
@@ -35,7 +45,7 @@ export function CapabilityPicker({
     <div className="space-y-2">
       <Label>Capabilities</Label>
       <div className="flex flex-wrap gap-3">
-        {capabilitySchema.options.map((option) => {
+        {issuableCapabilitySchema.options.map((option) => {
           // While loading, nothing is known to be unroutable yet. Disabling
           // everything for a moment would make the form look broken, and the
           // selection is re-checked by the server regardless.

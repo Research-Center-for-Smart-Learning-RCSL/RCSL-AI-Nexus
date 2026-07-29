@@ -35,6 +35,7 @@ FRONTEND_PATHS = [
     "/admin/nodes",
     "/admin/dashboard",
     "/admin/chat",
+    "/admin/assistant",
     "/admin/invitations",
     "/admin/password-resets",
 ]

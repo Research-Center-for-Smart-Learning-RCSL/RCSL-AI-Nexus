@@ -41,6 +41,7 @@ from app.interfaces.http.middleware.geo_filter import build_geo_filter
 from app.interfaces.http.routers import (
     admin_chat,
     api_keys,
+    assistant,
     dashboard,
     gateway_info,
     health,
@@ -155,5 +156,9 @@ def mount_admin_routers(app: FastAPI) -> None:
         usage.router,
         logs.router,
         admin_chat.router,
+        # Admin entrances only, and deliberately not mounted on the gateway:
+        # `assist` is routable but not issuable, so no API key can name it, and
+        # the endpoint that serves it should not exist where only API keys call.
+        assistant.router,
     ):
         app.include_router(router, prefix=ADMIN_PREFIX)

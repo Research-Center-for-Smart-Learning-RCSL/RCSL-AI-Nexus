@@ -28,7 +28,7 @@ from ipaddress import IPv4Network, IPv6Network, ip_network
 
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.api_key import ApiKey
-from app.domain.entities.capability import KNOWN_CAPABILITIES
+from app.domain.entities.capability import ISSUABLE_CAPABILITIES
 from app.domain.exceptions import (
     InvalidCidrError,
     ModelStateConflictError,
@@ -48,9 +48,12 @@ from app.shared.clock import Clock
 silently powerless. The authoritative narrowing still happens at verification;
 this is about giving the operator an answer.
 
-Imported from the domain rather than defined here: routing policies and the
-gateway's scope mapping need the same set, and the two that kept their own copy
-had each drifted from it. See `domain/entities/capability.py`."""
+Imported from the domain rather than defined here: the gateway's scope mapping
+needs the same set and routing policies need a superset of it, and each of the
+readers that kept its own copy had drifted from the others. The *issuable* set
+specifically, which is narrower than the routable one — a key must not be
+issued for a capability that exists only to serve an internal surface. See
+`domain/entities/capability.py`."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,7 +139,7 @@ class ManageApiKeys:
 
         self._assert_expiry_sane(expires_at)
 
-        unknown = sorted(set(scopes) - KNOWN_CAPABILITIES)
+        unknown = sorted(set(scopes) - ISSUABLE_CAPABILITIES)
         if unknown:
             raise ModelStateConflictError(detail=f"unknown capabilities {unknown}")
 
@@ -194,7 +197,7 @@ class ManageApiKeys:
             self._assert_expiry_sane(expires_at)
 
         if scopes is not None:
-            unknown = sorted(set(scopes) - KNOWN_CAPABILITIES)
+            unknown = sorted(set(scopes) - ISSUABLE_CAPABILITIES)
             if unknown:
                 raise ModelStateConflictError(detail=f"unknown capabilities {unknown}")
 

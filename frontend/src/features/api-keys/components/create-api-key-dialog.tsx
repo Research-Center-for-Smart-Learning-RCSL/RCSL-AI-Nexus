@@ -29,6 +29,8 @@ import { useSession } from '@/lib/session';
 import { useUsers } from '@/features/users/hooks/use-users';
 import { IntegrationSnippet } from '@/features/gateway/components/integration-snippet';
 import { useIssueApiKey } from '@/features/api-keys/hooks/use-api-keys';
+import { useAssistantSurface } from '@/features/assistant/context';
+import { applyProposalPatch, draftFor } from '@/features/api-keys/assistant-bridge';
 import {
   createApiKeySchema,
   defaultExpiry,
@@ -74,6 +76,29 @@ export function CreateApiKeyDialog({
   });
 
   const scopes = form.watch('scopes');
+
+  // Published only while the form is on screen. Once `plaintext` is set the
+  // dialog is showing a secret rather than a form, and there is nothing left to
+  // advise on — `null` rather than another surface, so dismissing this dialog
+  // hands the assistant back to the key list rather than blanking it.
+  //
+  // What travels is `draftFor(form.getValues())` and nothing else. The
+  // plaintext is in scope on the very next line and has no field to arrive in.
+  useAssistantSurface(
+    open && plaintext === null
+      ? {
+          surface: 'api_keys.create',
+          readDraft: () => draftFor(form.getValues()),
+          applyPatch: (patch) =>
+            applyProposalPatch(patch, (field, value) =>
+              form.setValue(field, value as never, {
+                shouldValidate: true,
+                shouldDirty: true,
+              }),
+            ),
+        }
+      : null,
+  );
 
   async function onSubmit(values: CreateApiKeyValues) {
     const result = await issue.mutateAsync({

@@ -18,6 +18,11 @@ import { FormField } from '@/components/composed/form-field';
 import { describeError } from '@/components/composed/error-state';
 import { CapabilityPicker } from '@/features/api-keys/components/capability-picker';
 import { useUpdateApiKey } from '@/features/api-keys/hooks/use-api-keys';
+import { useAssistantSurface } from '@/features/assistant/context';
+import {
+  applyProposalPatch,
+  draftFor,
+} from '@/features/api-keys/assistant-bridge';
 import {
   defaultExpiry,
   keyStatus,
@@ -71,6 +76,23 @@ export function EditApiKeyDialog({
       allowed_cidrs_text: apiKey.allowed_cidrs.join('\n'),
       expires_at: expired ? defaultExpiry() : toDateInput(apiKey.expires_at),
     },
+  });
+
+  // This dialog is mounted only while a key is selected, so its presence is
+  // the whole condition — unlike the create dialog, nothing here ever replaces
+  // the form with a secret. `key_id` travels too, so a proposal can name the
+  // key it is about; it is the public lookup handle and reveals nothing.
+  useAssistantSurface({
+    surface: 'api_keys.edit',
+    keyId: apiKey.key_id,
+    readDraft: () => draftFor(form.getValues()),
+    applyPatch: (patch) =>
+      applyProposalPatch(patch, (field, value) =>
+        form.setValue(field, value as never, {
+          shouldValidate: true,
+          shouldDirty: true,
+        }),
+      ),
   });
 
   const scopes = form.watch('scopes');

@@ -17,6 +17,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.domain.exceptions import (
+    AssistantUnavailableError,
     ContextTooLongError,
     CountryNotAllowedError,
     CsrfValidationError,
@@ -52,6 +53,7 @@ logger = logging.getLogger(__name__)
 STATUS_MAP: dict[type[DomainError], int] = {
     ModelNotFoundError: 404,
     NoAvailableModelError: 503,
+    AssistantUnavailableError: 503,
     ModelStateConflictError: 409,
     InsufficientMemoryError: 409,
     InvalidModelReferenceError: 400,

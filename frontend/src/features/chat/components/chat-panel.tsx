@@ -19,7 +19,10 @@ import {
 } from '@/components/composed/stream-message';
 import { EmptyState } from '@/components/composed/empty-state';
 import { cn } from '@/lib/utils';
-import { capabilitySchema, type Capability } from '@/features/models/schema';
+import {
+  issuableCapabilitySchema,
+  type IssuableCapability,
+} from '@/features/models/schema';
 import { useChatStream } from '@/features/chat/hooks/use-chat-stream';
 import type { ChatTurn } from '@/features/chat/hooks/use-chat-stream';
 
@@ -74,7 +77,7 @@ function Turn({ turn }: { turn: ChatTurn }) {
 
 export function ChatPanel() {
   const { turns, isStreaming, store, send, cancel, clear } = useChatStream();
-  const [capability, setCapability] = useState<Capability>('chat');
+  const [capability, setCapability] = useState<IssuableCapability>('chat');
   // Both positions are sent explicitly, so the box always describes what the
   // request asked for rather than what a server-side default happens to be.
   // Turning it off is the lever for a question a thinking model will not stop
@@ -125,13 +128,13 @@ export function ChatPanel() {
       <form onSubmit={submit} className="flex items-center gap-2">
         <Select
           value={capability}
-          onValueChange={(value) => setCapability(value as Capability)}
+          onValueChange={(value) => setCapability(value as IssuableCapability)}
         >
           <SelectTrigger className="w-36" aria-label="Capability">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {capabilitySchema.options.map((option) => (
+            {issuableCapabilitySchema.options.map((option) => (
               <SelectItem key={option} value={option}>
                 {option}
               </SelectItem>

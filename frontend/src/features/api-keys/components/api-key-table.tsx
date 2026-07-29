@@ -16,6 +16,7 @@ import {
 import { CreateApiKeyDialog } from '@/features/api-keys/components/create-api-key-dialog';
 import { EditApiKeyDialog } from '@/features/api-keys/components/edit-api-key-dialog';
 import { canManageKey, keyStatus, type ApiKey } from '@/features/api-keys/schema';
+import { useAssistantSurface } from '@/features/assistant/context';
 
 function formatDate(value: string | null): string {
   if (!value) return '-';
@@ -24,6 +25,11 @@ function formatDate(value: string | null): string {
 
 export function ApiKeyTable() {
   const { me, isAdmin } = useSession();
+  // No draft and nothing to apply: there is no form here. The surface alone is
+  // what the assistant needs, so a question about rotating or revoking a key is
+  // answered in the context of the screen asking it. A dialog opened from this
+  // table registers over the top and hands the surface back when it closes.
+  useAssistantSurface({ surface: 'api_keys.list' });
   const { data, isLoading, error, refetch } = useApiKeys();
   const revoke = useRevokeApiKey();
 

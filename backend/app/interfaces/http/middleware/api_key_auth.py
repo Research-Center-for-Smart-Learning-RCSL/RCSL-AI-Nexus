@@ -20,7 +20,7 @@ from app.adapters.persistence.repositories import (
 )
 from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.entities.api_key import ApiKey
-from app.domain.entities.capability import KNOWN_CAPABILITIES
+from app.domain.entities.capability import ISSUABLE_CAPABILITIES
 from app.domain.exceptions import NotAuthenticatedError, QuotaExceededError, RateLimitedError
 from app.domain.ports.infrastructure_ports import CachePort
 from app.domain.services.api_key_service import ApiKeyService
@@ -52,7 +52,7 @@ def _scopes_for(key: ApiKey) -> frozenset[Scope]:
     then all identical would have carried no information and reintroduced that
     bug the next time a capability was added.
     """
-    scopes = {Scope.CHAT_USE for c in key.scopes if c in KNOWN_CAPABILITIES}
+    scopes = {Scope.CHAT_USE for c in key.scopes if c in ISSUABLE_CAPABILITIES}
     if scopes:
         # Reading your own usage is implied by being able to consume anything.
         # Granted with the first real scope rather than unconditionally, so a
@@ -141,5 +141,14 @@ async def authenticate_api_key(
         # What the key was issued for, checked against the capability each
         # request names. Without it the list was decorative: any valid key
         # reached every capability the deployment could route.
-        allowed_capabilities=key.scopes,
+        #
+        # Intersected rather than passed through, for the same reason
+        # `_scopes_for` is a fixed rule: a stored list may narrow what a key
+        # reaches and must never widen it. `ManageApiKeys` already refuses to
+        # issue a routable-only capability, so this only matters for a row that
+        # did not come from it — but that row is exactly the threat the rule
+        # exists for, and without the intersection a single direct database
+        # write would let a gateway key reach `assist`, which serves the
+        # management assistant.
+        allowed_capabilities=key.scopes & ISSUABLE_CAPABILITIES,
     )

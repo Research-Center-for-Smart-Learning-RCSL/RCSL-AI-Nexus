@@ -43,6 +43,7 @@ from app.adapters.runtime.mlx_adapter import MlxAdapter
 from app.adapters.runtime.ollama_adapter import OllamaAdapter
 from app.adapters.session.session_store import SessionData, SessionStore
 from app.application.use_cases.accept_invitation import AcceptInvitation
+from app.application.use_cases.assist_operator import AssistOperator
 from app.application.use_cases.authenticate_local import AuthenticateLocal
 from app.application.use_cases.bootstrap_first_admin import BootstrapFirstAdmin
 from app.application.use_cases.download_model import DownloadModel
@@ -329,8 +330,37 @@ def build_list_capabilities(request: Request, session: SessionDep) -> ListCapabi
     )
 
 
+def build_assist_operator(
+    request: Request,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> AssistOperator:
+    """Built on the admin entrances only; nothing on the gateway reaches it.
+
+    Composed from `build_route_chat_request` rather than from its parts, so the
+    assistant inherits the streaming contract and every resource guardrail by
+    construction. A second assembly here would be a second place for the
+    concurrency slot or the wall-clock deadline to be forgotten, and the
+    assistant is inference like any other — it just happens to be about the
+    platform rather than for a user.
+    """
+    return AssistOperator(
+        chat=build_route_chat_request(request, session, settings),
+        authz=request.app.state.authz,
+        clock=SystemClock(),
+        gateway_base_url=settings.gateway_base_url,
+        # The same figure `build_manage_api_keys` is given, from the same
+        # setting. The assistant states this limit to an operator who is about
+        # to rely on it, so the two disagreeing would be worse than either being
+        # wrong alone.
+        max_lifetime_days=settings.api_key_max_lifetime_days,
+        max_tokens=settings.assistant_max_tokens,
+    )
+
+
 ListCapabilitiesDep = Annotated[ListCapabilities, Depends(build_list_capabilities)]
 RouteChatRequestDep = Annotated[RouteChatRequest, Depends(build_route_chat_request)]
+AssistOperatorDep = Annotated[AssistOperator, Depends(build_assist_operator)]
 MemoryBudgetDep = Annotated[MemoryBudgetService, Depends(MemoryBudgetService)]
 
 
@@ -481,7 +511,7 @@ def build_download_model(request: Request, session: SessionDep) -> DownloadModel
 
 
 def build_manage_api_keys(
-    request: Request, session: SessionDep, tenant: TenantIdDep
+    request: Request, session: SessionDep, tenant: TenantIdDep, settings: SettingsDep
 ) -> ManageApiKeys:
     return ManageApiKeys(
         # Scoped to the caller's tenant: an admin issues, lists, edits and
@@ -494,6 +524,14 @@ def build_manage_api_keys(
         authz=request.app.state.authz,
         audit=request.app.state.audit,
         clock=SystemClock(),
+        # Passed rather than left to the use case's own default. `Settings`
+        # carried this and `.env.example` documented it, but nothing read
+        # either: the use case defaulted to the same 365, so the two agreed by
+        # coincidence and setting `API_KEY_MAX_LIFETIME_DAYS=90` changed
+        # nothing at all. Wired here because the assistant now has to quote the
+        # limit, and a second reader of a number that was never authoritative
+        # is how it would start being quoted wrongly.
+        max_lifetime_days=settings.api_key_max_lifetime_days,
     )
 
 

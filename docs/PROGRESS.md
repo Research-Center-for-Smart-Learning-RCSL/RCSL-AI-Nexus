@@ -15,6 +15,122 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-07-29
+
+### An assistant in the admin UI, and the one filter that would have defeated it
+
+The management UI now carries an advisory assistant: a drawer mounted by the app
+shell, so one conversation follows the operator from the key list to the API
+reference and back. It answers questions about this deployment's settings and,
+on the two API key forms, offers values as a card the operator applies and then
+saves themselves.
+
+**It advises and does not act, and that was the design decision rather than a
+first increment.** No tool call, no write path, no new authorization edge. Every
+write still happens through the dialog that always performed it, with the scope
+check in `ManageApiKeys` and the audit record it already had. The whole reason a
+language model can sit in the control plane without reopening
+[security.md](./architecture/security.md) is that it is not a caller with
+permissions — it reads what the operator is already looking at and prints a hint
+beside the form. §7.3 has said since Phase 2 that model output is untrusted
+input and that agents and tool calls are where that becomes the line between
+prompt injection and remote code execution. Staying on the near side of that
+line is the feature.
+
+Four controls are structural rather than remembered, which is the only kind
+worth writing down: the request schema has no `system` role, so the instructions
+assembled from live domain values cannot be displaced by a client; the frontend
+publishes a six-field `ApiKeyDraft` that has no field a plaintext could arrive
+in, and the create dialog stops publishing at all once a key exists; a proposal
+is validated against `UpdateApiKeyRequest`, the same schema `PATCH` uses, which
+also has no `owner_id`; and the operator's screen is serialised into a block
+delimited by a per-request nonce, because a key's *name* is text its owner chose
+and a fixed marker is guessable by anyone who has read the source.
+
+### The filter that had to be re-applied by hand
+
+`assist` needed to be routable without being issuable — a policy has to point it
+at a fast model, and a key issued for it would sell an external integrator a
+seat at an internal management surface. So `KNOWN_CAPABILITIES` became
+`ISSUABLE_CAPABILITIES` and `ROUTABLE_CAPABILITIES`, with every reader forced to
+say which question it is asking. There is deliberately no third name meaning
+"either".
+
+That split has a hole in it that the type system cannot see. **`ListCapabilities`
+does not read either constant**: it derives its answer from the routing policies
+that exist, and it feeds both `GET /v1/models` and the key-issuing form. So the
+ordinary act of making the assistant work — writing a policy for `assist` —
+would have published `assist` to every integrator and offered it in the issue
+dialog, at the exact moment the split was supposed to be preventing that. Found
+by reading the use case rather than by a failing test, because there was no test
+that could have failed: nothing was wrong until a routable-only capability
+existed.
+
+A second one came out of the same read. `_scopes_for` was carefully a fixed
+table so no database row could promote a key into the control plane, and the
+comment above it says so — but `Actor.allowed_capabilities` was set to
+`key.scopes` verbatim two lines below. `ManageApiKeys` refuses to issue `assist`,
+so the only way to get one is a direct write to `api_keys`, which is precisely
+the threat that rule exists for. Now intersected with the issuable set, which
+restores the property the surrounding code already claimed to have.
+
+### A setting nothing read
+
+`API_KEY_MAX_LIFETIME_DAYS` was in `Settings`, documented in `.env.example`, and
+read by nobody: `build_manage_api_keys` never passed it, and `ManageApiKeys`
+carried an identical default of 365. The two agreed by coincidence, so setting
+it to 90 changed nothing at all.
+
+Found because the assistant has to quote the limit to an operator who is about
+to rely on it, and a second reader of a number that was never authoritative is
+how it starts being quoted wrongly. Both readers now take the setting. Same
+shape as `api_keys.debug_logging_until`, which is still a column nothing writes
+and nothing reads.
+
+### What the assistant is not allowed to be slow
+
+The capability is separate from `chat` for one measured reason, recorded on
+2026-07-27: 16,384 tokens and 10m53s for zero answer tokens. Beside a settings
+form that is not a slow answer, it is no answer. `assist` gets its own routing
+policy pointing at a fast model, `think: false` on every request, and
+`ASSISTANT_MAX_TOKENS=1536` — far below the platform ceiling, because this
+answers in two or three sentences and a ceiling near the length of a good answer
+turns a rambling model into a cut-off paragraph rather than ten held minutes.
+
+**Neither prerequisite can be done from the development machine.** `assist` needs
+a routing policy, and that policy needs a fast non-thinking model registered and
+downloaded on the Mac Studio. Until both exist the drawer answers with
+`assistant_unavailable`, which names the fix — unlike `no_available_model`,
+which would send an operator looking at node load for a policy that was never
+created.
+
+### Reading past the terminator
+
+The proposal has to be finished before it can be validated, so it travels as a
+trailer: one frame after the terminal `finish_reason` and before `[DONE]`. Added
+to the shared SSE framing as an optional argument rather than as a second framer,
+so there stays one implementation of the envelope, the error branch and the
+sentinel.
+
+Which surfaced a real ordering problem on the client. `readChatStream` returns
+the moment it sees a `finish_reason` — deliberate, tested, and correct for every
+chat turn — so it would never have reached the trailer. The reader now keeps
+going to the sentinel, but only for a caller that provides `onTrailer`, and the
+reason is deferred rather than dropped. The frame is handed over undecoded on
+purpose: `streamFrameSchema` strips unknown keys rather than rejecting them, so
+a trailer routed through it would have arrived as `{}` — the same silent failure
+that once made the chat panel render every reply as nothing at all.
+
+Model output is stripped from the visible answer as it streams, which needs a
+holdback: the `<proposal>` marker arrives split across chunks at whatever
+boundary the tokeniser chose, and a partial `<propo` cannot be taken back once
+it has been streamed. Flushed at the end, or every reply that recommended
+nothing would silently lose its last nine characters.
+
+353 backend tests and 135 frontend tests, up from 318 and 116.
+
+---
+
 ## 2026-07-28
 
 ### The key was issuable and unusable
