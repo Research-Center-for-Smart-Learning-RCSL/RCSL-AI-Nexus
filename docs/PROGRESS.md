@@ -240,6 +240,50 @@ own code confirms what you meant rather than what you wrote. The mistake with
 `useChatStream` was the same failure without the test: a claim that matched the
 shape of a real bug, asserted without executing anything.
 
+### The keychain again, from the other side, with a push that looked like it failed
+
+`git push` ended with `fatal: failed to store: -61` while reporting the refs it
+had just updated. The push had worked; only caching the credential failed. That
+combination is the actual hazard — a line beginning `fatal:` that means the
+opposite of what it says.
+
+2026-07-27 called the Docker `credsStore` workaround "one instance of a class"
+and this is the second instance, but the mechanism is worse than that entry
+described. It is not that the login keychain is *locked* and nobody can answer
+the prompt. It is that **the login keychain is not in a non-GUI session's
+keychain search list at all**: `security list-keychains` returns
+`/Library/Keychains/System.keychain` and nothing else, though
+`~/Library/Keychains/login.keychain-db` sits there on disk. So the helper cannot
+read either — `git credential-osxkeychain get` returns nothing — and the earlier
+"unlock it and it works" reading does not apply.
+
+Which raised the question of where the credential for a working push came from.
+`GIT_ASKPASS` points at VS Code Server's `askpass.sh`, so it came from the
+editor attached at the other end. **Nothing was stored on this machine at all**,
+and every push depended on a client being connected — invisible while one always
+is, and fatal to anything scheduled. `gh`'s stored token is separately expired,
+so that was not a fallback either.
+
+One thing narrows it: the repository is public, which was confirmed by cloning
+the ref list with no credential and `GIT_ASKPASS` pointed at `/usr/bin/false`.
+Only writes need authentication.
+
+Fixed with an SSH deploy key rather than a token. A PAT on this machine can only
+live in plaintext in `~/.git-credentials`, and §8 of security.md argues against
+exactly that shape of secret; a deploy key is scoped to one repository and
+revocable on its own. No passphrase, deliberately — a passphrase needs
+`ssh-agent` and unlocking an agent needs somebody at the machine, which is this
+problem one layer down. The host key was pinned against GitHub's published
+fingerprint rather than accepted on first connection.
+
+Two details worth keeping. The verification has to be run with `GIT_ASKPASS`
+removed from the environment, or it proves only that the editor is still
+attached. And the fingerprint comparison was written as a `grep` for the
+literal string, which reported MISMATCH on two fingerprints that were visibly
+identical: `+` is a repetition operator, and `SHA256:+DiY...` as a pattern means
+"one or more colons". It failed closed, which is the only reason that was a
+five-second problem rather than a habit of ignoring the check.
+
 355 backend tests and 155 frontend tests. `vitest.setup.ts` gained
 `afterEach(cleanup)` on the way, since these are the repository's first
 component tests and Testing Library does not auto-clean without Vitest's
