@@ -1,11 +1,18 @@
 /**
- * SSE reader for `/admin/chat`.
+ * SSE reader for `/admin/chat`, and for `/admin/assistant`, which frames its
+ * answer identically.
  *
  * The subtle part is the terminal error frame. By the time generation fails,
  * the HTTP status has already been sent, so the response is a 200 with a
  * truncated body (backend.md section 6). A reader that only checks
  * `response.ok` reports success and silently drops the tail. This one treats an
  * error frame as a first-class outcome and hands the message to the caller.
+ *
+ * Shared rather than copied for the assistant. Two readers would be two places
+ * for the error-frame handling above to be got right, and the second one would
+ * be written by someone who had not yet had the failure that produced the
+ * first. It stays in `features/chat` because that is the endpoint whose shape
+ * it describes and where its tests live; the assistant imports it.
  */
 
 import {
@@ -37,6 +44,24 @@ export type StreamHandlers = {
    * with nothing on screen to say the model was still working when it stopped.
    */
   onDone: (finishReason?: string | null) => void;
+  /**
+   * A frame this reader has no interpretation for, handed over undecoded.
+   *
+   * Providing it also changes when the read ends, and the two belong together:
+   * a trailer is emitted *after* the terminal `finish_reason` frame and before
+   * `[DONE]` (backend `interfaces/http/sse.py`), so a caller expecting one must
+   * read on to the sentinel rather than stopping at the reason. Without this
+   * handler the reader keeps its existing behaviour and returns at the reason,
+   * which is what every chat turn wants.
+   *
+   * Undecoded because this module should not learn the shape of every feature's
+   * extra frames. The assistant's proposal is validated in `features/assistant`
+   * against its own schema, which matters: `streamFrameSchema` strips unknown
+   * keys rather than rejecting them, so a trailer parsed through it would
+   * arrive as an empty object — the same silent failure that once made the chat
+   * panel render nothing at all.
+   */
+  onTrailer?: (raw: unknown) => void;
 };
 
 // Reading the envelope is the schema's job, so both spellings resolve here.
@@ -93,6 +118,9 @@ export async function readChatStream(
   const decoder = new TextDecoder();
   let buffer = '';
   let sawTerminator = false;
+  // Held rather than reported immediately, but only for a caller that reads
+  // past it. It still reaches `onDone`, just at the sentinel instead.
+  let heldFinishReason: string | null = null;
 
   try {
     for (;;) {
@@ -119,7 +147,7 @@ export async function readChatStream(
           if (!payload) continue;
           if (payload === DONE_SENTINEL) {
             sawTerminator = true;
-            handlers.onDone();
+            handlers.onDone(heldFinishReason ?? undefined);
             return;
           }
 
@@ -156,9 +184,23 @@ export async function readChatStream(
 
           const finishReason = frameFinishReason(frame.data);
           if (finishReason) {
-            sawTerminator = true;
-            handlers.onDone(finishReason);
-            return;
+            if (!handlers.onTrailer) {
+              sawTerminator = true;
+              handlers.onDone(finishReason);
+              return;
+            }
+            // A caller expecting a trailer reads on: the trailer is emitted
+            // after this frame. The reason is not lost, only deferred to the
+            // sentinel below.
+            heldFinishReason = finishReason;
+            continue;
+          }
+
+          // Anything left is a frame this reader does not model. Offered
+          // undecoded, and only to a caller that asked, so the chat panel never
+          // sees a frame it has no idea what to do with.
+          if (handlers.onTrailer && !reasoning && !delta) {
+            handlers.onTrailer(parsed);
           }
         }
       }

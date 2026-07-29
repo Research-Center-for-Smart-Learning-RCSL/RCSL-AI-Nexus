@@ -10,12 +10,22 @@ describes the deployment.
 Two callers, one answer. The gateway serves it as `GET /v1/models` so that
 OpenAI client libraries can discover what to put in the `model` field, and the
 management UI serves it so the key-issuing form can offer only capabilities
-that will work. Deriving it twice is how the two would come to disagree.
+that will work *and may be issued*. Deriving it twice is how the two would come
+to disagree.
+
+Both callers want the issuable set, which is why one answer still serves them.
+That is worth stating because this use case reads policies rather than the
+constant, so it is the one place where the issuable/routable split has to be
+re-applied by hand: writing a policy is what makes a capability appear here,
+and a routable-only capability would therefore advertise itself to every
+integrator the moment an administrator pointed it at a model. See
+`domain/entities/capability.py`.
 """
 
 from __future__ import annotations
 
 from app.domain.entities.actor import Actor, Scope
+from app.domain.entities.capability import ISSUABLE_CAPABILITIES
 from app.domain.ports.repositories import RoutingPolicyRepositoryPort
 from app.domain.ports.security_ports import AuthorizationPort
 
@@ -35,8 +45,20 @@ class ListCapabilities:
         """
         self._authz.require(actor, Scope.CHAT_USE)
 
-        servable = sorted({policy.capability for policy in await self._policies.list_all()})
-        # Narrowed to the key's own list, so the answer is "what may I call"
-        # rather than "what exists". A person on an admin entrance carries None
-        # and sees all of them.
+        # Servable *and* issuable. The second half is not decoration: a
+        # capability appears here because somebody wrote a policy for it, so
+        # without the filter `assist` would be published on `GET /v1/models`
+        # and offered in the key-issuing form the moment its policy was saved —
+        # which is precisely the outcome the two-set split exists to prevent,
+        # arriving at the one place that does not read the sets.
+        servable = sorted(
+            {
+                policy.capability
+                for policy in await self._policies.list_all()
+                if policy.capability in ISSUABLE_CAPABILITIES
+            }
+        )
+        # Narrowed again to the key's own list, so the answer is "what may I
+        # call" rather than "what exists". A person on an admin entrance
+        # carries None and sees all of them.
         return [name for name in servable if actor.may_use(name)]

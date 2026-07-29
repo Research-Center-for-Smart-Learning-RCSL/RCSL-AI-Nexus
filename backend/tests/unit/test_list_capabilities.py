@@ -57,6 +57,31 @@ async def test_a_key_with_no_capabilities_sees_nothing() -> None:
     assert await build().execute(service_actor()) == []
 
 
+async def test_a_routable_only_capability_is_never_listed() -> None:
+    """The trap this use case sets for the issuable/routable split.
+
+    It derives its answer from the policies that exist rather than from a
+    constant, so it is the one reader the split has to be re-applied to by
+    hand. Without the filter, pointing `assist` at a model — the entirely
+    ordinary act of making the management assistant work — would publish it on
+    `GET /v1/models` to every integrator and offer it in the key-issuing form,
+    which is exactly the outcome having two sets exists to prevent.
+    """
+    listing = ListCapabilities(
+        policies=FakePolicies([*POLICIES, RoutingPolicy("assist", (RoutingCandidate("a", 1),))]),
+        authz=RoleAuthorization(),
+    )
+    member = Actor(
+        id="u9",
+        display="member",
+        role=Role.USER,
+        source="local",
+        scopes=RoleAuthorization().scopes_for("user"),
+    )
+
+    assert await listing.execute(member) == ["chat", "code"]
+
+
 async def test_a_member_reads_the_whole_servable_set() -> None:
     """A person is not restricted by capability; `allowed_capabilities` is
     None for them and their role decides what they can reach."""

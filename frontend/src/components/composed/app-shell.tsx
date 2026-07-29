@@ -41,6 +41,8 @@ import { Logo } from '@/components/composed/logo';
 import { Spinner } from '@/components/composed/spinner';
 import { useSession, useSessionExpiry } from '@/lib/session';
 import { TAILSCALE_CONNECTION_LOST } from '@/features/auth/messages';
+import { AssistantContextProvider } from '@/features/assistant/context';
+import { AssistantDrawer } from '@/features/assistant/components/assistant-drawer';
 
 type NavItem = {
   href: string;
@@ -272,6 +274,29 @@ export function AppShell({ children }: { children: ReactNode }) {
           <main className="min-w-0 flex-1 p-4">{children}</main>
         </div>
       </div>
+
+      {/* Inside the authenticated branch, and after `children` so the fixed
+          panel stacks above the content. Every early return above — loading,
+          Tailscale lost, unreachable API — renders no drawer: each is a state
+          where the assistant could not answer anyway, since its endpoint needs
+          the same identity the failed call did. */}
+      <AssistantDrawer />
     </div>
+  );
+}
+
+/**
+ * The shell, with the assistant's page-context registry around it.
+ *
+ * The provider wraps rather than nests so that it is mounted for every branch
+ * of `AppShell`, including the ones that render no drawer. `useAssistantSurface`
+ * throws without a provider, and a page that registers itself on mount would
+ * otherwise crash during the moment the session is still loading.
+ */
+export function AppShellWithAssistant({ children }: { children: ReactNode }) {
+  return (
+    <AssistantContextProvider>
+      <AppShell>{children}</AppShell>
+    </AssistantContextProvider>
   );
 }

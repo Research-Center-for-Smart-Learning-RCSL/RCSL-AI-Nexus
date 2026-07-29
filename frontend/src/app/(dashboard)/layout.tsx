@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
 
-import { AppShell } from '@/components/composed/app-shell';
+import { AppShellWithAssistant } from '@/components/composed/app-shell';
 
 export default function DashboardLayout({
   children,
 }: {
   children: ReactNode;
 }) {
-  return <AppShell>{children}</AppShell>;
+  return <AppShellWithAssistant>{children}</AppShellWithAssistant>;
 }

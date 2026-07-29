@@ -623,6 +623,38 @@ Scope so far is the foundation plus minimal management (create and list tenants,
 
 User-supplied values fill data slots only and must not alter template structure or role markers. Use structured parameter substitution, never string formatting against the template body.
 
+### 7.5 The Management Assistant
+
+A drawer in the admin UI that answers questions about this deployment's own settings and, on the two API key forms, offers a set of values the operator may apply. Served by `POST /admin/assistant` on the admin entrances only; it routes on the `assist` capability, which §7.5.1 explains is deliberately not issuable.
+
+**It advises. It does not act.** There is no tool call, no write path, and no new authorization edge. Every write still happens through the dialog that always performed it, with the scope check in `ManageApiKeys` and the audit record that comes with it. This is the whole of why embedding a language model in the control plane does not reopen the questions this document settles: the assistant is not a caller with permissions, it is a hint printed next to a form. It reads only what the operator is already looking at, so it can leak nothing they could not read themselves, and the worst outcome of a hostile or confused answer is a bad suggestion a person declines.
+
+That boundary is worth defending deliberately rather than by intention. §7.3 already states the rule this rests on — **model output is always untrusted input** — and adds that once agents and tool calls arrive it becomes the line between prompt injection and remote code execution. An advisory assistant is on the safe side of that line. Moving it across is not a feature increment; it is a different threat model and needs this section rewritten, not extended.
+
+Four controls are structural, meaning they are enforced by the shape of a type rather than by a check somebody has to remember:
+
+- **The request has no `system` role.** `AssistMessageIn.role` is a `Literal` of `user` and `assistant`. The instructions are assembled server-side from live domain values, and a client able to supply a system turn could replace the rules they state. `/admin/chat` accepts one, correctly — that panel is a chat client the operator is entitled to steer.
+- **A key's plaintext has no field to travel in.** The frontend publishes `ApiKeyDraft`, which names six form fields and nothing else. The create dialog holds the one copy of an issued secret at the same moment it publishes, so this is enforced by the compiler rather than by whoever edits that dialog next. The dialog also stops publishing entirely once a key has been issued.
+- **A proposal is validated against `UpdateApiKeyRequest`**, the same schema `PATCH /api-keys/{key_id}` uses. A proposal the API would refuse cannot be rendered as a filled-in form. That schema has no `owner_id`, so the assistant structurally cannot propose issuing a key to somebody else — an identity decision belonging to the owner picker, which is gated on `api_key:write_any`.
+- **The operator's screen is data, inside a per-request nonce.** An API key's name is chosen by whoever owns the key, which makes it attacker-controlled text arriving in a prompt. The context block is delimited by `<context-{nonce}>` with a fresh random nonce each request, so no value can forge the terminator. JSON escaping alone would not be sufficient: JSON has no opinion about what the surrounding text means, and a fixed marker is guessable by anyone who has read the source. Per §7.4 the values are serialised into a slot, never formatted into the template body.
+
+Failure is asymmetric on purpose: **fail-closed on the proposal, fail-open on the prose**. A malformed, truncated or out-of-policy proposal yields no card at all while the written answer is delivered unchanged. The prose is a suggestion a person reads; the proposal is values that land in a form with one click, and the two do not deserve the same benefit of the doubt.
+
+The resource guardrails of §4.3 apply unchanged, because `AssistOperator` delegates to `RouteChatRequest`: the concurrency slot, the token ceiling, the wall-clock deadline and cancel-on-disconnect. A drawer can exhaust unified memory as easily as anything else. `ASSISTANT_MAX_TOKENS` bounds one reply well below the platform ceiling.
+
+**Residual risk, accepted.** A hostile string in a key name can still influence what the assistant *says*, and the nonce prevents forging the data boundary rather than preventing the model from being persuaded inside it. The mitigation is the advisory boundary itself: nothing the model emits is executed, the proposal is schema-checked twice, and every field it suggests is listed on the card before the operator applies it. Conversations are held in `sessionStorage` and never reach the server, so there is no transcript to classify or retain under §9.1.
+
+#### 7.5.1 Issuable Is Not the Same Set as Routable
+
+`domain/entities/capability.py` now carries two sets. `ROUTABLE_CAPABILITIES` is what a routing policy may name; `ISSUABLE_CAPABILITIES` is what an API key may be issued for, and is the narrower of the two. `assist` is routable only: it must have a policy so the assistant can be pointed at a fast model, and a key issued for it would sell an external integrator a seat at an internal management surface.
+
+Three readers ask the narrow question (`ManageApiKeys` at issue and at edit, and the gateway's scope mapping) and one asks the wide one (`ManageRoutingPolicies`). There is deliberately no third name meaning "either", since that is the one every caller would reach for by default.
+
+Two places needed the distinction re-applied by hand, and both are easy to miss:
+
+- **`ListCapabilities` derives its answer from the policies that exist**, not from either constant. It is the one reader the split does not reach on its own, and it feeds both `GET /v1/models` and the key-issuing form. Without an explicit filter, pointing `assist` at a model — the entirely ordinary act of making the assistant work — would publish it to every integrator.
+- **`api_key_auth` intersects the stored list** rather than passing it through. `_scopes_for` was already a fixed rule so that no database row could promote a key into the control plane, but `Actor.allowed_capabilities` took `key.scopes` verbatim, so a single direct write to `api_keys` would have let a gateway key reach `assist`. Narrowing there restores the property the surrounding code already claimed.
+
 ## 8. Secrets and Configuration
 
 - `.env` is never committed. `.gitignore` lists it explicitly, and `.env.example` carries field names only.
@@ -766,6 +798,9 @@ looking for the risk. The state below is checked against the code.
 | Step-up (current password) required to replace the second factor | `application/use_cases/manage_own_account.py` |
 | Failed model load/unload state committed independently, surviving the request rollback | `adapters/persistence/model_state.py` |
 | Transient model states reconciled at deploy, so a crash leaves no dead-end row | `infrastructure/provision.py` |
+| Issuable and routable capabilities as separate sets, re-applied by hand in the one reader that derives from policies | `domain/entities/capability.py`, `ListCapabilities` |
+| A key's stored capability list intersected with the issuable set, so a direct database write cannot widen a key's reach | `middleware/api_key_auth.py` |
+| Management assistant confined to advice: no `system` role in its request, no plaintext field in its context type, proposals validated against `UpdateApiKeyRequest`, screen contents nonce-delimited as data (§7.5) | `application/use_cases/assist_operator.py`, `interfaces/http/assistant_proposal.py`, `features/assistant/` |
 | Targeted key and user updates that cannot revert a concurrent revoke or disable | `adapters/persistence/repositories.py` |
 | `user` role limited to chat, own keys, own usage; no registry or node read | `adapters/authz/role_authorization.py` |
 | Data plane and control plane on separate Docker networks; the gateway can reach no admin entrance | `docker-compose.yml` §3.2 |

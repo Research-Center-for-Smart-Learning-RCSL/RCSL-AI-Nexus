@@ -208,6 +208,26 @@ class Settings(BaseSettings):
     Expiry exists to force rotation, and a mandatory field with no upper bound
     does not: `expires_at` of the year 9999 satisfied "must be in the future"
     and rotated nothing.
+
+    Read by `build_manage_api_keys` and quoted to the operator by the management
+    assistant. It was read by neither until 2026-07-29: the use case carried an
+    identical default, so the two agreed by coincidence and changing this value
+    did nothing at all.
+    """
+
+    assistant_max_tokens: int = 1536
+    """Token ceiling for one management assistant reply.
+
+    Far below `max_tokens_ceiling`, because the two are answering different
+    questions. That one is the most the hardware should ever spend on a
+    generation; this is the most a two-or-three-sentence answer in a drawer
+    could possibly need, and a ceiling near the length of a good answer turns a
+    model that has started rambling into a cut-off paragraph rather than ten
+    minutes of held concurrency slot.
+
+    It bounds the proposal too. A block that runs past the ceiling arrives
+    unterminated and is discarded, so the visible cost of setting this too low
+    is a card that does not appear, not a malformed one that does.
     """
 
     metrics_enabled: bool = True

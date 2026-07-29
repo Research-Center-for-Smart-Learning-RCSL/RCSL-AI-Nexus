@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { CodeBlock } from '@/components/composed/code-block';
 import { useGatewayInfo } from '@/features/gateway/hooks/use-gateway';
+import { useAssistantSurface } from '@/features/assistant/context';
 
 /**
  * The public API documentation security.md §4.4 promised.
@@ -22,6 +23,10 @@ import { useGatewayInfo } from '@/features/gateway/hooks/use-gateway';
  */
 export function ApiReference() {
   const { data, isLoading, error, refetch } = useGatewayInfo();
+  // The page an integrator reads while wiring a key into their own code, which
+  // is where the capability convention is most often got wrong. The assistant
+  // is told the same convention from the same live source this page renders.
+  useAssistantSurface({ surface: 'api_docs' });
 
   const baseUrl = data?.base_url ?? 'https://<gateway>';
   const capabilities = data?.capabilities ?? [];

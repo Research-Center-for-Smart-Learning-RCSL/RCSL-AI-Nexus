@@ -23,14 +23,46 @@ export const modelStateSchema = z.enum([
 ]);
 export type ModelState = z.infer<typeof modelStateSchema>;
 
+/**
+ * Every capability a routing policy may name, and therefore every capability a
+ * registered model may be tagged with.
+ *
+ * Mirrors `ROUTABLE_CAPABILITIES` in the backend's
+ * `domain/entities/capability.py`, which is the single definition; this is a
+ * hand-maintained copy and adding a name there means adding it here too.
+ *
+ * `assist` serves the management assistant. It is routable so a policy can
+ * point it at a fast, non-deliberating model, and deliberately not issuable —
+ * see below.
+ */
 export const capabilitySchema = z.enum([
   'chat',
   'code',
   'vision',
   'embedding',
   'rerank',
+  'assist',
 ]);
 export type Capability = z.infer<typeof capabilitySchema>;
+
+/**
+ * What an API key may be issued for: the routable set minus anything that
+ * exists only to serve an internal surface. Mirrors `ISSUABLE_CAPABILITIES`.
+ *
+ * The two are separate because "may be routed to" and "may be sold to a
+ * caller" are different questions. A key issued for `assist` would buy an
+ * external integrator a seat at the management assistant, so the key form must
+ * not offer it — and the backend refuses it regardless, in `ManageApiKeys` and
+ * again when a key's stored list is turned into an actor's reach.
+ */
+export const issuableCapabilitySchema = z.enum([
+  'chat',
+  'code',
+  'vision',
+  'embedding',
+  'rerank',
+]);
+export type IssuableCapability = z.infer<typeof issuableCapabilitySchema>;
 
 export const resourceProfileSchema = z.object({
   memory_gb: z.number().positive(),

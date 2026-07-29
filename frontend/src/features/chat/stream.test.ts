@@ -221,3 +221,85 @@ describe('the terminal frame reason', () => {
     expect(reasons).toEqual([undefined]);
   });
 });
+
+describe('a caller that expects a trailer', () => {
+  const terminal = frame({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+  const proposal = frame({ proposal: { action: 'create' } });
+
+  it('reads past the finish_reason to reach frames that follow it', async () => {
+    // The whole reason the option exists. The backend emits the trailer after
+    // the terminal frame and before the sentinel, so a reader that stopped at
+    // the reason — which is what every chat turn wants — would never see it.
+    const trailers: unknown[] = [];
+    await readChatStream(sseResponse([delta('hi'), terminal, proposal, 'data: [DONE]\n\n']), {
+      onDelta: () => {},
+      onError: () => {},
+      onDone: () => {},
+      onTrailer: (raw) => trailers.push(raw),
+    });
+
+    expect(trailers).toEqual([{ proposal: { action: 'create' } }]);
+  });
+
+  it('still reports the finish_reason, deferred to the sentinel', async () => {
+    const reasons: (string | null | undefined)[] = [];
+    await readChatStream(sseResponse([delta('hi'), frame({ choices: [{ delta: {}, finish_reason: 'length' }] }), 'data: [DONE]\n\n']), {
+      onDelta: () => {},
+      onError: () => {},
+      onDone: (r) => reasons.push(r),
+      onTrailer: () => {},
+    });
+
+    expect(reasons).toEqual(['length']);
+  });
+
+  it('hands over the frame undecoded, so the caller validates it', async () => {
+    // `streamFrameSchema` strips unknown keys rather than rejecting them, so a
+    // trailer routed through it would arrive as `{}` — the same silent failure
+    // that once made the chat panel render every reply as nothing at all.
+    const trailers: unknown[] = [];
+    await readChatStream(
+      sseResponse([frame({ proposal: { action: 'update', key_id: 'abc' } }), 'data: [DONE]\n\n']),
+      {
+        onDelta: () => {},
+        onError: () => {},
+        onDone: () => {},
+        onTrailer: (raw) => trailers.push(raw),
+      },
+    );
+
+    expect(trailers).toEqual([{ proposal: { action: 'update', key_id: 'abc' } }]);
+  });
+
+  it('is not offered content frames', async () => {
+    const trailers: unknown[] = [];
+    await readChatStream(sseResponse([delta('hi'), 'data: [DONE]\n\n']), {
+      onDelta: () => {},
+      onError: () => {},
+      onDone: () => {},
+      onTrailer: (raw) => trailers.push(raw),
+    });
+
+    expect(trailers).toEqual([]);
+  });
+
+  it('gets no trailer from a stream that failed', async () => {
+    // The backend withholds it on error for the same reason it withholds
+    // `[DONE]`, and the reader must not invent one from a frame that arrived
+    // before the failure.
+    const trailers: unknown[] = [];
+    const errors: string[] = [];
+    await readChatStream(
+      sseResponse([delta('partial'), frame({ error: { message: 'model exploded' } })]),
+      {
+        onDelta: () => {},
+        onError: (m) => errors.push(m),
+        onDone: () => {},
+        onTrailer: (raw) => trailers.push(raw),
+      },
+    );
+
+    expect(errors).toEqual(['model exploded']);
+    expect(trailers).toEqual([]);
+  });
+});

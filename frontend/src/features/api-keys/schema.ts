@@ -1,6 +1,9 @@
 import { z } from 'zod';
 
-import { capabilitySchema, type Capability } from '@/features/models/schema';
+import {
+  issuableCapabilitySchema,
+  type IssuableCapability,
+} from '@/features/models/schema';
 
 /**
  * Mirrors security.md section 4.2. The plaintext key is never stored and is
@@ -11,7 +14,7 @@ import { capabilitySchema, type Capability } from '@/features/models/schema';
 export const apiKeySchema = z.object({
   key_id: z.string(),
   name: z.string(),
-  scopes: z.array(capabilitySchema),
+  scopes: z.array(issuableCapabilitySchema),
   rate_limit_rpm: z.number().int().nonnegative(),
   quota_tokens_per_day: z.number().int().nonnegative(),
   allowed_cidrs: z.array(z.string()),
@@ -52,7 +55,9 @@ export const cidrTextSchema = z
 
 export const createApiKeySchema = z.object({
   name: z.string().min(1, 'Required').max(80),
-  scopes: z.array(capabilitySchema).min(1, 'Choose at least one capability.'),
+  scopes: z
+    .array(issuableCapabilitySchema)
+    .min(1, 'Choose at least one capability.'),
   rate_limit_rpm: z.coerce.number().int().positive(),
   quota_tokens_per_day: z.coerce.number().int().positive(),
   allowed_cidrs_text: cidrTextSchema,
@@ -73,7 +78,7 @@ export type CreateApiKeyValues = z.output<typeof createApiKeySchema>;
 export type CreateApiKeyPayload = {
   name: string;
   owner_id: string;
-  scopes: Capability[];
+  scopes: IssuableCapability[];
   rate_limit_rpm: number;
   quota_tokens_per_day: number;
   allowed_cidrs: string[];
@@ -88,7 +93,9 @@ export type CreateApiKeyPayload = {
  */
 export const updateApiKeySchema = z.object({
   name: z.string().min(1, 'Required').max(80),
-  scopes: z.array(capabilitySchema).min(1, 'Choose at least one capability.'),
+  scopes: z
+    .array(issuableCapabilitySchema)
+    .min(1, 'Choose at least one capability.'),
   rate_limit_rpm: z.coerce.number().int().positive(),
   quota_tokens_per_day: z.coerce.number().int().positive(),
   allowed_cidrs_text: cidrTextSchema,
@@ -104,7 +111,7 @@ export type UpdateApiKeyValues = z.output<typeof updateApiKeySchema>;
  */
 export type UpdateApiKeyPayload = {
   name: string;
-  scopes: Capability[];
+  scopes: IssuableCapability[];
   rate_limit_rpm: number;
   quota_tokens_per_day: number;
   allowed_cidrs: string[];

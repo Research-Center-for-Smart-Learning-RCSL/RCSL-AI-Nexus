@@ -67,6 +67,13 @@ frontend/
       gateway/                # what an integrator needs: the base URL, the
                               #   servable capabilities, the paste-ready
                               #   snippets shown at issue, and the API reference
+      assistant/              # the advisory drawer, mounted once by AppShell so
+                              #   one conversation follows the operator across
+                              #   screens. context.tsx is a typed registry: a
+                              #   page publishes a surface and, on the key
+                              #   forms, a draft — and there is no field an
+                              #   issued key's plaintext could travel in
+                              #   (security.md §7.5)
       users/
       chat/
       dashboard/

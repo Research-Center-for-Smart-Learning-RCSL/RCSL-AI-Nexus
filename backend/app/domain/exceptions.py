@@ -74,6 +74,21 @@ class ContextTooLongError(DomainError):
     public_message = "The conversation is longer than this platform accepts."
 
 
+class AssistantUnavailableError(DomainError):
+    code = "assistant_unavailable"
+    public_message = (
+        "The management assistant has no model to run on. "
+        "An administrator can point the `assist` capability at one under Routing."
+    )
+    # Names the fix, unlike `NoAvailableModelError`, which deliberately does
+    # not say which candidates were considered. The difference is the audience:
+    # that error answers an anonymous caller on the public gateway, while this
+    # one reaches only a signed-in operator on an admin entrance, who is either
+    # able to write the routing policy or able to ask the person who is. Told
+    # "no model is currently available" instead, they would go looking for a
+    # busy node rather than for a policy that was never created.
+
+
 # --- Quota and rate limiting ---------------------------------------------
 
 

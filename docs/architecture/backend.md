@@ -348,6 +348,10 @@ Unlike `max_tokens` it is not clamped. A caller asking a deliberating model to a
 
 **Where framing happens.** `interfaces/http/routers/chat.py` converts chunks into `data: {...}\n\n` frames and terminates with `data: [DONE]`. `admin_chat.py` may use a simpler frame shape.
 
+**Trailers.** A stream may carry one final frame after the answer and before `[DONE]`, for something that could only be known once the whole answer existed. `/admin/assistant` uses it for a structured proposal it has to finish writing before it can be validated ([security.md](./security.md) §7.5). It is an optional argument to `sse.streaming_response`, not a second framing function, so there stays one implementation of the envelope, the error branch and the sentinel. Two orderings make it safe and both are pinned by tests: it precedes `[DONE]`, because a client is right to stop reading at the sentinel; and a stream that failed carries none, for the same reason `[DONE]` is withheld on error — whatever it described came from an answer that never finished.
+
+The client half has a matching rule. `readChatStream` returns as soon as it sees a `finish_reason`, which is correct for a chat turn and would miss a trailer entirely, so a caller that expects one opts in and the reader continues to the sentinel. The frame is handed over undecoded: the shared frame schema strips unknown keys rather than rejecting them, so routing a trailer through it would deliver an empty object.
+
 **Non-streaming requests.** The port only offers a streaming interface. When a client sends `stream: false`, the router consumes the iterator to exhaustion and assembles a single response. There is exactly one execution path, which avoids the two implementations drifting apart.
 
 **Concurrency slot lifetime.** The global inference semaphore is held for the whole generator lifetime, not just the call that creates it.
