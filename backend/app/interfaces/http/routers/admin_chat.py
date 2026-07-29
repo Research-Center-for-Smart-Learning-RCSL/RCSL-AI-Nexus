@@ -22,7 +22,7 @@ from fastapi.responses import StreamingResponse
 
 from app.domain.entities.actor import Actor
 from app.domain.entities.chat import Message, MessageRole
-from app.infrastructure.di import RouteChatRequestDep
+from app.infrastructure.di import GroundChatFactoryDep, RouteChatRequestDep
 from app.interfaces.http import sse
 from app.interfaces.http.middleware.identity import current_actor
 from app.interfaces.http.schemas.chat_schemas import AdminChatRequest
@@ -35,10 +35,23 @@ async def admin_chat(
     body: AdminChatRequest,
     actor: Annotated[Actor, Depends(current_actor)],
     use_case: RouteChatRequestDep,
+    ground_chat: GroundChatFactoryDep,
 ) -> StreamingResponse:
     """Always streaming. The panel has no non-streaming mode, and offering one
     would be a second path through the same use case for no caller."""
     messages = [Message(role=MessageRole(m.role), content=m.content) for m in body.messages]
+
+    # Grounding happens before the streaming use case rather than inside it, so
+    # the retrieval read and the embedding call are not in front of the
+    # concurrency slot and the `finally` that records usage. See
+    # application/use_cases/ground_chat.py.
+    passages: list[tuple[str, int]] = []
+    if body.use_knowledge:
+        messages, retrieved = await ground_chat(actor.tenant_id).execute(
+            actor, messages, collection_id=body.knowledge_collection
+        )
+        passages = [(p.document_id, p.index) for p in retrieved]
+
     generation = use_case.execute(
         actor, body.capability, messages, body.max_tokens, body.think
     )
@@ -53,4 +66,5 @@ async def admin_chat(
         model=body.capability,
         generation=generation,
         first=first,
+        extra_headers=sse.citation_header(passages),
     )

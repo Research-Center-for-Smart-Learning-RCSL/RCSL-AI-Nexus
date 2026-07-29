@@ -57,6 +57,9 @@ class StubRuntime:
         self.seen_ref: str | None = None
         self.seen_max_tokens: int | None = None
         self.seen_thinking: bool | None = None
+        self.seen_messages: Sequence[Message] = ()
+        """What actually reached the runtime, which is where grounding shows up:
+        the retrieval tests assert on the messages rather than on the answer."""
 
     async def generate(
         self,
@@ -68,6 +71,7 @@ class StubRuntime:
         self.seen_ref = ref
         self.seen_max_tokens = max_tokens
         self.seen_thinking = thinking
+        self.seen_messages = list(messages)
         try:
             for i in range(self._chunks):
                 yield CompletionChunk(delta=f"tok{i} ", token_count=1)
@@ -508,3 +512,43 @@ async def test_a_pre_generation_failure_on_the_streaming_path_still_returns_503(
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "no_available_model"
+
+
+# --- retrieval-augmented generation --------------------------------------
+
+
+async def test_grounding_is_off_unless_asked_for(client) -> None:
+    """Grounding costs an embedding call and a slice of the context window, so
+    an API caller who never asked for it must not get it."""
+    test_client, runtime, _ = client
+    response = test_client.post(
+        "/v1/chat/completions",
+        json={"model": "chat", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+    )
+
+    assert response.status_code == 200
+    assert "X-Knowledge-Sources" not in response.headers
+    assert [m.role.value for m in runtime.seen_messages] == ["user"]
+
+
+async def test_a_request_asking_for_knowledge_still_answers_with_no_index(client) -> None:
+    """The whole degradation path, end to end: there is no embedding policy and
+    no Qdrant in this environment, and an ordinary completion still comes back.
+    Retrieval is an enhancement to the request, not the request."""
+    test_client, _, _ = client
+    response = test_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "chat",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+            "use_knowledge": True,
+        },
+    )
+
+    assert response.status_code == 200
+    events = _sse_events(response.text)
+    assert "".join(e["choices"][0]["delta"].get("content", "") for e in events if e.get("choices"))
+    # Nothing was retrieved, so nothing is cited. A header naming sources that
+    # did not exist would be worse than its absence.
+    assert "X-Knowledge-Sources" not in response.headers

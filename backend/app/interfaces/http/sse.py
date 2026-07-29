@@ -91,12 +91,35 @@ def streaming_response(
     generation: AsyncGenerator[CompletionChunk, None],
     first: CompletionChunk | None,
     trailer: Trailer | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> StreamingResponse:
+    """`extra_headers` carries anything that is not part of the completion.
+
+    Retrieval citations go here rather than into a frame of their own, because
+    the envelope is the OpenAI one and an extra frame shape would be a protocol
+    error to every client that parses it strictly. Headers are also the only
+    channel still open at this point that is not the body: they are sent before
+    the first chunk, and the body is committed the moment streaming starts.
+    """
     return StreamingResponse(
         _frames(completion_id, created, model, generation, first, trailer),
         media_type="text/event-stream",
-        headers=STREAM_HEADERS,
+        headers={**STREAM_HEADERS, **(extra_headers or {})},
     )
+
+
+CITATION_HEADER = "X-Knowledge-Sources"
+"""Comma-separated `<document_id>:<passage index>` for a grounded completion.
+
+Ids and indexes only, never passage text: a header reaches access logs, and
+passage text is document content (security.md section 9.2).
+"""
+
+
+def citation_header(passages: list[tuple[str, int]]) -> dict[str, str]:
+    if not passages:
+        return {}
+    return {CITATION_HEADER: ",".join(f"{doc}:{index}" for doc, index in passages)}
 
 
 def created_now() -> int:

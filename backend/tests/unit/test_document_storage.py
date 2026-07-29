@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from app.adapters.storage.filesystem_documents import FilesystemDocumentStorage
+from app.domain.entities.tenant import DEFAULT_TENANT_ID
 from app.domain.exceptions import DocumentNotFoundError
 
 TENANT_A = "11111111-1111-1111-1111-111111111111"
@@ -62,9 +63,21 @@ async def test_a_document_id_that_is_not_a_uuid_is_refused(tmp_path: Path, hosti
         await store.read_original(hostile)
 
 
-async def test_a_tenant_id_that_is_not_a_uuid_is_refused_at_construction(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="uuid"):
-        FilesystemDocumentStorage(tmp_path, "../escape")
+@pytest.mark.parametrize("hostile", ["../escape", "a/b", "..", "", "a" * 100, "tenant\x00"])
+async def test_a_tenant_id_that_is_not_a_safe_path_segment_is_refused(
+    tmp_path: Path, hostile: str
+) -> None:
+    with pytest.raises(ValueError, match="safe path segment"):
+        FilesystemDocumentStorage(tmp_path, hostile)
+
+
+async def test_the_default_tenant_is_accepted(tmp_path: Path) -> None:
+    """`DEFAULT_TENANT_ID` is the literal string `default`, not a UUID, and it
+    is the tenant every existing deployment runs under. Requiring a UUID here
+    refused it outright, which no unit test using a generated id would notice."""
+    store = FilesystemDocumentStorage(tmp_path, DEFAULT_TENANT_ID)
+    await store.put_original(DOCUMENT, b"x")
+    assert await store.read_original(DOCUMENT) == b"x"
 
 
 async def test_nothing_is_written_outside_the_tenant_directory(tmp_path: Path) -> None:

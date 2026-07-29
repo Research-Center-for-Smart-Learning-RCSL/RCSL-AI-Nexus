@@ -71,7 +71,5 @@ class ManageTenants:
             role=Role.ADMIN,
             tenant_id=tenant.id,
         )
-        await self._audit.record(
-            actor, "tenant.created", target=tenant.id, detail={"name": name}
-        )
+        await self._audit.record(actor, "tenant.created", target=tenant.id, detail={"name": name})
         return TenantCreated(tenant=tenant, invitation=issued)

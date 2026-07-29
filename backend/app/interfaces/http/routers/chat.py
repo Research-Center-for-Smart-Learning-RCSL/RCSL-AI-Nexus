@@ -17,7 +17,11 @@ from fastapi.responses import StreamingResponse
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.domain.entities.actor import Actor
 from app.domain.entities.chat import Message, MessageRole
-from app.infrastructure.di import ListCapabilitiesDep, RouteChatRequestDep
+from app.infrastructure.di import (
+    GroundChatFactoryDep,
+    ListCapabilitiesDep,
+    RouteChatRequestDep,
+)
 from app.interfaces.http import sse
 from app.interfaces.http.middleware.api_key_auth import authenticate_api_key
 from app.interfaces.http.schemas.chat_schemas import (
@@ -70,10 +74,23 @@ async def chat_completions(
     body: ChatCompletionRequest,
     actor: ActorDep,
     use_case: RouteChatRequestDep,
+    ground_chat: GroundChatFactoryDep,
 ) -> ChatCompletionResponse | StreamingResponse:
     completion_id = sse.new_completion_id()
     created = sse.created_now()
     messages = _to_domain(body)
+
+    # Opt-in, and the two fields are the only non-OpenAI ones this endpoint
+    # accepts. Grounding every request would surprise an API caller who never
+    # asked for it, and it costs an embedding call and a slice of the context
+    # window. Grounding runs before the streaming use case, so retrieval is not
+    # in front of the concurrency slot; see application/use_cases/ground_chat.py.
+    passages: list[tuple[str, int]] = []
+    if body.use_knowledge:
+        messages, retrieved = await ground_chat(actor.tenant_id).execute(
+            actor, messages, collection_id=body.knowledge_collection
+        )
+        passages = [(p.document_id, p.index) for p in retrieved]
 
     if body.stream:
         generation = use_case.execute(actor, body.model, messages, body.max_tokens, body.think)
@@ -84,6 +101,9 @@ async def chat_completions(
             model=body.model,
             generation=generation,
             first=first,
+            # A header rather than a frame: the envelope is OpenAI's, and an
+            # extra frame shape is a protocol error to a strict client.
+            extra_headers=sse.citation_header(passages),
         )
 
     return await _collect(
