@@ -1132,6 +1132,43 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
   cd RCSL-AI-Nexus
   ```
 
+- [ ] **要能 push 的話，用 SSH deploy key，不要用 HTTPS。** 讀取不需要憑證（repo 是
+  公開的），但寫入需要，而 macOS 的 `osxkeychain` helper 在這台機器上**兩個方向都不能
+  用**：非 GUI session 的 keychain 搜尋清單裡只有 System keychain，login keychain 雖然
+  檔案在、卻不在清單內。`get` 回空、`store` 回 `-61`。跟 §Docker 那個 `credsStore` 是
+  同一個根因（[PROGRESS.md](../PROGRESS.md) 2026-07-27、2026-07-29）。
+
+  沒設好的話 push 會靠一個連著的編輯器現場供應憑證，看起來能動——直到你從純 SSH
+  session 推，或是想讓排程去推。
+
+  ```sh
+  # 1. 產金鑰。刻意不設密語：密語要 ssh-agent，解鎖 agent 要有人在機器旁，
+  #    那正是這一步在解決的問題往下一層。
+  ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_rcsl_nexus -N "" \
+    -C "RCSL-AI-Nexus deploy key (Mac Studio, headless)"
+
+  # 2. 釘住 GitHub 的主機金鑰，比對官方公布的指紋，不要靠第一次連線就信任
+  ssh-keyscan -t ed25519 github.com > /tmp/gh_hostkey
+  ssh-keygen -lf /tmp/gh_hostkey    # 必須是 SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU
+  cat /tmp/gh_hostkey >> ~/.ssh/known_hosts
+
+  # 3. 停用那個沒有用的 helper，否則每次 push 都噴一行看起來像失敗的 fatal
+  git config --global credential.helper ""
+  ```
+
+  把 `~/.ssh/id_ed25519_rcsl_nexus.pub` 貼到 repo 的 Settings → Deploy keys，
+  **要勾 Allow write access**。用 deploy key 而不是 PAT，是因為 PAT 在這台機器上只能明文
+  躺在 `~/.git-credentials`；deploy key 只對這一個 repo 有效，也能單獨撤銷。
+
+  然後把 remote 換成 SSH 並驗證。判準是**拿掉 `GIT_ASKPASS` 之後仍然可用**——否則你驗
+  到的只是編輯器還連著：
+
+  ```sh
+  git remote set-url origin git@github.com:<org>/<repo>.git
+  env -u GIT_ASKPASS git fetch origin
+  env -u GIT_ASKPASS git push origin main
+  ```
+
 - [ ] 建立 `.env`（只放非機密設定）：
 
   ```sh
