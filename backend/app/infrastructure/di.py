@@ -662,6 +662,10 @@ def build_ingest_document(
         jobs=request.app.state.jobs,
         vectors=build_vector_store(settings, tenant),
         embedder=build_embed_texts(request.app.state.runtimes, session),
+        # `claim` alone uses this, and it must be the request session: the row
+        # it claims was inserted in that same uncommitted transaction. See
+        # IngestDocument.claim.
+        knowledge=PostgresKnowledgeRepository(session, tenant),
     )
 
 

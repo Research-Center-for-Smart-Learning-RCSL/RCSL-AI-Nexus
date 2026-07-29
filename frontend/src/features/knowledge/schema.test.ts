@@ -6,6 +6,7 @@ import {
   describeUploadRefusal,
   documentSchema,
   formatBytes,
+  resolveMediaType,
   searchResponseSchema,
 } from '@/features/knowledge/schema';
 
@@ -126,11 +127,29 @@ describe('upload policy, mirroring the server', () => {
     ).toBeNull();
   });
 
-  it('passes an unknown-to-the-browser type through to the server', () => {
-    // Browsers leave `type` empty for extensions they do not recognise, and
-    // guessing from the name is exactly what the backend refuses to do. Letting
-    // it through means the server's allowlist decides, not the browser's guess.
-    expect(describeUploadRefusal(file('a.md', '', 10))).toBeNull();
+  it('accepts a markdown file the browser could not identify', () => {
+    // `.md` is unregistered on Windows and many Linux setups, so the browser
+    // reports no type. Passing that through became `application/octet-stream`
+    // server-side and was refused, for a file the picker explicitly invites.
+    expect(describeUploadRefusal(file('notes.md', '', 10))).toBeNull();
+    expect(resolveMediaType(file('notes.md', '', 10))).toBe('text/markdown');
+    expect(resolveMediaType(file('notes.MD', '', 10))).toBe('text/markdown');
+    expect(resolveMediaType(file('notes.txt', '', 10))).toBe('text/plain');
+  });
+
+  it('does not guess a type for the binary formats', () => {
+    // Their parsers select on the declared type and the server checks it
+    // against magic bytes, so a guess here could steer bytes at the wrong
+    // format reader. Only the two text formats, whose parser is a decode, get
+    // an extension fallback.
+    expect(resolveMediaType(file('paper.pdf', '', 10))).toBe('');
+    expect(describeUploadRefusal(file('paper.pdf', '', 10))).toMatch(
+      /could not identify/,
+    );
+  });
+
+  it('keeps a type the browser did supply', () => {
+    expect(resolveMediaType(file('a.md', 'text/markdown', 10))).toBe('text/markdown');
   });
 });
 

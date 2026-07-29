@@ -26,6 +26,7 @@ from app.domain.entities.actor import Actor
 from app.domain.exceptions import UploadRejectedError
 from app.domain.services.upload_policy import MAX_UPLOAD_BYTES
 from app.infrastructure.di import (
+    SessionDep,
     build_ingest_document,
     build_manage_knowledge,
     build_search_knowledge,
@@ -112,6 +113,7 @@ async def upload_document(
     actor: Annotated[Actor, Depends(current_actor)],
     knowledge: Annotated[ManageKnowledge, Depends(build_manage_knowledge)],
     ingest: Annotated[IngestDocument, Depends(build_ingest_document)],
+    session: SessionDep,
     collection_id: Annotated[str, Form()],
     file: Annotated[UploadFile, File()],
 ) -> KnowledgeDocumentResponse:
@@ -133,6 +135,18 @@ async def upload_document(
     # Claim before scheduling, so a failure to claim is answered to the caller
     # rather than disappearing into a background task.
     status = await ingest.claim(document, str(uuid.uuid4()))
+
+    # Commit before scheduling, and this is the load-bearing line rather than a
+    # tidy-up. The insert and the claim both live in this request's transaction,
+    # which `session_scope` would otherwise commit only at dependency teardown,
+    # after this handler returns. The detached task opens a session of its own
+    # and its first act is to read the document, so scheduling first is a race
+    # it can lose: it would see nothing, fail the job with "The document was
+    # removed while queued", and the upload would never be ingested. Committing
+    # here makes the row durable before anything else can look for it. The
+    # second commit at teardown then finds nothing pending and is a no-op.
+    await session.commit()
+
     schedule_ingestion(
         request.app,
         document_id=document.id,

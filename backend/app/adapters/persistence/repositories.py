@@ -735,7 +735,18 @@ class PostgresKnowledgeRepository(_TenantScoped):
         stmt = self._scope(select(KnowledgeDocumentRow), KnowledgeDocumentRow.tenant_id)
         if collection_id is not None:
             stmt = stmt.where(KnowledgeDocumentRow.collection_id == collection_id)
-        stmt = stmt.order_by(KnowledgeDocumentRow.uploaded_at.desc()).limit(limit).offset(offset)
+        # `id` as a tiebreaker, not decoration. `uploaded_at` alone leaves rows
+        # sharing a timestamp in no defined order between queries, and offset
+        # paging over an unstable order can skip a row. That is a cosmetic
+        # glitch in the UI and a real failure in `ManageKnowledge._all_documents`,
+        # which pages through this to delete a collection: a skipped document
+        # keeps its foreign key, so the delete then fails on the constraint
+        # after other documents' bytes and vectors are already gone.
+        stmt = (
+            stmt.order_by(KnowledgeDocumentRow.uploaded_at.desc(), KnowledgeDocumentRow.id)
+            .limit(limit)
+            .offset(offset)
+        )
         rows = await self._session.scalars(stmt)
         return [m.document_to_domain(row) for row in rows]
 

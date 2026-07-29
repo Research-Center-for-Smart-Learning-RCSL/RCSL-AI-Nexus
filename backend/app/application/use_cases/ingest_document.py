@@ -32,6 +32,7 @@ from app.domain.ports.knowledge_ports import (
     DocumentStoragePort,
     VectorStorePort,
 )
+from app.domain.ports.repositories import KnowledgeRepositoryPort
 from app.domain.services.chunking import chunk_text
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ class IngestDocument:
         jobs: JobProgressPort,
         vectors: VectorStorePort,
         embedder: TextEmbedderPort,
+        knowledge: KnowledgeRepositoryPort | None = None,
     ) -> None:
         self._state = state_committer
         self._storage = storage
@@ -79,6 +81,10 @@ class IngestDocument:
         self._jobs = jobs
         self._vectors = vectors
         self._embedder = embedder
+        # The request-session repository, used only by `claim`. `run` is
+        # detached and must not touch it, so it is optional and None there,
+        # exactly as `DownloadModel` carries `models` for `start` alone.
+        self._knowledge = knowledge
 
     async def claim(self, document: KnowledgeDocument, job_id: str) -> JobStatus:
         """Move the document into `EXTRACTING` while the caller is still waiting.
@@ -86,12 +92,27 @@ class IngestDocument:
         Written here rather than inside the detached task so that a second
         upload-and-ingest of the same document is refused with an answer, the
         same reasoning as `DownloadModel.start`.
+
+        **Through the request session, not the state committer**, and the
+        distinction is load-bearing rather than stylistic. The document row was
+        inserted by `ManageKnowledge.upload_document` moments ago in *this*
+        transaction, which has not committed. The committer opens a session of
+        its own, so its `UPDATE ... WHERE id = :id` would run on a connection
+        that cannot see the row yet, match nothing, and report nothing: the
+        document would sit at `uploaded` while the parser ran, `is_transient`
+        would stay false so the delete guards would not fire, and the UI would
+        stop polling. Writing through the same transaction as the insert is what
+        makes the claim real. `DownloadModel.start` does the same thing for the
+        same reason; it simply never showed the failure, because the model row
+        it claims was committed by an earlier request.
         """
         if document.status not in INGESTABLE_STATES:
             raise DocumentStateConflictError(
                 detail=f"document {document.id} is {document.status}, not ingestable"
             )
-        await self._state.commit(document.id, DocumentStatus.EXTRACTING)
+        if self._knowledge is None:
+            raise RuntimeError("claim needs a request-session repository")
+        await self._knowledge.set_document_status(document.id, DocumentStatus.EXTRACTING)
         status = JobStatus(
             job_id=job_id, state="queued", target=document.id, message="Queued for extraction"
         )
@@ -137,15 +158,24 @@ class IngestDocument:
             await self._fail(job_id, document_id, "Extraction failed.")
             return
 
-        await self._storage.put_text(document_id, text)
-        await self._state.commit(document_id, DocumentStatus.EXTRACTED)
-
         try:
+            # Inside the `try`, not before it. These two were outside every
+            # handler, so a failure writing the extracted text (a full volume, a
+            # read-only mount, a permission error) propagated out of `run` into
+            # a caller that only logs: no terminal document state and no
+            # terminal job state, leaving the row transient until the next
+            # deploy's reconciliation and the job "running" until its TTL. That
+            # is precisely what this method's contract says cannot happen.
+            await self._storage.put_text(document_id, text)
+            await self._state.commit(document_id, DocumentStatus.EXTRACTED)
             chunk_count = await self._index(document, text, job_id)
         except Exception as exc:
             reason = f"{type(exc).__name__}"
+            # "post_extraction" rather than "indexing": this block now also
+            # covers storing the extracted text, and a log line naming the wrong
+            # stage sends an operator to the wrong component.
             logger.warning(
-                "indexing_failed document=%s job=%s reason=%s", document_id, job_id, reason
+                "post_extraction_failed document=%s job=%s reason=%s", document_id, job_id, reason
             )
             # EXTRACTED is not rolled back on this path. The text is genuinely
             # extracted and stored, so a retry re-indexes from it rather than
@@ -154,6 +184,7 @@ class IngestDocument:
             await self._state.commit(document_id, DocumentStatus.ERROR, error=reason)
             await self._fail(job_id, document_id, "Indexing failed.")
             return
+        # Reached only when the text is stored and the passages are in.
 
         await self._state.commit(document_id, DocumentStatus.INDEXED, chunk_count=chunk_count)
         await self._jobs.set(

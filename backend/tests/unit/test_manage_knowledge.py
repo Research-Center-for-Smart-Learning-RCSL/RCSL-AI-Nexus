@@ -274,6 +274,7 @@ def build_ingest(
             jobs=jobs,
             vectors=store,
             embedder=embed,
+            knowledge=knowledge,
         ),
         knowledge=knowledge,
         storage=storage,
@@ -293,7 +294,12 @@ async def test_ingestion_extracts_then_indexes_and_stores_the_text_between() -> 
 
     # EXTRACTED is a durable state between the two stages, not bookkeeping: it
     # is what lets a failed index be retried without re-running the parser.
-    assert ctx.state.states == ["extracting", "extracted", "indexing", "indexed"]
+    #
+    # `extracting` is absent from the committer's list on purpose: `claim` runs
+    # in the request and writes through the request session, because the row is
+    # still uncommitted at that point. Only the detached half writes through the
+    # committer. The repository below holds the whole sequence.
+    assert ctx.state.states == ["extracted", "indexing", "indexed"]
     stored = ctx.knowledge.documents[doc.id]
     assert stored.status is DocumentStatus.INDEXED
     assert stored.chunk_count == 1
@@ -360,6 +366,72 @@ async def test_a_failed_index_leaves_the_extracted_text_in_place_for_a_retry() -
     # The parser is the component with the CVE history, and the text it produced
     # survives, so retrying does not put the document through it again.
     assert ctx.storage.texts[doc.id] == "text"
+    assert ctx.jobs.rows["job-1"].state == "failed"
+
+
+async def test_claim_writes_through_the_request_session_not_the_committer() -> None:
+    """The row it claims was inserted in the request's uncommitted transaction.
+
+    The committer opens a session of its own, so a claim written through it
+    would target a row that connection cannot see yet: zero rows matched, no
+    error raised, and the document left at `uploaded` while the parser ran. The
+    delete guards read `is_transient`, so they would not fire either. This pins
+    that `claim` goes through the repository the insert used.
+    """
+    doc = document()
+    ctx = build_ingest(doc)
+
+    await ctx.use_case.claim(doc, "job-1")
+
+    # Visible through the repository, which is the request session's view.
+    assert ctx.knowledge.documents[doc.id].status is DocumentStatus.EXTRACTING
+    assert ctx.knowledge.documents[doc.id].is_transient
+    # And not written by the detached committer, whose transaction cannot see
+    # the row at this point.
+    assert ctx.state.states == []
+
+
+async def test_a_document_being_extracted_cannot_be_deleted_after_a_real_claim() -> None:
+    """The end of the chain the bug broke: claim makes the row transient, and
+    transient is what stops an operator deleting a document whose background
+    task will keep writing passages for it."""
+    doc = document()
+    ctx = build_ingest(doc)
+    await ctx.use_case.claim(doc, "job-1")
+
+    manage = ManageKnowledge(
+        knowledge=ctx.knowledge,
+        storage=ctx.storage,
+        vectors=ctx.vectors,
+        authz=RoleAuthorization(),
+        audit=FakeAudit(),
+    )
+    with pytest.raises(DocumentStateConflictError):
+        await manage.delete_document(ADMIN, doc.id)
+    with pytest.raises(DocumentStateConflictError):
+        await manage.delete_collection(ADMIN, "col-1")
+
+
+async def test_a_failure_storing_the_extracted_text_is_a_terminal_state() -> None:
+    """`run` promises never to raise and to write every outcome. `put_text` and
+    the EXTRACTED commit sat outside every handler, so a full volume or a
+    read-only mount left the row transient until the next deploy and the job
+    "running" until its TTL."""
+    doc = document()
+    ctx = build_ingest(doc, parser=FakeParser("text"))
+
+    async def refuse(document_id: str, text: str) -> None:
+        raise OSError("no space left on device")
+
+    ctx.storage.put_text = refuse  # type: ignore[method-assign]
+
+    await ctx.use_case.claim(doc, "job-1")
+    await ctx.use_case.run(doc.id, "job-1")
+
+    stored = ctx.knowledge.documents[doc.id]
+    assert stored.status is DocumentStatus.ERROR
+    assert stored.error == "OSError"
+    assert not stored.is_transient
     assert ctx.jobs.rows["job-1"].state == "failed"
 
 

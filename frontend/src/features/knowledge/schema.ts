@@ -103,6 +103,35 @@ export const ACCEPTED_MEDIA_TYPES: Record<string, string> = {
 /** For the file input's `accept`, which matches on extension in most browsers. */
 export const ACCEPT_ATTRIBUTE = '.pdf,.docx,.txt,.md';
 
+/**
+ * Extension fallback for the two formats browsers routinely report no type for.
+ *
+ * A browser derives `File.type` from the OS registry, and `.md` is unregistered
+ * on Windows and on many Linux setups, so a markdown file arrives with
+ * `type === ''`. Sending that becomes `application/octet-stream` server-side,
+ * which is not on the allowlist, so a file the picker explicitly invites
+ * (`ACCEPT_ATTRIBUTE` lists `.md`) was refused with "media type ... is not
+ * accepted".
+ *
+ * Only the two text formats are here, and that boundary is the point. Their
+ * parser is a UTF-8 decode, so naming the type wrongly cannot steer bytes into
+ * a format reader; a PDF or docx with no browser type is still sent as-is and
+ * refused, because those go to parsers where the declared type decides what
+ * runs and the server checks it against the file's magic bytes.
+ */
+const EXTENSION_FALLBACK: Record<string, string> = {
+  '.md': 'text/markdown',
+  '.markdown': 'text/markdown',
+  '.txt': 'text/plain',
+};
+
+export function resolveMediaType(file: File): string {
+  if (file.type) return file.type;
+  const dot = file.name.lastIndexOf('.');
+  if (dot === -1) return '';
+  return EXTENSION_FALLBACK[file.name.slice(dot).toLowerCase()] ?? '';
+}
+
 export function describeUploadRefusal(file: File): string | null {
   if (file.size === 0) return 'That file is empty.';
   if (file.size > MAX_UPLOAD_BYTES) {
@@ -110,10 +139,15 @@ export function describeUploadRefusal(file: File): string | null {
       MAX_UPLOAD_BYTES,
     )} limit.`;
   }
-  // Browsers leave `type` empty for extensions they do not know, and the server
-  // decides regardless, so an empty type is passed through rather than refused
-  // here: guessing from the name is exactly what the backend refuses to do.
-  if (file.type && !(file.type in ACCEPTED_MEDIA_TYPES)) {
+  // An empty type after the fallback means the browser knew nothing and the
+  // extension is not one of the two safe text ones. Refused here with a message
+  // that names the problem, rather than sent to be rejected as
+  // `application/octet-stream` with one that does not.
+  const mediaType = resolveMediaType(file);
+  if (!mediaType) {
+    return 'This browser could not identify that file type. Rename it with a .pdf, .docx, .txt or .md extension, or convert it.';
+  }
+  if (!(mediaType in ACCEPTED_MEDIA_TYPES)) {
     return 'That file type is not accepted. Upload a PDF, Word, text or markdown file.';
   }
   return null;

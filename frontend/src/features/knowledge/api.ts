@@ -4,6 +4,7 @@ import {
   collectionSchema,
   documentPageSchema,
   documentSchema,
+  resolveMediaType,
   searchResponseSchema,
   type Collection,
   type CreateCollectionInput,
@@ -57,7 +58,18 @@ export async function uploadDocument(
 ): Promise<KnowledgeDocument> {
   const form = new FormData();
   form.append('collection_id', collectionId);
-  form.append('file', file);
+
+  // The multipart part carries the File's own `type`, which is empty for any
+  // extension the OS does not have registered — `.md` on Windows, among others.
+  // Re-wrapping is the only way to set the part's content type, and the
+  // fallback covers the two text formats alone; see `resolveMediaType`.
+  const mediaType = resolveMediaType(file);
+  const part =
+    file.type || !mediaType
+      ? file
+      : new File([file], file.name, { type: mediaType });
+  form.append('file', part);
+
   return documentSchema.parse(
     await api.post<unknown>(`${BASE}/documents`, form),
   );
