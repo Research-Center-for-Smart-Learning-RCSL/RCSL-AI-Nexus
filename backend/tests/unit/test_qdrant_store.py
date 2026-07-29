@@ -13,6 +13,7 @@ import pytest
 
 from app.adapters.vector.qdrant_store import COLLECTION_PREFIX, QdrantVectorStore, point_id
 from app.domain.entities.knowledge import DocumentChunk
+from app.domain.entities.tenant import DEFAULT_TENANT_ID
 from app.domain.exceptions import VectorStoreError
 
 TENANT_A = "11111111-1111-1111-1111-111111111111"
@@ -71,10 +72,18 @@ def test_the_collection_name_comes_from_the_tenant() -> None:
     assert store(TENANT_A)._collection != store(TENANT_B)._collection
 
 
-def test_a_tenant_id_that_is_not_a_uuid_is_refused_at_construction() -> None:
+@pytest.mark.parametrize("hostile", ["../escape", "a/b", "", "a" * 100])
+def test_a_tenant_id_that_is_not_a_safe_collection_name_is_refused(hostile: str) -> None:
     """The collection name is interpolated from it, so it may not be arbitrary."""
-    with pytest.raises(ValueError, match="uuid"):
-        QdrantVectorStore("http://qdrant:6333", "a-key", "../escape")
+    with pytest.raises(ValueError, match="safe collection name"):
+        QdrantVectorStore("http://qdrant:6333", "a-key", hostile)
+
+
+def test_the_default_tenant_is_accepted() -> None:
+    """`DEFAULT_TENANT_ID` is `default`, not a UUID, and is the tenant every
+    existing deployment runs under. A UUID rule refused it, and no test using a
+    generated tenant id would have noticed."""
+    assert QdrantVectorStore("http://qdrant:6333", "a-key", DEFAULT_TENANT_ID)
 
 
 async def test_every_request_targets_only_this_tenants_collection(recorder: Recorder) -> None:

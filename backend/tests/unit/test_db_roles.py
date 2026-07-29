@@ -48,8 +48,7 @@ def test_gateway_can_read_all_tables():
     statements = build_statements([GATEWAY], database="nexus")
     grants = _grants_to(statements, "nexus_gateway")
     assert any(
-        "SELECT" in privs and "all tables in schema public" in target
-        for privs, target in grants
+        "SELECT" in privs and "all tables in schema public" in target for privs, target in grants
     )
 
 
@@ -65,8 +64,7 @@ def test_gateway_privileges_are_revoked_before_regrant():
     # Declarative, not additive: a prior over-grant cannot survive a redeploy.
     statements = build_statements([GATEWAY], database="nexus")
     assert any(
-        statement.upper().startswith("REVOKE ALL ON ALL TABLES")
-        and "nexus_gateway" in statement
+        statement.upper().startswith("REVOKE ALL ON ALL TABLES") and "nexus_gateway" in statement
         for statement in statements
     )
 
@@ -74,9 +72,7 @@ def test_gateway_privileges_are_revoked_before_regrant():
 def test_gateway_writable_set_is_exactly_the_named_tables():
     statements = build_statements([GATEWAY], database="nexus")
     insert_targets = {
-        target
-        for privs, target in _grants_to(statements, "nexus_gateway")
-        if "INSERT" in privs
+        target for privs, target in _grants_to(statements, "nexus_gateway") if "INSERT" in privs
     }
     assert insert_targets == {f'"{table}"' for table in GATEWAY_WRITABLE_TABLES}
 
@@ -84,9 +80,7 @@ def test_gateway_writable_set_is_exactly_the_named_tables():
 def test_admin_has_full_dml_on_all_tables():
     statements = build_statements([ADMIN], database="nexus")
     grants = _grants_to(statements, "nexus_admin")
-    all_tables = next(
-        privs for privs, target in grants if "all tables in schema public" in target
-    )
+    all_tables = next(privs for privs, target in grants if "all tables in schema public" in target)
     for verb in ("SELECT", *WRITE_VERBS):
         assert verb in all_tables
 

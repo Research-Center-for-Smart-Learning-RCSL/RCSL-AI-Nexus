@@ -10,7 +10,7 @@ wiring stays readable in one file rather than spreading across routers.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -53,6 +53,7 @@ from app.application.use_cases.authenticate_local import AuthenticateLocal
 from app.application.use_cases.bootstrap_first_admin import BootstrapFirstAdmin
 from app.application.use_cases.download_model import DownloadModel
 from app.application.use_cases.embed_texts import EmbedTexts
+from app.application.use_cases.ground_chat import GroundChat
 from app.application.use_cases.ingest_document import IngestDocument
 from app.application.use_cases.issue_invitation import IssueInvitation
 from app.application.use_cases.list_capabilities import ListCapabilities
@@ -662,6 +663,39 @@ def build_ingest_document(
         vectors=build_vector_store(settings, tenant),
         embedder=build_embed_texts(request.app.state.runtimes, session),
     )
+
+
+def build_ground_chat_factory(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> Callable[[str], GroundChat]:
+    """A factory, not a `GroundChat`, and the reason is which entrances use it.
+
+    Every other tenant-scoped builder here depends on `current_tenant_id`, which
+    reads `current_actor`. The gateway installs no such resolver: it
+    authenticates an API key through `authenticate_api_key`, so depending on
+    `current_actor` there raises at request time rather than at wiring time.
+    Taking the tenant as an argument lets the chat routers pass the tenant of
+    whichever actor they already resolved, which is the same value either way.
+
+    The gateway's vector store is then built from the read-only Qdrant key
+    mounted at the same target name (docker-compose.yml), so retrieving a
+    passage to answer a request cannot become writing one, the same split its
+    database account has.
+    """
+
+    def make(tenant_id: str) -> GroundChat:
+        return GroundChat(
+            search=SearchKnowledge(
+                vectors=build_vector_store(settings, tenant_id),
+                embedder=build_embed_texts(request.app.state.runtimes, session),
+                authz=request.app.state.authz,
+            )
+        )
+
+    return make
+
+
+GroundChatFactoryDep = Annotated[Callable[[str], GroundChat], Depends(build_ground_chat_factory)]
 
 
 def build_search_knowledge(

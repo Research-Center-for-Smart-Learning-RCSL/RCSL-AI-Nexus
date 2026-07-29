@@ -51,6 +51,23 @@ class ChatCompletionRequest(BaseModel):
             "advertise measurably do nothing."
         ),
     )
+    use_knowledge: bool = Field(
+        default=False,
+        description=(
+            "Retrieve from this tenant's knowledge base and ground the answer "
+            "on what comes back. Not an OpenAI field, and off by default: "
+            "grounding costs an embedding call and a slice of the context "
+            "window, so it is asked for rather than assumed. Cited documents "
+            "come back in the X-Knowledge-Sources header, not in the frames, "
+            "which stay strictly OpenAI-shaped."
+        ),
+    )
+    knowledge_collection: str | None = Field(
+        default=None,
+        description="Restrict retrieval to one collection. Ignored unless "
+        "use_knowledge is set. Never widens the tenant scope, which is fixed "
+        "by the caller's key.",
+    )
 
 
 class AdminChatRequest(BaseModel):
@@ -67,6 +84,8 @@ class AdminChatRequest(BaseModel):
     max_tokens: int | None = Field(default=None, gt=0)
     think: bool | None = Field(default=None)
     """Omitted takes the deployment default. See `ChatCompletionRequest.think`."""
+    use_knowledge: bool = False
+    knowledge_collection: str | None = None
 
 
 class Delta(BaseModel):

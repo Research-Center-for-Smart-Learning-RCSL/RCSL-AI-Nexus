@@ -136,9 +136,7 @@ class ManageNodes:
             )
 
         await self._nodes.delete(node.id)
-        await self._audit.record(
-            actor, "node.removed", target=node.id, detail={"name": node.name}
-        )
+        await self._audit.record(actor, "node.removed", target=node.id, detail={"name": node.name})
 
     async def check_health(self, actor: Actor, node_id: str) -> Node:
         """Probe a node now and persist the observed status.

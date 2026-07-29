@@ -33,7 +33,13 @@ from app.domain.exceptions import VectorStoreError
 logger = logging.getLogger(__name__)
 
 COLLECTION_PREFIX = "kb_"
-_TENANT = re.compile(r"\A[0-9a-fA-F-]{36}\Z")
+
+_TENANT = re.compile(r"\A[A-Za-z0-9_-]{1,64}\Z")
+"""Not "must be a UUID": the default tenant every existing deployment runs under
+is the literal string `default` (domain/entities/tenant.py), and demanding a
+UUID refused it. What has to be true is that the value is a safe collection
+name, which this class guarantees: Qdrant collection names admit exactly these
+characters, so nothing here can escape the name into a path segment."""
 
 _POINT_NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00cf4fc964ff")
 """Fixed namespace for deriving a point id from (document, passage index).
@@ -59,7 +65,7 @@ class QdrantVectorStore:
         timeout_seconds: int = 30,
     ) -> None:
         if not _TENANT.match(tenant_id):
-            raise ValueError(f"tenant id is not a uuid: {tenant_id!r}")
+            raise ValueError(f"tenant id is not a safe collection name: {tenant_id!r}")
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._tenant_id = tenant_id

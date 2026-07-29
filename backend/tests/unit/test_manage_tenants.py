@@ -19,9 +19,7 @@ from app.domain.services.token_service import TokenService
 from app.shared.clock import SystemClock
 from tests.unit.fakes import FakeAudit, FakeInvitations, FakeTenants, FakeUsers
 
-ADMIN = Actor(
-    id="a1", display="admin", role=Role.ADMIN, source="tailnet", scopes=frozenset(Scope)
-)
+ADMIN = Actor(id="a1", display="admin", role=Role.ADMIN, source="tailnet", scopes=frozenset(Scope))
 PLAIN_USER = Actor(
     id="u1", display="user", role=Role.USER, source="local", scopes=frozenset({Scope.CHAT_USE})
 )

@@ -251,9 +251,7 @@ async def test_wall_clock_deadline_cuts_a_slow_stream_below_the_token_ceiling() 
     """
     clock = FakeMonotonic()
     runtime = SlowRuntime(clock, seconds_per_chunk=10.0)
-    use_case, usage, limiter = build(
-        runtime, limit=1, ceiling=1000, deadline=25, monotonic=clock
-    )
+    use_case, usage, limiter = build(runtime, limit=1, ceiling=1000, deadline=25, monotonic=clock)
 
     chunks = []
     async with aclosing(use_case.execute(ACTOR, "chat", MESSAGES)) as stream:
