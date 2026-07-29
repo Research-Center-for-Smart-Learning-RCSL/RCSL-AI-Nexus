@@ -1229,6 +1229,11 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
     `openssl rand -base64 32` 即可。同一個檔會掛給 Prometheus，兩邊自動一致。若把
     `METRICS_ENABLED` 設成 `false` 就不需要這個
   - `secrets/grafana_admin_password`：Grafana 首次登入的 admin 密碼
+  - `secrets/qdrant_api_key` 與 `secrets/qdrant_read_only_api_key`：知識庫向量庫的
+    金鑰，**兩個必須是不同的值**（各跑一次 `openssl rand -base64 32`）。Qdrant 預設
+    完全沒有認證，所以這不是加強而是唯一的控制；read-only 那把掛給 gateway，讓它
+    只能讀不能寫（security.md §6）。這兩個檔在 production 一定要是真值，沒有像
+    `metrics_scrape_token` 那樣的關閉開關
 
   寫檔避免尾端換行的寫法：
 
@@ -1502,6 +1507,15 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
   `ListCapabilities` 是從「現存的 routing policy」推導清單的，不是讀常數，所以它是整個
   可簽發／可路由拆分裡唯一要手動套過濾的地方（[security.md](../architecture/security.md)
   §7.5.1）。建了策略卻在這裡看到 `assist`，就是那道過濾掉了。
+
+- [ ] 確認新增的兩個容器也起來了：`docker compose ps` 裡 `qdrant` 與 `parser` 都應該
+  是 `(healthy)`。
+
+- [ ] **要用知識庫的話**，還需要一個 `embedding` 模型與一條對應的 routing policy，
+  而且**啟動時沒有任何東西會檢查這件事**：沒設的話上傳成功、文件狀態停在 `error`、
+  搜尋安靜回空。步驟與驗證見
+  [upgrade-knowledge-base.md](./upgrade-knowledge-base.md) 第 4、5 部分（那份是為
+  既有部署寫的升級流程，但第 4 部分之後的內容首次部署一樣適用）。
 
 ---
 

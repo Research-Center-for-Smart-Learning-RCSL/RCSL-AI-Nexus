@@ -467,8 +467,16 @@ services:
       - qdrant-data:/qdrant/storage
     networks: [gateway-data, admin-data]
     healthcheck:
-      # /healthz needs no key; the data endpoints do.
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:6333/healthz"]
+      # bash's /dev/tcp, not curl or wget: the Qdrant image ships neither, and a
+      # healthcheck calling a binary that is not there fails forever while
+      # `docker compose config` validates happily. Found by running the
+      # container rather than by reading the file. `/healthz` needs no key; the
+      # data endpoints do.
+      test:
+        - CMD
+        - bash
+        - -c
+        - "exec 3<>/dev/tcp/127.0.0.1/6333; printf 'GET /healthz HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; head -1 <&3 | grep -q '200 OK'"
       interval: 15s
       timeout: 5s
       retries: 5
