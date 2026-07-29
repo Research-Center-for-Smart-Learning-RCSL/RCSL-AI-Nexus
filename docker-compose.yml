@@ -94,6 +94,15 @@ networks:
   admin-data:
     internal: true
 
+  # The document parser and nothing else. Internal, so the container that reads
+  # attacker-supplied PDFs has no route to the internet; and separate from
+  # `admin-data`, so it has no route to Postgres or Redis either. Only the two
+  # admin entrances are on it with the parser, because ingestion is an
+  # administrative operation and the gateway never parses anything.
+  # See docs/architecture/security.md section 7.3.
+  parser-net:
+    internal: true
+
   # Scrape segments, kept separate so the gateway/admin invariant above still
   # holds: Prometheus is on both, but the gateway and the admin entrances never
   # share one. Prometheus is a scraper, not a router — it issues only the fixed
@@ -131,6 +140,13 @@ volumes:
   redis-data:
   prometheus-data:
   grafana-data:
+  # Uploaded knowledge base documents and their extracted text. A volume rather
+  # than MinIO: one node, one filesystem, and MinIO would have added a service,
+  # a set of default credentials to replace, and a CVE surface for features this
+  # deployment does not use. See ARCHITECTURE.md section 6. It holds the team's
+  # unpublished research, so it is the volume that most needs to be in the
+  # encrypted backup (security.md section 9.4).
+  documents:
 
 # Every secret is a file under ./secrets, git-ignored, populated per deployment.
 # The three database URLs each name a different least-privilege account
@@ -249,7 +265,16 @@ services:
       - "8001"
     ports:
       - "127.0.0.1:8001:8001"
-    networks: [control-tailnet, admin-data, metrics-admin]
+    networks: [control-tailnet, admin-data, metrics-admin, parser-net]
+    # Repeated rather than merged: a service-level `volumes` replaces the
+    # anchor's list outright, so the two mounts from x-backend are restated
+    # alongside the documents volume. Read-write here, because ingestion writes
+    # both the upload and its extracted text; the gateway gets no mount at all,
+    # since retrieval reads chunk text from Qdrant and never touches the volume.
+    volumes:
+      - ./data:/data:ro
+      - ${HF_CACHE_HOST_PATH:-./data/hf-cache}:/hf-cache
+      - documents:/var/lib/nexus/documents
     secrets:
       - source: admin_database_url
         target: database_url
@@ -274,7 +299,11 @@ services:
       - "8002"
     ports:
       - "${TAILNET_IP:?set TAILNET_IP in .env; an empty value publishes on 0.0.0.0}:8002:8002"
-    networks: [control-public, admin-data, metrics-admin]
+    networks: [control-public, admin-data, metrics-admin, parser-net]
+    volumes:
+      - ./data:/data:ro
+      - ${HF_CACHE_HOST_PATH:-./data/hf-cache}:/hf-cache
+      - documents:/var/lib/nexus/documents
     secrets:
       - source: admin_database_url
         target: database_url
@@ -284,6 +313,56 @@ services:
       - session_signing_key
       - proxy_shared_secret
       - metrics_scrape_token
+
+  # --- document parser ----------------------------------------------------
+  # The container that reads attacker-supplied bytes, and the only one this
+  # deployment assumes will fall (security.md section 7.3). Everything about it
+  # is subtraction:
+  #
+  #   no env_file and no secrets  - it reads no settings, so a compromise finds
+  #                                 no credential in its environment
+  #   no volumes                  - a file-write primitive has nothing to write to
+  #   parser-net only, internal   - no internet, and no route to Postgres, Redis
+  #                                 or the vector store
+  #   read_only root + tmpfs      - safe because the image sets
+  #                                 PYTHONDONTWRITEBYTECODE and nothing here
+  #                                 writes outside /tmp
+  #   mem_limit                   - a decompression bomb kills this container
+  #                                 rather than the host
+  #
+  # It is the same image as the backend with a different ASGI app, not a second
+  # image: the isolation that matters is the process, network and credential
+  # boundary, not which layers the code was built from.
+  parser:
+    image: rcsl-ai-nexus:latest
+    restart: unless-stopped
+    command:
+      - uvicorn
+      - app.parser.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+    networks: [parser-net]
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: 1.0
+    # Only so the image tag exists before this starts; this service touches no
+    # database and needs no schema. Same reason every other service waits on it.
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # --- frontends ----------------------------------------------------------
   # One image, one instance per entrance, differing only in which admin API

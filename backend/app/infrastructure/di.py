@@ -26,12 +26,15 @@ from app.adapters.crypto.secret_box import FernetSecretBox
 from app.adapters.crypto.zxcvbn_policy import ZxcvbnPasswordPolicy
 from app.adapters.http.egress_guard import TailnetEgressGuard
 from app.adapters.http.node_health import RuntimeNodeHealth
+from app.adapters.http.parser_client import HttpDocumentParser
 from app.adapters.metrics.prometheus import MeteredUsageRepository
+from app.adapters.persistence.document_state import DocumentStateCommitter
 from app.adapters.persistence.model_state import ModelStateCommitter
 from app.adapters.persistence.repositories import (
     PostgresApiKeyRepository,
     PostgresAuditLogRepository,
     PostgresInvitationRepository,
+    PostgresKnowledgeRepository,
     PostgresModelRepository,
     PostgresNodeRepository,
     PostgresRoutingPolicyRepository,
@@ -42,14 +45,17 @@ from app.adapters.persistence.repositories import (
 from app.adapters.runtime.mlx_adapter import MlxAdapter
 from app.adapters.runtime.ollama_adapter import OllamaAdapter
 from app.adapters.session.session_store import SessionData, SessionStore
+from app.adapters.storage.filesystem_documents import FilesystemDocumentStorage
 from app.application.use_cases.accept_invitation import AcceptInvitation
 from app.application.use_cases.assist_operator import AssistOperator
 from app.application.use_cases.authenticate_local import AuthenticateLocal
 from app.application.use_cases.bootstrap_first_admin import BootstrapFirstAdmin
 from app.application.use_cases.download_model import DownloadModel
+from app.application.use_cases.ingest_document import IngestDocument
 from app.application.use_cases.issue_invitation import IssueInvitation
 from app.application.use_cases.list_capabilities import ListCapabilities
 from app.application.use_cases.manage_api_keys import ManageApiKeys
+from app.application.use_cases.manage_knowledge import ManageKnowledge
 from app.application.use_cases.manage_models import ManageModels
 from app.application.use_cases.manage_nodes import ManageNodes
 from app.application.use_cases.manage_own_account import ManageOwnAccount
@@ -581,6 +587,39 @@ def build_manage_tenants(
         invite=invite,
         authz=request.app.state.authz,
         audit=request.app.state.audit,
+    )
+
+
+def build_manage_knowledge(
+    request: Request, session: SessionDep, settings: SettingsDep, tenant: TenantIdDep
+) -> ManageKnowledge:
+    """Both collaborators are scoped to the actor's tenant, and that is the whole
+    of the knowledge base's isolation.
+
+    The repository filters and stamps by tenant; the storage adapter puts the
+    tenant in the path. Neither takes it as an argument, so `ManageKnowledge`
+    names no tenant anywhere and cannot read or write another one's documents.
+    See docs/architecture/security.md section 7.3.
+    """
+    return ManageKnowledge(
+        knowledge=PostgresKnowledgeRepository(session, tenant),
+        storage=FilesystemDocumentStorage(settings.document_storage_path, tenant),
+        authz=request.app.state.authz,
+        audit=request.app.state.audit,
+    )
+
+
+def build_ingest_document(
+    request: Request, settings: SettingsDep, tenant: TenantIdDep
+) -> IngestDocument:
+    """No request session: `claim` writes through the committer's own
+    transaction, so the state change survives whatever the request does next,
+    and `run` is scheduled detached with the same construction (jobs.py)."""
+    return IngestDocument(
+        state_committer=DocumentStateCommitter(get_session_factory(), tenant),
+        storage=FilesystemDocumentStorage(settings.document_storage_path, tenant),
+        parser=HttpDocumentParser(settings.parser_base_url, settings.parser_timeout_seconds),
+        jobs=request.app.state.jobs,
     )
 
 

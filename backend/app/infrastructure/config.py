@@ -230,6 +230,23 @@ class Settings(BaseSettings):
     is a card that does not appear, not a malformed one that does.
     """
 
+    document_storage_path: str = "/var/lib/nexus/documents"
+    """Where uploaded documents and their extracted text are kept.
+
+    A mounted volume rather than MinIO, decided when the knowledge base was
+    built: one node, one filesystem, and MinIO would have added a service, a set
+    of default credentials to replace, and a CVE surface for features this
+    deployment does not use. See ARCHITECTURE.md section 6 and
+    adapters/storage/filesystem_documents.py.
+    """
+
+    parser_base_url: str = "http://parser:8000"
+    """The isolated document parser (app/parser/main.py). A sibling container on
+    an internal network, unlike the runtimes, which are on the host: this one
+    must reach nothing, so it is deliberately not on `host.docker.internal`."""
+
+    parser_timeout_seconds: int = 120
+
     metrics_enabled: bool = True
     """Whether each application exposes `/metrics` for Prometheus. On by default;
     an operator who runs no Prometheus can turn it off, which also lifts the

@@ -32,9 +32,14 @@ from typing import Any, cast
 
 from fastapi import FastAPI
 
+from app.adapters.http.parser_client import HttpDocumentParser
+from app.adapters.persistence.document_state import DocumentStateCommitter
 from app.adapters.persistence.model_state import ModelStateCommitter
+from app.adapters.storage.filesystem_documents import FilesystemDocumentStorage
 from app.application.use_cases.download_model import DownloadModel
+from app.application.use_cases.ingest_document import IngestDocument
 from app.domain.ports.repositories import ModelRepositoryPort
+from app.infrastructure.config import get_settings
 from app.infrastructure.db import get_session_factory
 
 logger = logging.getLogger(__name__)
@@ -50,6 +55,21 @@ documented behaviour of `create_task`, and this set is the documented remedy.
 
 def schedule_download(app: FastAPI, *, model_id: str, job_id: str) -> None:
     task = asyncio.create_task(_run_download(app, model_id, job_id), name=f"download:{job_id}")
+    _running.add(task)
+    task.add_done_callback(_running.discard)
+
+
+def schedule_ingestion(app: FastAPI, *, document_id: str, job_id: str, tenant_id: str) -> None:
+    """The tenant travels with the task.
+
+    It is taken from the actor in the request that scheduled this, not looked up
+    later, so the detached write lands under the same tenant the upload did. A
+    background task is exactly where a scoped repository would otherwise be
+    constructed from nothing.
+    """
+    task = asyncio.create_task(
+        _run_ingestion(app, document_id, job_id, tenant_id), name=f"ingest:{job_id}"
+    )
     _running.add(task)
     task.add_done_callback(_running.discard)
 
@@ -74,3 +94,19 @@ async def _run_download(app: FastAPI, model_id: str, job_id: str) -> None:
         ).run(model_id, job_id)
     except Exception:
         logger.exception("download_task_failed model=%s job=%s", model_id, job_id)
+
+
+async def _run_ingestion(app: FastAPI, document_id: str, job_id: str, tenant_id: str) -> None:
+    """Never raises, for the reason `_run_download` does not: `run` writes every
+    outcome to the job and to the document's state through its own short
+    transactions, and this guard covers only a failure to construct at all."""
+    try:
+        settings = get_settings()
+        await IngestDocument(
+            state_committer=DocumentStateCommitter(get_session_factory(), tenant_id),
+            storage=FilesystemDocumentStorage(settings.document_storage_path, tenant_id),
+            parser=HttpDocumentParser(settings.parser_base_url, settings.parser_timeout_seconds),
+            jobs=app.state.jobs,
+        ).run(document_id, job_id)
+    except Exception:
+        logger.exception("ingestion_task_failed document=%s job=%s", document_id, job_id)

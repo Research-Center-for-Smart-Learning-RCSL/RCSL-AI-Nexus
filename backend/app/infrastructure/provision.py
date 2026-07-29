@@ -29,6 +29,7 @@ import logging
 import sys
 
 from app.adapters.persistence.repositories import (
+    PostgresKnowledgeRepository,
     PostgresModelRepository,
     PostgresNodeRepository,
 )
@@ -88,6 +89,15 @@ async def provision() -> None:
             )
         if moved:
             logger.warning("reconciled %s model(s) stranded in a transient state by a crash", moved)
+
+        async with session_scope() as session:
+            # Unscoped on purpose: this runs at deploy on behalf of no caller,
+            # and a crash strands documents in every tenant, not just one.
+            stranded = await PostgresKnowledgeRepository.unscoped(
+                session
+            ).reconcile_transient_documents("Interrupted by a restart. Upload again to retry.")
+        if stranded:
+            logger.warning("reconciled %s document(s) stranded mid-ingestion", stranded)
     finally:
         await dispose_engine()
 

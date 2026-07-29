@@ -51,6 +51,9 @@ class Scope(StrEnum):
 
     LOGS_READ = "logs:read"
 
+    KNOWLEDGE_READ = "knowledge:read"
+    KNOWLEDGE_WRITE = "knowledge:write"
+
 
 @dataclass(frozen=True, slots=True)
 class Actor:

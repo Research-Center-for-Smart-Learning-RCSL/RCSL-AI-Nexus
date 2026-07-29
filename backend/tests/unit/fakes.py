@@ -18,6 +18,7 @@ from ipaddress import ip_network
 from app.domain.entities.actor import Actor, Role
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.invitation import Invitation, InvitationPurpose, RecoveryCode
+from app.domain.entities.knowledge import DocumentStatus
 from app.domain.entities.model import Model, ModelState, PullProgress
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import RoutingPolicy
@@ -485,3 +486,144 @@ class FakeRuntime:
 
     async def health(self) -> bool:
         return True
+
+
+class FakeKnowledge:
+    """In-memory stand-in for `KnowledgeRepositoryPort`.
+
+    It has **no tenant filter**, deliberately, and that is why the isolation
+    property is pinned by an integration test against real Postgres instead: a
+    fake with no filter cannot prove a filter works. What these fakes are for is
+    the use case's own logic, which is the ordering of storage against the row
+    and the state refusals.
+    """
+
+    def __init__(self, collections=(), documents=()) -> None:
+        self.collections = {c.id: c for c in collections}
+        self.documents = {d.id: d for d in documents}
+
+    async def get_collection(self, collection_id):
+        collection = self.collections.get(collection_id)
+        if collection is None:
+            return None
+        count = sum(1 for d in self.documents.values() if d.collection_id == collection_id)
+        return replace(collection, document_count=count)
+
+    async def get_collection_by_name(self, name):
+        return next((c for c in self.collections.values() if c.name == name), None)
+
+    async def list_collections(self):
+        return sorted(self.collections.values(), key=lambda c: c.name)
+
+    async def save_collection(self, collection) -> None:
+        self.collections[collection.id] = collection
+
+    async def delete_collection(self, collection_id) -> None:
+        self.collections.pop(collection_id, None)
+
+    async def get_document(self, document_id):
+        return self.documents.get(document_id)
+
+    async def list_documents(self, *, collection_id=None, limit, offset):
+        found = [
+            d
+            for d in self.documents.values()
+            if collection_id is None or d.collection_id == collection_id
+        ]
+        return found[offset : offset + limit]
+
+    async def count_documents(self, *, collection_id=None):
+        return len(
+            [
+                d
+                for d in self.documents.values()
+                if collection_id is None or d.collection_id == collection_id
+            ]
+        )
+
+    async def save_document(self, document) -> None:
+        self.documents[document.id] = document
+
+    async def set_document_status(self, document_id, status, *, chunk_count=None, error=None):
+        document = self.documents[document_id]
+        self.documents[document_id] = replace(
+            document,
+            status=status,
+            error=error,
+            chunk_count=chunk_count if chunk_count is not None else document.chunk_count,
+        )
+
+    async def delete_document(self, document_id) -> None:
+        self.documents.pop(document_id, None)
+
+    async def reconcile_transient_documents(self, error: str) -> int:
+        moved = 0
+        for key, document in list(self.documents.items()):
+            if document.is_transient:
+                self.documents[key] = replace(document, status=DocumentStatus.ERROR, error=error)
+                moved += 1
+        return moved
+
+
+class FakeDocumentStorage:
+    """`DocumentStoragePort` over two dicts.
+
+    `fail_on_put` exists for the one ordering the use case promises: the bytes
+    reach storage before any row claims the document exists.
+    """
+
+    def __init__(self, *, fail_on_put: bool = False) -> None:
+        self.originals: dict[str, bytes] = {}
+        self.texts: dict[str, str] = {}
+        self.deleted: list[str] = []
+        self._fail_on_put = fail_on_put
+
+    async def put_original(self, document_id: str, data: bytes) -> None:
+        if self._fail_on_put:
+            raise OSError("no space left on device")
+        self.originals[document_id] = data
+
+    async def put_text(self, document_id: str, text: str) -> None:
+        self.texts[document_id] = text
+
+    async def read_original(self, document_id: str) -> bytes:
+        return self.originals[document_id]
+
+    async def read_text(self, document_id: str) -> str:
+        return self.texts[document_id]
+
+    async def delete(self, document_id: str) -> None:
+        self.deleted.append(document_id)
+        self.originals.pop(document_id, None)
+        self.texts.pop(document_id, None)
+
+
+class FakeParser:
+    def __init__(self, text: str = "extracted text", *, raises: Exception | None = None) -> None:
+        self.text = text
+        self._raises = raises
+        self.calls: list[tuple[str, int]] = []
+
+    async def extract_text(self, *, media_type: str, data: bytes) -> str:
+        self.calls.append((media_type, len(data)))
+        if self._raises is not None:
+            raise self._raises
+        return self.text
+
+
+class FakeDocumentState:
+    """`DocumentStateCommitterPort` backed by a `FakeKnowledge`, so a test can
+    watch the row move through the ingestion states as the task writes them."""
+
+    def __init__(self, knowledge: FakeKnowledge) -> None:
+        self._knowledge = knowledge
+        self.states: list[str] = []
+
+    async def get(self, document_id: str):
+        return await self._knowledge.get_document(document_id)
+
+    async def commit(self, document_id, status, *, chunk_count=None, error=None) -> None:
+        self.states.append(status.value)
+        await self._knowledge.set_document_status(
+            document_id, status, chunk_count=chunk_count, error=error
+        )
