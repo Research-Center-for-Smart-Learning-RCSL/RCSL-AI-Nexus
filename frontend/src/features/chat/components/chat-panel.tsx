@@ -85,6 +85,9 @@ export function ChatPanel() {
   // thinking off after producing nothing in 23,632 tokens with it on.
   const [thinking, setThinking] = useState(true);
   const [prompt, setPrompt] = useState('');
+  // Off by default, matching the API: grounding costs an embedding call and a
+  // slice of the context window, so it is asked for rather than assumed.
+  const [useKnowledge, setUseKnowledge] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -96,7 +99,7 @@ export function ChatPanel() {
     const trimmed = prompt.trim();
     if (!trimmed || isStreaming) return;
     setPrompt('');
-    void send(capability, trimmed, thinking);
+    void send(capability, trimmed, thinking, useKnowledge);
   }
 
   return (
@@ -124,6 +127,16 @@ export function ChatPanel() {
 
         <div ref={bottomRef} />
       </div>
+
+      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+        <input
+          type="checkbox"
+          className="size-4 accent-primary"
+          checked={useKnowledge}
+          onChange={(event) => setUseKnowledge(event.target.checked)}
+        />
+        Answer from the knowledge base
+      </label>
 
       <form onSubmit={submit} className="flex items-center gap-2">
         <Select

@@ -88,8 +88,19 @@ export function chatRequestFor(
   capability: ChatRequest['capability'],
   messages: ChatMessage[],
   think?: boolean,
+  useKnowledge?: boolean,
 ): ChatRequest {
-  return { capability, messages, ...(think === undefined ? {} : { think }) };
+  return {
+    capability,
+    messages,
+    ...(think === undefined ? {} : { think }),
+    // Present only when asked for, unlike `think`, which is sent in both
+    // directions because its checkbox would otherwise display the opposite of
+    // what happened. Grounding has no such problem: `false` is both the
+    // server's default and the absence of the field, so an ordinary turn is
+    // exactly the request it was before the knowledge base existed.
+    ...(useKnowledge ? { use_knowledge: true } : {}),
+  };
 }
 
 export function useChatStream() {
@@ -116,6 +127,7 @@ export function useChatStream() {
       capability: ChatRequest['capability'],
       prompt: string,
       think?: boolean,
+      useKnowledge = false,
     ) => {
       if (isStreaming) return;
 
@@ -138,7 +150,7 @@ export function useChatStream() {
 
       try {
         const response = await openChatStream(
-          chatRequestFor(capability, history, think),
+          chatRequestFor(capability, history, think, useKnowledge),
           controller.signal,
         );
 

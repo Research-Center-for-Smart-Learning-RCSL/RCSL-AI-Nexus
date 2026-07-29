@@ -14,7 +14,21 @@ export type ModelState =
   | 'unloading'
   | 'error';
 
-export type StatusValue = NodeStatus | ModelState | 'active' | 'revoked' | 'expired';
+/** Knowledge base ingestion lifecycle, domain/entities/knowledge.py. */
+export type DocumentStatus =
+  | 'uploaded'
+  | 'extracting'
+  | 'extracted'
+  | 'indexing'
+  | 'indexed';
+
+export type StatusValue =
+  | NodeStatus
+  | ModelState
+  | DocumentStatus
+  | 'active'
+  | 'revoked'
+  | 'expired';
 
 type Descriptor = {
   label: string;
@@ -39,6 +53,14 @@ const DESCRIPTORS: Record<StatusValue, Descriptor> = {
   loaded: { label: 'Loaded', variant: 'secondary', dot: 'bg-emerald-500' },
   unloading: { label: 'Unloading', variant: 'secondary', dot: 'bg-amber-500' },
   error: { label: 'Error', variant: 'destructive', dot: 'bg-destructive' },
+
+  // `error` is shared with the model lifecycle above rather than duplicated:
+  // it means the same thing to an operator and reads the same either way.
+  uploaded: { label: 'Uploaded', variant: 'outline', dot: 'bg-muted-foreground' },
+  extracting: { label: 'Extracting', variant: 'secondary', dot: 'bg-sky-500' },
+  extracted: { label: 'Extracted', variant: 'outline', dot: 'bg-sky-500' },
+  indexing: { label: 'Indexing', variant: 'secondary', dot: 'bg-amber-500' },
+  indexed: { label: 'Indexed', variant: 'secondary', dot: 'bg-emerald-500' },
 
   active: { label: 'Active', variant: 'secondary', dot: 'bg-emerald-500' },
   revoked: { label: 'Revoked', variant: 'destructive', dot: 'bg-destructive' },

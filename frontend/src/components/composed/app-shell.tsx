@@ -23,6 +23,7 @@ import {
   BoxIcon,
   GaugeIcon,
   KeyIcon,
+  LibraryIcon,
   LogOutIcon,
   MessageSquareIcon,
   Building2Icon,
@@ -78,6 +79,15 @@ const NAV: NavItem[] = [
     href: '/nodes',
     label: 'Nodes',
     icon: <ServerIcon className="size-4" />,
+    adminOnly: true,
+  },
+  {
+    href: '/knowledge',
+    label: 'Knowledge',
+    icon: <LibraryIcon className="size-4" />,
+    // knowledge:read is an admin scope. Retrieval for the chat happens
+    // server-side under the caller's tenant, so a `user` never needs the
+    // screen to have their questions answered from these documents.
     adminOnly: true,
   },
   {
