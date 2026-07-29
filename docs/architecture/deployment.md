@@ -449,7 +449,12 @@ holds the setup. One file per credential, raw value, no trailing newline.
 | `proxy_shared_secret` | Matches `X-Nexus-Proxy` in nginx | backend services, `migrate` |
 | `metrics_scrape_token` | Bearer token for `/metrics`; the same file is mounted into Prometheus | backend services, `migrate`, `prometheus` |
 | `grafana_admin_password` | Grafana's initial admin password | `grafana` |
-| `qdrant_api_key`, `minio_root_password` | Phase 2 | not yet |
+| `qdrant_api_key` | Qdrant's API key. It ships with **no authentication at all**, so this is not hardening but the only control between anything on the admin network and a full read of the knowledge base. Required to be a real value in production unconditionally, unlike `metrics_scrape_token` | `qdrant`, the two admin entrances, `migrate` |
+| `qdrant_read_only_api_key` | A **different** value, and the vector store's half of the §6 least-privilege split. Mounted into `gateway` at the target name `qdrant_api_key`, so retrieving a passage to answer a request cannot become writing one. Verified against a live Qdrant: this key gets 200 on a search and 403 on a collection write | `qdrant`, `gateway` (as `qdrant_api_key`) |
+
+MinIO is absent and will stay absent: document storage is a mounted volume, not
+object storage. See [ARCHITECTURE.md](../ARCHITECTURE.md) §4 for that decision
+and the condition that would reverse it.
 
 The four crypto secrets, and `metrics_scrape_token` when metrics are enabled, are
 mounted into `migrate` as well, because it calls `get_settings()`, which refuses
