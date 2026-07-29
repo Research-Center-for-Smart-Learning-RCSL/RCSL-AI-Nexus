@@ -31,12 +31,21 @@ export const chatRequestSchema = z.object({
    * `max_tokens`: it asks for less work, not more.
    */
   think: z.boolean().optional(),
+  /**
+   * Retrieve from the knowledge base and ground the answer on what comes back.
+   * Off unless asked for: it costs an embedding call and a slice of the context
+   * window, and the passages are inserted as data the model is told to treat as
+   * quoted material rather than instructions (security.md 7.3).
+   */
+  use_knowledge: z.boolean().optional(),
+  knowledge_collection: z.string().nullable().optional(),
 });
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 
 export const composerSchema = z.object({
   capability: issuableCapabilitySchema,
   prompt: z.string().min(1, 'Say something.'),
+  use_knowledge: z.boolean().optional(),
 });
 export type ComposerInput = z.infer<typeof composerSchema>;
 
