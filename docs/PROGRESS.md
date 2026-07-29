@@ -15,6 +15,160 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-07-30
+
+### The knowledge base, and the container built to be the one that falls (Phase 2)
+
+The largest Phase 2 item, in four commits: uploads with an isolated parser, then
+chunking and embeddings into Qdrant, then retrieval wired into the chat, then
+the screen. Four decisions were taken before any of it was written, and each
+changed what got built rather than only how.
+
+**Documents live on a volume, not in MinIO, and the plan said MinIO.** It was
+dropped on contact with the deployment. MinIO is another service to run, another
+set of default credentials to replace (`minioadmin`/`minioadmin`, which
+`security.md` §10 names), and another CVE surface; what it would have bought
+(presigned URLs, per-tenant credentials, storage outliving one machine) is
+unused by a single node with one filesystem. `ARCHITECTURE.md` §4 now records
+this, with the trigger to revisit it: the moment a second compute node has to
+read the same documents.
+
+**Parsing runs in its own container, and its isolation is subtraction rather
+than configuration.** This is the part worth remembering. `security.md` §7.3
+required "a separate resource-limited process with no network access", and the
+obvious reading — spawn a subprocess with rlimits — would have put the parser
+inside the admin container, next to the database credentials and the mounted
+secrets, which is where an exploit would then land. So `app/parser/` is a fourth
+ASGI application in the same image, and what makes it isolated is what it does
+not have: it reads no settings, so a compromise finds no credential in its
+environment; it mounts no volumes, so a file-write primitive has nothing to
+write to; it sits alone on an internal network, so it reaches neither the
+internet nor Postgres, Redis or Qdrant; and it runs read-only with dropped
+capabilities and a memory limit, so a decompression bomb kills it and not the
+host. The same image rather than a second one is deliberate: the boundary that
+matters is process, network and credential, not which layers the code was built
+from.
+
+Every one of those properties is one convenient import away from silently
+stopping being true, and neither mypy nor a functional test would notice. So a
+test parses the package with `ast` and fails if it ever imports from
+`app.domain`, `app.adapters`, `app.application`, `app.infrastructure` or
+`app.interfaces`. It is parsed rather than grepped because the module docstrings
+name those packages precisely in order to explain the rule, and a text scan read
+the explanation as a violation the first time it ran.
+
+**Path traversal is made unreachable rather than validated.** The storage port
+takes a document id and never a location, so no argument exists through which a
+`../` could travel; the adapter is constructed with the tenant, putting it in
+the path the way the scoped repositories put it in the WHERE. The uploader's
+filename is kept for display only, and sanitising it is about what a control
+character or a right-to-left override does in an operator UI, not about what a
+slash does to a path. The other two attacker-controlled parts of an upload are
+bounded separately: a size ceiling read in chunks rather than after `UploadFile`
+has spooled the body (and never trusting `content-length`, a client header on a
+streamed request), and a media-type allowlist checked against the file's own
+magic bytes so a declared type cannot steer bytes to the wrong parser.
+
+**Embeddings go through the existing routing policy, not a setting of their
+own.** `embed` is on `ModelRuntimePort`, so an embedding model is registered,
+budgeted and routed exactly like a chat model, and a policy on the `embedding`
+capability decides which one answers. A second way of naming a model would be a
+second place for the registry to be wrong. Two silent-corruption cases are
+refusals rather than approximations, both for the same reason: they would not
+fail, they would index the knowledge base with values that retrieve confidently
+and wrongly. MLX raises rather than embedding, which is the judgement its
+`unload` already makes; and a batch answered with the wrong number of vectors is
+refused rather than zipped, since pairing passages with each other's embeddings
+is invisible afterwards.
+
+**The vector store's tenant boundary is enforced twice, and this deviates from
+what the design specified.** `security.md` §7.3 described one shared Qdrant
+collection with a payload filter, and included the code. That is sound but fails
+in the wrong direction: a search that lost its filter returns every tenant's
+passages. Each tenant now gets its own collection, named from the tenant the
+adapter was constructed with, so a lost tenant names a collection that does not
+exist and errors instead; the payload filter is applied as well. The document is
+updated rather than left to disagree. Qdrant is also reached over its REST API
+instead of `qdrant-client`, which would pull grpcio and protobuf into an image
+that needs neither for calls that fit in a hundred lines of httpx, and it gets
+the §6 least-privilege treatment: the gateway holds Qdrant's **read-only** key,
+mounted at the same target name, so retrieving a passage cannot become writing
+one. Its key is a required production secret with no opt-out, unlike the metrics
+token, because Qdrant ships with no authentication at all and there is no
+deployment shape where the placeholder is intended.
+
+**Retrieval was added without touching `RouteChatRequest`.** That file is the
+most carefully ordered in the tree, and putting a database read and an embedding
+call in front of the concurrency slot and the `finally` that records usage would
+have meant reasoning about all of it again. So grounding is a transformation of
+the messages that runs before it: the streaming path receives a longer list and
+nothing else. It is the same move the metrics work made when it added
+observation through a wrapped repository rather than instrumenting the
+generator, and it is the second time that shape has paid off.
+
+The prompt assembly is where the injection concern is answered, and none of the
+three mechanisms is asking the model nicely. Passages go in their own system
+message rather than spliced into the user's turn. Each is fenced with a marker
+generated per request, so a document would have to guess 64 bits to close its
+own fence, and the marker is stripped from the passage if it appears anyway — a
+fixed marker is one an uploaded file can simply write. And the instruction
+naming them as data is placed *after* them, because an instruction before an
+untrusted block is what the block is trying to override. This is mitigation and
+is documented as such: no prompt construction makes a model immune to
+instructions in its context, which is why "model output is always untrusted
+input" still stands beside it.
+
+Retrieval is opt-in per request, because it costs an embedding call and a slice
+of the context window and silently grounding every completion would surprise an
+API caller. Citations come back in a header rather than an extra SSE frame,
+since the envelope is OpenAI's and a new frame shape is a protocol error to a
+strict client; the header carries ids and indexes only, never passage text,
+because a header reaches access logs (§9.2). It runs under `chat:use` rather
+than `knowledge:read`, so a `user` who may never list documents still has
+questions answered from them, and it degrades to an ordinary completion when
+Qdrant or the embedding policy is unavailable — while deliberately not
+degrading an authorization failure, which is a decision about who may ask.
+
+**One real defect, and it is the familiar kind.** Both the document storage and
+the vector store required their tenant id to be a UUID. `DEFAULT_TENANT_ID` is
+the literal string `default`, which is the tenant every existing deployment runs
+under, so both adapters refused it outright. Every unit test passed a generated
+UUID and nothing noticed until an end-to-end request went through the real
+gateway. The assertion was about the wrong property: what has to be true is that
+the value is a safe path segment and collection name, not that it is a UUID.
+That is now what is checked, and pinned against the default tenant explicitly.
+
+Two pre-existing breakages were fixed on the way. `test_db_role_grants.py` had
+not been updated when `usage_records.tenant_id` became NOT NULL, so the test
+that proves the gateway account cannot write `api_keys` had been failing on a
+constraint before reaching any grant — the security property it exists to
+demonstrate had quietly stopped being demonstrated. It now also pins that the
+gateway cannot write the knowledge base. And ruff's `S608` fires on the tenants
+migration's hardcoded table interpolation, pinned per-file the way
+`db_roles.py` already is.
+
+Verified: 134 new backend tests (the upload policy's three attacker-controlled
+inputs; the storage adapter against a real temporary directory, where another
+tenant's document does not resolve and no write lands outside the tenant
+directory; the parser service turning a crafted PDF into a refusal rather than a
+traceback, plus the `ast` isolation test; chunking geometry, including that
+overlap repeats text without losing any; the Qdrant adapter's request shapes;
+the ingestion pipeline through indexing, a re-index replacing a stale tail, a
+scanned PDF with no text layer indexing as zero passages rather than an error,
+and a failed index preserving the extracted text so a retry does not re-run the
+parser; and the prompt structure) and 9 new integration tests against real
+Postgres 17. The full suite is 424 unit and 69 integration tests passing, ruff
+and mypy clean, 77 frontend tests with `tsc`, `eslint` and `next build`
+generating `/knowledge`, and `docker compose config` still showing the gateway
+sharing no network with either admin entrance or with the parser.
+
+What waits for the Mac Studio is what always does: real embedding, and whether
+retrieval actually answers questions well, which is a quality property no stub
+can report. The upload rules, the parser's isolation, the tenant scoping and the
+prompt structure are exercised now.
+
+---
+
 ## 2026-07-29
 
 ### An assistant in the admin UI, and the one filter that would have defeated it
@@ -3363,6 +3517,21 @@ One thing still exists as an API with no dedicated UI: the download progress
 endpoint, which the models table polls but no page surfaces on its own. The
 routing policy editor now exists, so a policy is no longer curl-only.
 
+Phase 2 is now largely complete: both runtime adapters, node management, the
+multi-tenancy boundary, the logs and usage screens, the observability emission
+stack, and the knowledge base with retrieval. What remains there is the live
+free-memory figure the budget would consume (which needs the hardware), prompt
+template management, the logging boundaries and expiring debug switch, encrypted
+backups, and the audit and authorization completeness sweeps.
+
+**Using the knowledge base needs one piece of configuration that nothing
+enforces at startup**: a routing policy on the `embedding` capability, naming a
+registered embedding model on an Ollama node. Without it, uploads still parse
+and store but indexing fails with a named error, and retrieval quietly returns
+nothing. That is deliberate — a chat should not fail because the knowledge base
+is unconfigured — but it does mean an operator who skips this step sees a
+knowledge base that looks like it is working and never answers anything.
+
 ## What comes next
 
 Four things are open as of the end of 2026-07-26, in the order they should be
@@ -3461,10 +3630,9 @@ implementation:
   because it is the only real test of whether the hexagonal layering delivered
   what it was chosen for. If adding one requires touching a use case, the
   abstraction failed.
-- **Multi-tenancy.** Currently single tenant, stated as such. The Phase 1
-  schema was written not to preclude it, but adding `tenant_id` touches every
-  repository and the filter has to be injected inside the adapter so a caller
-  cannot forget it.
+- **Multi-tenancy.** Done; see the 2026-07-25 entry. The knowledge base, its
+  main consumer, now plugs into that boundary and enforces it in three more
+  places (the two tables, the document path, and the Qdrant collection name).
 - **Prometheus and Grafana** are now built on the emission side (see the
   2026-07-25 entry). What remains is the ingestion half: a live free-memory
   figure feeding the memory budget, which needs the Mac Studio to produce a real

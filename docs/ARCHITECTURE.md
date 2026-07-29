@@ -246,8 +246,8 @@ The chat interface lives on the admin API rather than calling the public gateway
 - Frontend (management UI): **Next.js (React) + shadcn/ui**
 - State: PostgreSQL (registry, policies, keys, users, usage, audit)
 - Cache and job state: Redis (rate limits, session storage, model download progress)
-- Vector store: Qdrant (knowledge base, Phase 2)
-- Object storage: MinIO (uploaded documents, Phase 2)
+- Vector store: Qdrant (knowledge base). Reached over its REST API rather than through `qdrant-client`, which would pull grpcio and protobuf into an image that needs neither; see `adapters/vector/qdrant_store.py`
+- Document storage: **a mounted volume, not MinIO (decided while building the knowledge base)**. MinIO was the original plan and was dropped on contact with the deployment. It is another service to run, another set of default credentials to replace (`minioadmin`/`minioadmin`, named in [security.md](./architecture/security.md) §10) and another CVE surface, and what it would have bought — presigned URLs, per-tenant credentials, storage that outlives one machine — none of it is used by a single-node deployment with one filesystem. Documents live under `/var/lib/nexus/documents/<tenant>/<document>/` on a Docker volume, with keys derived from ids the platform generates so no caller ever supplies a path. **A second compute node is the trigger to revisit this**: the moment two machines must read the same documents, a volume stops being sufficient and MinIO (or an equivalent) becomes the answer again
 - Monitoring: Prometheus + Grafana (Phase 2), consumed by the dashboard rather than reimplemented
 
 **The gateway and admin API are separate containers (decided).** The reasoning is a security requirement rather than a code-structure preference; see [architecture/security.md](./architecture/security.md) §1.
