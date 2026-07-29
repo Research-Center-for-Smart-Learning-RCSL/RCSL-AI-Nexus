@@ -11,7 +11,7 @@ from __future__ import annotations
 from contextlib import aclosing
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from fastapi.responses import StreamingResponse
 
 from app.application.use_cases.route_chat_request import RouteChatRequest
@@ -75,6 +75,7 @@ async def chat_completions(
     actor: ActorDep,
     use_case: RouteChatRequestDep,
     ground_chat: GroundChatFactoryDep,
+    response: Response,
 ) -> ChatCompletionResponse | StreamingResponse:
     completion_id = sse.new_completion_id()
     created = sse.created_now()
@@ -105,6 +106,13 @@ async def chat_completions(
             # extra frame shape is a protocol error to a strict client.
             extra_headers=sse.citation_header(passages),
         )
+
+    # The same citations on this path as on the streaming one. `use_knowledge`
+    # promises them in the header without qualifying which path, and a grounded
+    # non-streaming answer whose sources were computed and then dropped is the
+    # kind of gap nothing complains about.
+    for name, value in sse.citation_header(passages).items():
+        response.headers[name] = value
 
     return await _collect(
         completion_id, created, body.model, actor, use_case, messages, body.max_tokens, body.think

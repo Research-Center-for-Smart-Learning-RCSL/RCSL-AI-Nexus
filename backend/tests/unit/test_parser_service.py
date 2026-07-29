@@ -13,6 +13,7 @@ it silently.
 from __future__ import annotations
 
 import ast
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import httpx
@@ -126,45 +127,111 @@ def test_the_parser_package_imports_nothing_from_the_application() -> None:
 # --- the client ----------------------------------------------------------
 
 
-class StubTransport(httpx.AsyncBaseTransport):
-    def __init__(self, response: httpx.Response) -> None:
+class FakeStreamResponse:
+    """Enough of a streamed `httpx.Response` for the client's read loop.
+
+    `aiter_bytes` yields separately from `aread`, so a test can hand back a body
+    far larger than the ceiling without ever building it: the point of the
+    streaming read is that the client stops before the whole thing exists.
+    """
+
+    def __init__(self, status_code: int, chunks: list[bytes]) -> None:
+        self.status_code = status_code
+        self._chunks = chunks
+        self.chunks_read = 0
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            self.chunks_read += 1
+            yield chunk
+
+    async def aread(self) -> bytes:
+        return b"".join(self._chunks)
+
+
+class _StubStream:
+    def __init__(self, response: FakeStreamResponse) -> None:
         self._response = response
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def __aenter__(self) -> FakeStreamResponse:
         return self._response
 
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
 
-async def test_the_client_refuses_an_oversized_response_body(monkeypatch) -> None:
+
+def patch_stream(monkeypatch, response: FakeStreamResponse) -> None:
+    def fake_stream(self: object, *args: object, **kwargs: object) -> _StubStream:
+        return _StubStream(response)
+
+    monkeypatch.setattr(httpx.AsyncClient, "stream", fake_stream)
+
+
+async def test_the_client_stops_reading_once_the_response_passes_the_ceiling(
+    monkeypatch,
+) -> None:
     """The parser is the component assumed to fall, so a compromised one
-    answering with an unbounded body must not become a memory problem here."""
-    parser = HttpDocumentParser("http://parser:8000")
-    monkeypatch.setattr("app.adapters.http.parser_client.MAX_TEXT_CHARS", 10)
+    answering with an unbounded body must not become a memory problem here.
 
-    async def fake_post(*args: object, **kwargs: object) -> httpx.Response:
-        return httpx.Response(200, json={"text": "x" * 100})
+    The earlier version of this bound checked the length of the *decoded* string,
+    by which point httpx had buffered the whole body and `json()` had built a
+    second copy of it, so it protected nothing. This asserts the read is
+    abandoned partway rather than merely rejected afterwards.
+    """
+    monkeypatch.setattr("app.adapters.http.parser_client.MAX_RESPONSE_BYTES", 100)
+    response = FakeStreamResponse(200, [b"x" * 60] * 1000)
+    patch_stream(monkeypatch, response)
 
-    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
-    with pytest.raises(DocumentParseError):
-        await parser.extract_text(media_type="text/plain", data=b"x")
+    with pytest.raises(DocumentParseError, match="exceeded"):
+        await HttpDocumentParser("http://parser:8000").extract_text(
+            media_type="text/plain", data=b"x"
+        )
+
+    # Two chunks is 120 bytes, past the 100-byte ceiling. The remaining 998 were
+    # never pulled off the wire.
+    assert response.chunks_read == 2
+
+
+async def test_a_response_within_the_ceiling_is_returned(monkeypatch) -> None:
+    patch_stream(monkeypatch, FakeStreamResponse(200, [b'{"text": "hel', b'lo"}']))
+    text = await HttpDocumentParser("http://parser:8000").extract_text(
+        media_type="text/plain", data=b"x"
+    )
+    assert text == "hello"
 
 
 async def test_the_client_turns_an_unreachable_parser_into_a_domain_error(monkeypatch) -> None:
-    parser = HttpDocumentParser("http://parser:8000")
-
-    async def fail(*args: object, **kwargs: object) -> httpx.Response:
+    def fail(self: object, *args: object, **kwargs: object) -> _StubStream:
         raise httpx.ConnectError("no route to host")
 
-    monkeypatch.setattr(httpx.AsyncClient, "post", fail)
+    monkeypatch.setattr(httpx.AsyncClient, "stream", fail)
     with pytest.raises(DocumentParseError):
-        await parser.extract_text(media_type="text/plain", data=b"x")
+        await HttpDocumentParser("http://parser:8000").extract_text(
+            media_type="text/plain", data=b"x"
+        )
 
 
 async def test_the_client_refuses_a_response_with_no_text_field(monkeypatch) -> None:
-    parser = HttpDocumentParser("http://parser:8000")
-
-    async def fake_post(*args: object, **kwargs: object) -> httpx.Response:
-        return httpx.Response(200, json={"unexpected": True})
-
-    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    patch_stream(monkeypatch, FakeStreamResponse(200, [b'{"unexpected": true}']))
     with pytest.raises(DocumentParseError):
-        await parser.extract_text(media_type="text/plain", data=b"x")
+        await HttpDocumentParser("http://parser:8000").extract_text(
+            media_type="text/plain", data=b"x"
+        )
+
+
+async def test_the_client_refuses_a_non_json_body(monkeypatch) -> None:
+    patch_stream(monkeypatch, FakeStreamResponse(200, [b"not json at all"]))
+    with pytest.raises(DocumentParseError, match="non-JSON"):
+        await HttpDocumentParser("http://parser:8000").extract_text(
+            media_type="text/plain", data=b"x"
+        )
+
+
+async def test_a_non_200_is_reported_by_status_without_the_body(monkeypatch) -> None:
+    """The parser's error body can quote the document, so only the status
+    crosses back."""
+    patch_stream(monkeypatch, FakeStreamResponse(422, [b'{"error": "extraction_failed"}']))
+    with pytest.raises(DocumentParseError, match="422"):
+        await HttpDocumentParser("http://parser:8000").extract_text(
+            media_type="application/pdf", data=b"x"
+        )
