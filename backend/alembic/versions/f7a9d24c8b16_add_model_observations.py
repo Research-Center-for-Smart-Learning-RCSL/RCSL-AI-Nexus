@@ -27,9 +27,7 @@ def upgrade() -> None:
     # lie these columns exist to end.
     op.add_column("models", sa.Column("observed_state", sa.String(24), nullable=True))
     op.add_column("models", sa.Column("observed_memory_gb", sa.Float(), nullable=True))
-    op.add_column(
-        "models", sa.Column("observed_at", sa.DateTime(timezone=True), nullable=True)
-    )
+    op.add_column("models", sa.Column("observed_at", sa.DateTime(timezone=True), nullable=True))
 
 
 def downgrade() -> None:

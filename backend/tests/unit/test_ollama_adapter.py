@@ -444,7 +444,7 @@ async def test_residency_answers_under_the_bare_name_for_a_latest_tag(patch_http
 
 
 async def test_residency_is_none_when_the_runtime_cannot_be_asked(patch_httpx) -> None:
-    """"Could not ask" and "asked, nothing loaded" must not read the same: an
+    """ "Could not ask" and "asked, nothing loaded" must not read the same: an
     unreachable runtime answering as empty would mark every model unloaded on
     the strength of a network blip."""
 

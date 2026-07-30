@@ -1,0 +1,209 @@
+name: CI
+
+# What this exists to catch. Every quality gate this repository had ran on the
+# machine of whoever was committing: pre-commit hooks that a `--no-verify`
+# skips, and two test suites nobody but the author ran. The integration suite in
+# particular needs a Postgres, so it was the easiest thing in the repo to leave
+# unrun — and it is the suite that found the account-split test asserting
+# nothing (PROGRESS.md 2026-07-26). A gate that only runs where the code was
+# written is a gate that eventually does not run.
+#
+# The runners are GitHub-hosted Linux, which is deliberately *not* the
+# deployment: the Mac Studio's GPU, the tailnet and nginx cannot be reproduced
+# here and nothing below pretends otherwise. What CI checks is the half that is
+# platform-independent — types, lint, unit and integration behaviour against a
+# real Postgres, and the dependency surface. The rest is verified by deploying,
+# which is what the runbook is for.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Weekly, so the audit jobs report a newly published advisory against
+  # unchanged code. A vulnerability disclosed on a Tuesday should not wait for
+  # someone to happen to commit.
+  schedule:
+    - cron: '0 4 * * 3'
+  workflow_dispatch:
+
+# A second push to the same branch makes the first run's answer irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+
+    services:
+      # The same major version Compose runs, because the integration suite
+      # asserts against real Postgres behaviour — role grants, `date_trunc`
+      # bucketing, tenant filters — and none of that is guaranteed to be
+      # identical on another version.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: nexus
+          POSTGRES_PASSWORD: devpw
+          POSTGRES_DB: nexus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexus"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install dependencies
+        working-directory: backend
+        # --frozen, so a lockfile that does not match pyproject.toml fails here
+        # rather than being silently updated into a resolution nobody reviewed.
+        run: uv sync --frozen
+
+      - name: Ruff (lint)
+        working-directory: backend
+        run: uv run ruff check app tests alembic
+
+      - name: Ruff (format)
+        working-directory: backend
+        # `--check` only. CI reports formatting; it never rewrites the tree,
+        # because a job that pushes formatting commits is a job that can push.
+        run: uv run ruff format --check app tests alembic
+
+      - name: mypy (strict)
+        working-directory: backend
+        run: uv run mypy app
+
+      - name: Unit tests
+        working-directory: backend
+        # No TEST_DATABASE_URL: the integration tests skip, which is the same
+        # arrangement a developer gets, and proves the unit suite really is
+        # independent of a database rather than quietly relying on one.
+        run: uv run pytest tests/unit -q
+
+      - name: Integration tests, against a real Postgres
+        working-directory: backend
+        env:
+          # Deliberately not DATABASE_URL. The variable is separate precisely so
+          # the unit suite can never reach a database by accident, and these
+          # tests drop and recreate the schema on every run.
+          TEST_DATABASE_URL: postgresql+asyncpg://nexus:devpw@127.0.0.1:5432/nexus
+        run: uv run pytest tests/integration -q
+
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: frontend
+        # --frozen-lockfile is the default in CI; naming it makes the intent
+        # explicit rather than environment-dependent.
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript
+        working-directory: frontend
+        run: pnpm exec tsc --noEmit
+
+      - name: ESLint
+        working-directory: frontend
+        run: pnpm lint
+
+      - name: Vitest
+        working-directory: frontend
+        run: pnpm test
+
+      - name: Build
+        working-directory: frontend
+        # The deployed image is `output: 'standalone'`, and a build-time failure
+        # (a server/client boundary violation, a bad import) does not appear in
+        # any of the checks above. This is also where the class of defect from
+        # PROGRESS.md 2026-07-26 lived: a rewrite resolved at build time.
+        run: pnpm build
+
+  audit:
+    runs-on: ubuntu-latest
+    # Advisory rather than blocking, and the reason is specific: these jobs fail
+    # when someone else publishes an advisory, not when this repository changes.
+    # Blocking on that would mean an unrelated CVE stops an unrelated fix from
+    # merging, which is how a red pipeline stops being read at all. The signal
+    # goes to whoever looks at the run; the ROADMAP item that asked for this
+    # asked for scanning, not for a gate.
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: pip-audit
+        working-directory: backend
+        # Against the locked resolution rather than the declared ranges, so the
+        # report names what would actually be installed. `uv tool run` keeps
+        # pip-audit out of the project's own dependency set.
+        run: |
+          uv export --frozen --no-dev --format requirements-txt > /tmp/requirements.txt
+          uv tool run pip-audit --requirement /tmp/requirements.txt --strict
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: pnpm audit
+        working-directory: frontend
+        # `--prod` first: a vulnerability in a build-time devDependency does not
+        # ship in the image, and mixing the two makes the report unreadable.
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm audit --prod --audit-level moderate
+
+      - name: Trivy, filesystem
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          scan-type: fs
+          # `vuln,secret` and deliberately **not** `misconfig`. The Dockerfile
+          # and Compose misconfiguration rules have never been run against this
+          # repository, so turning them on here would publish a wall of
+          # untriaged findings — and several would be things this deployment
+          # chose on purpose and recorded in security.md §15. An unread report
+          # is worse than no report, which is the same reasoning that makes this
+          # whole job advisory. Turning misconfig on is its own piece of work:
+          # run it once by hand, decide each finding, and add the ones that
+          # remain as ignores with a reason before it becomes a step here.
+          scanners: vuln,secret
+          # HIGH and CRITICAL only. At MEDIUM the base-image noise buries
+          # everything that would be acted on.
+          severity: HIGH,CRITICAL
+          # A vulnerability with no released fix is not something a commit can
+          # answer, and reporting it every run trains people to skip the job.
+          ignore-unfixed: true
+          exit-code: '1'
