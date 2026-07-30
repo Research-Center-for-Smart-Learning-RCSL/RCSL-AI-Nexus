@@ -151,13 +151,20 @@ jobs:
 
   audit:
     runs-on: ubuntu-latest
-    # Advisory rather than blocking, and the reason is specific: these jobs fail
-    # when someone else publishes an advisory, not when this repository changes.
-    # Blocking on that would mean an unrelated CVE stops an unrelated fix from
-    # merging, which is how a red pipeline stops being read at all. The signal
-    # goes to whoever looks at the run; the ROADMAP item that asked for this
-    # asked for scanning, not for a gate.
-    continue-on-error: true
+    # `continue-on-error` is on each scanning step below, **not on this job**,
+    # and the difference was learned the hard way on the first run: with it here,
+    # `aquasecurity/trivy-action@0.29.0` (the tag is `v0.29.0`) failed to resolve,
+    # the whole job died in "Set up job" before a single scanner ran, and the run
+    # still reported success. A scanning job that has never executed while the
+    # pipeline shows green is precisely the "designed, written down, marked done,
+    # and not actually in force" defect this repository keeps finding in itself.
+    #
+    # Per-step instead: a broken workflow, a failed install or an unreachable
+    # advisory database fails this job and is visible, because those are ours to
+    # fix. A scanner that *ran* and found something does not, because that fires
+    # when someone else publishes an advisory rather than when this repository
+    # changes — and an unrelated CVE blocking an unrelated fix is how a red
+    # pipeline stops being read at all.
 
     steps:
       - uses: actions/checkout@v4
@@ -169,6 +176,7 @@ jobs:
           cache-dependency-glob: backend/uv.lock
 
       - name: pip-audit
+        continue-on-error: true
         working-directory: backend
         # Against the locked resolution rather than the declared ranges, so the
         # report names what would actually be installed. `uv tool run` keeps
@@ -189,6 +197,7 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: pnpm audit
+        continue-on-error: true
         working-directory: frontend
         # `--prod` first: a vulnerability in a build-time devDependency does not
         # ship in the image, and mixing the two makes the report unreadable.
@@ -197,7 +206,11 @@ jobs:
           pnpm audit --prod --audit-level moderate
 
       - name: Trivy, filesystem
-        uses: aquasecurity/trivy-action@0.29.0
+        continue-on-error: true
+        # `v0.36.0`, with the `v`. The tag without it does not exist, and a
+        # `uses:` that cannot be resolved kills the job in "Set up job" before
+        # any step runs — see the note on this job.
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           # `vuln,secret` and deliberately **not** `misconfig`. The Dockerfile

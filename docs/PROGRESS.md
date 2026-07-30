@@ -91,6 +91,19 @@ exactly the kind of drift a gate on someone's laptop permits. And every CI
 command was run locally first, because a workflow whose steps have never been
 executed is a red pipeline waiting to happen rather than a gate.
 
+**And the audit job's first run proved the point it was written about.** It
+never ran at all: `aquasecurity/trivy-action@0.29.0` does not exist (the tag
+carries a `v`), an unresolvable `uses:` kills a job in "Set up job" before any
+step executes, and because `continue-on-error` was on the *job* the run still
+reported success. A scanning job that has never executed, behind a green
+pipeline — the same "designed, written down, marked done, and not actually in
+force" shape this log keeps recording, this time in the very thing added to
+catch it. Every *command* had been run locally first; an action reference is the
+one thing that cannot be, and that is exactly where it broke. `continue-on-error`
+now sits on the three scanning steps instead, so a broken workflow or a failed
+install fails the job and is visible, while a scanner that ran and found
+something does not.
+
 **The audit job is advisory, deliberately.** `pip-audit`, `pnpm audit` and
 Trivy fail when *someone else* publishes an advisory, not when this repository
 changes; blocking a merge on that means an unrelated CVE stops an unrelated fix,
