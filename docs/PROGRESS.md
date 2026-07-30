@@ -17,6 +17,73 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-30
 
+### What `/api-docs` does not say, audited against the wire it describes
+
+`security.md` §4.4 trades `/openapi.json` and `/docs` away on the gateway in
+exchange for hand-written public documentation. The page exists (2026-07-28), so
+the trade has looked settled since — but nothing had ever compared it against
+what the gateway actually serves. Read side by side with
+`routers/chat.py`, `schemas/chat_schemas.py` and `errors.py`, five things are
+missing, and two of them make an integrator write code that is wrong without
+saying so. **Recorded rather than fixed**, so the gaps are visible while the
+decision about the third one below is still open.
+
+**Knowledge grounding is not mentioned, and the gateway implements it.**
+`ChatCompletionRequest` carries `use_knowledge` and `knowledge_collection`; both
+paths in `routers/chat.py` honour them, and a grounded answer returns its
+citations in `X-Knowledge-Sources` as `<document_id>:<passage index>`. The
+request-field list on the page covers `stream`, `max_tokens` and `think` and
+stops there, so the most valuable thing this deployment can do is undiscoverable
+from the only document that describes the contract.
+
+**`temperature`, `top_p`, `n`, `stop`, `tools` and `response_format` are
+accepted and silently dropped.** The request model sets no `extra`, so pydantic's
+default `ignore` applies — verified against the model itself, not inferred. A
+caller who sets `temperature: 0` for reproducibility gets 200 and the model's own
+default, with nothing anywhere saying the field went nowhere. This is the class
+of thing documentation exists for: not a missing feature, a silent
+non-compliance with the schema the page claims to be compatible with.
+
+**`usage` is half-filled, and absent entirely when streaming.** `_collect`
+builds `Usage(completion_tokens=tokens, total_tokens=tokens)`, so
+`prompt_tokens` is always the default `0`; anyone doing cost accounting
+under-counts the input side permanently. The streaming path emits no `usage`
+object at all, so a client sending `stream_options: {include_usage: true}` — the
+OpenAI way to ask — receives nothing. **The open question is which of the two
+this is**: documenting "prompt tokens are not reported" is honest and free,
+while actually counting them means changing what `RouteChatRequest` records, and
+the quota deliberately meters produced tokens only. Documenting it first, and
+treating the count as a separate roadmap item, is the current inclination rather
+than a decision.
+
+**A stream that fails after the first byte is a 200 with an error frame, and no
+`[DONE]`.** That design is deliberate and right — the status line is committed
+before the failure, so `sse.py` yields `{"error": {...}}` and suppresses the
+sentinel, because `[DONE]` means "completed normally" — and its own docstring
+says it is "documented for consumers". It is not: the error section describes
+HTTP statuses only. A client that treats a missing `[DONE]` as a transport
+problem will retry a request the platform deliberately refused, and one that
+treats the error frame as content will show it to a user. The wall-clock
+generation deadline reaches callers the same way and is also unmentioned.
+
+**Five reachable error codes are not in the table, four of them newly reachable
+because grounding is.** `vector_store_unavailable` (503) when Qdrant is down,
+`runtime_capability_unsupported` (400) when the `embedding` policy names a model
+that cannot embed, `model_not_found` (404) when the runtime does not hold the
+weights the registry claims, `untrusted_proxy` (400) for a misconfigured proxy,
+and the unmapped fallback of 500 `internal_error`. Two smaller inaccuracies sit
+beside them: the envelope also carries `type` (`OPENAI_ERROR_TYPES`), which the
+page's example omits, and `Retry-After` is set on `quota_exceeded` as well as on
+`rate_limited` — the page implies only the latter, which is exactly the field a
+client needs to back off correctly.
+
+What the audit did *not* find is worth stating too, because it is the part §4.4
+depends on: everything the page does say is accurate. The capability convention,
+the `GET /v1/models` narrowing ("narrowed to what your key was issued for" — and
+`ListCapabilities` does intersect with the key's own list), the two-403 and
+two-429 distinctions, and the reasoning about `reasoning_content` never being
+merged into `content` all match the code. The gaps are omissions, not errors.
+
 ### Review of the day's four commits, and the six things it found
 
 Six findings, all fixed. Three deserve recording because each is a shape this
