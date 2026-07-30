@@ -23,8 +23,13 @@ COPY app ./app
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Runs unprivileged. The image carries no shell tooling the application needs,
-# and nothing here writes to the filesystem outside /tmp.
-RUN useradd --create-home --uid 10001 nexus && chown -R nexus:nexus /app
+# and nothing here writes to the filesystem outside /tmp — except the document
+# store, whose mountpoint is created here *owned by nexus* so that Docker's
+# volume initialization copies that ownership onto the fresh `documents`
+# volume. Without this the volume comes up root-owned and every upload dies
+# with EACCES, because nothing else in a rootless service can chown it.
+RUN useradd --create-home --uid 10001 nexus && chown -R nexus:nexus /app \
+    && mkdir -p /var/lib/nexus/documents && chown -R nexus:nexus /var/lib/nexus
 USER nexus
 
 EXPOSE 8000
