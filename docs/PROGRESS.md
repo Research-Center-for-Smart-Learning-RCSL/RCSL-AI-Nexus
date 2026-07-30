@@ -104,6 +104,16 @@ now sits on the three scanning steps instead, so a broken workflow or a failed
 install fails the job and is visible, while a scanner that ran and found
 something does not.
 
+That move exposed the next layer of the same problem, and it was in a sentence
+this file had already written: "the signal goes to whoever looks at the run". A
+`continue-on-error` step reports its conclusion as success whatever it found, so
+the findings existed only in the run log — and fetching logs needs admin rights
+on the repository, which the operator reading this does not have. The claim was
+false as written. All three scanners now write their output to
+`$GITHUB_STEP_SUMMARY`, which renders on the run page with no special rights, and
+the Trivy summary step is `if: always()` because the case worth publishing is
+exactly the one where the scan stopped on a finding.
+
 **The audit job is advisory, deliberately.** `pip-audit`, `pnpm audit` and
 Trivy fail when *someone else* publishes an advisory, not when this repository
 changes; blocking a merge on that means an unrelated CVE stops an unrelated fix,

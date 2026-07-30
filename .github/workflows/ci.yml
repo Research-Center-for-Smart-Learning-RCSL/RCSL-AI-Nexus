@@ -181,9 +181,21 @@ jobs:
         # Against the locked resolution rather than the declared ranges, so the
         # report names what would actually be installed. `uv tool run` keeps
         # pip-audit out of the project's own dependency set.
+        #
+        # The findings go to the run summary, not only to the log. A
+        # `continue-on-error` step reports its conclusion as success whatever it
+        # found, so the log is the only place the result exists — and fetching
+        # logs needs admin rights on the repository, which the person most likely
+        # to read this does not have. A report nobody can reach is the same as no
+        # report, which is the argument this whole job rests on.
         run: |
           uv export --frozen --no-dev --format requirements-txt > /tmp/requirements.txt
-          uv tool run pip-audit --requirement /tmp/requirements.txt --strict
+          echo '## pip-audit (backend, production resolution)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          uv tool run pip-audit --requirement /tmp/requirements.txt --strict \
+            2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit "${PIPESTATUS[0]}"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -203,7 +215,11 @@ jobs:
         # ship in the image, and mixing the two makes the report unreadable.
         run: |
           pnpm install --frozen-lockfile --ignore-scripts
-          pnpm audit --prod --audit-level moderate
+          echo '## pnpm audit (frontend, production dependencies)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          pnpm audit --prod --audit-level moderate 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit "${PIPESTATUS[0]}"
 
       - name: Trivy, filesystem
         continue-on-error: true
@@ -230,3 +246,22 @@ jobs:
           # answer, and reporting it every run trains people to skip the job.
           ignore-unfixed: true
           exit-code: '1'
+          # A file rather than the log, so the next step can put it where someone
+          # without repository admin rights can actually read it.
+          format: table
+          output: trivy.txt
+
+      - name: Trivy findings to the run summary
+        # `always()`, because the interesting case is the one where the scan above
+        # found something and stopped. Without it this step is skipped exactly
+        # when there is a report to publish.
+        if: always()
+        run: |
+          echo '## Trivy (filesystem, vuln + secret, HIGH/CRITICAL, fixed only)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ -s trivy.txt ]; then
+            cat trivy.txt >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Nothing reported.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
