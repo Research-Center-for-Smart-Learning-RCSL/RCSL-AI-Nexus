@@ -386,3 +386,77 @@ async def test_a_numeric_keep_alive_is_sent_as_a_number(patch_httpx) -> None:
         async for _ in s:
             pass
     assert seen["keep_alive"] == 300, "surrounding whitespace must not make it a duration"
+
+
+# --- residency observation ------------------------------------------------
+
+
+async def test_residency_reports_resident_and_on_disk_models(patch_httpx) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/ps":
+            return httpx.Response(
+                200,
+                json={"models": [{"name": "glm-4.7-flash:q8_0", "size": 38 * 1024**3}]},
+            )
+        if request.url.path == "/api/tags":
+            return httpx.Response(
+                200,
+                json={
+                    "models": [
+                        {"name": "glm-4.7-flash:q8_0"},
+                        {"name": "qwen2.5:7b"},
+                    ]
+                },
+            )
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    patch_httpx(handler)
+
+    residency = await OllamaAdapter("http://ollama.invalid").residency()
+
+    assert residency is not None
+    assert residency.resident == {"glm-4.7-flash:q8_0": 38.0}
+    assert "qwen2.5:7b" in residency.on_disk
+    assert "glm-4.7-flash:q8_0" in residency.on_disk
+
+
+async def test_residency_answers_under_the_bare_name_for_a_latest_tag(patch_httpx) -> None:
+    """Ollama canonicalises `nomic-embed-text` to `nomic-embed-text:latest` in
+    its listings while the registry may hold either spelling. Both must match,
+    or a model that is plainly resident reads as missing and the observation
+    reintroduces the very lie it exists to end."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/ps":
+            return httpx.Response(
+                200, json={"models": [{"name": "nomic-embed-text:latest", "size": 1024**3}]}
+            )
+        return httpx.Response(200, json={"models": [{"name": "nomic-embed-text:latest"}]})
+
+    patch_httpx(handler)
+
+    residency = await OllamaAdapter("http://ollama.invalid").residency()
+
+    assert residency is not None
+    assert "nomic-embed-text" in residency.resident
+    assert "nomic-embed-text:latest" in residency.resident
+    assert "nomic-embed-text" in residency.on_disk
+
+
+async def test_residency_is_none_when_the_runtime_cannot_be_asked(patch_httpx) -> None:
+    """"Could not ask" and "asked, nothing loaded" must not read the same: an
+    unreachable runtime answering as empty would mark every model unloaded on
+    the strength of a network blip."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("nobody home")
+
+    patch_httpx(handler)
+
+    assert await OllamaAdapter("http://ollama.invalid").residency() is None
+
+
+async def test_residency_is_none_on_a_non_200(patch_httpx) -> None:
+    patch_httpx(lambda request: httpx.Response(500, json={"error": "boom"}))
+
+    assert await OllamaAdapter("http://ollama.invalid").residency() is None

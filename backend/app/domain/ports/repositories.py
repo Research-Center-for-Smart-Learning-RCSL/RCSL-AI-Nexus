@@ -50,6 +50,19 @@ class ModelRepositoryPort(Protocol):
 
     async def save(self, model: Model) -> None: ...
     async def set_state(self, model_id: str, state: ModelState) -> None: ...
+
+    async def set_observed(
+        self, model_id: str, state: ModelState | None, memory_gb: float | None
+    ) -> None:
+        """Targeted observation write for the heartbeat, leaving intent alone.
+
+        `state=None` records "not currently observable" and clears the
+        timestamp with it: a stale observation must not keep the authority of
+        a fresh one. Targeted for the same reason `set_status` on nodes is —
+        both admin entrances run the sweep, and a read-modify-write here would
+        let them overwrite each other's whole row."""
+        ...
+
     async def delete(self, model_id: str) -> None: ...
 
     async def reconcile_transient_states(self, mapping: dict[ModelState, ModelState]) -> int:

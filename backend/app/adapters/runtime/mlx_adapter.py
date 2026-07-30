@@ -292,6 +292,14 @@ class MlxAdapter:
         except httpx.HTTPError:
             return False
 
+    async def residency(self) -> None:
+        """Cannot be observed: `mlx_lm.server` has no endpoint that says what
+        is resident, only `/v1/models` listing what it could serve. None keeps
+        the heartbeat trusting the registry's intent for MLX models, the same
+        judgement `unload` and `embed` make — refusing to answer beats
+        answering plausibly and wrongly."""
+        return None
+
     # --- internals -------------------------------------------------------
     #
     # The three download seams are methods so tests can replace them without a

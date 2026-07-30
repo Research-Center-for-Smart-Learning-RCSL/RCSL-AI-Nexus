@@ -266,6 +266,13 @@ class ModelResponse(BaseModel):
     capabilities: list[str]
     resource_profile: ResourceProfileBody
 
+    observed_state: str | None
+    """What the runtime last reported holding, where `state` is the
+    platform's intent. Null when the heartbeat has not observed the model, or
+    the runtime cannot say (MLX)."""
+    observed_memory_gb: float | None
+    observed_at: datetime | None
+
     @classmethod
     def of(cls, model: Model) -> ModelResponse:
         return cls(
@@ -282,6 +289,9 @@ class ModelResponse(BaseModel):
                 memory_gb=model.resource_profile.memory_gb,
                 context_length=model.resource_profile.context_length,
             ),
+            observed_state=model.observed_state.value if model.observed_state else None,
+            observed_memory_gb=model.observed_memory_gb,
+            observed_at=model.observed_at,
         )
 
 

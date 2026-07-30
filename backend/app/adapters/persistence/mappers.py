@@ -100,6 +100,9 @@ def model_to_domain(row: ModelRow) -> Model:
             memory_gb=row.memory_gb,
             context_length=row.context_length,
         ),
+        observed_state=ModelState(row.observed_state) if row.observed_state else None,
+        observed_memory_gb=row.observed_memory_gb,
+        observed_at=row.observed_at,
     )
 
 
@@ -114,6 +117,9 @@ def model_to_row(model: Model) -> ModelRow:
         capabilities=sorted(model.capabilities),
         memory_gb=model.resource_profile.memory_gb,
         context_length=model.resource_profile.context_length,
+        observed_state=model.observed_state.value if model.observed_state else None,
+        observed_memory_gb=model.observed_memory_gb,
+        observed_at=model.observed_at,
     )
 
 

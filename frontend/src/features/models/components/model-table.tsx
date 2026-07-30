@@ -85,13 +85,35 @@ export function ModelTable() {
         id: 'memory',
         accessorFn: (row) => row.resource_profile.memory_gb,
         header: 'Memory',
-        cell: ({ row }) => `${row.original.resource_profile.memory_gb} GB`,
+        cell: ({ row }) => {
+          const declared = row.original.resource_profile.memory_gb;
+          const observed = row.original.observed_memory_gb;
+          // The runtime's own figure includes the KV cache the declared one
+          // does not, and it is what the memory budget now counts.
+          if (observed == null) return `${declared} GB`;
+          return `${declared} GB (resident ${observed.toFixed(1)} GB)`;
+        },
       },
       {
         id: 'state',
         accessorKey: 'state',
         header: 'State',
-        cell: ({ row }) => <StatusBadge status={row.original.state} />,
+        cell: ({ row }) => {
+          const { state, observed_state } = row.original;
+          return (
+            <div className="flex flex-col gap-0.5">
+              <StatusBadge status={state} />
+              {/* Shown only when the runtime contradicts the registry: that
+                  divergence is what routing now follows, so it must not be
+                  invisible. Agreement and "not observed" both stay quiet. */}
+              {observed_state !== null && observed_state !== state && (
+                <span className="text-xs text-destructive">
+                  runtime reports {observed_state.replace(/_/g, ' ')}
+                </span>
+              )}
+            </div>
+          );
+        },
       },
       {
         id: 'actions',
