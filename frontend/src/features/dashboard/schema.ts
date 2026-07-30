@@ -1,10 +1,10 @@
 import { z } from 'zod';
 
 /**
- * Dashboard is Phase 1 with static data and Phase 2 with real metrics
- * (ARCHITECTURE.md section 3). Live figures come from Prometheus through
- * `MetricsPort`, which does not exist yet, so everything below is deliberately
- * shallow and the UI labels it as such.
+ * Deliberately shallow: counts the registry can answer cheaply, plus two
+ * 24-hour totals from `usage_records`. The real series behind the dashboard's
+ * charts live in `features/usage`; this shape stays small so the landing page
+ * is one cheap query, not an analytics call.
  */
 
 export const dashboardSummarySchema = z.object({
@@ -14,7 +14,7 @@ export const dashboardSummarySchema = z.object({
   nodes_total: z.number().int().nonnegative(),
   api_keys_active: z.number().int().nonnegative(),
   users_total: z.number().int().nonnegative(),
-  /** Phase 2. Null until usage analytics exists. */
+  /** Null on a deployment that has never served a request. */
   requests_last_24h: z.number().int().nonnegative().nullable(),
   tokens_last_24h: z.number().int().nonnegative().nullable(),
 });

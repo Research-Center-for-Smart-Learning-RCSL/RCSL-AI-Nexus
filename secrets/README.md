@@ -74,6 +74,7 @@ openssl rand -base64 32        # for each password and each of the four below
 | `qdrant_read_only_api_key` | A **different** value from the one above. The gateway mounts this one (at the target name `qdrant_api_key`) so that retrieving a passage to answer a request cannot become writing one, the same least-privilege split its database account has. Generate it separately; reusing the full key silently removes the split |
 | `alert_smtp_account` | the Gmail address `check-platform-health.sh` sends alerts *from*; not itself a secret, but kept beside the password because Gmail requires the envelope sender to be the account that authenticates |
 | `alert_smtp_password` | a Google app password for that account, not the account password. Needs 2-Step Verification enabled on it first |
+| `maxmind_license_key` | the MaxMind account's permanent licence key, read by `launchd/refresh-geolite2.sh` on the host — no container mounts it. The long-lived credential, unlike the throwaway tokens the first download used; without it the country database rots in place (the script's header explains). Not needed if the refresh job is not installed |
 
 **Use a dedicated sending account, not the operator's own.** These two files sit
 in plaintext on a host whose FileVault is off ([security.md](../docs/architecture/security.md)

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>online.rcsl.refresh-geolite2</string>
+
+	<!-- Keeps the country database the geo filter reads from rotting in
+	     place. Why a refresh is needed at all, and why the two enforcing
+	     containers are restarted afterwards, is at the top of the script. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/rcslmac1/dev/RCSL-AI-Nexus/launchd/refresh-geolite2.sh</string>
+	</array>
+
+	<!-- The docker socket is the user's, same arrangement as the
+	     reconciler and online.rcsl.ollama. -->
+	<key>UserName</key>
+	<string>rcslmac1</string>
+
+	<!-- Weekly, Wednesday 05:30. MaxMind publishes Tuesdays and Fridays;
+	     the day after a publish day, at an hour nobody is using the
+	     platform, because a changed database restarts the gateway and the
+	     public admin entrance. Not RunAtLoad: a boot already has enough
+	     going on, and a database at most a week old does not need the
+	     boot to fix it. launchd runs a missed StartCalendarInterval at the
+	     next opportunity if the machine was asleep, so a quiet Wednesday
+	     is not a skipped week. -->
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Weekday</key>
+		<integer>3</integer>
+		<key>Hour</key>
+		<integer>5</integer>
+		<key>Minute</key>
+		<integer>30</integer>
+	</dict>
+
+	<key>StandardOutPath</key>
+	<string>/opt/homebrew/var/log/nexus-geolite2.log</string>
+	<key>StandardErrorPath</key>
+	<string>/opt/homebrew/var/log/nexus-geolite2.log</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/rcslmac1/dev/RCSL-AI-Nexus</string>
+</dict>
+</plist>

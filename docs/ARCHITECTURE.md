@@ -14,7 +14,7 @@ Three phases (see [ROADMAP.md](./ROADMAP.md)):
 2. **The extensible AI platform, which is this repository**: management UI, gateway, and the capability abstraction.
 3. Operations automation (health checks, backups, monitoring).
 
-This phase was developed on Windows and produced code and Compose definitions only; deployment happens via git pull plus `docker compose up`. Since 2026-07-26 the Mac Studio is itself the development machine, so the local development mode described in [architecture/deployment.md](./architecture/deployment.md) is no longer the only way the code is exercised — but the first deploy has not been done, and everything needing the stack up remains unverified.
+This phase was developed on Windows and produced code and Compose definitions only; deployment happens via git pull plus `docker compose up`. Since 2026-07-26 the Mac Studio is itself both the development machine and the deployment: the first `docker compose up` ran that day and the platform has served since ([PROGRESS.md](./PROGRESS.md) 2026-07-26 and later record what each deploy proved). What remains unverified is the public entrance, which waits on the NTNU proxy administrator.
 
 ### 0.1 A hardware constraint that shapes everything
 

@@ -5,8 +5,10 @@ import {
 } from '@/features/dashboard/schema';
 
 /**
- * `/admin/dashboard` exists in Phase 1 but serves static counts. Charts and
- * live metrics are Phase 2, so nothing here polls.
+ * One snapshot per visit: counts plus two 24-hour totals. The charts on the
+ * dashboard read `/admin/usage` through `features/usage`, not this endpoint,
+ * and nothing here polls — the numbers move slowly enough that a refresh is
+ * the user reloading the page.
  */
 export async function getDashboardSummary(): Promise<DashboardSummary> {
   return dashboardSummarySchema.parse(await api.get<unknown>('/dashboard'));
