@@ -80,7 +80,22 @@ which is the number that was missing, but a genuine host free-memory figure
 (the OS and containers included) has no source a container can reach and
 waits for a host-side exporter if one is ever warranted.
 
-### The knowledge base, and the container built to be the one that falls (Phase 2)
+**Deployed to the Mac Studio the same day, and the deploy verified both this
+and the knowledge base below.** The heartbeat's first sweep wrote honest
+numbers: `glm47-flash` observed at 35.7 GB against 32 declared, `qwen7b`
+agreeing at `downloaded` on both columns — which was itself the live instance
+of the problem, because the `assist` policy's only candidate required
+`loaded` and the assistant had quietly stopped routing. Loading `qwen7b`
+through the API fixed it (observed 5.3 GB against 5.0 declared, caught by the
+next sweep), and the assistant answers again. The knowledge base then went
+end to end for the first time: a markdown file with fictional facts uploaded,
+parsed in the isolated container, embedded through the `embedding` policy,
+indexed into Qdrant (status `indexed`, one chunk), retrieved by semantic
+search (score 0.61), and a grounded chat answered the fictional project
+number and date correctly with the citation in `X-Knowledge-Sources`. The
+test document was deleted afterwards so fiction does not pollute retrieval.
+What remains unverified is quality at scale — one small document proves the
+path, not the ranking.
 
 The largest Phase 2 item, in four commits: uploads with an isolated parser, then
 chunking and embeddings into Qdrant, then retrieval wired into the chat, then
