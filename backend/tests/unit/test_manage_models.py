@@ -282,6 +282,46 @@ async def test_a_failed_load_leaves_the_model_in_error_not_loading() -> None:
     assert ("model.loaded", "m1", "failed") in harness.audit.entries
 
 
+async def test_a_load_clears_the_observation_it_has_just_invalidated() -> None:
+    """The observation outranks intent in routing and in the memory budget, so
+    one taken before this load would outrank the load itself: a policy asking
+    for a loaded model would skip the model that was just loaded, for as long as
+    the heartbeat interval, and a single-candidate policy would answer 503.
+    Clearing it sends readers back to intent until the next sweep looks.
+    """
+    harness = Harness([make_model(observed_state=ModelState.DOWNLOADED)])
+
+    await harness.use_case.load(ADMIN, "m1")
+
+    row = harness.models.rows["m1"]
+    assert row.state is ModelState.LOADED
+    assert row.observed_state is None, "a pre-load observation must not survive the load"
+    assert row.observed_memory_gb is None
+
+
+async def test_an_unload_clears_the_observation_too() -> None:
+    """The other direction, and the reason this belongs to `set_state` rather
+    than to `load`: an observation of `loaded` taken a moment ago would keep the
+    model qualifying for a `model_state: [loaded]` policy after it was evicted
+    on purpose."""
+    harness = Harness(
+        [
+            make_model(
+                state=ModelState.LOADED,
+                observed_state=ModelState.LOADED,
+                observed_memory_gb=5.7,
+            )
+        ]
+    )
+
+    await harness.use_case.unload(ADMIN, "m1")
+
+    row = harness.models.rows["m1"]
+    assert row.state is ModelState.DOWNLOADED
+    assert row.observed_state is None
+    assert row.observed_memory_gb is None
+
+
 async def test_a_failed_unload_returns_the_model_to_loaded() -> None:
     """Not to ERROR. The unload failed, so as far as anyone knows the weights
     are still resident and the memory budget must keep counting them."""

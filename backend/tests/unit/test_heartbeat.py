@@ -73,13 +73,14 @@ def _model(
     observed: ModelState | None = None,
     observed_gb: float | None = None,
     runtime: RuntimeKind = RuntimeKind.OLLAMA,
+    node_id: str = "a",
 ) -> Model:
     return Model(
         id=f"id-{alias}",
         alias=alias,
         ref=alias,
         runtime=runtime,
-        node_id="a",
+        node_id=node_id,
         state=state,
         capabilities=frozenset({"chat"}),
         resource_profile=ResourceProfile(memory_gb=4.7, context_length=8192),
@@ -106,7 +107,7 @@ async def test_observation_catches_the_registry_lie() -> None:
     async def source() -> list[Model]:
         return models
 
-    changed = await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes))
+    changed = await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes), "a")
 
     assert changed == 1
     assert writes == [("id-qwen7b", ModelState.DOWNLOADED, None)]
@@ -122,7 +123,7 @@ async def test_observation_records_the_runtime_own_memory_figure() -> None:
     async def source() -> list[Model]:
         return models
 
-    changed = await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes))
+    changed = await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes), "a")
 
     assert changed == 1
     assert writes == [("id-glm", ModelState.LOADED, 38.0)]
@@ -140,7 +141,7 @@ async def test_unchanged_observation_is_not_rewritten() -> None:
     async def source() -> list[Model]:
         return models
 
-    assert await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes)) == 0
+    assert await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes), "a") == 0
     assert writes == []
 
 
@@ -155,7 +156,7 @@ async def test_unobservable_runtime_clears_a_stale_observation() -> None:
         return models
 
     changed = await observe_models(
-        {RuntimeKind.OLLAMA: FakeRuntime(residency=None)}, source, _writer(writes)
+        {RuntimeKind.OLLAMA: FakeRuntime(residency=None)}, source, _writer(writes), "a"
     )
 
     assert changed == 1
@@ -172,7 +173,7 @@ async def test_a_raising_runtime_reads_as_unobservable_not_as_absent() -> None:
         return models
 
     changed = await observe_models(
-        {RuntimeKind.OLLAMA: FakeRuntime(fail_on="residency")}, source, _writer(writes)
+        {RuntimeKind.OLLAMA: FakeRuntime(fail_on="residency")}, source, _writer(writes), "a"
     )
 
     assert changed == 1
@@ -188,5 +189,28 @@ async def test_a_runtime_with_no_adapter_leaves_no_observation() -> None:
     async def source() -> list[Model]:
         return models
 
-    assert await observe_models({}, source, _writer(writes)) == 0
+    assert await observe_models({}, source, _writer(writes), "a") == 0
     assert writes == []
+
+
+async def test_another_node_s_models_are_left_unobserved_not_reported_absent() -> None:
+    """The adapters point at the configured host runtime, never at
+    `node.address`, so a second node's residency is not something this sweep can
+    see. Writing `not_downloaded` would be a confident wrong answer — and since
+    routing ranks observation over intent, it would refuse every model on that
+    node and make the memory budget count its rows against the local runtime."""
+    local = _model("here")
+    remote = _model("there", node_id="b")
+    runtime = FakeRuntime(
+        residency=RuntimeResidency(resident={"here": 4.0}, on_disk=frozenset({"here"}))
+    )
+    writes: list[tuple[str, ModelState | None, float | None]] = []
+
+    async def source() -> list[Model]:
+        return [local, remote]
+
+    changed = await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes), "a")
+
+    assert changed == 1, "only the local model's observation moved"
+    assert writes == [("id-here", ModelState.LOADED, 4.0)]
+    assert all(w[0] != "id-there" for w in writes), "a remote model must not be reported absent"

@@ -193,8 +193,23 @@ class PostgresModelRepository(_Base):
         await self._session.flush()
 
     async def set_state(self, model_id: str, state: ModelState) -> None:
+        # The observation is cleared with the intent write, because it now
+        # predates it. Readers rank observation over intent, so a load that has
+        # just succeeded would otherwise be overruled for up to a heartbeat
+        # interval by the sweep's earlier `downloaded` — routing would skip the
+        # model the operator just loaded and a `model_state: [loaded]` policy
+        # with one candidate would answer 503. Null is the honest value until
+        # the next sweep looks: "not currently observed", which sends every
+        # reader back to intent.
         await self._session.execute(
-            update(ModelRow).where(ModelRow.id == model_id).values(state=state.value)
+            update(ModelRow)
+            .where(ModelRow.id == model_id)
+            .values(
+                state=state.value,
+                observed_state=None,
+                observed_memory_gb=None,
+                observed_at=None,
+            )
         )
 
     async def set_observed(
@@ -810,6 +825,26 @@ class PostgresKnowledgeRepository(_TenantScoped):
             KnowledgeDocumentRow.tenant_id,
         )
         await self._session.execute(stmt)
+
+    async def claim_document_status(
+        self, document_id: str, expected: frozenset[DocumentStatus], claimed: DocumentStatus
+    ) -> bool:
+        # The status predicate is what makes this a claim rather than a write:
+        # the row moves only if it is still where the caller found it, so of two
+        # concurrent claimers exactly one sees a matching row and the other's
+        # UPDATE matches nothing. `rowcount` is the answer, the same way
+        # `advance_totp_counter` and `consume` read theirs.
+        stmt = self._scope(
+            update(KnowledgeDocumentRow)
+            .where(
+                KnowledgeDocumentRow.id == document_id,
+                KnowledgeDocumentRow.status.in_([s.value for s in expected]),
+            )
+            .values(status=claimed.value, error=None),
+            KnowledgeDocumentRow.tenant_id,
+        )
+        result = cast(CursorResult[Any], await self._session.execute(stmt))
+        return (result.rowcount or 0) > 0
         await self._session.flush()
 
     async def delete_document(self, document_id: str) -> None:

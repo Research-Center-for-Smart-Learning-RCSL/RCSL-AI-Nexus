@@ -51,8 +51,19 @@ class ModelStateCommitter:
     async def commit(self, model_id: str, state: ModelState) -> None:
         try:
             async with self._sessions() as session:
+                # The observation goes null with the intent write, for the reason
+                # `PostgresModelRepository.set_state` spells out: readers rank
+                # observation over intent, so one taken before this transition
+                # would outrank the transition itself.
                 await session.execute(
-                    update(ModelRow).where(ModelRow.id == model_id).values(state=state.value)
+                    update(ModelRow)
+                    .where(ModelRow.id == model_id)
+                    .values(
+                        state=state.value,
+                        observed_state=None,
+                        observed_memory_gb=None,
+                        observed_at=None,
+                    )
                 )
                 await session.commit()
         except Exception:

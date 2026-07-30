@@ -188,7 +188,7 @@ async def reindex_document(
     extracted text. Use it after changing the embedding model or the chunk size,
     which are the two settings that make every stored passage stale.
     """
-    document = await knowledge.get_document(actor, document_id)
+    document = await knowledge.document_to_reindex(actor, document_id)
     status = await ingest.claim_reindex(document, str(uuid.uuid4()))
     # Committed before scheduling, for the reason `upload_document` spells out:
     # the claim lives in this request's transaction and the detached task opens

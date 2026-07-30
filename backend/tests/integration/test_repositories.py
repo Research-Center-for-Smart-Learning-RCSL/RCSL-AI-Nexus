@@ -129,6 +129,66 @@ async def test_list_loaded_filters_by_state_and_node(session) -> None:
     assert aliases == {"loaded-here"}
 
 
+async def test_an_intent_write_clears_the_observation_beside_it(session) -> None:
+    """The pairing `set_state` promises, against the real UPDATE.
+
+    Every reader ranks the observation over the intent, so an observation taken
+    before a transition would outrank the transition itself: a model loaded a
+    moment ago would keep routing as `downloaded` until the next sweep, and a
+    `model_state: [loaded]` policy with one candidate would answer 503 for
+    resident weights. This is pinned here rather than in the unit suite because
+    the use cases reach `set_state` only after a state committer has already
+    written — so a unit test of `load` passes whether or not this clause exists.
+    """
+    await PostgresNodeRepository(session).save(_node())
+    await session.flush()
+    repo = PostgresModelRepository(session)
+    model = replace(_model(), state=ModelState.DOWNLOADED)
+    await repo.save(model)
+    await session.flush()
+
+    await repo.set_observed(model.id, ModelState.DOWNLOADED, None)
+    await session.flush()
+    observed = await repo.get(model.id)
+    assert observed is not None and observed.observed_at is not None
+
+    await repo.set_state(model.id, ModelState.LOADED)
+    await session.flush()
+
+    stored = await repo.get(model.id)
+    assert stored is not None
+    assert stored.state is ModelState.LOADED
+    assert stored.observed_state is None, "an observation predating the write must not survive it"
+    assert stored.observed_memory_gb is None
+    assert stored.observed_at is None, "the timestamp goes with the observation it dated"
+
+
+async def test_an_unobservable_runtime_clears_rather_than_asserting_absence(session) -> None:
+    """`set_observed(None, None)` is the heartbeat saying "could not ask", which
+    must not read as "nothing is resident": the timestamp is cleared with it, so
+    no reader can mistake a stale observation for a fresh one."""
+    await PostgresNodeRepository(session).save(_node())
+    await session.flush()
+    repo = PostgresModelRepository(session)
+    model = _model()
+    await repo.save(model)
+    await session.flush()
+
+    await repo.set_observed(model.id, ModelState.LOADED, 5.7)
+    await session.flush()
+    seen = await repo.get(model.id)
+    assert seen is not None and seen.observed_memory_gb == 5.7
+
+    await repo.set_observed(model.id, None, None)
+    await session.flush()
+
+    cleared = await repo.get(model.id)
+    assert cleared is not None
+    assert cleared.observed_state is None
+    assert cleared.observed_at is None
+    assert cleared.state is ModelState.LOADED, "intent is untouched by an observation write"
+
+
 async def test_routing_policy_structured_requirements_round_trip(session) -> None:
     """The requirement document is the part most likely to rot silently.
 

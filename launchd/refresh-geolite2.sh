@@ -67,7 +67,13 @@ if [ ! -s "$KEY_FILE" ]; then
 fi
 LICENSE_KEY="$(tr -d '[:space:]' < "$KEY_FILE")"
 
-WORK="$(mktemp -d /tmp/geolite2.XXXXXX)" || { log "FATAL: mktemp failed"; exit 1; }
+# Beside the target, not in /tmp, and that is what makes the `mv` below atomic:
+# `mv` is a rename only within one filesystem, and degrades to copy-then-unlink
+# across two — which is exactly the half-written file a reader must never see.
+# /tmp and the repository happen to share a volume on this host today; a repo on
+# an external disk would silently turn the swap into a copy. Cleaned up by the
+# trap either way, and ./data is gitignored.
+WORK="$(mktemp -d "$REPO/data/.geolite2.XXXXXX")" || { log "FATAL: mktemp failed"; exit 1; }
 trap 'rm -rf "$WORK"' EXIT
 
 # --fail turns MaxMind's 401 (bad key) into a non-zero exit instead of an HTML
@@ -103,9 +109,10 @@ if [ -f "$TARGET" ] && cmp -s "$NEW" "$TARGET"; then
   exit 0
 fi
 
-# mv within ./data is atomic on the same filesystem, so no reader can see a
-# half-written file. The container mounts the directory, not the file, which
-# is what lets a replaced inode be visible on the next open.
+# A rename within ./data, so it is atomic and no reader can see a half-written
+# file — see the mktemp above for why the work directory has to live there. The
+# container mounts the directory, not the file, which is what lets a replaced
+# inode be visible on the next open.
 if ! mv "$NEW" "$TARGET"; then
   log "FATAL: could not replace $TARGET"
   exit 1

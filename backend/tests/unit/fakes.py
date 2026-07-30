@@ -233,7 +233,16 @@ class FakeModels:
         self.rows[model.id] = model
 
     async def set_state(self, model_id: str, state: ModelState) -> None:
-        self.rows[model_id] = replace(self.rows[model_id], state=state)
+        # Clears the observation with the intent write, as the Postgres
+        # repository does: an observation taken before this transition must not
+        # outrank it in the readers that prefer observation over intent.
+        self.rows[model_id] = replace(
+            self.rows[model_id],
+            state=state,
+            observed_state=None,
+            observed_memory_gb=None,
+            observed_at=None,
+        )
 
     async def set_observed(
         self, model_id: str, state: ModelState | None, memory_gb: float | None
@@ -278,7 +287,13 @@ class FakeStateCommitter:
         return self._models.rows.get(model_id)
 
     async def commit(self, model_id: str, state: ModelState) -> None:
-        self._models.rows[model_id] = replace(self._models.rows[model_id], state=state)
+        self._models.rows[model_id] = replace(
+            self._models.rows[model_id],
+            state=state,
+            observed_state=None,
+            observed_memory_gb=None,
+            observed_at=None,
+        )
 
 
 class FakeNodes:
@@ -581,6 +596,21 @@ class FakeKnowledge:
             error=error,
             chunk_count=chunk_count if chunk_count is not None else document.chunk_count,
         )
+
+    async def claim_document_status(
+        self,
+        document_id: str,
+        expected: frozenset[DocumentStatus],
+        claimed: DocumentStatus,
+    ) -> bool:
+        """Models the conditional UPDATE, including that it fails on the second
+        caller. A version that always returned True would let the concurrency
+        test pass against a read-then-write implementation."""
+        document = self.documents.get(document_id)
+        if document is None or document.status not in expected:
+            return False
+        self.documents[document_id] = replace(document, status=claimed, error=None)
+        return True
 
     async def delete_document(self, document_id) -> None:
         self.documents.pop(document_id, None)
