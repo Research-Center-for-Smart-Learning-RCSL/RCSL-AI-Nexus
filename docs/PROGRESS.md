@@ -53,6 +53,15 @@ inserted by the same request moments earlier; a re-index has no such protection.
 Now a conditional UPDATE (`claim_document_status`), the same mechanism
 `advance_totp_counter` uses, with the tenant filter every other write carries.
 
+**And a seventh, found by verifying the first fix on the Mac Studio rather than
+in a test.** Unloading a model answered `intent=downloaded, observed=loaded`
+while the row itself held neither: `load` and `unload` return
+`replace(model, state=...)`, an entity read *before* the write, so the response
+carried the observation the same request had just cleared. The models table
+renders a mismatch between the two in red, so the API was showing the operator a
+divergence that did not exist. Worth recording because the unit tests for the
+fix had all passed — the defect was only visible in an actual response body.
+
 The rest: the new CI would have failed on its first run, because
 `pnpm/action-setup` reads `packageManager` from a root `package.json` this
 repository does not have; re-index was a write gated only on the read scope,
