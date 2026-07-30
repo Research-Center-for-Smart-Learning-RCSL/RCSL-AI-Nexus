@@ -17,6 +17,45 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-30
 
+### Re-index without re-upload, and a preview that shows the text rather than the file
+
+Two knowledge base follow-ups, and both turned on a decision about what *not*
+to touch.
+
+**Re-indexing exists because the extracted text was kept for it.** Changing the
+embedding model or the chunk size makes every stored passage stale, and the
+only remedy before this was deleting each document and uploading it again —
+which runs the parser a second time on every one of them. The parser is the
+component with the CVE history and each run is an exposure, so a path that
+re-embeds from the text already on the volume is the difference between a cheap
+operation and one nobody should want to perform. `claim_reindex` moves the row
+straight to `indexing`, never `extracting`, because nothing extracts.
+
+It is offered on `error` as well as `extracted` and `indexed`, and that needed
+a decision rather than a default. An `ERROR` document may have failed *during*
+extraction, in which case there is no text and no amount of re-indexing will
+produce one. Excluding `error` to be safe would refuse exactly the retry that
+costs nothing — a post-extraction failure is the case this path was built for —
+so it is allowed and the missing-text case is reported precisely: "No extracted
+text is stored; upload the document again." The remedy differs from every other
+failure on the path, so the message sends the operator to the upload rather
+than back to the button they just pressed.
+
+**The preview serves the extracted text, never the uploaded bytes.** Serving
+the original back would hand a browser an attacker-supplied PDF to render,
+which is the plugin surface the isolated parser exists to keep out of this
+deployment — the preview would have quietly reintroduced it at the last step.
+The text is rendered as plain text and not as markdown, the same reasoning that
+makes a retrieved passage data rather than instructions. It is bounded at
+20,000 characters (an upload may be 32 MiB) and the server carries the
+`truncated` flag rather than letting the client infer it from a length, because
+a client comparing against a constant of its own would disagree the first time
+either changed.
+
+Neither path adds a progress mechanism: the re-index moves the row to
+`indexing` and the document table already polls while anything is transient, so
+the 202's job body is deliberately dropped on the frontend.
+
 ### The registry stops taking its own word for it (Phase 2)
 
 The roadmap carried two items that were one item wearing different clothes:

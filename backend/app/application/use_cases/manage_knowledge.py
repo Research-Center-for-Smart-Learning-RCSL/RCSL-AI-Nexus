@@ -41,6 +41,11 @@ MAX_DOCUMENT_PAGE = 200
 never needs the whole table, and an unbounded limit is a memory lever on a
 table that only grows."""
 
+PREVIEW_CHARS = 20_000
+"""How much extracted text a preview may return. Enough to see what the parser
+made of a document, which is the question a preview answers, and far short of
+the 32 MiB an upload may be."""
+
 
 class ManageKnowledge:
     def __init__(
@@ -141,6 +146,37 @@ class ManageKnowledge:
     async def get_document(self, actor: Actor, document_id: str) -> KnowledgeDocument:
         self._authz.require(actor, Scope.KNOWLEDGE_READ)
         return await self._require_document(document_id)
+
+    async def read_document_text(
+        self, actor: Actor, document_id: str, *, limit: int = PREVIEW_CHARS
+    ) -> tuple[str, bool]:
+        """The extracted text, bounded, for a preview. Returns it with a flag
+        saying whether it was cut.
+
+        **The extracted text, never the original bytes.** A preview that served
+        the uploaded file back would hand a browser an attacker-supplied PDF to
+        render, which is the plugin surface the isolated parser exists to keep
+        out of this deployment; the extracted text has already been through that
+        parser and is text. The frontend renders it as text and not as markdown
+        for the same reason a retrieved passage is data rather than instructions.
+
+        Bounded because a document is up to 32 MiB of source and nobody reads
+        that in a dialog, and an unbounded read is a memory lever on a path any
+        reader can reach.
+        """
+        self._authz.require(actor, Scope.KNOWLEDGE_READ)
+        document = await self._require_document(document_id)
+        if document.status is DocumentStatus.UPLOADED or document.is_transient:
+            # Nothing has been written yet, so the storage read would raise
+            # "no stored object" — true but unhelpful, and indistinguishable
+            # from a document whose text is genuinely missing.
+            raise DocumentStateConflictError(
+                detail=f"document {document_id} is {document.status}; no text has been extracted"
+            )
+
+        text = await self._storage.read_text(document_id)
+        bounded = max(1, min(limit, PREVIEW_CHARS))
+        return text[:bounded], len(text) > bounded
 
     async def upload_document(
         self,

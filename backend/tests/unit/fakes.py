@@ -32,6 +32,7 @@ from app.domain.entities.tenant import Tenant
 from app.domain.entities.usage import BucketUnit, UsageBucket, UsageRecord
 from app.domain.entities.user import User
 from app.domain.exceptions import (
+    DocumentNotFoundError,
     InvalidModelReferenceError,
     InvalidNodeAddressError,
     VectorStoreError,
@@ -618,7 +619,13 @@ class FakeDocumentStorage:
         return self.originals[document_id]
 
     async def read_text(self, document_id: str) -> str:
-        return self.texts[document_id]
+        try:
+            return self.texts[document_id]
+        except KeyError as exc:
+            # What the filesystem adapter raises for an absent object. A bare
+            # KeyError would let a test pass against a use case that only
+            # handles the domain error.
+            raise DocumentNotFoundError(detail="no stored object at extracted.txt") from exc
 
     async def delete(self, document_id: str) -> None:
         self.deleted.append(document_id)

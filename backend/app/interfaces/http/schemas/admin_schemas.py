@@ -719,6 +719,19 @@ class IngestionJobResponse(BaseModel):
         )
 
 
+class DocumentTextResponse(BaseModel):
+    """The extracted text of one document, for the preview dialog.
+
+    `truncated` is carried rather than left for the client to infer from the
+    length, because the bound is the server's and a client comparing against a
+    constant of its own would disagree the first time either changed.
+    """
+
+    document_id: str
+    text: str
+    truncated: bool
+
+
 class KnowledgeSearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     collection_id: str | None = None

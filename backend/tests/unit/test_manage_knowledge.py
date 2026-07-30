@@ -520,3 +520,113 @@ async def test_transient_documents_are_reconciled_to_error() -> None:
     assert (
         knowledge.documents["44444444-2222-2222-2222-222222222222"].status is DocumentStatus.INDEXED
     )
+
+
+# --- re-indexing and preview ---------------------------------------------
+
+
+async def test_reindex_uses_the_stored_text_and_never_the_parser() -> None:
+    """The whole point of keeping the extracted text: a changed embedding model
+    or chunk size must not send every document through the parser again, because
+    the parser is the component with the CVE history."""
+    doc = document(status=DocumentStatus.INDEXED, chunk_count=3)
+    parser = FakeParser()
+    ing = build_ingest(doc, parser=parser)
+    ing.storage.texts[doc.id] = "the text that was extracted at upload"
+
+    await ing.use_case.claim_reindex(doc, "job-r1")
+    await ing.use_case.run_reindex(doc.id, "job-r1")
+
+    assert ing.knowledge.documents[doc.id].status is DocumentStatus.INDEXED
+    assert ing.vectors.points, "passages must have been written"
+    assert (await ing.use_case.status("job-r1")).state == "succeeded"
+    assert parser.calls == [], "a re-index must never reach the parser"
+
+
+async def test_reindex_replaces_passages_rather_than_adding_to_them() -> None:
+    """A re-index that produced fewer chunks must not leave the tail of the
+    previous run retrievable forever."""
+    doc = document(status=DocumentStatus.INDEXED)
+    ing = build_ingest(doc)
+    ing.storage.texts[doc.id] = "short"
+
+    await ing.use_case.claim_reindex(doc, "job-r2")
+    await ing.use_case.run_reindex(doc.id, "job-r2")
+
+    assert doc.id in ing.vectors.deleted, "the document's old passages must be dropped first"
+
+
+async def test_reindex_of_a_document_with_no_stored_text_says_so() -> None:
+    """An ERROR document may have failed *during* extraction, in which case
+    there is no text and no amount of re-indexing will make one. The operator
+    has to be sent to the upload, not back to the button they just pressed."""
+    doc = document(status=DocumentStatus.ERROR, error="DocumentParseError")
+    ing = build_ingest(doc)  # no text stored
+
+    await ing.use_case.claim_reindex(doc, "job-r3")
+    await ing.use_case.run_reindex(doc.id, "job-r3")
+
+    assert ing.knowledge.documents[doc.id].status is DocumentStatus.ERROR
+    job = await ing.use_case.status("job-r3")
+    assert job.state == "failed"
+    assert "upload the document again" in (job.message or "")
+
+
+async def test_a_freshly_uploaded_document_cannot_be_reindexed() -> None:
+    """Nothing has been extracted yet, so this is a full ingest, not a
+    re-index. Refused with an answer rather than failing in the task."""
+    doc = document(status=DocumentStatus.UPLOADED)
+    ing = build_ingest(doc)
+
+    with pytest.raises(DocumentStateConflictError):
+        await ing.use_case.claim_reindex(doc, "job-r4")
+
+
+async def test_a_document_mid_ingest_cannot_be_reindexed() -> None:
+    doc = document(status=DocumentStatus.INDEXING)
+    ing = build_ingest(doc)
+
+    with pytest.raises(DocumentStateConflictError):
+        await ing.use_case.claim_reindex(doc, "job-r5")
+
+
+async def test_preview_returns_the_extracted_text_bounded() -> None:
+    doc = document(status=DocumentStatus.INDEXED)
+    use_case, _, storage, *_ = build(documents=(doc,))
+    storage.texts[doc.id] = "x" * 100
+
+    text, truncated = await use_case.read_document_text(ADMIN, doc.id, limit=10)
+
+    assert text == "x" * 10
+    assert truncated is True
+
+
+async def test_preview_reports_a_whole_document_as_not_truncated() -> None:
+    doc = document(status=DocumentStatus.EXTRACTED)
+    use_case, _, storage, *_ = build(documents=(doc,))
+    storage.texts[doc.id] = "all of it"
+
+    text, truncated = await use_case.read_document_text(ADMIN, doc.id)
+
+    assert text == "all of it"
+    assert truncated is False
+
+
+async def test_preview_of_a_document_with_nothing_extracted_yet_is_refused() -> None:
+    """Reading storage here would raise "no stored object", which is true and
+    tells the operator nothing about *why* — and reads identically to a document
+    whose text has genuinely gone missing."""
+    doc = document(status=DocumentStatus.UPLOADED)
+    use_case, *_ = build(documents=(doc,))
+
+    with pytest.raises(DocumentStateConflictError):
+        await use_case.read_document_text(ADMIN, doc.id)
+
+
+async def test_a_plain_user_cannot_preview_a_document() -> None:
+    doc = document(status=DocumentStatus.INDEXED)
+    use_case, _, storage, *_ = build(documents=(doc,))
+    storage.texts[doc.id] = "unpublished research"
+
+    with pytest.raises(NotAuthorizedError):
+        await use_case.read_document_text(PLAIN_USER, doc.id)
