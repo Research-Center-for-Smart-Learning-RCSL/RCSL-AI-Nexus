@@ -52,9 +52,7 @@ async def admin_chat(
         )
         passages = [(p.document_id, p.index) for p in retrieved]
 
-    generation = use_case.execute(
-        actor, body.capability, messages, body.max_tokens, body.think
-    )
+    generation = use_case.execute(actor, body.capability, messages, body.max_tokens, body.think)
 
     # Priming before the response exists is what keeps authorization and
     # routing failures reportable as status codes. See interfaces/http/sse.py.

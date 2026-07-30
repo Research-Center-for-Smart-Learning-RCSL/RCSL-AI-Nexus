@@ -17,6 +17,45 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-30
 
+### The first CI this repository has had, and what it found in its first run
+
+Every quality gate here ran on the machine of whoever was committing: pre-commit
+hooks that `--no-verify` skips, and two test suites nobody but the author ran.
+The integration suite was the easiest of all to leave unrun, because it needs a
+Postgres — and it is the suite that caught the account-split test asserting
+nothing (2026-07-26). `.github/workflows/ci.yml` now runs all of it on push and
+pull request: backend lint, format, strict mypy, unit tests, then the
+integration suite against a real `postgres:17-alpine` service; frontend
+typecheck, eslint, vitest, and a real `next build` — the last of these because
+the baked-in admin URL from 2026-07-26 was a build-time defect that no test
+would have shown.
+
+**Setting it up made two local facts visible.** `ruff format` had not been clean
+on `main` for some time (four files, two of them written the same day), which is
+exactly the kind of drift a gate on someone's laptop permits. And every CI
+command was run locally first, because a workflow whose steps have never been
+executed is a red pipeline waiting to happen rather than a gate.
+
+**The audit job is advisory, deliberately.** `pip-audit`, `pnpm audit` and
+Trivy fail when *someone else* publishes an advisory, not when this repository
+changes; blocking a merge on that means an unrelated CVE stops an unrelated fix,
+which is how a red pipeline stops being read at all. It also runs weekly, so a
+disclosure lands against unchanged code rather than waiting for a commit. Trivy
+is scoped to `vuln,secret` and **not** `misconfig`: those rules have never been
+run against this repository, so switching them on would publish a wall of
+untriaged findings — and several would be choices `security.md` §15 records as
+accepted. Triaging that is its own piece of work, and doing it badly here would
+undermine the same argument the `continue-on-error` rests on.
+
+**It found something on the first run.** `shadcn` — a scaffolding CLI used to
+generate components, imported by nothing — was declared as a production
+dependency, which put `@modelcontextprotocol/sdk` and its path-traversal
+advisory in the shipped dependency tree. Moved to `devDependencies`: five
+advisories became four, and the remaining four are Next's own `postcss` and
+`sharp`, upstream and unfixable from here. A small finding, and precisely the
+class that only appears when something other than the author's habits looks at
+the repository.
+
 ### Re-index without re-upload, and a preview that shows the text rather than the file
 
 Two knowledge base follow-ups, and both turned on a decision about what *not*

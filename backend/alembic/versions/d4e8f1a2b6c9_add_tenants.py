@@ -74,9 +74,7 @@ def upgrade() -> None:
         op.create_index(f"ix_{table}_tenant_id", table, ["tenant_id"])
 
     for table in _FK_TABLES:
-        op.create_foreign_key(
-            f"fk_{table}_tenant_id", table, "tenants", ["tenant_id"], ["id"]
-        )
+        op.create_foreign_key(f"fk_{table}_tenant_id", table, "tenants", ["tenant_id"], ["id"])
 
 
 def downgrade() -> None:
