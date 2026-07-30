@@ -49,7 +49,17 @@ class ModelRepositoryPort(Protocol):
         ...
 
     async def save(self, model: Model) -> None: ...
-    async def set_state(self, model_id: str, state: ModelState) -> None: ...
+
+    async def set_state(self, model_id: str, state: ModelState) -> None:
+        """Write intent, and clear the observation that now predates it.
+
+        The pairing is the contract, not an implementation detail. Readers rank
+        observation over intent, so an observation taken before this transition
+        would outrank the transition — a model loaded a second ago would keep
+        routing as `downloaded` until the next sweep. Null means "not currently
+        observed", which sends every reader back to intent until the heartbeat
+        looks again."""
+        ...
 
     async def set_observed(
         self, model_id: str, state: ModelState | None, memory_gb: float | None
@@ -293,6 +303,19 @@ class KnowledgeRepositoryPort(Protocol):
         nodes: the ingestion task read the row long before it writes, and a
         full-row save would carry a stale filename or collection back over a
         concurrent edit."""
+        ...
+
+    async def claim_document_status(
+        self, document_id: str, expected: frozenset[DocumentStatus], claimed: DocumentStatus
+    ) -> bool:
+        """Take the row only if it is still in one of `expected`. True if taken.
+
+        A conditional UPDATE, not a read followed by a write, and the difference
+        is the whole point: two callers checking a status and then writing it
+        both pass the check under READ COMMITTED, so both claim. That is the
+        same hazard the TOTP counter avoids with `advance_totp_counter`, and it
+        reaches the knowledge base through re-indexing, which unlike an upload
+        can be requested twice for a document that already exists."""
         ...
 
     async def delete_document(self, document_id: str) -> None: ...

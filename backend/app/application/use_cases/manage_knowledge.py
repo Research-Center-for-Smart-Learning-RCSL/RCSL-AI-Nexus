@@ -147,6 +147,22 @@ class ManageKnowledge:
         self._authz.require(actor, Scope.KNOWLEDGE_READ)
         return await self._require_document(document_id)
 
+    async def document_to_reindex(self, actor: Actor, document_id: str) -> KnowledgeDocument:
+        """The document, for a caller that is about to re-index it.
+
+        `KNOWLEDGE_WRITE`, and that is the point of the method existing at all.
+        Re-indexing moves the row's status and deletes and rewrites every passage
+        the document has in the vector store, so it is a write however cheap it
+        is; `get_document` is the read the preview and the table use, and
+        reaching a write through it would make this the one place in the module
+        where the read scope changes something. `IngestDocument.claim_reindex`
+        cannot hold the check itself — it has no authorization port, for the same
+        reason `claim` does not: the scope is checked by the use case that owns
+        the document, exactly as `upload_document` checks before claiming.
+        """
+        self._authz.require(actor, Scope.KNOWLEDGE_WRITE)
+        return await self._require_document(document_id)
+
     async def read_document_text(
         self, actor: Actor, document_id: str, *, limit: int = PREVIEW_CHARS
     ) -> tuple[str, bool]:

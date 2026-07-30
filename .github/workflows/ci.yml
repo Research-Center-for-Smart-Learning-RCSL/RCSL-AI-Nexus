@@ -109,6 +109,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
+        with:
+          # The pnpm version comes from `packageManager`, and that field lives in
+          # frontend/package.json — there is no package.json at the repository
+          # root. Without this the action reads the default `./package.json`,
+          # finds nothing, and the job fails before pnpm is installed at all.
+          # `working-directory` cannot fix it: it applies to `run` steps only.
+          package_json_file: frontend/package.json
 
       - uses: actions/setup-node@v4
         with:
@@ -171,6 +178,9 @@ jobs:
           uv tool run pip-audit --requirement /tmp/requirements.txt --strict
 
       - uses: pnpm/action-setup@v4
+        with:
+          # See the frontend job: `packageManager` is in frontend/package.json.
+          package_json_file: frontend/package.json
 
       - uses: actions/setup-node@v4
         with:

@@ -17,6 +17,52 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-30
 
+### Review of the day's four commits, and the six things it found
+
+Six findings, all fixed. Three deserve recording because each is a shape this
+log has already recorded once.
+
+**The observation outranked a load that had just happened.** Making routing
+prefer the observation over the intent — the whole point of the read-back — left
+nothing to invalidate an observation when the platform itself writes intent. The
+sweep records `observed_state=downloaded`; the operator loads the model;
+`state` becomes `loaded` and the stale observation still outranks it, so for up
+to a heartbeat interval a `model_state: [loaded]` policy skips the model that is
+resident and a single-candidate policy answers 503. **The verification earlier
+that day missed this by luck of timing**: qwen7b was loaded and the assistant
+tested a minute later, after the next sweep had corrected the observation. One
+more instance of a check that could only return one answer. Fixed by pairing the
+clear with the intent write in both writers, and the pairing is now stated on the
+port rather than left in two adapters.
+
+**A test that passed either way, again.** The first fix came with two unit tests
+asserting that a load clears the observation — and both passed with the defect
+put back, because `ManageModels.load` writes `LOADING` through the state
+committer first and *that* write clears it. The assertion was true for a reason
+unrelated to what it claimed to pin. The contract now has an integration test
+against real Postgres, where the UPDATE actually lives, and that one does fail
+when the clause is removed. Same lesson as 2026-07-29, arrived at from the other
+direction: putting the defect back is the only way to know a test is load-bearing.
+
+**A docstring promising a claim that was not atomic.** `claim_reindex` said a
+second re-index "is refused with an answer rather than racing" while reading the
+status and writing it in two statements — so two tabs both claim, and both
+delete and re-upsert the same Qdrant points, leaving the document briefly
+unsearchable. `claim` gets away with the same shape because the row it claims was
+inserted by the same request moments earlier; a re-index has no such protection.
+Now a conditional UPDATE (`claim_document_status`), the same mechanism
+`advance_totp_counter` uses, with the tenant filter every other write carries.
+
+The rest: the new CI would have failed on its first run, because
+`pnpm/action-setup` reads `packageManager` from a root `package.json` this
+repository does not have; re-index was a write gated only on the read scope,
+harmless today because only administrators hold either knowledge scope and a
+real hole the first time a read-only role exists; models on any *other* node were
+being observed as `not_downloaded` by the local runtime's answer, which the new
+ranking would have turned from a wrong status into a model refused outright; and
+the GeoLite2 refresh's "atomic mv" crossed a filesystem boundary (`/tmp` to the
+repository), holding only because both happen to share a volume on this host.
+
 ### The first CI this repository has had, and what it found in its first run
 
 Every quality gate here ran on the machine of whoever was committing: pre-commit

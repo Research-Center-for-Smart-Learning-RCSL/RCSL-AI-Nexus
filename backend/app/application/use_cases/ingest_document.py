@@ -140,6 +140,17 @@ class IngestDocument:
 
         Claimed while the caller waits, like `claim`, so a second re-index of
         the same document is refused with an answer rather than racing.
+
+        **The claim is a conditional UPDATE, and unlike `claim`'s it has to be.**
+        `claim` runs against a row this same request inserted moments ago, so no
+        second caller can exist; a re-index is requested against a document that
+        has been there for days, and two operators — or two browser tabs — can
+        ask at once. Checking the status and then writing it would let both
+        through under READ COMMITTED, and both would then delete and re-upsert
+        the same Qdrant points, leaving a window where the document is
+        unsearchable. The status check below is kept as well as the claim, so the
+        common refusal names the state the caller is in rather than reporting a
+        lost race.
         """
         if document.status not in REINDEXABLE_STATES:
             raise DocumentStateConflictError(
@@ -147,7 +158,15 @@ class IngestDocument:
             )
         if self._knowledge is None:
             raise RuntimeError("claim_reindex needs a request-session repository")
-        await self._knowledge.set_document_status(document.id, DocumentStatus.INDEXING)
+        if not await self._knowledge.claim_document_status(
+            document.id, REINDEXABLE_STATES, DocumentStatus.INDEXING
+        ):
+            # The row moved between the read and this write: another re-index (or
+            # a delete) got there first. Reported as the conflict it is rather
+            # than proceeding to schedule a second task over the same passages.
+            raise DocumentStateConflictError(
+                detail=f"document {document.id} is already being re-indexed"
+            )
         status = JobStatus(
             job_id=job_id, state="queued", target=document.id, message="Queued for re-indexing"
         )

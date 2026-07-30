@@ -40,6 +40,7 @@ from app.domain.entities.model import Model, ModelState, RuntimeKind, RuntimeRes
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.ports.model_runtime_port import ModelRuntimePort
 from app.domain.ports.node_health_port import NodeHealthPort
+from app.infrastructure.config import get_settings
 from app.infrastructure.db import session_scope
 
 logger = logging.getLogger(__name__)
@@ -73,13 +74,15 @@ async def observe_models(
     runtimes: dict[RuntimeKind, ModelRuntimePort],
     models: ModelsSource,
     write_observation: ObservationWriter,
+    local_node_id: str,
 ) -> int:
     """Ask each runtime what it holds and reconcile every registered model.
 
-    Returns the count of models whose observation moved. Same single-node
-    scope as `RuntimeNodeHealth`: the adapters point at the configured host
-    runtime, so until per-node endpoints exist this observes the one node the
-    adapters actually reach.
+    Returns the count of models whose observation moved. Same single-node scope
+    as `RuntimeNodeHealth`, and `local_node_id` is what makes it explicit: the
+    adapters point at the configured host runtime, so only that node's models
+    can be observed and every other node's are left unobserved rather than
+    guessed at.
 
     A runtime that raises or answers None contributes no observation, and the
     models it serves are written back to "not observed" rather than left
@@ -99,7 +102,18 @@ async def observe_models(
         residency = residencies.get(model.runtime)
         observed: ModelState | None
         observed_gb: float | None = None
-        if residency is None:
+        if model.node_id != local_node_id:
+            # The adapters are built pointing at the configured host runtime, not
+            # at `node.address`, so a second node's residency is not something
+            # this sweep can see. Left unobserved rather than reported absent:
+            # `not_downloaded` here would be a *confident wrong answer*, and
+            # because routing now ranks observation over intent it would refuse
+            # every model on that node and make the memory budget count node B's
+            # rows against node A's runtime. `RuntimeNodeHealth` carries the same
+            # single-node limitation, where the cost is only a wrong node status.
+            # Per-node runtime endpoints land with multi-node routing.
+            observed = None
+        elif residency is None:
             observed = None
         elif model.ref in residency.resident:
             observed = ModelState.LOADED
@@ -152,7 +166,12 @@ async def run_heartbeat(app: FastAPI, interval_seconds: int) -> None:
         except Exception:  # noqa: BLE001 - a failed sweep must not kill the loop
             logger.exception("node heartbeat sweep failed")
         try:
-            await observe_models(app.state.runtimes, load_models, write_observation)
+            await observe_models(
+                app.state.runtimes,
+                load_models,
+                write_observation,
+                get_settings().node_id,
+            )
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - a failed sweep must not kill the loop

@@ -177,3 +177,53 @@ async def test_reconciliation_moves_transient_documents_across_every_tenant(sess
         reconciled = await repo.get_document(doc.id)
         assert reconciled is not None
         assert reconciled.status is DocumentStatus.ERROR
+
+
+async def test_a_status_claim_is_won_once_against_the_real_update(session) -> None:
+    """The conditional UPDATE re-indexing depends on, against Postgres.
+
+    Two operators can ask to re-index the same document, and a read followed by
+    a write would let both through under READ COMMITTED: both would then delete
+    and re-upsert the same passages, leaving a window where the document is not
+    searchable. The predicate is what makes the second attempt match no row.
+    """
+    alpha = await _tenant(session, "alpha-claim")
+    repo = PostgresKnowledgeRepository(session, alpha)
+    collection = _collection(alpha, "Papers")
+    await repo.save_collection(collection)
+    document = _document(alpha, collection.id, "paper.pdf")
+    await repo.save_document(document)
+    await repo.set_document_status(document.id, DocumentStatus.INDEXED, chunk_count=3)
+
+    reindexable = frozenset(
+        {DocumentStatus.EXTRACTED, DocumentStatus.INDEXED, DocumentStatus.ERROR}
+    )
+
+    assert await repo.claim_document_status(document.id, reindexable, DocumentStatus.INDEXING)
+    # The second caller still holds `indexed`, which is the stale value a
+    # read-then-write would act on.
+    assert not await repo.claim_document_status(document.id, reindexable, DocumentStatus.INDEXING)
+
+    claimed = await repo.get_document(document.id)
+    assert claimed is not None and claimed.status is DocumentStatus.INDEXING
+
+
+async def test_a_claim_cannot_reach_another_tenants_document(session) -> None:
+    """The claim is a write, so it carries the tenant filter every other write
+    does: a lost tenant names a row that does not exist rather than taking it."""
+    alpha = await _tenant(session, "alpha-claim-scope")
+    beta = await _tenant(session, "beta-claim-scope")
+    beta_repo = PostgresKnowledgeRepository(session, beta)
+    theirs = _collection(beta, "Theirs")
+    await beta_repo.save_collection(theirs)
+    document = _document(beta, theirs.id, "theirs.pdf")
+    await beta_repo.save_document(document)
+    await beta_repo.set_document_status(document.id, DocumentStatus.INDEXED)
+
+    taken = await PostgresKnowledgeRepository(session, alpha).claim_document_status(
+        document.id, frozenset({DocumentStatus.INDEXED}), DocumentStatus.INDEXING
+    )
+
+    assert taken is False
+    still = await beta_repo.get_document(document.id)
+    assert still is not None and still.status is DocumentStatus.INDEXED
