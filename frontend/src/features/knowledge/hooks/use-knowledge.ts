@@ -9,6 +9,8 @@ import {
   deleteDocument,
   listCollections,
   listDocuments,
+  readDocumentText,
+  reindexDocument,
   searchKnowledge,
   uploadDocument,
 } from '@/features/knowledge/api';
@@ -24,6 +26,8 @@ export const knowledgeKeys = {
   collections: () => [...knowledgeKeys.all, 'collections'] as const,
   documents: (collectionId: string | undefined, offset: number) =>
     [...knowledgeKeys.all, 'documents', collectionId ?? 'all', offset] as const,
+  text: (documentId: string) =>
+    [...knowledgeKeys.all, 'text', documentId] as const,
 };
 
 export function useCollections() {
@@ -111,6 +115,39 @@ export function useDeleteDocument() {
     onSuccess: async () => {
       await invalidate();
       toast.success('Document deleted, with its passages.');
+    },
+    onError: (error) => toast.error(describeError(error)),
+  });
+}
+
+/**
+ * The preview, fetched only while the dialog is open.
+ *
+ * `enabled` on the id rather than a separate open flag: the dialog is rendered
+ * from the same state that holds the document, so a null id already means
+ * closed, and the text is not fetched for every row of the table.
+ */
+export function useDocumentText(documentId: string | null) {
+  return useQuery({
+    queryKey: knowledgeKeys.text(documentId ?? 'none'),
+    queryFn: () => readDocumentText(documentId as string),
+    enabled: documentId !== null,
+    // The extracted text does not change unless the document is re-uploaded,
+    // which replaces the row, so nothing is gained by re-asking on remount.
+    staleTime: Infinity,
+  });
+}
+
+export function useReindexDocument() {
+  const invalidate = useInvalidateKnowledge();
+  return useMutation({
+    mutationFn: (id: string) => reindexDocument(id),
+    onSuccess: async () => {
+      await invalidate();
+      // 202, like the upload: accepted, not finished. The row moves to
+      // `indexing` and the table's poll reports the rest — including the one
+      // failure re-indexing cannot fix, a document with no text stored.
+      toast.success('Re-indexing from the stored text.');
     },
     onError: (error) => toast.error(describeError(error)),
   });

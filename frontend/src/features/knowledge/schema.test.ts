@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   MAX_UPLOAD_BYTES,
+  PREVIEWABLE_STATUSES,
+  REINDEXABLE_STATUSES,
+  TRANSIENT_STATUSES,
   collectionSchema,
   describeUploadRefusal,
   documentSchema,
+  documentTextSchema,
   formatBytes,
   resolveMediaType,
   searchResponseSchema,
@@ -158,5 +162,43 @@ describe('formatBytes', () => {
     expect(formatBytes(512)).toBe('512 B');
     expect(formatBytes(2048)).toBe('2 KB');
     expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MB');
+  });
+});
+
+describe('the preview and re-index gates', () => {
+  it('parses the preview body, carrying the server\'s truncation flag', () => {
+    const parsed = documentTextSchema.parse({
+      document_id: 'd1',
+      text: 'extracted',
+      truncated: false,
+    });
+    expect(parsed.truncated).toBe(false);
+
+    // Inferring truncation from the length here would need a copy of the
+    // server's bound, which would disagree the first time either changed.
+    expect(() =>
+      documentTextSchema.parse({ document_id: 'd1', text: 'x' }),
+    ).toThrow();
+  });
+
+  it('never offers re-index or preview while a task holds the row', () => {
+    // Both are refused server-side for a transient document; the point of
+    // checking here is that the button is not offered in the first place.
+    for (const status of TRANSIENT_STATUSES) {
+      expect(REINDEXABLE_STATUSES).not.toContain(status);
+      expect(PREVIEWABLE_STATUSES).not.toContain(status);
+    }
+  });
+
+  it('offers both on a failed document, which is the case they exist for', () => {
+    // A post-extraction failure is exactly what re-indexing fixes without a
+    // re-upload, and the extracted text is there to preview.
+    expect(REINDEXABLE_STATUSES).toContain('error');
+    expect(PREVIEWABLE_STATUSES).toContain('error');
+  });
+
+  it('offers neither before the parser has run', () => {
+    expect(REINDEXABLE_STATUSES).not.toContain('uploaded');
+    expect(PREVIEWABLE_STATUSES).not.toContain('uploaded');
   });
 });

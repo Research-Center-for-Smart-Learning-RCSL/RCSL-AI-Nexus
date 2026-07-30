@@ -27,8 +27,39 @@ export const DOCUMENT_STATUS_HINT: Record<DocumentStatus, string> = {
   extracted: 'Text is out; passages are being indexed.',
   indexing: 'Passages are being embedded and stored.',
   indexed: 'Searchable.',
-  error: 'Ingestion failed. Delete and upload again to retry.',
+  // Re-index first: it starts from the text already extracted, so it costs no
+  // parser run and no re-upload. It cannot help a document that failed *during*
+  // extraction, and the job says so when that is the case.
+  error: 'Ingestion failed. Re-index to retry, or delete and upload again.',
 };
+
+/**
+ * Which statuses may be re-indexed from the stored text, mirroring
+ * `REINDEXABLE_STATES`. Gating the button here only saves a round trip; the
+ * use case refuses the rest.
+ */
+export const REINDEXABLE_STATUSES: readonly DocumentStatus[] = [
+  'extracted',
+  'indexed',
+  'error',
+];
+
+/** Statuses for which extracted text exists to preview. Same set, by coincidence
+ * of the lifecycle rather than by sharing a definition: a document is previewable
+ * once the parser has run, which is exactly when re-indexing becomes possible. */
+export const PREVIEWABLE_STATUSES: readonly DocumentStatus[] = [
+  'extracted',
+  'indexed',
+  'error',
+];
+
+export const documentTextSchema = z.object({
+  document_id: z.string(),
+  text: z.string(),
+  /** The server's bound, carried rather than inferred from the length here. */
+  truncated: z.boolean(),
+});
+export type DocumentText = z.infer<typeof documentTextSchema>;
 
 export const collectionSchema = z.object({
   id: z.string(),

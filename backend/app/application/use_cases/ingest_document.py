@@ -46,6 +46,17 @@ INGESTABLE_STATES = frozenset({DocumentStatus.UPLOADED, DocumentStatus.ERROR})
 re-running the parser over a document already read is exposing it to the parser
 a second time for no gain."""
 
+REINDEXABLE_STATES = frozenset(
+    {DocumentStatus.EXTRACTED, DocumentStatus.INDEXED, DocumentStatus.ERROR}
+)
+"""Documents whose text may already be on the volume, so indexing can start from
+it and the parser is not run again.
+
+`ERROR` is included and is the interesting one: it covers both a document that
+failed *during* extraction (no text stored, and `run_reindex` says so) and one
+that failed *after* it, which is the case this whole path exists for. Excluding
+it to be safe would refuse exactly the retry that costs nothing."""
+
 
 class DocumentStateCommitterPort(Protocol):
     """The narrow seam the detached half needs: read a document, write its
@@ -118,6 +129,83 @@ class IngestDocument:
         )
         await self._jobs.set(status, ttl_seconds=JOB_TTL_SECONDS)
         return status
+
+    async def claim_reindex(self, document: KnowledgeDocument, job_id: str) -> JobStatus:
+        """Move the document straight into `INDEXING`, skipping the parser.
+
+        The point of the whole path: the extracted text was kept precisely so a
+        changed chunk size or a new embedding model does not mean sending every
+        document through the parser again, which is the component with the CVE
+        history. `EXTRACTING` is never entered here because nothing extracts.
+
+        Claimed while the caller waits, like `claim`, so a second re-index of
+        the same document is refused with an answer rather than racing.
+        """
+        if document.status not in REINDEXABLE_STATES:
+            raise DocumentStateConflictError(
+                detail=f"document {document.id} is {document.status}; nothing to re-index from"
+            )
+        if self._knowledge is None:
+            raise RuntimeError("claim_reindex needs a request-session repository")
+        await self._knowledge.set_document_status(document.id, DocumentStatus.INDEXING)
+        status = JobStatus(
+            job_id=job_id, state="queued", target=document.id, message="Queued for re-indexing"
+        )
+        await self._jobs.set(status, ttl_seconds=JOB_TTL_SECONDS)
+        return status
+
+    async def run_reindex(self, document_id: str, job_id: str) -> None:
+        """The detached half of a re-index. Never raises, for the same reason
+        `run` does not: a background task has nowhere to report.
+
+        `_index` re-commits `INDEXING` and rewrites the job's progress, which is
+        redundant with the claim rather than wrong — it keeps one description of
+        what indexing does, at the cost of one extra write per re-index.
+        """
+        document = await self._state.get(document_id)
+        if document is None:
+            await self._fail(job_id, document_id, "The document was removed while queued.")
+            return
+
+        try:
+            text = await self._storage.read_text(document_id)
+        except Exception as exc:
+            reason = f"{type(exc).__name__}"
+            logger.warning(
+                "reindex_text_missing document=%s job=%s reason=%s", document_id, job_id, reason
+            )
+            await self._state.commit(document_id, DocumentStatus.ERROR, error=reason)
+            # Named precisely, because the remedy differs from every other
+            # failure on this path: no amount of retrying re-indexing will
+            # produce text that was never extracted, and the operator needs to
+            # be sent to the upload rather than to the button they just pressed.
+            await self._fail(
+                job_id, document_id, "No extracted text is stored; upload the document again."
+            )
+            return
+
+        try:
+            chunk_count = await self._index(document, text, job_id)
+        except Exception as exc:
+            reason = f"{type(exc).__name__}"
+            logger.warning(
+                "reindex_failed document=%s job=%s reason=%s", document_id, job_id, reason
+            )
+            await self._state.commit(document_id, DocumentStatus.ERROR, error=reason)
+            await self._fail(job_id, document_id, "Re-indexing failed.")
+            return
+
+        await self._state.commit(document_id, DocumentStatus.INDEXED, chunk_count=chunk_count)
+        await self._jobs.set(
+            JobStatus(
+                job_id=job_id,
+                state="succeeded",
+                target=document_id,
+                progress=1.0,
+                message=f"Re-indexed {chunk_count} passages",
+            ),
+            ttl_seconds=JOB_TTL_SECONDS,
+        )
 
     async def status(self, job_id: str) -> JobStatus:
         """Progress for the UI's poll.

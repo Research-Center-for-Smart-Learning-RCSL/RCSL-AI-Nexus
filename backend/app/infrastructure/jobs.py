@@ -78,6 +78,16 @@ def schedule_ingestion(app: FastAPI, *, document_id: str, job_id: str, tenant_id
     task.add_done_callback(_running.discard)
 
 
+def schedule_reindex(app: FastAPI, *, document_id: str, job_id: str, tenant_id: str) -> None:
+    """Re-index from the stored text. The tenant travels with the task for the
+    same reason it does above."""
+    task = asyncio.create_task(
+        _run_reindex(app, document_id, job_id, tenant_id), name=f"reindex:{job_id}"
+    )
+    _running.add(task)
+    task.add_done_callback(_running.discard)
+
+
 async def _run_download(app: FastAPI, model_id: str, job_id: str) -> None:
     """Never raises. `run` writes every outcome to the job and to the model
     state through short transactions of its own; the guard here is only for a
@@ -131,19 +141,37 @@ class _DetachedEmbedder:
         return await self.embed_with(runtime, texts, target.ref)
 
 
+def _detached_ingest(app: FastAPI, tenant_id: str) -> IngestDocument:
+    """The use case as the detached half needs it: no request-session
+    repository, because `run` and `run_reindex` write only through the state
+    committer's short transactions."""
+    settings = get_settings()
+    return IngestDocument(
+        state_committer=DocumentStateCommitter(get_session_factory(), tenant_id),
+        storage=FilesystemDocumentStorage(settings.document_storage_path, tenant_id),
+        parser=HttpDocumentParser(settings.parser_base_url, settings.parser_timeout_seconds),
+        jobs=app.state.jobs,
+        vectors=build_vector_store(settings, tenant_id),
+        embedder=_DetachedEmbedder(app.state.runtimes),
+    )
+
+
 async def _run_ingestion(app: FastAPI, document_id: str, job_id: str, tenant_id: str) -> None:
     """Never raises, for the reason `_run_download` does not: `run` writes every
     outcome to the job and to the document's state through its own short
     transactions, and this guard covers only a failure to construct at all."""
     try:
-        settings = get_settings()
-        await IngestDocument(
-            state_committer=DocumentStateCommitter(get_session_factory(), tenant_id),
-            storage=FilesystemDocumentStorage(settings.document_storage_path, tenant_id),
-            parser=HttpDocumentParser(settings.parser_base_url, settings.parser_timeout_seconds),
-            jobs=app.state.jobs,
-            vectors=build_vector_store(settings, tenant_id),
-            embedder=_DetachedEmbedder(app.state.runtimes),
-        ).run(document_id, job_id)
+        await _detached_ingest(app, tenant_id).run(document_id, job_id)
     except Exception:
         logger.exception("ingestion_task_failed document=%s job=%s", document_id, job_id)
+
+
+async def _run_reindex(app: FastAPI, document_id: str, job_id: str, tenant_id: str) -> None:
+    """Same contract as `_run_ingestion`. The parser is still constructed and
+    still unused on this path — cheaper than a second constructor that differs
+    only by omitting it, and a re-index that somehow reached the parser would be
+    a bug worth having the wiring make visible rather than impossible."""
+    try:
+        await _detached_ingest(app, tenant_id).run_reindex(document_id, job_id)
+    except Exception:
+        logger.exception("reindex_task_failed document=%s job=%s", document_id, job_id)

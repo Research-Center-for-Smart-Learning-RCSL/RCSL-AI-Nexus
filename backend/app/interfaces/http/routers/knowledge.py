@@ -31,10 +31,11 @@ from app.infrastructure.di import (
     build_manage_knowledge,
     build_search_knowledge,
 )
-from app.infrastructure.jobs import schedule_ingestion
+from app.infrastructure.jobs import schedule_ingestion, schedule_reindex
 from app.interfaces.http.middleware.identity import current_actor
 from app.interfaces.http.schemas.admin_schemas import (
     CreateCollectionRequest,
+    DocumentTextResponse,
     IngestionJobResponse,
     KnowledgeCollectionResponse,
     KnowledgeDocumentPageResponse,
@@ -154,6 +155,49 @@ async def upload_document(
         tenant_id=actor.tenant_id,
     )
     return KnowledgeDocumentResponse.of(document)
+
+
+@router.get("/knowledge/documents/{document_id}/text")
+async def read_document_text(
+    document_id: str,
+    actor: Annotated[Actor, Depends(current_actor)],
+    knowledge: Annotated[ManageKnowledge, Depends(build_manage_knowledge)],
+) -> DocumentTextResponse:
+    """The extracted text, bounded, for the preview dialog.
+
+    The *extracted* text and never the uploaded bytes: serving those back would
+    hand a browser an attacker-supplied PDF to render, which is precisely what
+    the isolated parser exists to keep out of this deployment.
+    """
+    text, truncated = await knowledge.read_document_text(actor, document_id)
+    return DocumentTextResponse(document_id=document_id, text=text, truncated=truncated)
+
+
+@router.post("/knowledge/documents/{document_id}/reindex", status_code=202)
+async def reindex_document(
+    document_id: str,
+    request: Request,
+    actor: Annotated[Actor, Depends(current_actor)],
+    knowledge: Annotated[ManageKnowledge, Depends(build_manage_knowledge)],
+    ingest: Annotated[IngestDocument, Depends(build_ingest_document)],
+    session: SessionDep,
+) -> IngestionJobResponse:
+    """202: re-indexing from the stored text has been accepted, not finished.
+
+    No parser run and no re-upload — that is the whole point of keeping the
+    extracted text. Use it after changing the embedding model or the chunk size,
+    which are the two settings that make every stored passage stale.
+    """
+    document = await knowledge.get_document(actor, document_id)
+    status = await ingest.claim_reindex(document, str(uuid.uuid4()))
+    # Committed before scheduling, for the reason `upload_document` spells out:
+    # the claim lives in this request's transaction and the detached task opens
+    # a session of its own, so an uncommitted claim is a race the task loses.
+    await session.commit()
+    schedule_reindex(
+        request.app, document_id=document_id, job_id=status.job_id, tenant_id=actor.tenant_id
+    )
+    return IngestionJobResponse.of(status)
 
 
 @router.get("/knowledge/jobs/{job_id}")

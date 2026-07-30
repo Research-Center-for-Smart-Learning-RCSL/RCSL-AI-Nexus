@@ -12,11 +12,15 @@ import { ConfirmDialog } from '@/components/composed/confirm-dialog';
 import {
   useDeleteDocument,
   useDocuments,
+  useReindexDocument,
   useUploadDocument,
 } from '@/features/knowledge/hooks/use-knowledge';
+import { DocumentPreviewDialog } from '@/features/knowledge/components/document-preview-dialog';
 import {
   ACCEPT_ATTRIBUTE,
   DOCUMENT_STATUS_HINT,
+  PREVIEWABLE_STATUSES,
+  REINDEXABLE_STATUSES,
   TRANSIENT_STATUSES,
   describeUploadRefusal,
   formatBytes,
@@ -38,8 +42,10 @@ export function DocumentTable({ collectionId }: DocumentTableProps) {
   );
   const remove = useDeleteDocument();
   const upload = useUploadDocument();
+  const reindex = useReindexDocument();
   const fileInput = useRef<HTMLInputElement>(null);
   const [deleting, setDeleting] = useState<KnowledgeDocument | null>(null);
+  const [previewing, setPreviewing] = useState<KnowledgeDocument | null>(null);
 
   const columns = useMemo<ColumnDef<KnowledgeDocument>[]>(
     () => [
@@ -103,7 +109,31 @@ export function DocumentTable({ collectionId }: DocumentTableProps) {
           const document = row.original;
           const busy = TRANSIENT_STATUSES.includes(document.status);
           return (
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-1">
+              {PREVIEWABLE_STATUSES.includes(document.status) && (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => setPreviewing(document)}
+                >
+                  Preview
+                </Button>
+              )}
+              {/* Re-index starts from the text already extracted, so it costs
+                  no parser run and no re-upload. Offered on `error` too: that
+                  is the case it exists for, and the one shape it cannot fix —
+                  a failure during extraction, where no text was ever stored —
+                  reports itself as such. */}
+              {REINDEXABLE_STATUSES.includes(document.status) && (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  disabled={busy || reindex.isPending}
+                  onClick={() => reindex.mutate(document.id)}
+                >
+                  Re-index
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="xs"
@@ -120,7 +150,7 @@ export function DocumentTable({ collectionId }: DocumentTableProps) {
         },
       },
     ],
-    [],
+    [reindex],
   );
 
   const total = data?.total ?? 0;
@@ -210,6 +240,13 @@ export function DocumentTable({ collectionId }: DocumentTableProps) {
           </div>
         </div>
       ) : null}
+
+      <DocumentPreviewDialog
+        document={previewing}
+        onOpenChange={(open) => {
+          if (!open) setPreviewing(null);
+        }}
+      />
 
       <ConfirmDialog
         open={Boolean(deleting)}

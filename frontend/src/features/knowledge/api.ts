@@ -4,11 +4,13 @@ import {
   collectionSchema,
   documentPageSchema,
   documentSchema,
+  documentTextSchema,
   resolveMediaType,
   searchResponseSchema,
   type Collection,
   type CreateCollectionInput,
   type DocumentPage,
+  type DocumentText,
   type KnowledgeDocument,
   type Passage,
 } from '@/features/knowledge/schema';
@@ -77,6 +79,29 @@ export async function uploadDocument(
 
 export async function deleteDocument(id: string): Promise<void> {
   await api.delete<void>(`${BASE}/documents/${id}`);
+}
+
+/**
+ * The extracted text, for the preview. Never the uploaded file: serving that
+ * back would hand the browser an attacker-supplied PDF to render, which is what
+ * the isolated parser exists to keep out of this deployment.
+ */
+export async function readDocumentText(id: string): Promise<DocumentText> {
+  return documentTextSchema.parse(
+    await api.get<unknown>(`${BASE}/documents/${id}/text`),
+  );
+}
+
+/**
+ * Re-index from the text already extracted — no parser run, no re-upload.
+ *
+ * The 202 body is a job, and it is deliberately dropped: the table already
+ * polls the document list while anything is mid-ingest, and the re-index moves
+ * the row to `indexing`, so the existing poll reports it. A second progress
+ * mechanism for the same work would be a second thing to keep in step.
+ */
+export async function reindexDocument(id: string): Promise<void> {
+  await api.post<unknown>(`${BASE}/documents/${id}/reindex`, {});
 }
 
 /**
