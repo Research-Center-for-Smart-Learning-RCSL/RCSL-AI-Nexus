@@ -39,7 +39,7 @@ export function DashboardOverview() {
         <StatCard
           label="Nodes online"
           value={data ? `${data.nodes_online} / ${data.nodes_total}` : '-'}
-          hint="Node management is Phase 2"
+          hint="From the node heartbeat"
           icon={<CpuIcon className="size-4" />}
           isLoading={isLoading}
         />
