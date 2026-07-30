@@ -52,6 +52,20 @@ class ModelStateCommitterPort(Protocol):
     async def commit(self, model_id: str, state: ModelState) -> None: ...
 
 
+def _with_state(model: Model, state: ModelState) -> Model:
+    """The model as it is after an intent write, observation included.
+
+    `set_state` clears the observation, so returning `replace(model, state=...)`
+    would answer with the observation as it was *before* the write — telling the
+    caller the runtime reports something the same request just invalidated. The
+    models table renders a mismatch between the two as a divergence in red, so
+    the stale value shows the operator a conflict that does not exist.
+    """
+    return replace(
+        model, state=state, observed_state=None, observed_memory_gb=None, observed_at=None
+    )
+
+
 DELETABLE_STATES = frozenset({ModelState.NOT_DOWNLOADED, ModelState.DOWNLOADED, ModelState.ERROR})
 """Anything mid-transition is excluded. Deleting a row while a download or a
 load is in flight leaves the runtime holding something the registry has
@@ -276,7 +290,7 @@ class ManageModels:
         # LOADING left by such a failure to ERROR.
         await self._models.set_state(model.id, ModelState.LOADED)
         await self._audit.record(actor, "model.loaded", target=model.id)
-        return replace(model, state=ModelState.LOADED)
+        return _with_state(model, ModelState.LOADED)
 
     async def unload(self, actor: Actor, model_id: str) -> Model:
         self._authz.require(actor, Scope.MODEL_WRITE)
@@ -299,7 +313,7 @@ class ManageModels:
 
         await self._models.set_state(model.id, ModelState.DOWNLOADED)
         await self._audit.record(actor, "model.unloaded", target=model.id)
-        return replace(model, state=ModelState.DOWNLOADED)
+        return _with_state(model, ModelState.DOWNLOADED)
 
     async def _require(self, model_id: str) -> Model:
         model = await self._models.get(model_id)

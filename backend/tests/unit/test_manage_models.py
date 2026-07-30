@@ -340,3 +340,38 @@ async def test_unloading_returns_the_model_to_downloaded() -> None:
 
     assert result.state is ModelState.DOWNLOADED
     assert harness.runtime.unloaded == ["library/qwen2.5:7b"]
+
+
+async def test_the_load_response_reports_the_observation_it_cleared() -> None:
+    """The returned entity is what the caller renders, and the models table
+    draws a mismatch between intent and observation in red. Answering with the
+    pre-write observation shows the operator a divergence the same request just
+    removed — found on the Mac Studio: an unload answered `intent=downloaded,
+    observed=loaded` while the row itself held neither.
+    """
+    harness = Harness([make_model(observed_state=ModelState.DOWNLOADED, observed_memory_gb=4.7)])
+
+    returned = await harness.use_case.load(ADMIN, "m1")
+
+    assert returned.state is ModelState.LOADED
+    assert returned.observed_state is None, "the response must not carry a cleared observation"
+    assert returned.observed_memory_gb is None
+    assert returned.observed_at is None
+
+
+async def test_the_unload_response_reports_the_observation_it_cleared() -> None:
+    harness = Harness(
+        [
+            make_model(
+                state=ModelState.LOADED,
+                observed_state=ModelState.LOADED,
+                observed_memory_gb=5.3,
+            )
+        ]
+    )
+
+    returned = await harness.use_case.unload(ADMIN, "m1")
+
+    assert returned.state is ModelState.DOWNLOADED
+    assert returned.observed_state is None
+    assert returned.observed_memory_gb is None
