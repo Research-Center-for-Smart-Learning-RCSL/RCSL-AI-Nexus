@@ -17,6 +17,69 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-07-30
 
+### The registry stops taking its own word for it (Phase 2)
+
+The roadmap carried two items that were one item wearing different clothes:
+"reconcile the registry's `loaded` state against what is actually resident"
+and "`MetricsPort` ingestion, a live memory figure feeding the budget". Both
+are the platform reading real state back from the runtime instead of trusting
+what it asserted earlier, so they were built as one mechanism.
+
+The registry's `state` column is intent: asserted once when a load or unload
+completes, and never re-checked. `qwen7b` read `loaded` for hours on
+2026-07-27 while Ollama held nothing, and `OLLAMA_KEEP_ALIVE=-1` removed only
+the most common cause of that lie (Ollama's own idle timer), not the class —
+a runtime restart, an out-of-band `ollama rm`, or an eviction to make room
+all leave the same standing falsehood. And the day this was built, the same
+shape was live in production a second way: the `assist` policy's only
+candidate required `model_state: [loaded]` while `qwen7b` sat at
+`downloaded`, so the management assistant had quietly stopped routing to
+anything.
+
+**Intent and observation are separate columns, deliberately.** The choice
+was between overwriting `state` when the runtime disagrees, keeping a
+separate observation, or merely alerting. Overwriting was rejected because it
+destroys the information that there *was* a disagreement — the operator sees
+`downloaded` and cannot tell a deliberate unload from an eviction the
+platform never sanctioned. So `models` gains `observed_state`,
+`observed_memory_gb` and `observed_at`, written by the existing heartbeat
+(the node-status half now has a model-residency half), and `state` stays
+what it always was: what the platform last did on purpose.
+
+The heartbeat asks each runtime that can answer — Ollama answers from
+`/api/ps` and `/api/tags`; MLX has no residency endpoint and answers None,
+the same honest refusal its `unload` and `embed` already make. **None means
+"could not ask", never "nothing is resident"**: an unreachable runtime clears
+the observation rather than asserting absence, because a network blip that
+reads as "everything is unloaded" would be one more check that can only
+return one answer, and 2026-07-26 already taught what those cost. A cleared
+observation makes every reader fall back to intent, which is exactly the
+pre-observation behaviour.
+
+Three readers consume the observation. Routing's `model_state` requirement
+now matches the observation when one exists and intent otherwise, so a
+policy asking for a loaded model gets weights that are actually resident —
+this is what turns the qwen7b lie from "standing for hours" into "corrected
+within a heartbeat interval". The memory budget prefers
+`observed_memory_gb` over the declared profile, because the runtime's own
+figure includes the KV cache the form field does not: the measured gap is
+5.7 GB resident against 4.7 GB declared for a 7B model, and with
+`glm-4.7-flash` it is 38 GB against a declared 32. `list_occupying_memory`
+also counts a model the runtime reports resident regardless of intent, so
+weights warmed by an out-of-band `ollama run` are memory the budget sees.
+The models screen shows the divergence in red under the intent badge and the
+resident figure next to the declared one; agreement and "not observed" both
+stay quiet.
+
+What this deliberately does not do: write `state`. No automation moves
+intent, because intent is the operator's, and the first design that
+auto-healed it would have erased the very evidence the operator needs to ask
+why the runtime dropped a model. And the `MetricsPort` roadmap item is
+narrowed rather than closed: the budget now runs on observed residency,
+which is the number that was missing, but a genuine host free-memory figure
+(the OS and containers included) has no source a container can reach and
+waits for a host-side exporter if one is ever warranted.
+
 ### The knowledge base, and the container built to be the one that falls (Phase 2)
 
 The largest Phase 2 item, in four commits: uploads with an isolated parser, then

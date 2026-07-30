@@ -19,7 +19,13 @@ from app.domain.entities.actor import Actor, Role
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.invitation import Invitation, InvitationPurpose, RecoveryCode
 from app.domain.entities.knowledge import DocumentChunk, DocumentStatus, RetrievedPassage
-from app.domain.entities.model import Model, ModelState, PullProgress, RuntimeKind
+from app.domain.entities.model import (
+    Model,
+    ModelState,
+    PullProgress,
+    RuntimeKind,
+    RuntimeResidency,
+)
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.tenant import Tenant
@@ -228,6 +234,13 @@ class FakeModels:
     async def set_state(self, model_id: str, state: ModelState) -> None:
         self.rows[model_id] = replace(self.rows[model_id], state=state)
 
+    async def set_observed(
+        self, model_id: str, state: ModelState | None, memory_gb: float | None
+    ) -> None:
+        self.rows[model_id] = replace(
+            self.rows[model_id], observed_state=state, observed_memory_gb=memory_gb
+        )
+
     async def delete(self, model_id: str) -> None:
         self.rows.pop(model_id, None)
 
@@ -235,7 +248,11 @@ class FakeModels:
         return [
             model
             for model in self.rows.values()
-            if model.node_id == node_id and model.state in (ModelState.LOADED, ModelState.LOADING)
+            if model.node_id == node_id
+            and (
+                model.state in (ModelState.LOADED, ModelState.LOADING)
+                or model.observed_state is ModelState.LOADED
+            )
         ]
 
     async def reconcile_transient_states(self, mapping: dict[ModelState, ModelState]) -> int:
@@ -457,6 +474,7 @@ class FakeRuntime:
         pull_updates: Sequence[PullProgress] = (),
         fail_on: str | None = None,
         invalid_refs: frozenset[str] = frozenset(),
+        residency: RuntimeResidency | None = None,
     ) -> None:
         self.loaded: list[str] = []
         self.unloaded: list[str] = []
@@ -464,6 +482,7 @@ class FakeRuntime:
         self._updates = pull_updates
         self._fail_on = fail_on
         self._invalid = invalid_refs
+        self._residency = residency
 
     def validate_ref(self, ref: str) -> None:
         if ref in self._invalid:
@@ -490,6 +509,11 @@ class FakeRuntime:
 
     async def health(self) -> bool:
         return True
+
+    async def residency(self) -> RuntimeResidency | None:
+        if self._fail_on == "residency":
+            raise RuntimeError("the runtime hung up mid-probe")
+        return self._residency
 
 
 class FakeKnowledge:

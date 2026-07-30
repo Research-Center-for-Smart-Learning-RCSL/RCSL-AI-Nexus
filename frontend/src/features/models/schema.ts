@@ -80,6 +80,15 @@ export const modelSchema = z.object({
   state: modelStateSchema,
   capabilities: z.array(capabilitySchema),
   resource_profile: resourceProfileSchema,
+  /**
+   * What the runtime last reported actually holding, written by the backend
+   * heartbeat; `state` above is the platform's intent. Null when the model has
+   * not been observed or its runtime cannot say (MLX). The table flags the
+   * rows where the two disagree.
+   */
+  observed_state: modelStateSchema.nullable(),
+  observed_memory_gb: z.number().nullable(),
+  observed_at: z.string().nullable(),
 });
 export type Model = z.infer<typeof modelSchema>;
 

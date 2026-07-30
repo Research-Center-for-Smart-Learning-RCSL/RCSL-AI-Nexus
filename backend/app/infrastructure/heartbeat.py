@@ -1,9 +1,18 @@
-"""Node status heartbeat.
+"""Node status and model residency heartbeat.
 
 Periodically probes every node and writes the status it observes, so a routing
 requirement of `node_status: [online]` stops selecting a node whose runtime has
 gone away instead of always holding. Before this, status was written once at
 provision and never revisited.
+
+The same loop reconciles model residency: each runtime that can answer is
+asked what it actually holds, and the answer lands in the registry's
+`observed_*` columns next to the intent it may contradict. `state` said
+`loaded` for hours on 2026-07-27 while Ollama held nothing — a restart, an
+out-of-band `ollama rm`, or an eviction all leave that assertion standing, and
+this is the read-back that catches it. A runtime that cannot answer (MLX) or
+cannot be reached leaves the observation null, which readers treat as "trust
+intent", the pre-observation behaviour.
 
 **It runs in the admin application, and both facts about how matter.** The
 gateway cannot host it: section 6's least-privilege split lets the gateway write
@@ -26,8 +35,10 @@ from collections.abc import Awaitable, Callable
 from fastapi import FastAPI
 
 from app.adapters.http.node_health import RuntimeNodeHealth
-from app.adapters.persistence.repositories import PostgresNodeRepository
+from app.adapters.persistence.repositories import PostgresModelRepository, PostgresNodeRepository
+from app.domain.entities.model import Model, ModelState, RuntimeKind, RuntimeResidency
 from app.domain.entities.node import Node, NodeStatus
+from app.domain.ports.model_runtime_port import ModelRuntimePort
 from app.domain.ports.node_health_port import NodeHealthPort
 from app.infrastructure.db import session_scope
 
@@ -35,6 +46,8 @@ logger = logging.getLogger(__name__)
 
 NodesSource = Callable[[], Awaitable[list[Node]]]
 StatusWriter = Callable[[str, NodeStatus], Awaitable[None]]
+ModelsSource = Callable[[], Awaitable[list[Model]]]
+ObservationWriter = Callable[[str, ModelState | None, float | None], Awaitable[None]]
 
 
 async def sweep(health: NodeHealthPort, nodes: NodesSource, write_status: StatusWriter) -> int:
@@ -56,6 +69,59 @@ async def sweep(health: NodeHealthPort, nodes: NodesSource, write_status: Status
     return changed
 
 
+async def observe_models(
+    runtimes: dict[RuntimeKind, ModelRuntimePort],
+    models: ModelsSource,
+    write_observation: ObservationWriter,
+) -> int:
+    """Ask each runtime what it holds and reconcile every registered model.
+
+    Returns the count of models whose observation moved. Same single-node
+    scope as `RuntimeNodeHealth`: the adapters point at the configured host
+    runtime, so until per-node endpoints exist this observes the one node the
+    adapters actually reach.
+
+    A runtime that raises or answers None contributes no observation, and the
+    models it serves are written back to "not observed" rather than left
+    holding a stale one: a claim that cannot be re-checked must not keep the
+    authority of one that just was.
+    """
+    residencies: dict[RuntimeKind, RuntimeResidency | None] = {}
+    for kind, adapter in runtimes.items():
+        try:
+            residencies[kind] = await adapter.residency()
+        except Exception:  # noqa: BLE001 - one broken runtime must not stop the sweep
+            logger.warning("a runtime residency probe raised", exc_info=True)
+            residencies[kind] = None
+
+    changed = 0
+    for model in await models():
+        residency = residencies.get(model.runtime)
+        observed: ModelState | None
+        observed_gb: float | None = None
+        if residency is None:
+            observed = None
+        elif model.ref in residency.resident:
+            observed = ModelState.LOADED
+            observed_gb = residency.resident[model.ref]
+        elif model.ref in residency.on_disk:
+            observed = ModelState.DOWNLOADED
+        else:
+            observed = ModelState.NOT_DOWNLOADED
+
+        if model.observed_state is observed and model.observed_memory_gb == observed_gb:
+            continue
+        changed += 1
+        await write_observation(model.id, observed, observed_gb)
+        logger.info(
+            "model %s observed %s (intent %s)",
+            model.alias,
+            observed.value if observed else "nothing",
+            model.state.value,
+        )
+    return changed
+
+
 async def run_heartbeat(app: FastAPI, interval_seconds: int) -> None:
     health = RuntimeNodeHealth(app.state.runtimes)
 
@@ -67,6 +133,16 @@ async def run_heartbeat(app: FastAPI, interval_seconds: int) -> None:
         async with session_scope() as session:
             await PostgresNodeRepository(session).set_status(node_id, status)
 
+    async def load_models() -> list[Model]:
+        async with session_scope() as session:
+            return await PostgresModelRepository(session).list_all()
+
+    async def write_observation(
+        model_id: str, state: ModelState | None, memory_gb: float | None
+    ) -> None:
+        async with session_scope() as session:
+            await PostgresModelRepository(session).set_observed(model_id, state, memory_gb)
+
     while True:
         await asyncio.sleep(interval_seconds)
         try:
@@ -75,3 +151,9 @@ async def run_heartbeat(app: FastAPI, interval_seconds: int) -> None:
             raise
         except Exception:  # noqa: BLE001 - a failed sweep must not kill the loop
             logger.exception("node heartbeat sweep failed")
+        try:
+            await observe_models(app.state.runtimes, load_models, write_observation)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a failed sweep must not kill the loop
+            logger.exception("model observation sweep failed")

@@ -68,6 +68,13 @@ class ModelRow(Base):
     memory_gb: Mapped[float] = mapped_column(Float, default=0.0)
     context_length: Mapped[int] = mapped_column(Integer, default=0)
 
+    # What the runtime last reported, written by the heartbeat; `state` above
+    # is intent. All nullable: null means never observed, which is also what a
+    # runtime with no residency endpoint (MLX) leaves behind.
+    observed_state: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    observed_memory_gb: Mapped[float | None] = mapped_column(Float, nullable=True)
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     __table_args__ = (
         # A runtime identifier is unique per node, unlike the alias which is
         # unique platform-wide.

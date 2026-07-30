@@ -171,11 +171,18 @@ class PostgresModelRepository(_Base):
         return [m.model_to_domain(r) for r in rows]
 
     async def list_occupying_memory(self, node_id: str) -> list[Model]:
+        # Intent says LOADED or LOADING, or the heartbeat observed the weights
+        # resident regardless of what intent says: a model someone warmed with
+        # an out-of-band `ollama run` occupies memory the budget must count,
+        # even though no registry operation ever claimed it.
         rows = (
             await self._session.scalars(
                 select(ModelRow).where(
                     ModelRow.node_id == node_id,
-                    ModelRow.state.in_((ModelState.LOADED.value, ModelState.LOADING.value)),
+                    or_(
+                        ModelRow.state.in_((ModelState.LOADED.value, ModelState.LOADING.value)),
+                        ModelRow.observed_state == ModelState.LOADED.value,
+                    ),
                 )
             )
         ).all()
@@ -188,6 +195,22 @@ class PostgresModelRepository(_Base):
     async def set_state(self, model_id: str, state: ModelState) -> None:
         await self._session.execute(
             update(ModelRow).where(ModelRow.id == model_id).values(state=state.value)
+        )
+
+    async def set_observed(
+        self, model_id: str, state: ModelState | None, memory_gb: float | None
+    ) -> None:
+        # The timestamp is the database's now(), not a client clock, and it is
+        # cleared alongside a None state: all three columns null together means
+        # "not currently observed", which is also the migration's start state.
+        await self._session.execute(
+            update(ModelRow)
+            .where(ModelRow.id == model_id)
+            .values(
+                observed_state=state.value if state else None,
+                observed_memory_gb=memory_gb,
+                observed_at=func.now() if state else None,
+            )
         )
 
     async def delete(self, model_id: str) -> None:

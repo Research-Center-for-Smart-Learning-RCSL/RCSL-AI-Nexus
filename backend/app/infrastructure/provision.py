@@ -62,9 +62,8 @@ def build_local_node(settings: Settings) -> Node:
         # and the memory budget refuses a load against it, so a stale value is
         # the difference between a refusal and driving the host into swap.
         address=settings.tailnet_ip,
-        # Phase 1 has no heartbeat, so a configured node is online by
-        # definition. `NodeHealthPort` arrives in Phase 2 and makes this an
-        # observed value rather than an assumption.
+        # A starting assumption only: the heartbeat re-probes this within one
+        # interval and overwrites it with what it observes.
         status=NodeStatus.ONLINE,
         total_memory_gb=settings.node_total_memory_gb,
         runtimes=frozenset({RuntimeKind.OLLAMA}),

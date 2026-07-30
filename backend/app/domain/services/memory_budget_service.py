@@ -25,7 +25,16 @@ class MemoryBudgetService:
 
     def assert_can_load(self, target: Model, node: Node, already_loaded: Iterable[Model]) -> None:
         budget = node.total_memory_gb * self._headroom
-        in_use = sum(m.resource_profile.memory_gb for m in already_loaded if m.id != target.id)
+        # The runtime's own figure for a resident model outranks the declared
+        # profile: it includes the KV cache the profile does not, and the gap
+        # is real — 5.7 GB measured against 4.7 GB of declared weights for a
+        # 7B model. The declared figure remains the estimate for anything the
+        # heartbeat has not observed.
+        in_use = sum(
+            m.observed_memory_gb or m.resource_profile.memory_gb
+            for m in already_loaded
+            if m.id != target.id
+        )
         available = budget - in_use
         required = target.resource_profile.memory_gb
 

@@ -59,8 +59,16 @@ class RoutingService:
         """
         if require.node_status and node.status not in require.node_status:
             return False
-        if require.model_state and model.state not in require.model_state:
-            return False
+        if require.model_state:
+            # The observation outranks the intent when both exist: a policy
+            # asking for a loaded model wants the weights resident, not the
+            # registry's last assertion about them, and the two diverged for
+            # hours on 2026-07-27. None means the runtime has not been (or
+            # cannot be) observed, and intent is all there is — so a runtime
+            # with no residency endpoint keeps routing exactly as before.
+            effective = model.observed_state or model.state
+            if effective not in require.model_state:
+                return False
         if require.min_free_memory_gb is not None:
             if free_memory is None or free_memory < require.min_free_memory_gb:
                 return False

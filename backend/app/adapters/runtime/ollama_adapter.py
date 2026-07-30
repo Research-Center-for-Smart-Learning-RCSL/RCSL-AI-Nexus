@@ -19,7 +19,7 @@ import httpx
 
 from app.adapters.runtime.validation import assert_valid_model_ref
 from app.domain.entities.chat import CompletionChunk, Message
-from app.domain.entities.model import PullProgress
+from app.domain.entities.model import PullProgress, RuntimeResidency
 from app.domain.exceptions import DomainError, ModelNotFoundError, NoAvailableModelError
 
 logger = logging.getLogger(__name__)
@@ -59,6 +59,18 @@ _FINISH_REASONS = {"stop": "stop", "length": "length", "load": "stop", "unload":
 
 def _finish_reason(done_reason: str | None) -> str:
     return _FINISH_REASONS.get(done_reason or "stop", "stop")
+
+
+def _spellings(name: str) -> tuple[str, ...]:
+    """Every reference Ollama would answer to for a reported model name.
+
+    Ollama canonicalises a bare `nomic-embed-text` to `nomic-embed-text:latest`
+    in its own listings, while the registry may hold either spelling. The tag
+    lives after the last `/`, so `namespace/name` stays intact."""
+    _, _, tail = name.rpartition("/")
+    if tail.endswith(":latest"):
+        return (name, name[: -len(":latest")])
+    return (name,)
 
 
 class OllamaAdapter:
@@ -294,6 +306,50 @@ class OllamaAdapter:
                 return response.status_code == 200
         except httpx.HTTPError:
             return False
+
+    async def residency(self) -> RuntimeResidency | None:
+        """What Ollama is actually holding: `/api/ps` for resident models,
+        `/api/tags` for what is on disk.
+
+        Returns None when either call fails, because "could not ask" and
+        "asked, and nothing is loaded" must not read the same: an unreachable
+        runtime yielding an empty answer would mark every model unloaded on
+        the strength of a network blip.
+
+        Each model is recorded under Ollama's reported name and, when the tag
+        is `:latest`, under the bare name as well — Ollama accepts both, the
+        registry may hold either, and this aliasing is Ollama grammar that
+        must not leak into the observer doing the matching.
+        """
+        try:
+            async with httpx.AsyncClient(
+                base_url=self._base_url, timeout=httpx.Timeout(10.0)
+            ) as client:
+                ps = await client.get("/api/ps")
+                tags = await client.get("/api/tags")
+                if ps.status_code != 200 or tags.status_code != 200:
+                    return None
+                resident_models = ps.json().get("models") or []
+                on_disk_models = tags.json().get("models") or []
+        except (httpx.HTTPError, json.JSONDecodeError):
+            return None
+
+        resident: dict[str, float] = {}
+        for entry in resident_models:
+            name = entry.get("name") or entry.get("model")
+            if not name:
+                continue
+            gb = float(entry.get("size") or 0) / 1024**3
+            for spelling in _spellings(name):
+                resident[spelling] = gb
+
+        on_disk: set[str] = set()
+        for entry in on_disk_models:
+            name = entry.get("name") or entry.get("model")
+            if name:
+                on_disk.update(_spellings(name))
+
+        return RuntimeResidency(resident=resident, on_disk=frozenset(on_disk))
 
     # --- internals -------------------------------------------------------
 

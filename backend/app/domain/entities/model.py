@@ -15,6 +15,7 @@ require editing every policy.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 
 
@@ -51,6 +52,37 @@ class Model:
     state: ModelState
     capabilities: frozenset[str] = field(default_factory=frozenset)
     resource_profile: ResourceProfile = ResourceProfile(memory_gb=0.0, context_length=0)
+
+    observed_state: ModelState | None = None
+    """What the runtime last reported actually holding, written by the
+    heartbeat. `state` above is the platform's intent; the two diverge when
+    something moves weights behind the registry's back — a runtime restart, an
+    out-of-band eviction, an `ollama run` nobody recorded. None means the
+    runtime has not been observed (or cannot be: MLX has no residency
+    endpoint), in which case intent is all there is."""
+
+    observed_memory_gb: float | None = None
+    """The runtime's own figure for the resident weights, which includes the
+    KV cache the declared profile does not. 5.7 GB measured against 4.7 GB of
+    weights for a 7B model, so where this exists the memory budget prefers it."""
+
+    observed_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeResidency:
+    """One runtime's answer to "what are you actually holding right now".
+
+    `resident` maps a runtime reference to the memory the runtime itself
+    reports for it, in GB. `on_disk` is every reference the runtime could load
+    without downloading. An adapter reports every spelling it would answer to
+    — Ollama lists `name:latest` under the bare name too — so the observer
+    matches registry refs by exact lookup and no runtime grammar leaks out of
+    the adapter that owns it.
+    """
+
+    resident: dict[str, float] = field(default_factory=dict)
+    on_disk: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass(frozen=True, slots=True)

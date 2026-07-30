@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator, Sequence
 from typing import Protocol
 
 from app.domain.entities.chat import CompletionChunk, Message
-from app.domain.entities.model import PullProgress
+from app.domain.entities.model import PullProgress, RuntimeResidency
 
 
 class ModelRuntimePort(Protocol):
@@ -93,3 +93,19 @@ class ModelRuntimePort(Protocol):
     async def unload(self, ref: str) -> None: ...
 
     async def health(self) -> bool: ...
+
+    async def residency(self) -> RuntimeResidency | None:
+        """What the runtime is actually holding, or None if it cannot say.
+
+        The registry's `state` records intent, asserted once at load time; a
+        runtime restart, an out-of-band eviction, or the runtime's own idle
+        timer all leave that assertion standing while the weights are gone.
+        This is the read-back that lets the heartbeat catch the divergence.
+
+        None means "this runtime has no way to answer", not "nothing is
+        resident" — mlx_lm.server has no residency endpoint, and for such a
+        runtime the platform falls back to trusting intent, which is exactly
+        the pre-observation behaviour. An empty `RuntimeResidency` by contrast
+        is a positive claim that nothing is loaded.
+        """
+        ...

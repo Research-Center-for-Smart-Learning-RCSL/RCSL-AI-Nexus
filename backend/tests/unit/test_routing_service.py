@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from app.domain.entities.model import Model, ModelState, ResourceProfile, RuntimeKind
@@ -137,3 +139,72 @@ def test_min_free_memory_requirement(service: RoutingService) -> None:
 
     chosen = service.select(policy, models, {"n1": make_node()}, free_memory_gb={"n1": 4.0})
     assert chosen.alias == "small"
+
+
+def test_observed_state_outranks_intent(service: RoutingService) -> None:
+    """The 2026-07-27 lie: the registry said loaded, the runtime held nothing.
+
+    A policy asking for a loaded model wants the weights resident, so the
+    heartbeat's observation must outrank the registry's last assertion.
+    """
+    policy = RoutingPolicy(
+        capability="chat",
+        candidates=(
+            RoutingCandidate(
+                "primary",
+                priority=100,
+                require=Requirement(model_state=frozenset({ModelState.LOADED})),
+            ),
+            RoutingCandidate("fallback", priority=10),
+        ),
+    )
+    stale = replace(
+        make_model("primary", state=ModelState.LOADED),
+        observed_state=ModelState.DOWNLOADED,
+    )
+    models = {"primary": stale, "fallback": make_model("fallback")}
+
+    assert service.select(policy, models, {"n1": make_node()}).alias == "fallback"
+
+
+def test_observed_state_can_also_qualify_a_model_intent_would_refuse(
+    service: RoutingService,
+) -> None:
+    """The other direction: warmed out of band, intent still says downloaded."""
+    policy = RoutingPolicy(
+        capability="chat",
+        candidates=(
+            RoutingCandidate(
+                "primary",
+                priority=100,
+                require=Requirement(model_state=frozenset({ModelState.LOADED})),
+            ),
+        ),
+    )
+    warmed = replace(
+        make_model("primary", state=ModelState.DOWNLOADED),
+        observed_state=ModelState.LOADED,
+    )
+
+    assert service.select(policy, {"primary": warmed}, {"n1": make_node()}).alias == "primary"
+
+
+def test_unobserved_model_routes_on_intent(service: RoutingService) -> None:
+    """None means "cannot be observed" (MLX, or no sweep yet), not "absent".
+
+    Falling back to intent keeps a runtime with no residency endpoint routing
+    exactly as it did before observations existed.
+    """
+    policy = RoutingPolicy(
+        capability="chat",
+        candidates=(
+            RoutingCandidate(
+                "primary",
+                priority=100,
+                require=Requirement(model_state=frozenset({ModelState.LOADED})),
+            ),
+        ),
+    )
+    models = {"primary": make_model("primary", state=ModelState.LOADED)}
+
+    assert service.select(policy, models, {"n1": make_node()}).alias == "primary"
