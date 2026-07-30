@@ -50,6 +50,7 @@ def _keep_alive(raw: str) -> str | int:
     except ValueError:
         return raw
 
+
 # Ollama's done_reason vocabulary is its own. OpenAI clients branch on
 # finish_reason, and an unrecognised value ("load", "unload") reads to them as
 # a protocol error, so anything outside the known set is reported as "stop".
@@ -269,15 +270,20 @@ class OllamaAdapter:
         """Warm a model into memory.
 
         An empty prompt with a keep_alive is Ollama's documented way to load
-        without generating anything.
+        without generating anything — but an embedding model refuses
+        `/api/generate` outright (400, `"does not support generate"`), so that
+        refusal is answered by warming through `/api/embed` with an empty
+        input, which loads the weights and honours `keep_alive` the same way.
+        Verified against Ollama on the Mac Studio: both directions, load and
+        evict, behave identically to the generate path.
         """
         assert_valid_model_ref(ref)
-        await self._post("/api/generate", {"model": ref, "keep_alive": self._keep_alive}, ref)
+        await self._post_lifecycle(ref, keep_alive=self._keep_alive)
 
     async def unload(self, ref: str) -> None:
         """Evict immediately. `keep_alive: 0` is the documented signal."""
         assert_valid_model_ref(ref)
-        await self._post("/api/generate", {"model": ref, "keep_alive": 0}, ref)
+        await self._post_lifecycle(ref, keep_alive=0)
 
     async def health(self) -> bool:
         try:
@@ -291,13 +297,23 @@ class OllamaAdapter:
 
     # --- internals -------------------------------------------------------
 
-    async def _post(self, path: str, payload: dict[str, Any], ref: str) -> None:
+    async def _post_lifecycle(self, ref: str, keep_alive: str | int) -> None:
         async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
-            response = await client.post(path, json=payload)
+            response = await client.post(
+                "/api/generate", json={"model": ref, "keep_alive": keep_alive}
+            )
+            if response.status_code == 400:
+                # An embedding model. The refusal is specific to generate;
+                # embed with no input moves the same weights the same way.
+                response = await client.post(
+                    "/api/embed", json={"model": ref, "input": [], "keep_alive": keep_alive}
+                )
             if response.status_code == 404:
                 raise ModelNotFoundError(detail=f"{ref} is not present on this runtime")
             if response.status_code >= 400:
-                raise NoAvailableModelError(detail=f"ollama {path} returned {response.status_code}")
+                raise NoAvailableModelError(
+                    detail=f"ollama lifecycle post returned {response.status_code} for {ref}"
+                )
 
     async def _raise_for_status(self, response: httpx.Response, ref: str) -> None:
         if response.status_code < 400:
