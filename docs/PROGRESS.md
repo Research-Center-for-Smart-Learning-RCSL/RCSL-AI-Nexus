@@ -17,6 +17,79 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-02
 
+### The administrator got public-entrance credentials, and the last two events fired
+
+The account bootstrapped from a tailnet identity had no `password_hash` and no
+`totp_secret` — an open item since 2026-07-26, and the reason four of the new
+audit events had never been seen on this deployment. Closed through the UI:
+**Re-invite** on the Users page, then the ordinary acceptance flow.
+
+Two things about doing it that are worth writing down.
+
+**The invitation link points somewhere that does not exist yet.**
+`ADMIN_BASE_URL` is `https://ai.nexus.rcsl.online`, which is correct for the
+deployment this will be and useless today — nginx is still the proxy
+administrator's four outstanding items. The token is fine; only the host is
+wrong, so swapping it for the tailnet hostname works. Worth knowing before
+someone clicks a single-use link, reads a dead URL, and closes the dialog that
+cannot be reopened.
+
+**It has to be done from another device, and that is a feature.** MagicDNS still
+does not resolve on the host itself (the 2026-07-26 caveat, still unchased), and
+going around it via `http://127.0.0.1:3000` fails twice over: that path does not
+pass through `tailscale serve`, so no identity header is injected and the admin
+UI 401s, and `COOKIE_SECURE=true` means the `__Host-` CSRF cookie is dropped over
+plaintext, so no form can be submitted. Doing it from a phone on the tailnet
+therefore also closed the *other* thing 2026-07-26 recorded: that the tailnet
+entrance "has never been confirmed end to end from a device that is not this
+one, and that is the confirmation that counts."
+
+Enrolment recorded `user.invitation_reissued`, then `user.invitation_accepted`
+and `user.totp_enrolled` 0.8 ms apart — the pair added the day before, firing for
+the first time. `totp_last_counter` is claimed, which is the check worth making:
+it distinguishes "a TOTP secret was written" from "a code was actually verified",
+and only the second means the second factor works.
+
+**Then the login itself**, which a browser cannot do: the public entrance
+requires the trusted-proxy header on every route and there is no nginx to add it.
+Driven with `curl` instead, from a script rather than a pasted block — password
+and code read from `/dev/tty` and piped into `curl`'s stdin, so neither becomes a
+process argument. Password step, TOTP step, `/admin/me` with the session, logout:
+all four passed, and `user.signed_in` (`factor: "totp"`) and `user.signed_out`
+landed 50 ms apart. **That is the public entrance's whole login flow proven
+before nginx exists**, which takes a piece of risk out of the cutover rather than
+discovering it on the day.
+
+**Nine of section 12's twelve event classes have now been observed in
+production.** The three that have not — recovery code use, node registration,
+user role changes — are absent because *the actions have never been performed on
+this deployment*: one user, so no role to change; a single node written by
+`provision` rather than through the write endpoint; and no reason to spend one of
+ten recovery codes to watch a row appear. That is a different thing from a
+recording that does not work, and the distinction is the whole point of keeping
+the list.
+
+### Two scripts that were wrong, and the second was wrong in the worse way
+
+The first attempt at the login check was a block to paste into a terminal. It
+wedged the shell: an interactive `read` inside a pasted block consumes the paste
+buffer as its own input, so the remaining lines were swallowed as a string
+literal and nothing ever reached the platform — confirmed by an audit log that
+simply stopped. Rewritten as a file, reading from `/dev/tty` so that no pipe or
+paste can feed it.
+
+The rewrite then failed on `set -u` with `"${arr[@]}"` on an empty array —
+**unbound variable on the bash 3.2 macOS ships**, fixed in 4.4, which is not what
+runs here. The constraint is written at the top of this repository's own
+`launchd/check-platform-health.sh`; it just was not read first.
+
+The bug is ordinary. What it printed is not: the script answered *"no CSRF cookie
+issued — is admin-public up?"*, and `admin-public` was entirely healthy. A
+guessed cause presented as a finding, two lines away from the real one — the
+shape this log keeps recording, produced this time by an error message rather
+than by a check. It now states only what it observed and prints the actual HTTP
+status for the reader to judge.
+
 ### Deployed and verified on the Mac Studio the same night
 
 Commit `4c6604d`, CI green, both images rebuilt, `docker compose up -d`, `migrate`
@@ -59,15 +132,14 @@ What was verified live, on the deployment rather than in a test:
   zero unexpected exceptions in any container; health check `OK` on a run whose
   state file was written the same second it was read
 
-**What could not be verified live, and why it matters:** `user.signed_in`,
-`user.signed_out`, `user.totp_enrolled` and `user.recovery_code_used` all require
-a *successful* public-entrance login, and no account on this deployment has
-public-entrance credentials — the bootstrapped administrator carries no
-`password_hash` and no `totp_secret`, which is the open item this log has been
-carrying since 2026-07-26. They are covered by the end-to-end integration test
-through the real composition root, which is not the same as being seen here. The
-one path exercised on the real entrance, `no_local_credentials`, is the
-platform's own report of that same gap.
+**What could not be verified live at the time of the deploy** — and was, an hour
+later: `user.signed_in`, `user.signed_out`, `user.totp_enrolled` and
+`user.recovery_code_used` all require a *successful* public-entrance login, and
+no account on this deployment had public-entrance credentials. The bootstrapped
+administrator carried no `password_hash` and no `totp_secret`, the open item this
+log had been carrying since 2026-07-26. The one path exercised on the real
+entrance at deploy time, `no_local_credentials`, was the platform's own report of
+that same gap. See the entry below.
 
 The verification rows are in `audit_log` permanently. There is no delete path in
 any repository and the table is append-only by design, so removing them would
@@ -4044,11 +4116,22 @@ management entrance is reachable and every screen works against the real backend
 The backend suite runs here too: 359 tests on Python 3.12 against a real
 Postgres 17.
 
-What is still unverified, and by what: the **public entrance and nginx**, which
-wait on the NTNU proxy administrator; the **unattended-recovery chain**, where
-round one has passed three of four boots and **round two, the OS update, failed**
-(runbook §1.1) — repaired, and the repair not yet through a boot; and **MLX**,
-which has an adapter and no model registered against it.
+What is still unverified, and by what — **this paragraph is a summary and has
+drifted from the dated entries below more than once; where they disagree, they
+win**:
+
+- **nginx and the network path to the public entrance**, which wait on the NTNU
+  proxy administrator. The entrance's *application* is no longer part of this:
+  its full login flow — password, TOTP, session, logout — was driven end to end
+  on 2026-08-02 (PROGRESS 2026-08-02). What is untested is everything between a
+  browser on the internet and that socket.
+- **MLX**, which has an adapter and no model registered against it.
+- The **unattended-recovery chain** is no longer on this list, and the earlier
+  version of this paragraph said "the repair not yet through a boot" for a week
+  after that stopped being true. Both of the reconciler's repair paths were
+  exercised by real boots with injected faults on 2026-07-26 (21:05:31 and
+  21:52:14). What remains is the **external dead-man's switch**: a monitor on the
+  host it watches cannot report that the host is off.
 
 **On the recovery chain specifically, because it is the item most likely to be
 misread.** Four boots on 2026-07-26 found two independent faults, and the second
@@ -4134,8 +4217,11 @@ knowledge base that looks like it is working and never answers anything.
 
 ## What comes next
 
-Four things are open as of the end of 2026-07-26, in the order they should be
-picked up.
+Written at the end of 2026-07-26 as four open items, in the order they should be
+picked up. **Item 2 was closed on 2026-08-02** and is marked so below rather than
+deleted, because the shape of the work is still the record. Items 1 and 3 remain
+open, and item 3 — the proxy administrator's four items — is now the only thing
+standing between this deployment and a public entrance.
 
 **1. Re-run the reboot test, and force a boot that loses the port-binding race.**
 [runbooks/first-deploy.md](./runbooks/first-deploy.md) §1.1. Where it stands: round
@@ -4171,12 +4257,13 @@ had listed, so after any future update the whole of §1.1 is the test, not those
 lines. Nothing should be concluded about the platform surviving a power cut until
 both repair paths above have been walked by a real boot.
 
-**2. Give the first administrator public-entrance credentials.** The account
-bootstrapped from a tailnet identity carries no `password_hash` and no
-`totp_secret` — the tailnet entrance does not need them. The public entrance
-requires both, so as things stand nobody can sign in there once nginx exists, and
-by then the reason will not be obvious. Fix from the Users page now; the runbook's
-§7 has the step and the SQL that confirms it.
+**2. Give the first administrator public-entrance credentials. — Done
+2026-08-02.** The account bootstrapped from a tailnet identity carried no
+`password_hash` and no `totp_secret`; the public entrance requires both, so
+nobody could have signed in there once nginx existed, and by then the reason
+would not have been obvious. Closed through the Users page, and the login flow
+itself was then driven with `curl` to prove the public entrance works before
+nginx exists. See the 2026-08-02 entry at the top of this file.
 
 **3. Send the proxy administrator their four items.** A drafted request with the
 real values is not in the repository (it names a person's mailbox and carries
@@ -4184,18 +4271,29 @@ setup detail); the content is [deployment.md](./architecture/deployment.md) §5
 plus the runbook §8, and the tailnet is now ready for it — `tag:ntnu-proxy` will
 apply, which it would not have before the ACL was in place. The shared secret goes
 by a separate channel from the configuration. This unblocks the public entrance,
-which is the largest unverified surface left.
+which is the largest unverified surface left — though **the application half of
+it stopped being unverified on 2026-08-02**, when its full login flow was driven
+end to end without nginx. What these four items unblock is the network path to
+that socket, not the socket's behaviour.
 
-**4. Then the roadmap.** Phase 2's remaining items are the knowledge base, prompt
-templates, logging boundaries, full audit coverage, backups, and the `MetricsPort`
-ingestion that now has a real number to be calibrated against (a loaded 7B model
+**4. Then the roadmap.** As written on 2026-07-26 this listed the knowledge base,
+prompt templates, logging boundaries, full audit coverage, backups, and
+`MetricsPort` ingestion. The knowledge base landed 2026-07-30 and the audit and
+authorization sweeps 2026-08-02, so what is left of Phase 2 is **prompt template
+management, the logging boundaries and expiring debug switch, encrypted backups
+and a rehearsed restore, the `/api-docs` gaps recorded 2026-07-30, and the
+`prompt_tokens` decision**. `MetricsPort` ingestion is half done via the residency
+read-back and now has a real number to calibrate against (a loaded 7B model
 measured 5.7 GB resident against 4.7 GB of weights, with `OLLAMA_KV_CACHE_TYPE=q8_0`
 in the committed plist; without it the same model measured 6.6 GB).
 
-Two smaller things worth not losing: the GeoLite2 database has no refresh
-mechanism and nothing said so until today (`ROADMAP.md` Phase 3), and the
-frontend test runner still covers logic units only — Playwright over the sign-in
-and enrolment screens remains the deferred increment.
+Two smaller things worth not losing: the GeoLite2 refresh **script** now exists
+(`launchd/refresh-geolite2.sh`, written 2026-07-30) but **its plist is not
+installed**, because `secrets/maxmind_license_key` has not been placed — so the
+country database is still ageing with nothing to stop it, which is the same
+outcome the missing mechanism had. And the frontend test runner still covers
+logic units only; Playwright over the sign-in and enrolment screens remains the
+deferred increment, now with a live enrolled account to drive it against.
 
 ### Done: the first Mac Studio deploy
 
