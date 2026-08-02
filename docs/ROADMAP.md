@@ -25,7 +25,7 @@ carries the checked control-by-control state.
 | Routing, registry, keys, usage: persistence | Complete, migrations tested |
 | Ollama adapter, reference validation | Complete |
 | Gateway security: scopes, quota, rate limit, CIDR, geo, guardrails | Complete |
-| Local accounts, TOTP, sessions, CSRF, bootstrap | Complete, tested from a fresh deployment to a signed-in user |
+| Local accounts, TOTP, sessions, CSRF, bootstrap | Complete, tested from a fresh deployment to a signed-in user — and since 2026-08-02 **exercised on the Mac Studio itself**: the administrator enrolled through the tailnet UI (password, TOTP QR, ten recovery codes) and the public entrance's whole login flow was then driven end to end, password → second factor → session → sign-out. `totp_last_counter` is claimed, which is what separates "a secret was written" from "a code was verified" |
 | Both admin entrances: identity resolution, `/me` | Complete. Each installs its own resolver; neither can default to the other's |
 | Invitation and password reset flows, both ends | Complete |
 | Audit logging | Complete against [security.md](./architecture/security.md) §12 as of 2026-08-02, with two exceptions §12 states. Every administrative action recorded one from the start; **no authentication event did** until the sweep — sign-in, sign-out, failed attempts, recovery code use and authorization refusals were all absent, which is the half an audit log exists for |
@@ -87,12 +87,16 @@ carries the checked control-by-control state.
 - [x] `migrate` as a one-shot service; all applications gate on `service_completed_successfully`
 - [x] `tailscale serve` for the tailnet entrance. Configured and serving:
       `https://rcslmac1demac-studio.tail68e30b.ts.net` proxies to `127.0.0.1:3000`, port 443
-      listening on the tailnet address, 200 over it. One caveat found on 2026-07-26 and not
-      yet chased: the MagicDNS name does not resolve **on the host itself** even though
-      `CorpDNS` is true, so the check above had to pin the address with `--resolve`. That
-      does not affect the entrance's users, who reach it from other devices — but it means
-      the entrance has never been confirmed end to end from a device that is not this one,
-      and that is the confirmation that counts
+      listening on the tailnet address, 200 over it. **Confirmed end to end from another
+      tailnet device on 2026-08-02** — the administrator's enrolment was carried out
+      entirely through it, which is the confirmation that counts and the one this bullet
+      had been waiting on since 2026-07-26. The MagicDNS caveat from that day survives and
+      is still unchased: the name does not resolve **on the host itself** even though
+      `CorpDNS` is true, so a check from here still has to pin the address with `--resolve`.
+      That is now known to cost more than tidiness — it is why enrolment could not be done
+      on the machine at all, since going around it via `127.0.0.1:3000` bypasses
+      `tailscale serve`, injects no identity header, and drops the `__Host-` cookie over
+      plaintext ([PROGRESS.md](./PROGRESS.md) 2026-08-02)
 - [x] Health endpoints wired into Compose health checks
 
 ### External coordination (can proceed in parallel)
