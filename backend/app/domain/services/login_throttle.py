@@ -102,6 +102,28 @@ class LoginThrottle:
                 self._window,
             )
 
+    async def claim_refusal_record(self, *, client_ip: str) -> bool:
+        """True the first time this address is refused in a window.
+
+        The audit record for a throttle trip has to mark the *transition*, not
+        every request after it. `assert_allowed` refuses every request for the
+        remaining 900 seconds and the refused path never calls
+        `record_failure`, so the counter stays above its ceiling and nothing
+        decays: recording on each refusal would give an attacker who has
+        already been rejected an unauthenticated INSERT per request, into an
+        append-only table kept for a year. A limiter that sheds CPU while
+        adding a write per rejected request is inverted.
+
+        Keyed on the address alone, deliberately. The pair key would let the
+        same attacker mint a fresh marker per invented login *after* the
+        per-address ceiling has already made refusal free, which is the
+        amplifier again with an extra step.
+
+        `incr` rather than a read-then-write, so two concurrent refusals cannot
+        both see zero and both record.
+        """
+        return await self._cache.incr(self._refusal_key(client_ip), ttl_seconds=self._window) == 1
+
     async def clear(self, *, login: str, client_ip: str) -> None:
         """A successful login clears only what that success speaks for.
 
@@ -123,6 +145,9 @@ class LoginThrottle:
 
     def _account_key(self, login: str) -> str:
         return f"login_fail:account:{_digest(login)}"
+
+    def _refusal_key(self, client_ip: str) -> str:
+        return f"login_refused:ip:{client_ip}"
 
 
 def _digest(login: str) -> str:

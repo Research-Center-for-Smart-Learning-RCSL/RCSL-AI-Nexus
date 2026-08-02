@@ -33,6 +33,27 @@ from app.shared.clock import Clock
 
 logger = logging.getLogger(__name__)
 
+# Matching `AuditLogRow`. Kept here because this is where a value that does not
+# fit turns into a lost event.
+_WIDTHS = {"actor_id": 36, "actor_display": 255, "actor_source": 16, "action": 64, "target": 255}
+
+
+def _fit(value: str | None, column: str) -> str | None:
+    """Trim to the column, marking that something was removed.
+
+    Postgres refuses an over-long value rather than trimming it, `record`
+    swallows its own failures, and the result would be a refusal that leaves no
+    trace — which an attacker can arrange deliberately. `target` on an
+    authorization failure is the request path, and nothing bounds a path: a few
+    hundred characters of padding in a URL would silently suppress the very
+    record that says someone was probing. A trimmed row is worth far more than
+    a missing one, and the marker keeps it from reading as the whole value.
+    """
+    if value is None:
+        return None
+    limit = _WIDTHS[column]
+    return value if len(value) <= limit else value[: limit - 1] + "…"
+
 
 class PostgresAudit:
     def __init__(self, sessions: async_sessionmaker[AsyncSession], clock: Clock) -> None:
@@ -51,11 +72,11 @@ class PostgresAudit:
         row = AuditLogRow(
             id=str(uuid.uuid4()),
             tenant_id=actor.tenant_id,
-            actor_id=actor.id,
-            actor_display=actor.display,
-            actor_source=actor.source,
-            action=action,
-            target=target,
+            actor_id=_fit(actor.id, "actor_id"),
+            actor_display=_fit(actor.display, "actor_display"),
+            actor_source=_fit(actor.source, "actor_source"),
+            action=_fit(action, "action"),
+            target=_fit(target, "target"),
             outcome=outcome,
             detail=detail or {},
             at=self._clock.now(),

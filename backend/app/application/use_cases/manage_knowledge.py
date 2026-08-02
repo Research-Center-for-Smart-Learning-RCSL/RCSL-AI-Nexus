@@ -62,6 +62,20 @@ class ManageKnowledge:
         self._authz = authz
         self._audit = audit
 
+    def assert_may_read(self, actor: Actor) -> None:
+        """The scope check on its own, for the one caller that needs the check
+        without the data.
+
+        Ingestion job progress is keyed by job id in a cache entry that carries
+        no tenant, so `IngestDocument.status` cannot make this decision and the
+        router must. Until 2026-08-02 it was made by calling `list_collections`
+        and discarding the result — correct, but it reads as a stray query, and
+        the day someone deletes it as dead code the endpoint quietly becomes
+        available to anyone with a session. Authorization stays here rather
+        than in the router, per security.md section 5.2.
+        """
+        self._authz.require(actor, Scope.KNOWLEDGE_READ)
+
     # --- collections -----------------------------------------------------
 
     async def list_collections(self, actor: Actor) -> list[KnowledgeCollection]:

@@ -121,6 +121,18 @@ async def test_a_plain_user_cannot_read_or_write_the_knowledge_base() -> None:
         )
 
 
+async def test_the_job_progress_check_refuses_the_same_user() -> None:
+    """`assert_may_read` is the ingestion job endpoint's whole authorization,
+    and it is a check with no data behind it — the shape most likely to be
+    mistaken for dead code and deleted. It was in fact a discarded
+    `list_collections` call until 2026-08-02, which is exactly that risk."""
+    use_case, *_ = build()
+
+    use_case.assert_may_read(ADMIN)
+    with pytest.raises(NotAuthorizedError):
+        use_case.assert_may_read(PLAIN_USER)
+
+
 # --- collections ---------------------------------------------------------
 
 

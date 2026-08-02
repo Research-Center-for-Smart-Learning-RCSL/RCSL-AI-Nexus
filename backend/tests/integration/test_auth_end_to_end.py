@@ -185,6 +185,26 @@ def test_a_fresh_deployment_reaches_a_signed_in_user(deployment: None) -> None:
         assert post(public, "/admin/auth/logout").status_code == 204
         assert public.get("/admin/me").status_code == 401
 
+    # 10. And all of it left a trail. Until 2026-08-02 none of these existed:
+    #     `AuthenticateLocal` took no `AuditPort`, so a platform could be
+    #     enrolled into, signed into and signed out of with the audit log
+    #     showing only the invitation. Asserted here rather than only in unit
+    #     tests because the fakes accept anything — this is the composition
+    #     root, the real writer and the real columns.
+    with tailnet_client() as tailnet:
+        logs = tailnet.get("/admin/logs", params={"limit": 100})
+        assert logs.status_code == 200, logs.text
+        actions = [entry["action"] for entry in logs.json()["entries"]]
+
+    for expected in (
+        "user.invited",
+        "user.invitation_accepted",
+        "user.totp_enrolled",
+        "user.signed_in",
+        "user.signed_out",
+    ):
+        assert expected in actions, f"{expected} missing from {actions}"
+
 
 def test_a_signed_in_user_cannot_invite(deployment: None) -> None:
     """Role gating in the UI is an affordance. The check that matters is in the

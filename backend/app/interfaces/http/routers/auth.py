@@ -11,20 +11,27 @@ See docs/architecture/security.md section 5.3.
 
 from __future__ import annotations
 
+import logging
 import secrets
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
 
+from app.adapters.audit.postgres_audit import PostgresAudit
+from app.adapters.persistence.repositories import PostgresUserRepository
 from app.adapters.session.session_store import SessionStore
+from app.application.audit_subject import subject_for
 from app.application.use_cases.authenticate_local import AuthenticateLocal
+from app.domain.entities.user import User
 from app.domain.exceptions import InvalidCredentialsError
 from app.domain.ports.infrastructure_ports import CachePort
 from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.di import (
     build_authenticate_local,
+    get_audit,
     get_cache,
     get_session_store,
+    get_user_repository,
 )
 from app.interfaces.http.middleware.client_ip import resolve_client_ip
 from app.interfaces.http.middleware.csrf import issue_csrf_cookie
@@ -35,6 +42,8 @@ from app.interfaces.http.schemas.admin_schemas import (
     TotpLoginRequest,
 )
 from app.shared.clock import SystemClock
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -97,21 +106,61 @@ async def logout(
     request: Request,
     sessions: Annotated[SessionStore, Depends(get_session_store)],
     settings: Annotated[Settings, Depends(get_settings)],
+    users: Annotated[PostgresUserRepository, Depends(get_user_repository)],
+    audit: Annotated[PostgresAudit, Depends(get_audit)],
 ) -> Response:
     """Deliberately does not depend on a valid session.
 
     Signing out has to work when the session has already expired or been
     invalidated elsewhere, and returning 401 there would leave the cookie in
     place on a shared machine. The CSRF middleware still gates the request.
+
+    That is also why the audit record is best-effort rather than a precondition.
+    Section 12 asks for sign-out, and the common case names a real account; a
+    logout arriving with an expired or forged cookie names nobody, and refusing
+    to clear the cookie over an unwritable audit row would be the wrong trade at
+    exactly the moment someone is trying to leave a shared machine.
     """
     session_id = request.cookies.get(settings.effective_session_cookie)
     if session_id:
+        # Read before destroy: afterwards there is nothing left to say who this
+        # was, and the session is the only thing this handler is given.
+        signing_out = await _who_is_signing_out(sessions, users, session_id)
         await sessions.destroy(session_id)
+
+        if signing_out is not None:
+            await audit.record(
+                subject_for(signing_out),
+                "user.signed_out",
+                target=signing_out.id,
+                detail={"client_ip": _client_ip(request)},
+            )
 
     response = Response(status_code=204)
     _clear_cookie(response, settings.effective_session_cookie, settings)
     _clear_cookie(response, settings.effective_csrf_cookie, settings)
     return response
+
+
+async def _who_is_signing_out(
+    sessions: SessionStore, users: PostgresUserRepository, session_id: str
+) -> User | None:
+    """Name the account for the audit row, or nothing. Never raises.
+
+    Naming it costs a session read and a database read, and **neither may
+    decide whether the cookie gets cleared.** Before the sign-out record
+    existed this handler touched no database at all; a `users.get` that raised
+    on an exhausted pool would return 500 with the session already destroyed
+    and the cookies still in the browser — on the shared machine the docstring
+    above says this has to work for. `PostgresAudit.record` takes the same
+    posture for the same reason, one step later.
+    """
+    try:
+        data = await sessions.read(session_id, SystemClock().now())
+        return await users.get(data.user_id) if data else None
+    except Exception:
+        logger.exception("sign_out_audit_subject_unavailable")
+        return None
 
 
 async def _consume_challenge(cache: CachePort, challenge: str) -> str:

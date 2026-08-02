@@ -17,9 +17,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from app.application.audit_subject import subject_for
 from app.application.use_cases.pending_enrolment import PendingEnrolment
 from app.application.use_cases.recovery_codes import reissue_recovery_codes
-from app.domain.entities.actor import Actor, Role
 from app.domain.entities.invitation import Invitation, InvitationPurpose
 from app.domain.entities.user import User
 from app.domain.exceptions import InvitationInvalidError
@@ -141,7 +141,14 @@ class AcceptInvitation:
         await self._pending.clear(user.id)
 
         codes = await reissue_recovery_codes(self._invitations, self._tokens, user.id)
-        await self._audit.record(_self_actor(user), "user.invitation_accepted", target=user.id)
+        subject = subject_for(user)
+        await self._audit.record(subject, "user.invitation_accepted", target=user.id)
+        # Its own row, though it can only happen here. Section 12 lists TOTP
+        # enrolment as an event, and answering "when did this account enrol a
+        # second factor" should not require knowing that acceptance is the only
+        # thing that enrols one. `user.totp_reenrolled` is the same event later
+        # in an account's life, and the two read as a pair.
+        await self._audit.record(subject, "user.totp_enrolled", target=user.id)
         return codes
 
     # --- password reset --------------------------------------------------
@@ -172,7 +179,7 @@ class AcceptInvitation:
 
         await self._users.save(replace(user, password_hash=await self._hasher.hash(password)))
         await self._sessions.invalidate_all(user.id, now)
-        await self._audit.record(_self_actor(user), "user.password_reset_consumed", target=user.id)
+        await self._audit.record(subject_for(user), "user.password_reset_consumed", target=user.id)
 
     # --- shared ----------------------------------------------------------
 
@@ -200,20 +207,3 @@ class AcceptInvitation:
         if user.can_use_public_entrance:
             raise InvitationInvalidError(detail=f"user {user.id} already enrolled")
         return user
-
-
-def _self_actor(user: User) -> Actor:
-    """The audit subject for an unauthenticated flow.
-
-    These actions are performed by the account holder against their own
-    account while holding a valid token, so recording them as the platform or
-    as the issuing administrator would both misattribute them. `source` is
-    `local` because that is the entrance they arrived through.
-    """
-    return Actor(
-        id=user.id,
-        display=user.login,
-        role=Role(user.role),
-        source="local",
-        scopes=frozenset(),
-    )

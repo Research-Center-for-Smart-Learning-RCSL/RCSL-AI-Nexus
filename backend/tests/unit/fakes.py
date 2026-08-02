@@ -178,6 +178,14 @@ class FakeSecretBox:
 class FakeAudit:
     def __init__(self) -> None:
         self.entries: list[tuple[str, str | None, str]] = []
+        self.rows: list[tuple[Actor, str, str | None, str, dict[str, str]]] = []
+        """The whole record, kept beside `entries` rather than replacing it.
+
+        `entries` is what most tests assert on and widening it would touch every
+        one of them. The login tests need the actor and the detail: who a failed
+        attempt was attributed to, and which reason it carried, are the parts
+        that make the audit trail worth anything after an incident.
+        """
 
     async def record(
         self,
@@ -189,9 +197,21 @@ class FakeAudit:
         detail: dict[str, str] | None = None,
     ) -> None:
         self.entries.append((action, target, outcome))
+        self.rows.append((actor, action, target, outcome, detail or {}))
 
     def actions(self) -> list[str]:
         return [action for action, _, _ in self.entries]
+
+    def only(self, action: str) -> tuple[Actor, str, str | None, str, dict[str, str]]:
+        """The single row with this action, or an assertion failure.
+
+        Written to be strict about the count: a test that meant to pin one
+        record and silently accepted two would miss a double write, which for an
+        audit log is a real defect rather than noise.
+        """
+        matching = [row for row in self.rows if row[1] == action]
+        assert len(matching) == 1, f"expected exactly one {action}, got {len(matching)}"
+        return matching[0]
 
 
 class FakeSessions:

@@ -21,10 +21,18 @@ import { useLogs } from '@/features/logs/hooks/use-logs';
 import type { AuditEntry } from '@/features/logs/schema';
 
 const PAGE_SIZE = 50;
+// The three values the backend writes, and the filter is an exact match on the
+// column. Until 2026-08-02 the third option here was `failure`, which nothing
+// has ever written: pressing it filtered a real query down to nothing and
+// looked like a quiet audit log rather than a broken button. `denied` became
+// worth its own option the same day, when authorization refusals started being
+// recorded — it is now the busiest failure outcome and a different question
+// from `failed`, which means an action was attempted and did not complete.
 const OUTCOMES = [
   { value: '', label: 'All' },
   { value: 'success', label: 'Success' },
-  { value: 'failure', label: 'Failure' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'denied', label: 'Denied' },
 ];
 
 function OutcomeBadge({ outcome }: { outcome: string }) {
