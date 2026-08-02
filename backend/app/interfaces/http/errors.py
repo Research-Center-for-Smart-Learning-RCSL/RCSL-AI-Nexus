@@ -54,6 +54,7 @@ from app.domain.exceptions import (
     VectorStoreError,
     WeakPasswordError,
 )
+from app.interfaces.http.request_actor import actor_from_request
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,53 @@ def _log(request: Request, exc: DomainError, status: int) -> None:
     )
 
 
+AUTHZ_DENIED = "authz.denied"
+
+
+async def _audit_refusal(request: Request, exc: NotAuthorizedError) -> None:
+    """Record an authorization failure, from the one place none can bypass.
+
+    Section 12 requires these and nothing recorded them until 2026-08-02. The
+    handler is the right place precisely because it is not a decision point:
+    every `NotAuthorizedError` from every use case arrives here, so a new use
+    case cannot forget, and a future path that raises without a `require` is
+    still seen. Putting it in `AuthorizationPort.require` would be closer to
+    the decision but would make that port async at seventy call sites, and
+    would still miss the refusals use cases raise directly — an administrator
+    changing their own role, a key that does not exist.
+
+    **The gateway does not audit these, and that is deliberate.** Its database
+    account may INSERT into `usage_records` and nothing else (section 6), so a
+    row here would fail and be logged as a failure on every data-plane 403.
+    Granting it `audit_log` would let a compromised gateway write into the
+    record that exists to describe the compromise. Its refusals — a key using a
+    capability it was not issued for — stay in the application log, and the
+    absence is recorded in section 12 rather than hidden here. In practice the
+    gateway has no `audit` on its app state, so this returns early.
+
+    Best-effort by construction: `PostgresAudit.record` already swallows and
+    logs its own failures, so a refused request cannot become a 500 because the
+    audit write failed.
+    """
+    audit = getattr(request.app.state, "audit", None)
+    actor = actor_from_request(request)
+    if audit is None or actor is None:
+        return
+
+    await audit.record(
+        actor,
+        AUTHZ_DENIED,
+        # The path, not the resource id: this says what was reached for, and
+        # the handler cannot know which path parameter was the subject.
+        target=request.url.path,
+        outcome="denied",
+        # `exc.detail` names the missing scope and is operator-facing; it never
+        # reaches the response body. Method included because a read and a write
+        # refused on the same path are different attempts.
+        detail={"method": request.method, "reason": exc.detail or ""},
+    )
+
+
 def error_response(
     exc: DomainError, *, envelope: str = "admin", auth_mode: str | None = None
 ) -> JSONResponse:
@@ -192,6 +240,8 @@ def install_error_handlers(
             # python -O and turn a wiring mistake into a confusing 500.
             raise exc
         _log(request, exc, _status_for(exc))
+        if isinstance(exc, NotAuthorizedError):
+            await _audit_refusal(request, exc)
         return error_response(exc, envelope=envelope, auth_mode=auth_mode)
 
     handler: Callable[[Request, Exception], Awaitable[JSONResponse]] = handle

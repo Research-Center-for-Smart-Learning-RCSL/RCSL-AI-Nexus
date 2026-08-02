@@ -24,7 +24,7 @@ from app.domain.services.login_throttle import LoginThrottle
 from app.domain.services.token_service import TokenService
 from app.interfaces.http.schemas.admin_schemas import CreateUserRequest
 from app.shared.clock import FixedClock
-from tests.unit.fakes import FakeHasher, FakeInvitations, FakeSecretBox, FakeUsers
+from tests.unit.fakes import FakeAudit, FakeHasher, FakeInvitations, FakeSecretBox, FakeUsers
 
 NOW = datetime(2026, 7, 25, tzinfo=UTC)
 SECRET = "JBSWY3DPEHPK3PXP"  # noqa: S105
@@ -99,6 +99,7 @@ def _auth(users: FakeUsers) -> AuthenticateLocal:
         tokens=TokenService(),
         throttle=LoginThrottle(InMemoryCache()),
         secret_box=FakeSecretBox(),
+        audit=FakeAudit(),
         clock=FixedClock(NOW),
     )
 

@@ -35,6 +35,7 @@ from app.infrastructure.di import (
     get_session_store,
     get_user_repository,
 )
+from app.interfaces.http.request_actor import remember_actor
 from app.shared.clock import SystemClock
 
 # `current_actor` and `current_session` are defined in di.py (so the tenant-
@@ -89,7 +90,10 @@ async def resolve_tailnet_actor(
     if user is None:
         raise NotAuthenticatedError(detail=f"tailnet login {login} has no account")
 
-    return _actor_for(user, source="dev" if settings.auth_mode == "dev" else "tailnet", authz=authz)
+    return remember_actor(
+        request,
+        _actor_for(user, source="dev" if settings.auth_mode == "dev" else "tailnet", authz=authz),
+    )
 
 
 async def resolve_session_actor(
@@ -120,7 +124,7 @@ async def resolve_session_actor(
     _assert_csrf_bound_to_session(request, data, settings)
 
     setattr(request.state, SESSION_STATE_KEY, data)
-    return _actor_for(user, source="local", authz=authz)
+    return remember_actor(request, _actor_for(user, source="local", authz=authz))
 
 
 def session_from_request(request: Request) -> SessionData | None:

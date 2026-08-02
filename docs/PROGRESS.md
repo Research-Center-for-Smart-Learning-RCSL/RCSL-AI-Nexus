@@ -15,6 +15,247 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-02
+
+### Two completeness sweeps, one of which came back clean and one of which did not
+
+`ROADMAP.md` carried two Phase 2 items that are audits rather than features:
+"full audit coverage across every event in §12" and "authorization checks
+covering every use case". Both were run by enumeration rather than by sampling,
+because the thing they are looking for is an absence, and an absence is what
+sampling is worst at.
+
+**The authorization sweep found nothing, and that is a result.** All 26 use
+cases, every public method that takes an `Actor`, checked against
+`self._authz.require`. Every one carries it. The five use cases without a check
+are unauthenticated or self-scoped by design — `AuthenticateLocal`,
+`AcceptInvitation` and `BootstrapFirstAdmin` are the flows that establish an
+identity rather than use one, `ManageOwnAccount` goes through `_require_self`,
+and `EmbedTexts` / `GroundChat` / `IngestDocument` are internal collaborators
+that take no actor at all. `ManageApiKeys` was followed through by hand because
+it is the one with a per-owner rule rather than a flat scope, and its three
+write paths all reach `_require_owner_permission`. The layering did what it was
+chosen for: putting the check in the use case rather than the router means
+enumerating use cases is the same thing as enumerating the checks.
+
+**The audit sweep found that the identity plane wrote nothing.** Nine of §12's
+twelve event classes were covered, and all three gaps were in the same place.
+`AuthenticateLocal`'s constructor had no `AuditPort` in it — so a successful
+sign-in, a failed one, a spent recovery code and a sign-out all left the audit
+log untouched. `authz.denied` did not exist either: `RoleAuthorization.require`
+raised, `errors.py` mapped it to a 403 and wrote one `logger.warning`, and
+nothing durable recorded that anyone had been refused anything.
+
+Put another way, and it is worth putting this way because it is the reason the
+gap mattered more than its size suggested: **every administrative action was
+recorded and no authentication event was.** After an incident the log could say
+what was changed and could not say who had signed in, from where, how many times
+they had failed first, or what they had been refused. Those are the first four
+questions anyone asks.
+
+### A sentence in security.md that had been describing an intention for months
+
+§5.3, in the present tense, on the login flow:
+
+> Repeated failures raise an alert and are written to the audit log.
+
+Neither half was true, and had never been true. §13.0's own Phase 3 list said
+"alerting on authorization failures" was still to come, so the document
+contradicted itself two hundred lines apart — and the sentence a reader reaches
+first, while deciding whether the control exists, was the false one.
+
+This is the eighth or ninth instance of the shape this log keeps recording, and
+the first where the artefact carrying it was the security document rather than
+the code. Worth noticing: the code was honest here. `AuthenticateLocal` made no
+claim to audit anything; it simply did not take the port. Only the prose
+asserted a control. A reader auditing the code against the document would have
+found the discrepancy; a reader trusting the document would not have looked.
+
+### What was built, and the two defects the building turned up
+
+Sign-in now records `user.signed_in`, `user.sign_in_failed` (with the reason the
+*response* deliberately withholds — an unknown login and a wrong password are
+indistinguishable to the caller and must not be to the operator),
+`user.sign_in_throttled`, `user.recovery_code_used`, and `user.signed_out` from
+the logout handler. Authorization failures record `authz.denied` from the shared
+exception handler.
+
+**The handler, not the port, and the reason is worth stating.** Recording in
+`AuthorizationPort.require` would be closer to the decision, but `require` is
+synchronous and `AuditPort.record` is not, so it would mean making the port
+async at seventy call sites — and it would *still* miss the refusals use cases
+raise directly without consulting it, of which there are four: an administrator
+changing their own role, disabling themselves, deleting themselves, and a key
+id that does not exist. The handler is the one place every `NotAuthorizedError`
+must pass through, which makes it the only place that cannot be forgotten by a
+use case written next year.
+
+**A recovery code gets two rows, deliberately.** `user.signed_in` says a session
+was granted; `user.recovery_code_used` says a single-use credential was spent,
+which is a fact about the account rather than about that login. §12 lists them
+separately for the same reason: someone scanning actions for "was the second
+factor ever bypassed" should not have to know to read inside a `detail` field.
+
+**Every failure path records exactly once, and that is a constraint rather than
+tidiness.** `dummy_verify` exists so an unknown login and a wrong password take
+comparable time. A database round trip on some failure paths and not others
+would reintroduce exactly the oracle it removes. The four branches in
+`verify_password` now each perform one write on the same side of the same work,
+and a future branch that skips it would be a timing leak as well as a missing
+entry — which is now said in the module docstring, where the next person editing
+it will meet it.
+
+Two defects surfaced from building rather than from the sweep:
+
+**`_self_actor` dropped `tenant_id`.** Invitation acceptance and password reset
+consumption built their audit subject without carrying the user's tenant across,
+so those rows landed in the default tenant. The logs screen is tenant-scoped, so
+a non-default tenant's own enrolment events were invisible in the only view that
+tenant can read. Found while writing the shared `audit_subject` module the login
+path needed, which is the ordinary way this kind of thing surfaces: the second
+caller is what makes the first one's assumption visible.
+
+**An over-long value made the writer lose the event silently.** Postgres refuses
+a string wider than its column rather than trimming it, and
+`PostgresAudit.record` swallows its own failures on purpose — losing an event
+beats turning a successful administrative action into a 500. Those two are fine
+apart and bad together: any unbounded value silently drops the row. `target` on
+an authorization failure is the request path, and nothing bounds a path, so a
+few hundred characters of padding in a URL would suppress the record of someone
+probing — **a way to be refused without leaving a trace, introduced by the
+change meant to record refusals.** The writer now trims to each column's width
+with a marker. `actor_display` was the near miss: `LoginRequest.login` is capped
+at 255 and the column is 255 wide, so the longest login a caller can send fits
+exactly, and a narrower column would have been trimming every failed login
+instead.
+
+### Where the checks were put, and what putting them back proved
+
+Each new record was verified by removing it and confirming a test failed —
+the habit from 2026-07-29 and 2026-07-30, and it earned its keep twice.
+
+One test was wrong on the first run in a way worth recording. It asserted that a
+replayed TOTP code records `totp_replay`, and it failed: a *sequential* replay
+never reaches the conditional UPDATE, because `TotpPort.verify` already rejects
+a counter at or below the stored one, so it arrives as `bad_totp_code`. The
+`totp_replay` reason belongs to the concurrent case only — two requests carrying
+the same code, both reading the old counter, both passing the Python check, one
+losing the write. The test now drives that race explicitly with a repository
+that advances the counter behind the caller's back, and a second test pins the
+sequential path so the pair documents that **the reasons do not partition the
+way their names suggest**. Left as it was, the log would have been read as
+saying replays never happen.
+
+The audit *writer* had never been tested against a real database at all: every
+existing test used `FakeAudit`, which accepts anything, and the adapter swallows
+its own failures, so a row Postgres rejected would have vanished with only an
+application-log line. `tests/integration/test_audit_writer.py` closes that, and
+it is the test that fails when the trimming is removed. The end-to-end
+deployment test now also reads `/admin/logs` after walking bootstrap →
+invitation → enrolment → sign-in → sign-out, and asserts the five rows are
+there — through the real composition root, the real adapter and the real
+columns, which is the only arrangement that would have caught a
+`build_authenticate_local` that forgot to pass the port.
+
+### The review of this work, and the amplifier the fix had built
+
+Five findings, all real, all fixed. Three are worth recording because each is a
+case of a control being turned against itself.
+
+**Recording the throttle on every refusal was a write amplifier.**
+`assert_allowed` refuses every request for the remaining 900 seconds and the
+refused path never calls `record_failure`, so the counter never decays inside
+the window. Recording each refusal therefore gave an attacker who had *already
+been rejected* one unauthenticated INSERT per request — in its own transaction,
+into an append-only table retained a year, and drowning the logs screen while it
+went. The limiter exists to make abuse cost the attacker rather than the
+platform, and the audit record inverted it: the cheapest thing an attacker could
+do became the most expensive thing the platform did. Now claimed once per
+address per window through the limiter that owns the window, keyed on the
+address rather than the pair, because the pair key would let the same attacker
+mint a fresh marker per invented login *after* the per-address ceiling had
+already made refusal free — the amplifier again with an extra step.
+
+**Signing out had quietly acquired a database dependency.** Naming the account
+for the sign-out row added a `users.get`, and the logout handler's whole
+docstring is about working when things are broken: it deliberately does not
+require a valid session, because returning 401 would leave the cookie in place
+on a shared machine. With the lookup unguarded, an exhausted pool meant a 500
+*after* `sessions.destroy` had run — session gone, cookies still in the browser,
+which is the exact outcome the docstring exists to prevent. Worse, the docstring
+added the same day *claimed* the record was best-effort. That is the shape this
+log keeps recording, committed a few hours after an entry about finding it in
+§5.3, and this time it was in text written to describe the fix.
+
+**A password typed into the login field would have been stored for a year.**
+`unknown_subject` recorded the presented string verbatim, reasoning that it
+arrived unauthenticated from the network and is not a secret. True of an
+attacker; not true of the ordinary user who types their password into the login
+box, whose credential would then sit in `actor_display` — readable with
+`logs:read`, retained a year, in the table §12 says must never carry a
+credential. Logins are `EmailStr` at creation, so the test is cheap: keep the
+string when it is address-shaped, otherwise a digest that still groups repeats
+and can be confirmed against a suspected value. `LoginThrottle` had already
+reached this conclusion for its own counters, and the reasoning was sitting in a
+docstring one file away.
+
+The other two: the throttle row was attributed to `unknown` even when the login
+named a real account, which put it in the default tenant — so a tenant
+administrator watching an attack on their own user would have seen every
+`user.sign_in_failed` and none of the rows saying it had become an attack, the
+very failure the tenant test written that afternoon guards against for the other
+rows; and three second-step refusals raised silently while the module docstring
+claimed every outcome was audited, the most interesting being an account
+disabled inside the five-minute challenge window, which is precisely what an
+incident review goes looking for.
+
+### And the logs screen's Failure filter had never matched a row
+
+Checking whether the new events needed anything in the UI turned up something
+older. The action filter is a free-text box and needed nothing. The outcome
+filter is three buttons, and the third one sent `failure` — a value nothing in
+the backend has ever written. The writer produces `success`, `failed` and
+`denied`, and the query is an exact match on the column, so pressing **Failure**
+turned a working query into an empty one.
+
+The failure mode is the reason it survived: an audit log with no failures in it
+looks like a well-behaved deployment. There is no error, nothing renders wrong,
+and the one reading it concludes something reassuring. It is the same shape as
+the audit job that never ran behind a green pipeline (2026-07-30) and the
+account-split test that asserted nothing (2026-07-26) — a control that reports
+the good answer whatever is true.
+
+Now three buttons matching what is written, with `denied` split from `failed`
+because they are different questions: `failed` means an action was attempted and
+did not complete, `denied` means it was refused. As of today `denied` is the
+busiest of the two, which it could not have been before this afternoon.
+
+### What was deliberately not done
+
+**The gateway does not write audit rows.** Its database account may INSERT into
+`usage_records` and nothing else (§6). Granting it `audit_log` would let a
+compromised gateway write into the record that exists to describe the
+compromise, to capture one event: a key reaching for a capability it was not
+issued for. That refusal stays in the application log and the usage series, and
+the absence is now stated in §12 rather than left to be discovered.
+
+**Alert delivery is still Phase 3.** What exists now is the substrate — every
+throttle trip and every refusal is a queryable row. The rule that reads them and
+the channel it reports to are the remaining work, and the channel already
+exists: `launchd/check-platform-health.sh` mails on a state change.
+
+**The knowledge job read still has no tenant filter.** `GET
+/admin/knowledge/jobs/{job_id}` was the one thing the authorization sweep did
+find, and only half of it is fixed. Its scope check used to be a call to
+`list_collections` whose result was discarded — correct, but indistinguishable
+from a stray query, and one tidy-up away from taking the endpoint's entire
+authorization with it. That is now an explicit `assert_may_read`. The tenant
+boundary is the half left standing: job ids live in a cache entry with no
+tenant, so a knowledge reader who learns another tenant's job id sees that job's
+document id and progress. The id is a uuid4 and the entry lives 24 hours, so it
+is recorded in §7.3 as the one read the isolation paragraph does not cover,
+rather than fixed by putting a tenant on the cache entry.
+
 ## 2026-07-30
 
 ### What `/api-docs` does not say, audited against the wire it describes
@@ -3820,10 +4061,11 @@ routing policy editor now exists, so a policy is no longer curl-only.
 
 Phase 2 is now largely complete: both runtime adapters, node management, the
 multi-tenancy boundary, the logs and usage screens, the observability emission
-stack, and the knowledge base with retrieval. What remains there is the live
-free-memory figure the budget would consume (which needs the hardware), prompt
-template management, the logging boundaries and expiring debug switch, encrypted
-backups, and the audit and authorization completeness sweeps.
+stack, the knowledge base with retrieval, and — since 2026-08-02 — the audit and
+authorization completeness sweeps. What remains there is the live free-memory
+figure the budget would consume (which needs the hardware), prompt template
+management, the logging boundaries and expiring debug switch, encrypted backups,
+and the `/api-docs` gaps recorded on 2026-07-30.
 
 **Using the knowledge base needs one piece of configuration that nothing
 enforces at startup**: a routing policy on the `embedding` capability, naming a

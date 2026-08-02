@@ -209,12 +209,14 @@ async def read_ingestion_job(
 ) -> IngestionJobResponse:
     """Job progress for the UI's poll.
 
-    The scope check is `ManageKnowledge`'s read, called for its own sake: job
-    ids live in a cache entry that carries no tenant, so without a check here
-    any authenticated caller could poll any job id. What they would learn is a
-    document id and a progress figure, which is little, but the check is free.
+    Job ids live in a cache entry that carries no tenant, so `status` cannot
+    make this decision and the check has to be made here. What an unchecked
+    caller would learn is a document id and a progress figure — little, but the
+    check costs nothing. The tenant boundary itself is still not enforced on
+    this one read; the job id is a uuid4, and the gap is recorded in
+    security.md section 7.3 rather than left in a docstring.
     """
-    await knowledge.list_collections(actor)
+    knowledge.assert_may_read(actor)
     return IngestionJobResponse.of(await ingest.status(job_id))
 
 

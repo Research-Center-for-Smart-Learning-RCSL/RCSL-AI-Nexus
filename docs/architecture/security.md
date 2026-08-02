@@ -441,7 +441,8 @@ Enrolment happens during invitation acceptance and cannot be deferred, so an acc
 
 - **No user enumeration.** An unknown login and a wrong password produce the same response and comparable timing; the handler runs a dummy hash for unknown accounts rather than returning early.
 - **Rate limiting by source address and by account**, with increasing delay. Hard account lockout is deliberately avoided: it converts a known login into a denial-of-service lever against a real person. Escalating delay plus alerting achieves the defensive goal without that side effect.
-- Repeated failures raise an alert and are written to the audit log.
+- **Every attempt is written to the audit log, and the limiter firing is written too** — `user.signed_in`, `user.sign_in_failed` with the reason the response deliberately withholds, `user.sign_in_throttled`, `user.recovery_code_used`, `user.signed_out`. Each failure path records exactly once, on the same side of the same work, because a database round trip on some paths and not others would be the timing oracle `dummy_verify` exists to prevent. **The throttle record is the deliberate exception: once per address per window, not once per refusal.** A refused request costs the caller nothing — the check runs before the hash and the refused path records no failure, so the counter stays above its ceiling for the full window — and a row per refusal would hand whoever is already being refused an unauthenticated INSERT per request, into an append-only table kept for a year. A limiter that sheds CPU while adding a write is inverted. **Alert *delivery* is not built**: these rows are the queryable substrate an alert rule would read, and the rule itself is the §13 Phase 3 item. Until 2026-08-02 this bullet claimed both halves in the present tense and neither existed — `AuthenticateLocal` took no `AuditPort` at all.
+- **A login that is not address-shaped is recorded as a digest, not verbatim.** Logins are `EmailStr` at creation, so a presented string with no `@` in it is most often someone typing their password into the login field — and `actor_display` is kept for a year and readable with `logs:read`. The digest keeps repeats grouping and lets a suspected value be confirmed by hashing it. `LoginThrottle` already digests the login so its counters cannot accumulate a list of valid addresses; this is the same rule one table over.
 - §4.1(a) applies to this entrance as well, so most unsolicited attempts never reach the handler.
 
 **Sessions.** Server-side in Redis under an opaque identifier. Cookie uses the `__Host-` prefix with `HttpOnly`, `Secure`, `SameSite=Lax`, and no `Domain` attribute. Absolute lifetime (for example 12 hours) plus an idle timeout; `/admin/me` returns `session_expires_at` so the UI can warn before expiry. A new session identifier is issued on successful login to prevent session fixation, and **changing a password invalidates every other session** for that user.
@@ -610,6 +611,8 @@ A parser failure is recorded as an exception class, never as the parser's messag
 
 **Isolation, now implemented (Phase 2).** Phase 1 was single tenant and said so, with no `Tenant` entity and no boundary, because a claimed boundary nothing implemented is worse than none. The boundary is now real: a `Tenant` entity, a `tenant_id` on `users`, `api_keys`, `usage_records` and `audit_log`, and tenant-scoped repositories that enforce it. `models`, `nodes` and `routing_policies` deliberately carry no tenant: they are the shared compute the tenants use, not tenant data.
 
+**One read is outside the boundary, and it is worth naming rather than leaving in a docstring.** `GET /admin/knowledge/jobs/{job_id}` returns ingestion progress, and a job lives in a cache entry that carries no tenant, so `IngestDocument.status` cannot scope it and does not try. The scope check is enforced (`ManageKnowledge.assert_may_read`, made explicit on 2026-08-02 — until then it was a call to `list_collections` whose result was discarded, which reads as dead code and would take the endpoint's only authorization with it if anyone tidied it away). What is missing is the tenant filter: a knowledge reader in one tenant who learns a job id from another can see that job's document id, state and progress. The id is a uuid4 and the window is the job's 24-hour TTL, which is why this is recorded as a residual rather than fixed by putting a tenant on the cache entry — but it is the one read in the system that the paragraph below does not describe.
+
 **The filter is injected inside the repository adapter, taken from the actor, never from the caller**, so a use case cannot forget it. A scoped repository is constructed with a tenant id, the di builder takes that id from the authenticated actor, and every read filters and every write stamps by it. The identity and bootstrap paths, which resolve a principal before any tenant is known, use an explicit unscoped variant; a globally-unique login means authentication needs no tenant hint. The knowledge base follows the same scoped-repository pattern, in three places: `knowledge_collections` and `knowledge_documents` both carry `tenant_id` and are filtered on it directly (a document read needs no join to be correctly scoped), the document storage adapter puts the tenant in the path, and the vector store puts it in the collection name.
 
 **The vector store enforces the boundary twice, and the first layer fails closed.** This is a deliberate change from what this section originally specified, which was a single shared Qdrant collection with a payload filter. That design was sound but failed in the wrong direction: a search that somehow lost its filter would return every tenant's passages. So each tenant now gets its own collection, named from the tenant the adapter was constructed with, and a search that lost its tenant asks for a collection that does not exist and gets an error instead. The payload filter is applied as well, unchanged in spirit:
@@ -757,18 +760,27 @@ The practical position:
 
 ## 12. Audit Logging
 
-**Events that must be recorded** (who, when, what, from where, and the outcome):
+**Events that must be recorded** (who, when, what, from where, and the outcome), and where each stands as of 2026-08-02:
 
-- Management sign-in and sign-out, at both entrances, including failed attempts
-- **First-administrator bootstrap** (§5.5)
-- Invitation and reset link issue and consumption, TOTP enrolment, recovery code use
-- API key issuance, modification, revocation
-- Model download, load, unload
-- Routing policy changes
-- Node registration and removal
-- User role changes
-- Knowledge base uploads, deletions, collection lifecycle (Phase 2)
-- Authorization failures, with alerting on repeated failures
+| Event | State |
+|---|---|
+| Management sign-in and sign-out, including failed attempts | `user.signed_in`, `user.sign_in_failed`, `user.sign_in_throttled` (once per address per window), `user.signed_out` (§5.3). **Public entrance only, because it is the only one with a sign-in**: the tailnet entrance resolves an identity per request from a header and has no session to begin or end, so there is no event to record there. A tailnet caller with no account is a 401 and appears in the application log. One second-step refusal is unrecorded and named in the code: a challenge whose user id no longer exists has no subject, and inventing one would put a fiction in the log for an investigation to rule out |
+| **First-administrator bootstrap** (§5.5) | `bootstrap.first_admin` |
+| Invitation and reset link issue and consumption | `user.invited`, `user.invitation_reissued`, `user.invitation_accepted`, `user.password_reset_issued`, `user.password_reset_consumed` |
+| TOTP enrolment | `user.totp_enrolled` at acceptance, `user.totp_reenrolled` later in an account's life |
+| Recovery code use | `user.recovery_code_used`, its own row beside the sign-in: spending a single-use credential is a fact about the account, not about that login |
+| API key issuance, modification, revocation | `api_key.issued`, `api_key.updated`, `api_key.revoked` |
+| Model download, load, unload | `model.download_started`, `model.loaded`, `model.unloaded`, each with a `failed` outcome as well; plus `model.registered`, `model.updated`, `model.deleted` |
+| Routing policy changes | `routing_policy.saved`, `routing_policy.deleted` |
+| Node registration and removal | `node.registered`, `node.updated`, `node.removed` |
+| User role changes | `user.role_changed`, plus `user.updated`, `user.disabled`, `user.enabled`, `user.deleted` |
+| Knowledge base uploads, deletions, collection lifecycle | `knowledge.document_uploaded`, `knowledge.document_deleted`, `knowledge.collection_created`, `knowledge.collection_deleted` |
+| Authorization failures | `authz.denied`, recorded in the shared exception handler (`interfaces/http/errors.py`) rather than in `AuthorizationPort.require`, so no use case can forget and refusals raised directly — an administrator changing their own role, a key that does not exist — are caught too. **Admin entrances only; see below** |
+| Alerting on repeated failures | **Not built.** `user.sign_in_throttled` and `authz.denied` are the rows a rule would query; the rule is a §13 Phase 3 item |
+
+**The gateway does not write audit rows, and that is a decision rather than an omission.** Its database account may INSERT into `usage_records` and nothing else (§6). Granting it `audit_log` would let a compromised gateway write into the record that exists to describe the compromise, which is a poor trade for capturing one event: a key reaching for a capability it was not issued for. That refusal is a 403 in the application log and in the usage series, and it is the one item on this list the audit log does not hold.
+
+**A value that does not fit is trimmed, not dropped.** Postgres refuses an over-long string rather than truncating it, and `PostgresAudit.record` swallows its own failures so that a failed audit write cannot turn a successful action into a 500. Those two together mean an unbounded value silently loses the event — and `target` on an authorization failure is the request path, which nothing bounds. The writer trims to each column's width with a marker, so padding a URL cannot suppress the record of someone probing.
 
 The audit log is stored separately from application logs, designed append-only, and retained for at least a year. After any incident it is the only thing that can answer what was actually accessed.
 
@@ -810,7 +822,9 @@ looking for the risk. The state below is checked against the code.
 | CSRF double-submit, plus binding to the server-held session token | `middleware/csrf.py`, `middleware/identity.py` |
 | Invitation and reset flows: single use, hashed at rest, expiring, never transmitting a credential | `application/use_cases/issue_invitation.py`, `accept_invitation.py` |
 | First-admin bootstrap: tailnet only, inert once any user exists, atomic under concurrent first requests | `application/use_cases/bootstrap_first_admin.py` |
-| Audit logging, written in its own transaction so failures survive a rollback | `adapters/audit/postgres_audit.py` |
+| Audit logging, written in its own transaction so failures survive a rollback, and trimmed to the column so an unbounded value cannot suppress an event | `adapters/audit/postgres_audit.py`, `tests/integration/test_audit_writer.py` |
+| Every §12 event recorded except gateway authorization failures and alert delivery, both of which §12 states rather than hides. Sign-in, sign-out, failed attempts, the limiter firing, recovery code use and authorization refusals all landed on 2026-08-02; before that the identity plane wrote nothing at all | `application/use_cases/authenticate_local.py`, `interfaces/http/errors.py`, `interfaces/http/routers/auth.py`, `tests/unit/test_audit_coverage.py` |
+| Authorization checked in every use case, verified by enumerating all 26 rather than by sampling. The five without a `require` are unauthenticated or self-scoped by design: `AuthenticateLocal`, `AcceptInvitation`, `BootstrapFirstAdmin`, `ManageOwnAccount` (`_require_self`), and the internal collaborators `EmbedTexts` / `GroundChat` / `IngestDocument`, which take no actor | `application/use_cases/`, audited 2026-08-02 |
 | Authorization on every administrative action, declared by the use case rather than the router | `application/use_cases/manage_*.py` |
 | Model reference validated at registration as well as at the runtime call, per runtime | `ModelRuntimePort.validate_ref` |
 | Memory budget enforced before a load, as a refusal | `ManageModels.load` |
@@ -872,12 +886,12 @@ looking for the risk. The state below is checked against the code.
 
 **Phase 2**
 
-- Full audit coverage across all events in §12
+- Full audit coverage across all events in §12: done 2026-08-02, with the two exceptions §12's table names — the gateway, which may not write the table, and alert delivery, which stays in Phase 3
 - SSRF guard, shipping with the first node write endpoint
 - Multi-tenancy: `Tenant` entity, `tenant_id` columns, repository-enforced filters (§7.3)
 - Logging boundaries and the expiring debug switch
 - Encrypted backups and a rehearsed restore
-- Authorization checks covering every use case
+- Authorization checks covering every use case: done 2026-08-02, by enumerating all 26 rather than sampling. The sweep found no missing check; what it did find was one endpoint whose check was a discarded call to an unrelated method, now explicit (§7.3)
 - Prometheus and Grafana: the emission stack and both services ship (see the table above); replacing the static memory budget with a live free-memory figure still waits for the Mac Studio, where that figure is real
 - Knowledge base upload handling and parser isolation: built (see the table above). What still waits for the Mac Studio is real embedding and real retrieval quality, the same boundary inference has; the upload rules, the parser's isolation and the tenant scoping are exercised now
 - The knowledge base's documents volume in the encrypted backup, which is the item above it: `documents` holds the team's unpublished research and is the volume that most needs to be in it (§9.1, §9.4)
@@ -886,7 +900,7 @@ looking for the risk. The state below is checked against the code.
 
 - Trivy, pip-audit, and pnpm audit in CI
 - Credentials and trust model for additional compute nodes
-- Alerting on authorization failures and anomalous usage
+- Alerting on authorization failures and anomalous usage. The rows to alert *on* now exist (`authz.denied`, `user.sign_in_throttled`); what is missing is the rule that reads them and the channel it reports to, which is the same mail path `launchd/check-platform-health.sh` already uses
 - Periodic access review
 
 ## 14. Pre-Launch Checklist

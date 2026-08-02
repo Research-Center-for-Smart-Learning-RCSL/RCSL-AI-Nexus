@@ -443,6 +443,7 @@ def build_authenticate_local(request: Request, session: SessionDep) -> Authentic
         tokens=request.app.state.tokens,
         throttle=LoginThrottle(request.app.state.cache),
         secret_box=request.app.state.secret_box,
+        audit=request.app.state.audit,
         clock=SystemClock(),
     )
 
