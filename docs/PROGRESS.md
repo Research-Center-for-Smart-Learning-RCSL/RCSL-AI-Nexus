@@ -17,6 +17,63 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-02
 
+### Deployed and verified on the Mac Studio the same night
+
+Commit `4c6604d`, CI green, both images rebuilt, `docker compose up -d`, `migrate`
+exited 0. No migration in this change, so the deploy was a rolling restart of the
+five services carrying the two images. `rollback-20260803` names the 2026-07-30
+build, which had been serving three days without incident — the tag means "last
+known good", not "previous", per [deployment.md](./architecture/deployment.md) §9.
+
+**Two of the checks along the way could each have returned only one answer, and
+both were caught before being believed.** The running image was going to be
+dated against the last commit — and the image was built at 17:19:12 against a
+commit at 17:19:03, nine seconds apart, which a timestamp cannot separate. Asked
+instead whether the container held `_with_state`, the marker that commit
+actually added, the answer was definite. Then a naive port probe reported three
+of five entrances unbound, because it tested loopback: they are bound to the
+tailnet address, which is §3.3 working correctly. A check that reports failure
+on a correct configuration is the same defect as one that reports success on a
+broken one.
+
+What was verified live, on the deployment rather than in a test:
+
+- **`authz.denied`**, driven by an administrator trying to change their own
+  role. That refusal is raised directly by `ManageUsers` without consulting
+  `AuthorizationPort`, so it is exactly the case the handler-based approach
+  catches and a `require`-based one would have missed — the argument for the
+  design, confirmed against the real thing rather than against a fake
+- **`user.sign_in_failed` on three paths**: a real account attributed to its own
+  user id with `no_local_credentials`, an unknown address-shaped login kept
+  verbatim, and a password-shaped string recorded as `redacted:b64851d1…`, whose
+  digest was checked against `sha256` of the string. The plaintext is not in the
+  table
+- **The throttle recording once per window.** Twelve attempts from one address:
+  six 401s and six 429s produced six `user.sign_in_failed` rows and **exactly one**
+  `user.sign_in_throttled`. Without the review's fix that would have been six,
+  and unbounded under sustained grinding
+- **The logs filter.** `outcome=denied` returns 2, `outcome=failed` returns 10,
+  and `outcome=failure` — the value the UI sent until today — returns 0 against a
+  table that now demonstrably has failures in it
+- Zero `audit_write_failed` lines, so nothing took the swallowed-exception path;
+  zero unexpected exceptions in any container; health check `OK` on a run whose
+  state file was written the same second it was read
+
+**What could not be verified live, and why it matters:** `user.signed_in`,
+`user.signed_out`, `user.totp_enrolled` and `user.recovery_code_used` all require
+a *successful* public-entrance login, and no account on this deployment has
+public-entrance credentials — the bootstrapped administrator carries no
+`password_hash` and no `totp_secret`, which is the open item this log has been
+carrying since 2026-07-26. They are covered by the end-to-end integration test
+through the real composition root, which is not the same as being seen here. The
+one path exercised on the real entrance, `no_local_credentials`, is the
+platform's own report of that same gap.
+
+The verification rows are in `audit_log` permanently. There is no delete path in
+any repository and the table is append-only by design, so removing them would
+mean doing by hand the thing the design forbids. They are also true: those
+requests were made.
+
 ### Two completeness sweeps, one of which came back clean and one of which did not
 
 `ROADMAP.md` carried two Phase 2 items that are audits rather than features:
