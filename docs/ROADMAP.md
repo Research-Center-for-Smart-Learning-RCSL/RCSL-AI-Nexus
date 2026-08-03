@@ -101,11 +101,15 @@ carries the checked control-by-control state.
 
 ### External coordination (can proceed in parallel)
 
-- [ ] Proxy host joins the tailnet, tagged `tag:ntnu-proxy`
-- [ ] Two nginx server blocks, plus the HTTP-to-HTTPS redirect block
-- [ ] Let's Encrypt certificates for both hostnames
-- [ ] Confirm no request body logging and no Lua interception
-- [ ] Confirm `proxy_buffering off` and `proxy_read_timeout`
+Sent and largely done on 2026-08-03. Verified by `scripts/verify-public-entrance.sh`, which is the record for this section — the two outstanding items below fail it, and neither is visible from the proxy's side, where every response looks like a working TLS terminator forwarding to a live backend.
+
+- [x] Proxy host joins the tailnet, tagged `tag:ntnu-proxy`. Joined 2026-08-03 16:12 as `npm-proxy-node` (linux), tag confirmed from `tailscale status --json`, `KeyExpiry: None` as a tagged device should be
+- [x] Two nginx server blocks, plus the HTTP-to-HTTPS redirect block. Both hostnames reach this deployment rather than a default page, checked by response *body* rather than status: the gateway's own `{"status":"ok"}` and the application's `{"detail":"Not Found"}`
+- [x] Let's Encrypt certificates for both hostnames. Note for anyone repeating this: the existing `*.rcsl.online` certificate does **not** cover these names, because a TLS wildcard matches one label while a DNS wildcard matches any depth — so the names resolved long before they could be served
+- [ ] Confirm no request body logging and no Lua interception. Not yet confirmed by the administrator, and not something this end can test
+- [ ] **`X-Nexus-Proxy` is not being set.** Established by sending a deliberately *wrong* value and finding it survived to the application; supplying the correct value cannot distinguish "nginx sets nothing" from "nginx sets it and ignored mine". Every request through the entrance is refused, and 48 `/admin/me` calls have never returned 200
+- [ ] **`X-Forwarded-For` is appended, not overwritten.** A request from Taiwan carrying `X-Forwarded-For: 8.8.8.8` was refused as coming from the US, so the forged value is believed — the country filter and every per-key CIDR allowlist bypassed by a header the caller writes. `$remote_addr`, never `$proxy_add_x_forwarded_for`; `RouteChatRequest` and the geo filter read the first value
+- [ ] Confirm `proxy_buffering off` and `proxy_read_timeout`. Cannot be tested without a working key on the entrance, so it waits on the two items above
 - [ ] Request explicit A records rather than relying on wildcard synthesis
 
 ### Security: required before anything is exposed publicly

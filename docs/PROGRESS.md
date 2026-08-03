@@ -17,6 +17,86 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-03
 
+### The public entrance went live, and two controls were reporting nothing
+
+The proxy administrator did all four items today: the host joined the tailnet at
+16:12 carrying `tag:ntnu-proxy`, both hostnames have valid certificates, and both
+reach this deployment rather than a default page — `api.nexus.rcsl.online/healthz`
+answers `{"status":"ok"}` from the gateway and `/` answers the application's own
+`{"detail":"Not Found"}`, which is how you tell our 404 from the proxy's.
+
+**Two of the four header confirmations in item 4 were not done, and neither is
+visible from the proxy's side.** Every response there looks like a working TLS
+terminator forwarding to a live backend.
+
+`X-Nexus-Proxy` is not set at all. The first attempt to establish this was a
+weak test — supplying the *correct* secret and watching the 400 become a 401,
+which cannot distinguish "nginx sets nothing" from "nginx sets it and my header
+was ignored". Supplying a deliberately **wrong** value is the test that decides:
+it survived to the application, so nothing upstream is overwriting it. Every
+request through the entrance was being refused, and 48 `/admin/me` calls from
+`frontend-public` have never once returned 200.
+
+`X-Forwarded-For` is appended rather than overwritten. A request sent from
+Taiwan carrying `X-Forwarded-For: 8.8.8.8` came back `403 country_not_allowed`,
+which means the forged value was believed. That is the country filter and every
+per-key CIDR allowlist bypassed by a header the caller writes. Before reporting
+it, the frontend was ruled out as the culprit: `middleware.ts` uses
+`NextResponse.rewrite`, which forwards headers unchanged and cannot resurrect a
+value nginx replaced, so the append is upstream of us.
+
+Only the two together kept this from being live: the forged address is worthless
+without the secret, and the secret is not in nginx to leak. That is a
+coincidence, not a control. **The §14 forged-`Tailscale-User-Login` check passed
+on the way through** — 401, with the public entrance stripping the header as §4
+requires.
+
+### The perimeter had an explanation for all of it, and threw it away
+
+`untrusted_proxy` has three causes — wrong secret, absent `X-Forwarded-For`, one
+that will not parse — and the response deliberately distinguishes none of them,
+because naming the half that failed tells an attacker which half to work on. The
+operator is meant to read the difference from `geo_middleware`, which writes one
+line for exactly that purpose at INFO.
+
+It had never appeared. **Nothing in this tree configured logging at all**, so the
+root logger had no handler, Python's `lastResort` fallback took every record, and
+that handler emits at WARNING and discards the rest. Every `logger.info` in all
+three processes had been written, formatted and dropped since the first deploy.
+The cause above was instead established by probing from outside with wrong values
+until the answers narrowed it down — which is the work that line exists to make
+unnecessary. The control was working and its own record of firing did not exist,
+the same shape as the audit gap closed on 2026-08-02.
+
+`infrastructure/logging_config.py` now configures the `app` logger, deliberately
+not the root: raising the root also raises `httpx`, which logs a line per request
+to the model runtime, on the hot path, saying nothing `usage_records` does not
+already hold. `LOG_LEVEL` defaults to INFO.
+
+**Writing the test found a second copy of the same defect.** The new unit tests
+passed alone and failed in the full suite, with the logger reporting an effective
+level of INFO while `isEnabledFor(INFO)` returned False — a combination that
+means `disabled = True`, which no level inspection reveals. `alembic/env.py`
+called `fileConfig` without `disable_existing_loggers=False`, and `alembic.ini`
+names only root, sqlalchemy and alembic, so running a migration disabled the
+entire `app.*` tree. A deployment is unaffected because `migrate` is its own
+process; the test session was not, and had been silently discarding every
+application log line from the first integration test onward. Two independent
+mechanisms, found the same day, both of which made a diagnostic exist and never
+arrive.
+
+### An acceptance script, because neither failure shows up in a status code
+
+`scripts/verify-public-entrance.sh` runs what was done by hand here: the tag, the
+certificates, that the backends reached are ours, the two header controls, and
+§14's forged identity. The two that matter work by sending something
+deliberately wrong and requiring it *not* to survive, which is the only way
+either can fail visibly. It reproduces today's state exactly — 7 passed, 2
+failed — and is what the proxy administrator's fix will be checked against.
+
+`security.md` §14 says several items must be tested rather than assumed. Until
+today there was nothing to test them against.
+
 ### The deploy, and a page whose own HTML could not confirm it
 
 Commits `a5ab7a7` and `7bb1ed4` are on the Mac Studio. Only the frontend changed,

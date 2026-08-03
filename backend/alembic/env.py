@@ -20,7 +20,20 @@ from app.infrastructure.config import get_settings
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers=False` is not a preference. The default is
+    # True, and `alembic.ini` names only root, sqlalchemy and alembic — so
+    # every logger that already exists and is not one of those is set
+    # `disabled = True`, which includes the whole `app.*` tree. A disabled
+    # logger reports its level normally and drops every record, so the effect
+    # is invisible in anything that inspects levels.
+    #
+    # The migrate service runs in its own process, so a deployment is not
+    # affected. The test session is: from the first integration test onward,
+    # every application log line was silently discarded, which is how
+    # tests/unit/test_logging_config.py came to pass alone and fail in the
+    # suite. Found 2026-08-03, the same day as the sibling defect — the one
+    # where the perimeter's own explanation of a refusal was never emitted.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

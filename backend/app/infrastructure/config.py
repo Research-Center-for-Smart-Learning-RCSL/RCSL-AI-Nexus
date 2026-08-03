@@ -37,6 +37,19 @@ class Settings(BaseSettings):
     auth_mode: AuthMode = "dev"
     expose_openapi_flag: bool = Field(default=False, alias="EXPOSE_OPENAPI")
 
+    log_level: str = Field(
+        default="INFO",
+        description=(
+            "Level for the application's own `app.*` loggers, not the root. "
+            "INFO by default because the lines below WARNING are the ones that "
+            "say *why* a request was refused — `perimeter_rejected` is the only "
+            "place the three causes of `untrusted_proxy` are distinguished. "
+            "Nothing configured logging at all before 2026-08-03, which meant "
+            "Python's WARNING-level fallback handler discarded every one of "
+            "them (infrastructure/logging_config.py)."
+        ),
+    )
+
     tailnet_ip: str = "127.0.0.1"
     proxy_hostname: str = "api.nexus.rcsl.online"
 
