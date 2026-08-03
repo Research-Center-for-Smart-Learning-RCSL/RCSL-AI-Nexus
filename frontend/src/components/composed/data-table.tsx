@@ -41,6 +41,21 @@ import {
 import { EmptyState } from '@/components/composed/empty-state';
 import { ErrorState } from '@/components/composed/error-state';
 
+/**
+ * What to call a column in the visibility menu.
+ *
+ * The menu listed `column.id`, so it offered `expires_at`, `cidrs` and
+ * `passages` while the header above the same column read Expires, Sources and
+ * Passages. A string header is the label the operator already knows; anything
+ * else (a component, or no header at all) falls back to the id with its
+ * separators turned back into spaces.
+ */
+export function columnLabel(header: unknown, id: string): string {
+  if (typeof header === 'string' && header.length > 0) return header;
+  const words = id.replace(/[_-]+/g, ' ').trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 export type DataTableProps<TData, TValue> = {
   columns: ColumnDef<TData, TValue>[];
   data: TData[] | undefined;
@@ -143,7 +158,7 @@ export function DataTable<TData, TValue>({
                             column.toggleVisibility(event.target.checked)
                           }
                         />
-                        {column.id}
+                        {columnLabel(column.columnDef.header, column.id)}
                       </label>
                     ))}
                 </div>

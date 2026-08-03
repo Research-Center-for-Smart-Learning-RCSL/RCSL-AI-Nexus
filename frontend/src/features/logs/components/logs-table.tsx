@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -18,7 +18,7 @@ import {
 import { EmptyState } from '@/components/composed/empty-state';
 import { ErrorState } from '@/components/composed/error-state';
 import { useLogs } from '@/features/logs/hooks/use-logs';
-import type { AuditEntry } from '@/features/logs/schema';
+import { AUDIT_ACTIONS, type AuditEntry } from '@/features/logs/schema';
 
 const PAGE_SIZE = 50;
 // The three values the backend writes, and the filter is an exact match on the
@@ -53,23 +53,38 @@ function detailText(detail: Record<string, string>): string {
 const COLUMNS = ['When', 'Actor', 'Action', 'Target', 'Outcome', 'Detail'];
 
 export function LogsTable() {
+  // What is typed, and what is asked for. They were the same value, so every
+  // keystroke queried the server: typing one action name sent a dozen requests,
+  // eleven of which described a prefix that matches nothing by definition.
+  const [actionText, setActionText] = useState('');
   const [action, setAction] = useState('');
   const [outcome, setOutcome] = useState('');
   const [offset, setOffset] = useState(0);
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setAction(actionText.trim());
+      // A filter change must return to the first page, or the offset could
+      // point past the end of a smaller filtered set.
+      setOffset(0);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [actionText]);
+
   const filters = { action: action || undefined, outcome: outcome || undefined, limit: PAGE_SIZE, offset };
   const { data, isLoading, isFetching, error, refetch } = useLogs(filters);
 
-  // A filter change must return to the first page, or the offset could point
-  // past the end of a smaller filtered set.
-  function changeAction(next: string) {
-    setAction(next);
-    setOffset(0);
-  }
   function changeOutcome(next: string) {
     setOutcome(next);
     setOffset(0);
   }
+
+  // An exact match that found nothing is a different situation from a filter
+  // nobody set, and only one of them has advice worth giving.
+  const filtered = Boolean(action || outcome);
+  const unknownAction = Boolean(
+    action && !AUDIT_ACTIONS.includes(action as (typeof AUDIT_ACTIONS)[number]),
+  );
 
   if (error) {
     return <ErrorState error={error} onRetry={() => void refetch()} />;
@@ -83,13 +98,24 @@ export function LogsTable() {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Input
-          value={action}
-          onChange={(e) => changeAction(e.target.value)}
-          placeholder="Filter by action, e.g. user.invited"
-          className="max-w-xs"
-          aria-label="Filter by action"
-        />
+        <div className="max-w-xs flex-1">
+          <Input
+            value={actionText}
+            onChange={(e) => setActionText(e.target.value)}
+            placeholder="Exact action, e.g. user.invited"
+            list="audit-actions"
+            aria-label="Filter by action, matched exactly"
+            aria-describedby="audit-action-hint"
+          />
+          {/* The whole set the backend writes. Without it the box looked like a
+              search and behaved like an equality check, so a partial name
+              returned an empty table that read as a quiet audit log. */}
+          <datalist id="audit-actions">
+            {AUDIT_ACTIONS.map((value) => (
+              <option key={value} value={value} />
+            ))}
+          </datalist>
+        </div>
         <div className="flex gap-1">
           {OUTCOMES.map((o) => (
             <Button
@@ -107,6 +133,18 @@ export function LogsTable() {
           {total === 0 ? 'No entries' : `${from}–${to} of ${total}`}
         </span>
       </div>
+
+      <p id="audit-action-hint" className="text-xs text-muted-foreground">
+        The action filter matches the whole name, not part of one. Start typing
+        to pick from the {AUDIT_ACTIONS.length} the platform records.
+        {unknownAction ? (
+          <span className="text-destructive">
+            {' '}
+            <strong>{action}</strong> is not one of them, so this can only ever
+            return nothing.
+          </span>
+        ) : null}
+      </p>
 
       <div className="rounded-lg ring-1 ring-foreground/10">
         <Table>
@@ -132,8 +170,16 @@ export function LogsTable() {
               <TableRow>
                 <TableCell colSpan={COLUMNS.length} className="p-0">
                   <EmptyState
-                    title="No matching entries"
-                    description="Every administrative action is recorded here. Adjust the filters to widen the search."
+                    title={
+                      filtered ? 'No matching entries' : 'Nothing recorded yet'
+                    }
+                    description={
+                      unknownAction
+                        ? `No action is named "${action}". Clear the box and pick from the list to see what is recorded.`
+                        : filtered
+                          ? 'Nothing matched these filters. The action has to be a whole name; clear it, or try a different outcome.'
+                          : 'Every administrative action is recorded here as it happens.'
+                    }
                     className="border-0"
                   />
                 </TableCell>
