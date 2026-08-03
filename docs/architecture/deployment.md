@@ -416,7 +416,7 @@ Non-secret values are environment variables; secrets are mounted files read thro
 | `ALLOWED_COUNTRIES` | `TW,AU` | Empty disables the filter |
 | `MAX_CONTEXT_LENGTH` | `32768` | Bounds prompt size before generation starts |
 | `API_KEY_PEPPER_PREVIOUS` | empty | Set only during a rotation |
-| `GEOIP_DB_PATH` | `/data/GeoLite2-Country.mmdb` | Refreshed monthly |
+| `GEOIP_DB_PATH` | `/data/GeoLite2-Country.mmdb` | Refreshed weekly by `launchd/refresh-geolite2.sh` (runbook §5.1), which restarts the two enforcing services only when the file actually changed — geoip2 opens the database once at startup, so a swap alone changes nothing. Said "monthly" until 2026-08-03 and described no mechanism that existed |
 | `BOOTSTRAP_ADMIN_LOGIN` | `you@example.com` | Inert once any user exists |
 | `MAX_CONCURRENT_INFERENCE` | `4` | Queueing depth, not throughput: the GPU serves one generation at a time |
 | `MAX_TOKENS_CEILING` | `16384` | Counts a thinking model's reasoning as well as its answer |
