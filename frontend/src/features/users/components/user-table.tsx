@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { DataTable } from '@/components/composed/data-table';
 import { ConfirmDialog } from '@/components/composed/confirm-dialog';
+import { DisabledReason } from '@/components/composed/disabled-reason';
 import { OneTimeSecret } from '@/components/composed/one-time-secret';
 import { SecretDialog } from '@/components/composed/secret-dialog';
 import {
@@ -108,45 +109,50 @@ export function UserTable() {
               >
                 Re-invite
               </Button>
-              <Button
-                variant="ghost"
-                size="xs"
-                disabled={reset.isPending || !user.has_local_credentials}
-                // A disabled button with no explanation reads as a fault in the
-                // page. This one is off for a reason specific to the row: there
-                // is no password to reset for someone who only ever arrives
-                // over the tailnet.
-                title={
+              {/* A disabled button with no explanation reads as a fault in the
+                  page. Both of these are off for a reason specific to the row,
+                  and the reason has to live on a wrapper: see DisabledReason. */}
+              <DisabledReason
+                reason={
                   user.has_local_credentials
                     ? undefined
                     : 'This account has no password. It signs in over the tailnet, where identity comes with the connection.'
                 }
-                onClick={async () => {
-                  const issued = await reset.mutateAsync(user.id);
-                  if (issued.url) {
-                    setIssuedLink({
-                      title: 'Single-use password reset link',
-                      url: issued.url,
-                    });
-                  }
-                }}
               >
-                Reset password
-              </Button>
-              <Button
-                variant="ghost"
-                size="xs"
-                className="text-destructive"
-                disabled={user.id === me?.id}
-                title={
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  disabled={reset.isPending || !user.has_local_credentials}
+                  onClick={async () => {
+                    const issued = await reset.mutateAsync(user.id);
+                    if (issued.url) {
+                      setIssuedLink({
+                        title: 'Single-use password reset link',
+                        url: issued.url,
+                      });
+                    }
+                  }}
+                >
+                  Reset password
+                </Button>
+              </DisabledReason>
+              <DisabledReason
+                reason={
                   user.id === me?.id
                     ? 'You cannot remove your own account. Another administrator has to do it.'
                     : undefined
                 }
-                onClick={() => setDeleting(user)}
               >
-                Remove
-              </Button>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="text-destructive"
+                  disabled={user.id === me?.id}
+                  onClick={() => setDeleting(user)}
+                >
+                  Remove
+                </Button>
+              </DisabledReason>
             </div>
           );
         },

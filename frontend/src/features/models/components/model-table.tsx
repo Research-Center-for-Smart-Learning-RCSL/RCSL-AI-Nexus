@@ -70,6 +70,14 @@ export function ModelTable() {
     }
   }, [jobState, invalidateModels]);
 
+  // An unreadable job is not worth restoring next time. The banner stays until
+  // dismissed so the failure is not silent, but the id leaves storage now
+  // rather than greeting the next visit to this screen.
+  const jobFailedToLoad = job.isError;
+  useEffect(() => {
+    if (jobFailedToLoad) sessionStorage.removeItem(DOWNLOAD_JOB_KEY);
+  }, [jobFailedToLoad]);
+
   // Which model the bar is about, resolved from the job rather than remembered
   // separately, so it survives the reload above.
   const jobAlias = data?.find((model) => model.id === job.data?.model_id)?.alias;

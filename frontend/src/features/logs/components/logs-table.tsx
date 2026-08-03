@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -61,9 +61,22 @@ export function LogsTable() {
   const [outcome, setOutcome] = useState('');
   const [offset, setOffset] = useState(0);
 
+  // What the last debounce actually applied. A ref rather than a comparison
+  // inside a state updater, which React may run twice and which would make the
+  // `setOffset` below a side effect in a place that must not have one.
+  const appliedAction = useRef('');
+
   useEffect(() => {
     const timer = setTimeout(() => {
-      setAction(actionText.trim());
+      const next = actionText.trim();
+      // Guarded, because this fires on mount and after any edit that resolves
+      // back to the same filter — typing a character and deleting it, say.
+      // Resetting unconditionally meant a Next click within the debounce window
+      // silently returned to page 1 while the request for the later offset was
+      // already in flight.
+      if (appliedAction.current === next) return;
+      appliedAction.current = next;
+      setAction(next);
       // A filter change must return to the first page, or the offset could
       // point past the end of a smaller filtered set.
       setOffset(0);
