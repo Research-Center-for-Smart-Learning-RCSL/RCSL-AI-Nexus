@@ -113,17 +113,41 @@ esac
 # --- 4. The two header controls ---------------------------------------------
 head_ "4. Perimeter headers (the two that fail silently)"
 
-# A wrong secret must not survive. If nginx sets the header, this value is
-# replaced before the application sees it and the request proceeds to its
-# ordinary 401. If nginx does not, the wrong value arrives and is refused.
-S4="$(status -H 'X-Nexus-Proxy: deliberately-wrong-value' "https://$ADMIN_HOST/admin/me")"
-if [ "$S4" = "400" ]; then
-  fail "nginx sets X-Nexus-Proxy (client value overwritten)" \
-    "a caller-supplied wrong secret reached the application (400 untrusted_proxy), so nginx is not setting this header. Every request through the entrance is refused, and a caller who learns the secret can supply it themselves."
-elif [ "$S4" = "000" ]; then
-  fail "nginx sets X-Nexus-Proxy (client value overwritten)" "no response"
+# Three states are possible and one test cannot separate them, which is worth
+# spelling out because the wrong diagnosis sends the administrator looking in
+# the wrong place — and a proxy whose configuration *looks* right is exactly
+# when that happens:
+#
+#   A  nginx sets no X-Nexus-Proxy at all
+#   B  nginx sets the correct secret
+#   C  nginx sets some other value (a placeholder, or the secret never arrived)
+#
+#   sending a wrong value   -> A: 400   B: passes   C: 400
+#   sending the real value  -> A: passes   B: passes   C: 400
+#
+# So the pair separates all three, and neither probe does it alone. The first
+# version of this script reported A on the strength of the wrong-value probe by
+# itself, which would have been a confident and unfounded accusation in case C.
+S4_WRONG="$(status -H 'X-Nexus-Proxy: deliberately-wrong-value' "https://$ADMIN_HOST/admin/me")"
+if [ -n "$SECRET" ]; then
+  S4_RIGHT="$(status -H "X-Nexus-Proxy: $SECRET" "https://$ADMIN_HOST/admin/me")"
 else
-  pass "nginx sets X-Nexus-Proxy (client value overwritten, got $S4)"
+  S4_RIGHT=""
+fi
+
+if [ "$S4_WRONG" = "000" ]; then
+  fail "nginx sets X-Nexus-Proxy" "no response"
+elif [ "$S4_WRONG" != "400" ]; then
+  pass "nginx sets X-Nexus-Proxy and overwrites the caller's (got $S4_WRONG)"
+elif [ -z "$S4_RIGHT" ]; then
+  fail "nginx sets X-Nexus-Proxy" \
+    "a wrong value survived to the application (400). Without $SECRET_FILE this cannot say whether nginx sets nothing or sets a different value."
+elif [ "$S4_RIGHT" = "400" ]; then
+  fail "nginx sets the CORRECT X-Nexus-Proxy" \
+    "state C: nginx is setting this header, but not to the value this deployment expects — the real secret is refused too. Check the value in the proxy configuration against secrets/proxy_shared_secret; a placeholder left in place looks exactly like a correct configuration in a screenshot."
+else
+  fail "nginx sets X-Nexus-Proxy" \
+    "state A: nginx sets no value at all — the caller's own header reaches the application untouched, whatever it says. Every request through the entrance is refused (400), and a caller who learns the secret can supply it themselves. If the configuration looks correct, the usual cause is placement: a single proxy_set_header inside a location block DISCARDS every proxy_set_header inherited from the server block, so directives added at server level vanish. Confirm with 'nginx -T' (the effective config) rather than the file or the UI."
 fi
 
 # A forged foreign address must be discarded. Sending the real secret too, so
