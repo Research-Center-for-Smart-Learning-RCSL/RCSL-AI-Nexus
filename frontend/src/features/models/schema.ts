@@ -64,6 +64,42 @@ export const issuableCapabilitySchema = z.enum([
 ]);
 export type IssuableCapability = z.infer<typeof issuableCapabilitySchema>;
 
+/**
+ * What each capability actually does, in the words of someone deciding which
+ * one to ask for.
+ *
+ * The names were rendered bare everywhere they appeared. On the key form that
+ * is survivable, because the surrounding copy explains the convention; in the
+ * chat composer's picker it was five lowercase words with nothing to
+ * distinguish a request that will hold a conversation from one that cannot.
+ */
+export const CAPABILITY_DESCRIPTIONS: Record<Capability, string> = {
+  chat: 'General questions and instruction following.',
+  code: 'Programming: writing, explaining and reviewing code.',
+  vision: 'Questions that include an image.',
+  embedding: 'Turns text into vectors. Used by knowledge retrieval, not answered as a reply.',
+  rerank: 'Scores candidate passages against a query. Also retrieval machinery.',
+  assist: 'The management assistant. Internal, and never issued to a key.',
+};
+
+/**
+ * The capabilities that answer with prose, which is all the chat panel can do
+ * anything with.
+ *
+ * `embedding` and `rerank` are routable and issuable, so they belong on the key
+ * form — an application really does call them. Asking one of them for a chat
+ * completion routes the request to a model that does not generate text, and the
+ * failure surfaces as a runtime error with nothing on screen to suggest the
+ * choice was the problem. The composer still lists them, disabled and labelled,
+ * on the same reasoning the key form shows unroutable capabilities: hiding them
+ * makes the list look like the whole set.
+ */
+export const CONVERSATIONAL_CAPABILITIES = ['chat', 'code', 'vision'] as const;
+
+export function isConversational(capability: string): boolean {
+  return (CONVERSATIONAL_CAPABILITIES as readonly string[]).includes(capability);
+}
+
 export const resourceProfileSchema = z.object({
   memory_gb: z.number().positive(),
   context_length: z.number().int().positive(),
