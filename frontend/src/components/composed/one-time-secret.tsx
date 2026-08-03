@@ -34,16 +34,23 @@ export function OneTimeSecret({
   className,
 }: OneTimeSecretProps) {
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
 
   async function copy() {
+    setCopyFailed(false);
     try {
       await navigator.clipboard.writeText(values.join('\n'));
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard access can be denied; the value is selectable on screen.
+      // Clipboard access can be denied — an insecure origin, or a browser
+      // permission — and the failure used to be silent: the button stayed
+      // reading "Copy" and nothing else changed. On the one screen where the
+      // value will never be shown again, that is someone ticking the
+      // acknowledgement and closing the dialog holding nothing.
       setCopied(false);
+      setCopyFailed(true);
     }
   }
 
@@ -79,6 +86,18 @@ export function OneTimeSecret({
           {copied ? 'Copied' : 'Copy'}
         </Button>
       </div>
+
+      {/* Announced, not just shown: the acknowledgement checkbox above is the
+          next thing in reading order and it gates dismissing the only copy. */}
+      <p aria-live="polite" className="sr-only">
+        {copied ? 'Copied to the clipboard.' : ''}
+      </p>
+      {copyFailed ? (
+        <p role="alert" className="text-sm text-destructive">
+          Could not reach the clipboard — your browser refused it. Select the
+          text above and copy it manually before continuing.
+        </p>
+      ) : null}
     </div>
   );
 }

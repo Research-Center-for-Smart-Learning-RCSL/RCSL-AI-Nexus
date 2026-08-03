@@ -7,7 +7,7 @@
  * consistent (section 5).
  */
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   flexRender,
   getCoreRowModel,
@@ -93,6 +93,30 @@ export function DataTable<TData, TValue>({
   const [globalFilter, setGlobalFilter] = useState('');
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [showColumnMenu, setShowColumnMenu] = useState(false);
+  const columnMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // Hand-rolled, unlike the Select and Dialog next to it, so it had none of the
+  // dismissal behaviour those bring: clicking away left it open over the table
+  // and Escape did nothing. Both are what anyone who has used the rest of this
+  // UI already expects.
+  useEffect(() => {
+    if (!showColumnMenu) return;
+
+    function onPointerDown(event: PointerEvent) {
+      const root = columnMenuRef.current;
+      if (root && !root.contains(event.target as Node)) setShowColumnMenu(false);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setShowColumnMenu(false);
+    }
+
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [showColumnMenu]);
 
   const table = useReactTable({
     data: data ?? [],
@@ -131,11 +155,12 @@ export function DataTable<TData, TValue>({
           ) : null}
           <div className="ml-auto flex items-center gap-2">
             {toolbar}
-            <div className="relative">
+            <div className="relative" ref={columnMenuRef}>
               <Button
                 variant="outline"
                 size="sm"
                 aria-expanded={showColumnMenu}
+                aria-haspopup="menu"
                 onClick={() => setShowColumnMenu((open) => !open)}
               >
                 <SettingsIcon />

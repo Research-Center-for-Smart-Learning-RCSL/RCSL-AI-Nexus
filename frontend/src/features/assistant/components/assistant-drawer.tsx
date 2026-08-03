@@ -166,13 +166,26 @@ export function AssistantDrawer() {
         ))}
 
         {isStreaming ? (
-          <div className="rounded-lg px-3 py-2 text-sm ring-1 ring-foreground/10">
+          <div
+            className="rounded-lg px-3 py-2 text-sm ring-1 ring-foreground/10"
+            aria-busy="true"
+          >
             <p className="mb-1 text-xs font-medium text-muted-foreground">
               Assistant
             </p>
             <StreamMessage store={store} />
           </div>
         ) : null}
+
+        {/* State only, for the same reason as the chat panel: announcing the
+            body would repeat the whole answer once per token. */}
+        <p aria-live="polite" className="sr-only">
+          {isStreaming
+            ? 'Answering.'
+            : turns.length > 0
+              ? 'Answer complete.'
+              : ''}
+        </p>
 
         <div ref={bottomRef} />
       </div>

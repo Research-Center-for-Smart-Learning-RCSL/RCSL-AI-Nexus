@@ -102,6 +102,12 @@ export function MetricChart({
 
   const xTicks = times.length <= 4 ? times : [times[0], times[Math.floor(times.length / 2)], times[times.length - 1]];
 
+  function hoverAt(index: number) {
+    const t = times[Math.min(times.length - 1, Math.max(0, index))];
+    if (t === undefined) return;
+    setHover({ t, leftPct: (scaleX(t, plot) / VIEW_W) * 100 });
+  }
+
   function onMove(event: React.PointerEvent<SVGSVGElement>) {
     const svg = svgRef.current;
     if (!svg || times.length === 0) return;
@@ -117,6 +123,42 @@ export function MetricChart({
       }
     }
     setHover({ t: nearest, leftPct: (scaleX(nearest, plot) / VIEW_W) * 100 });
+  }
+
+  /**
+   * The same readout, from the keyboard.
+   *
+   * Values were reachable only by hovering a pointer over the plot, so the
+   * numbers behind the line were unavailable to anyone navigating by keyboard —
+   * and the shape of a line is not a substitute for the figure when the question
+   * is how many requests arrived at four in the morning.
+   */
+  function onKeyDown(event: React.KeyboardEvent<SVGSVGElement>) {
+    if (times.length === 0) return;
+    const current = hover ? times.indexOf(hover.t) : -1;
+
+    switch (event.key) {
+      case 'ArrowRight':
+        hoverAt(current < 0 ? 0 : current + 1);
+        break;
+      case 'ArrowLeft':
+        hoverAt(current < 0 ? times.length - 1 : current - 1);
+        break;
+      case 'Home':
+        hoverAt(0);
+        break;
+      case 'End':
+        hoverAt(times.length - 1);
+        break;
+      case 'Escape':
+        setHover(null);
+        return;
+      default:
+        return;
+    }
+    // Only for the keys handled above, so Tab still moves on and the page still
+    // scrolls with the arrows when the chart is not the focused element.
+    event.preventDefault();
   }
 
   const hoverEntries = hover
@@ -153,11 +195,14 @@ export function MetricChart({
             <svg
               ref={svgRef}
               viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-              className="h-48 w-full touch-none"
+              className="h-48 w-full touch-none rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
               role="img"
-              aria-label={`${title} over time`}
+              aria-label={`${title} over time. ${times.length} points. Focus and use the arrow keys to read values.`}
+              tabIndex={0}
               onPointerMove={onMove}
               onPointerLeave={() => setHover(null)}
+              onKeyDown={onKeyDown}
+              onBlur={() => setHover(null)}
             >
               {/* Baseline and the top gridline, with their value labels. */}
               {[0, plot.axisMax].map((v) => {
@@ -240,6 +285,25 @@ export function MetricChart({
                 </g>
               ) : null}
             </svg>
+
+            {/* The tooltip's contents as text. The tooltip itself is positioned
+                and pointer-driven, so it is not something a screen reader can
+                be walked through; this says the same thing when the selection
+                moves, by pointer or by arrow key. */}
+            <p aria-live="polite" className="sr-only">
+              {hover
+                ? `${fullLabel(hover.t, spanMs)}. ${hoverEntries
+                    .map(
+                      (entry) =>
+                        `${entry.label}: ${
+                          entry.value === undefined
+                            ? 'no value'
+                            : formatValue(entry.value)
+                        }`,
+                    )
+                    .join('. ')}`
+                : ''}
+            </p>
 
             {hover ? (
               <div

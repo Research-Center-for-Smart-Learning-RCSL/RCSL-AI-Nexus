@@ -23,6 +23,9 @@ import { DownloadProgress } from '@/features/models/components/download-progress
 import { ModelFormDialog } from '@/features/models/components/model-form-dialog';
 import { RUNTIME_LABELS, type Model } from '@/features/models/schema';
 
+/** Per-tab, so two tabs pulling different models do not overwrite each other. */
+const DOWNLOAD_JOB_KEY = 'nexus.models.download-job';
+
 export function ModelTable() {
   const { isAdmin } = useSession();
   const { data, isLoading, error, refetch } = useModels();
@@ -38,6 +41,23 @@ export function ModelTable() {
   const [deleting, setDeleting] = useState<Model | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
+  // The download outlives the page: it runs on the server, and a pull of tens
+  // of gigabytes is exactly the thing somebody reloads or navigates away from
+  // while it works. Held in sessionStorage rather than component state alone,
+  // so coming back shows the progress instead of a row stuck on `downloading`
+  // with nothing to explain it. Per-tab, because it is a view preference and
+  // not a fact about the deployment.
+  useEffect(() => {
+    const stored = sessionStorage.getItem(DOWNLOAD_JOB_KEY);
+    if (stored) setActiveJobId(stored);
+  }, []);
+
+  function trackJob(jobId: string | null) {
+    setActiveJobId(jobId);
+    if (jobId) sessionStorage.setItem(DOWNLOAD_JOB_KEY, jobId);
+    else sessionStorage.removeItem(DOWNLOAD_JOB_KEY);
+  }
+
   // The job is owned here rather than inside DownloadProgress, which only
   // renders: the table is what has to refresh when the pull finishes, and
   // useDownloadJob stops polling at a terminal state without telling anyone.
@@ -49,6 +69,10 @@ export function ModelTable() {
       void invalidateModels();
     }
   }, [jobState, invalidateModels]);
+
+  // Which model the bar is about, resolved from the job rather than remembered
+  // separately, so it survives the reload above.
+  const jobAlias = data?.find((model) => model.id === job.data?.model_id)?.alias;
 
   const columns = useMemo<ColumnDef<Model>[]>(
     () => [
@@ -145,7 +169,7 @@ export function ModelTable() {
                   disabled={busy || download.isPending}
                   onClick={() =>
                     download.mutate(model.id, {
-                      onSuccess: (started) => setActiveJobId(started.job_id),
+                      onSuccess: (started) => trackJob(started.job_id),
                     })
                   }
                 >
@@ -200,7 +224,14 @@ export function ModelTable() {
 
   return (
     <>
-      {activeJobId && <DownloadProgress jobId={activeJobId} className="mb-3" />}
+      {activeJobId && (
+        <DownloadProgress
+          jobId={activeJobId}
+          modelAlias={jobAlias}
+          onDismiss={() => trackJob(null)}
+          className="mb-3"
+        />
+      )}
 
       <DataTable
         columns={columns}
