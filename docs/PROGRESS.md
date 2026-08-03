@@ -56,6 +56,92 @@ the case where MaxMind itself went a month without publishing. Recorded rather
 than fixed, because the fix is to separate the two claims and the message has
 never fired.
 
+### The five gaps in `/api-docs`, and the two the audit itself had got wrong
+
+The page is the entire consideration `security.md` §4.4 receives in exchange for
+disabling `/openapi.json` and `/docs` on the gateway. The 2026-07-30 audit found
+five things it did not say; this closed them. Everything it already said was
+accurate then and still is, so this is addition rather than correction.
+
+What went in: the two grounding fields and the `X-Knowledge-Sources` header,
+including the part an integrator cannot afford to guess — retrieval **degrades
+to an ordinary ungrounded answer** rather than failing, so `use_knowledge: true`
+is a request and the header is the only evidence it was honoured. The six OpenAI
+fields that parse and do nothing, because pydantic's default is `ignore` and a
+caller setting `temperature: 0` gets a 200 that means nothing happened. What a
+mid-stream failure looks like on the wire, and the rule that follows from it: a
+stream that ended without `[DONE]` is a failed request, not a short answer.
+`prompt_tokens` declared absent rather than left to look measured. Four error
+codes, and the note that `no_available_model` is also what arrives in an error
+frame.
+
+**Re-verifying the audit's own list against the code changed two entries, which
+is the argument for not transcribing a finding into documentation.** The audit
+said `vector_store_unavailable` was newly reachable through grounding. It is
+not: `SearchKnowledge.execute_or_empty` catches `VectorStoreError` and
+`NoAvailableModelError` precisely so a Qdrant outage cannot turn a working chat
+into a 503. Publishing it would have told integrators to handle a 503 this
+endpoint does not produce — a documented error that cannot happen is the same
+class of defect as an undocumented one that can, and harder to notice because
+nothing contradicts it. And the audit grouped the wall-clock deadline with the
+mid-stream error frame; the deadline emits `finish_reason: "length"` and a
+normal `[DONE]`, indistinguishable from the token ceiling. That is a truncated
+success, not a failure, and a client told to treat it as a failure would retry
+an answer it already had.
+
+The reachability of what was added was checked the same way rather than assumed.
+`model_not_found` turned out to be the one worth having: it is not
+grounding-specific at all, since `_raise_for_status` maps Ollama's 404 on
+`/api/chat`, so any deployment whose routing policy names a model the runtime
+does not hold answers an ordinary chat request with a 404 no client would have
+expected. `runtime_capability_unsupported` needs the `embedding` policy pointing
+at MLX, which refuses to embed rather than returning a plausible wrong vector.
+`untrusted_proxy` needs nothing but reaching the application port directly.
+
+Gates: `tsc`, `eslint --max-warnings=0`, 171 vitest tests, and a real `next
+build`. No backend change — every one of these was a behaviour that already
+existed and was not written down.
+
+### The review, which found the same defect this entry had just claimed to avoid
+
+Six findings, all six confirmed against the code rather than accepted. Two of
+them were the work being wrong in the way it had congratulated itself for
+getting right.
+
+**`internal_error` was a documented error that cannot happen.** Two paragraphs
+above, this entry argues that publishing `vector_store_unavailable` would have
+been a defect because the code never produces it — and the same commit added a
+`500 internal_error` row. Counting the classes settles it: all 35 `DomainError`
+subclasses are in `STATUS_MAP`, so `_status_for` never falls through to its 500
+default, and the only bare `raise DomainError` in the tree is in `pull`, which
+the gateway does not mount. Worse, a genuinely unexpected failure is not a
+`DomainError` at all, so it never reaches the handler — Starlette answers with
+plain-text `Internal Server Error` and no JSON. A client written from that row
+would have parsed an envelope on the one status where it most needs to degrade.
+The row now says exactly that, which is more useful than either publishing the
+false code or deleting the row: **a 500 is the one response that is not JSON**.
+
+**"Retrieval degrades quietly rather than failing your request" was false for
+the likeliest embedding failure.** `execute_or_empty` catches `VectorStoreError`
+and `NoAvailableModelError` — not `ModelNotFoundError`, which is what
+`OllamaAdapter.embed` raises when the routed embedding model is absent from the
+runtime. That is the same condition this entry had just called the most valuable
+addition to the error table for `chat`; it escapes and 404s the whole request.
+So `use_knowledge: true` *can* turn a working chat into a failure, in exactly
+two ways, and the page now names both instead of promising it cannot happen.
+
+The rest were the page contradicting itself — "three share 400" against a table
+listing two, and the mid-stream frame described as carrying the same envelope
+when `sse.py` writes it by hand with no `type` — plus the runbook's new section
+being placed before the repository is cloned, so both of its commands were
+unrunnable and the "prove the key works" step would have reported failure on a
+correct setup by restarting containers that do not exist yet. It moved to §7
+beside the other daemon installs, where the stack is already up.
+
+**The through-line is that all four page defects are the same mistake**: writing
+what the wire ought to do instead of reading what it does. That is the mistake
+the 2026-07-30 audit existed to catch, repeated while closing it.
+
 ## 2026-08-02
 
 ### The administrator got public-entrance credentials, and the last two events fired
