@@ -1,4 +1,5 @@
 import { Logo } from '@/components/composed/logo';
+import { ThemeToggle } from '@/components/composed/theme-toggle';
 
 /**
  * Layout for screens that must render before anyone is authenticated.
@@ -9,7 +10,13 @@ import { Logo } from '@/components/composed/logo';
  */
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="nexus-dot-grid flex min-h-screen items-center justify-center bg-muted/40 p-6">
+    <div className="nexus-dot-grid relative flex min-h-screen items-center justify-center bg-muted/40 p-6">
+      {/* Reachable before anyone is signed in: the theme is a client-side
+          preference with no session behind it, and this is the first screen
+          most people see. */}
+      <div className="absolute top-4 right-4">
+        <ThemeToggle />
+      </div>
       <div className="w-full max-w-md">
         <div className="mb-8 flex flex-col items-center text-center">
           {/* The sign-in screens are the one place with room to show the mark
