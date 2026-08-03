@@ -20,6 +20,15 @@ import { useAssistantSurface } from '@/features/assistant/context';
  * URL and the capability list are the real ones. A page that hardcoded
  * `api.nexus.rcsl.online` would be wrong on every other deployment and nobody
  * would notice.
+ *
+ * Audited field by field against `routers/chat.py`, `schemas/chat_schemas.py`,
+ * `sse.py` and `errors.py` on 2026-07-30, which found five omissions rather
+ * than any inaccuracy: grounding, the silently ignored OpenAI fields, what a
+ * mid-stream failure looks like, `prompt_tokens`, and four reachable error
+ * codes. All closed on 2026-08-03. The rule the audit worked to, and the one to
+ * keep: **anything an integrator would only discover by being surprised belongs
+ * here**, including the behaviours that are absences. A field that parses and
+ * does nothing is worse than one that is rejected, so it is written down.
  */
 export function ApiReference() {
   const { data, isLoading, error, refetch } = useGatewayInfo();
@@ -147,6 +156,118 @@ export function ApiReference() {
             <code>content</code> — echoing it back as history would feed the
             model its own scratch work.
           </dd>
+          <dt className="font-mono text-muted-foreground">use_knowledge</dt>
+          <dd>
+            An extension. Retrieves from your tenant&apos;s knowledge base and
+            grounds the answer on what comes back. Off by default, because
+            grounding costs an embedding call and a slice of the context window,
+            so it is asked for rather than assumed. See below for what it does
+            and does not promise.
+          </dd>
+          <dt className="font-mono text-muted-foreground">
+            knowledge_collection
+          </dt>
+          <dd>
+            Restrict retrieval to one collection. Ignored unless{' '}
+            <code>use_knowledge</code> is set. It can only narrow: the tenant
+            scope is fixed by your key and no value here widens it.
+          </dd>
+        </dl>
+        <p className="text-sm text-muted-foreground">
+          <strong>Those seven fields are the whole request.</strong> Anything
+          else is accepted and silently ignored, which matters most for the ones
+          you would reasonably expect to work:{' '}
+          <code>temperature</code>, <code>top_p</code>, <code>n</code>,{' '}
+          <code>stop</code>, <code>tools</code> and <code>response_format</code>{' '}
+          all parse, return 200, and have no effect. Sampling is the
+          deployment&apos;s, not the caller&apos;s. Message roles are{' '}
+          <code>system</code>, <code>user</code> and <code>assistant</code> only
+          — a <code>tool</code> role is rejected with 422, which is the one
+          place an unsupported feature does announce itself.
+        </p>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="font-heading text-base font-semibold">
+          Grounding on the knowledge base
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          With <code>use_knowledge: true</code> the platform embeds your latest
+          question, retrieves passages from your tenant&apos;s documents, and
+          puts them in front of the model as data. The frames themselves stay
+          strictly OpenAI-shaped; which passages were used comes back as a
+          response header, because an extra frame shape would be a protocol
+          error to a client that parses the envelope strictly.
+        </p>
+        <CodeBlock
+          code={'X-Knowledge-Sources: <document id>:<passage>,<document id>:<passage>'}
+          label="Copy the header name"
+        />
+        <p className="text-sm text-muted-foreground">
+          Ids and passage indexes only, never passage text — a header reaches
+          access logs. The header is present on both the streaming and
+          non-streaming paths, and is <strong>absent when nothing was
+          retrieved</strong>.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          <strong>Retrieval usually degrades rather than failing.</strong> If
+          the vector store is unreachable, or this deployment has no embedding
+          model routed, or your question matched nothing, you get an ordinary
+          ungrounded completion: 200, no header, no error. That is deliberate —
+          an outage in an enhancement should not turn a working chat into a 503
+          — and it means <code>use_knowledge: true</code> is a request rather
+          than a guarantee. If your application depends on an answer being
+          grounded, check for the header rather than assuming it.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          <strong>Two conditions are not survivable, and both fail the whole
+          request rather than the retrieval.</strong> If the routed embedding
+          model is missing from its runtime you get{' '}
+          <code>404 model_not_found</code>, and if it sits on a runtime that
+          cannot embed at all you get{' '}
+          <code>400 runtime_capability_unsupported</code>. Neither can happen to
+          the same request without <code>use_knowledge</code>, so dropping the
+          flag is a workaround while an administrator fixes the{' '}
+          <code>embedding</code> policy. Both are deployment faults; retrying
+          identically will not clear either.
+        </p>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="font-heading text-base font-semibold">
+          What comes back
+        </h2>
+        <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[10rem_1fr]">
+          <dt className="font-mono text-muted-foreground">finish_reason</dt>
+          <dd>
+            <code>stop</code> means the model finished. <code>length</code>{' '}
+            means the answer was cut, either at the token ceiling or at the
+            platform&apos;s wall-clock deadline for a single generation — the
+            two are not distinguishable from the response, and both mean the
+            same thing to you: the reply is incomplete and continuing it is your
+            decision.
+          </dd>
+          <dt className="font-mono text-muted-foreground">usage</dt>
+          <dd>
+            <strong>
+              <code>prompt_tokens</code> is not reported.
+            </strong>{' '}
+            It is always <code>0</code>, and <code>total_tokens</code>{' '}
+            consequently equals <code>completion_tokens</code> rather than the
+            sum of both. Do not use these figures for input-side cost
+            accounting; count your own prompt if you need it. The platform meters
+            produced tokens only, so the quota on your key is spent by the same
+            number reported here.
+          </dd>
+          <dt className="font-mono text-muted-foreground">
+            usage, when streaming
+          </dt>
+          <dd>
+            Not sent at all. A streamed response carries no <code>usage</code>{' '}
+            object in any frame, including the terminal one. If you need a token
+            figure per call, use <code>stream: false</code>, or count the deltas
+            you received.
+          </dd>
         </dl>
       </section>
 
@@ -154,11 +275,51 @@ export function ApiReference() {
         <h2 className="font-heading text-base font-semibold">Errors</h2>
         <p className="text-sm text-muted-foreground">
           Every failure the platform raises carries{' '}
-          <code>{'{"error": {"code": "...", "message": "..."}}'}</code>. Branch
-          on the code rather than the status: two different conditions share
-          429, and two share 403, and each pair needs different handling. The
-          one exception is a request the schema rejects before any of this runs
-          — see 422 below, which has the framework&apos;s shape instead.
+          <code>
+            {'{"error": {"type": "...", "code": "...", "message": "..."}}'}
+          </code>
+          . <code>type</code> is OpenAI&apos;s coarse classification, derived
+          from the status; <code>code</code> is this platform&apos;s and is the
+          one to branch on. Branch on it rather than on the status: 429, 403 and
+          400 each cover two different conditions, and each pair needs different
+          handling. Two responses do not carry this envelope at all: a request
+          the schema rejects before any of this runs (422 below, which has the
+          framework&apos;s shape) and a 500, which is not JSON — see the last row
+          of the table.
+        </p>
+        <h3 className="pt-2 font-heading text-sm font-semibold">
+          A stream that fails after it has started
+        </h3>
+        <p className="text-sm text-muted-foreground">
+          The table below describes failures that happen before any bytes are
+          sent, which get a status code. Once the first frame is out the status
+          line is already committed as 200 and cannot be taken back, so a
+          failure mid-generation arrives in the body instead — a frame carrying{' '}
+          <code>error.code</code> and <code>error.message</code>, and then{' '}
+          <strong>
+            the stream ends without <code>data: [DONE]</code>
+          </strong>
+          . Note that this frame carries no <code>type</code>: it is written by
+          the stream itself rather than by the error response above, so{' '}
+          <code>code</code> is the only field to branch on here.
+        </p>
+        <CodeBlock
+          code={`data: {"error":{"code":"no_available_model","message":"..."}}
+
+(stream ends; no [DONE])`}
+          label="Copy the failure shape"
+        />
+        <p className="text-sm text-muted-foreground">
+          This is inherent to server-sent events rather than a choice, and it
+          makes <code>[DONE]</code> load-bearing:{' '}
+          <strong>
+            treat a stream that ended without it as a failed request
+          </strong>
+          , not as a short answer. A dropped connection ends the stream with
+          neither a frame nor the sentinel, which the same rule covers. A
+          truncated-but-successful answer is the opposite case and does reach{' '}
+          <code>[DONE]</code>, reporting{' '}
+          <code>finish_reason: &quot;length&quot;</code> first.
         </p>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -170,6 +331,30 @@ export function ApiReference() {
               </tr>
             </thead>
             <tbody className="[&_td]:py-2 [&_td]:pr-4 [&_tr]:border-b">
+              <tr>
+                <td>400</td>
+                <td className="font-mono text-xs">untrusted_proxy</td>
+                <td>
+                  The request did not arrive through this deployment&apos;s
+                  front door, so no source address could be established. You
+                  will see this if you reach the application port directly
+                  rather than the published endpoint above. Nothing about the
+                  key is wrong.
+                </td>
+              </tr>
+              <tr>
+                <td>400</td>
+                <td className="font-mono text-xs">
+                  runtime_capability_unsupported
+                </td>
+                <td>
+                  Grounding only: this deployment&apos;s embedding model runs on
+                  a runtime that cannot produce embeddings, so retrieval could
+                  not be attempted. Retrying will not help and the request
+                  succeeds without <code>use_knowledge</code>; an administrator
+                  has to repoint the <code>embedding</code> policy.
+                </td>
+              </tr>
               <tr>
                 <td>401</td>
                 <td className="font-mono text-xs">not_authenticated</td>
@@ -199,6 +384,20 @@ export function ApiReference() {
                 </td>
               </tr>
               <tr>
+                <td>404</td>
+                <td className="font-mono text-xs">model_not_found</td>
+                <td>
+                  Routing picked a model that its runtime does not actually
+                  have. A deployment fault rather than anything about your
+                  request — the capability is configured but the weights behind
+                  it are missing — so retrying the same call repeats it. Two
+                  models can trigger it: the one serving your capability, and,
+                  with <code>use_knowledge</code>, the one serving{' '}
+                  <code>embedding</code>. In the second case the request
+                  succeeds without the flag.
+                </td>
+              </tr>
+              <tr>
                 <td>422</td>
                 <td className="font-mono text-xs">—</td>
                 <td>
@@ -220,8 +419,10 @@ export function ApiReference() {
                 <td>429</td>
                 <td className="font-mono text-xs">quota_exceeded</td>
                 <td>
-                  The daily token quota is spent. Retrying inside the same day
-                  cannot succeed, so back off until it resets rather than
+                  The daily token quota is spent. <code>Retry-After</code> is
+                  set here too, but unlike the row above it is a fixed hour
+                  rather than a measured wait — retrying inside the same day
+                  cannot succeed, so back off until the quota resets rather than
                   looping.
                 </td>
               </tr>
@@ -241,7 +442,24 @@ export function ApiReference() {
                   names it, or every candidate is offline, unloaded or busy.
                   The response deliberately does not say which. Retry with
                   backoff; if it persists, the deployment needs an
-                  administrator.
+                  administrator. This is also the code a generation that dies
+                  mid-stream carries, in the error frame described above.
+                </td>
+              </tr>
+              <tr>
+                <td>500</td>
+                <td className="font-mono text-xs">—</td>
+                <td>
+                  <strong>The one response that is not JSON.</strong> Every
+                  condition the platform anticipates is in a row above; a 500
+                  means something it did not, so there is no code to give you
+                  and the body is the framework&apos;s plain{' '}
+                  <code>Internal Server Error</code>. Parse defensively — a
+                  client that assumes an envelope on every non-2xx throws here,
+                  on the one status where it most needs to degrade. Retry once;
+                  if it repeats, an administrator needs the timestamp of your
+                  request, because the detail went to the log rather than to
+                  you.
                 </td>
               </tr>
             </tbody>
