@@ -76,6 +76,17 @@ export function LoginForm({ redirectTo = '/' }: { redirectTo?: string }) {
           <Button type="submit" className="w-full" disabled={login.pending}>
             {login.pending ? 'Checking...' : 'Continue'}
           </Button>
+          {/* There is no self-service reset, and there is deliberately no link
+              here pretending otherwise: a reset link is issued by an
+              administrator from the Users screen and delivered out of band,
+              because an unauthenticated endpoint that emails one would be an
+              account-enumeration oracle. Saying nothing left someone who had
+              forgotten their password on a screen with no visible way out. */}
+          <p className="text-center text-xs text-muted-foreground">
+            Forgotten your password? An administrator issues a single-use reset
+            link; there is no self-service reset. Ask whoever set up your
+            account.
+          </p>
         </form>
       </Form>
     );

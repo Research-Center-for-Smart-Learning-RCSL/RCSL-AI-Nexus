@@ -112,6 +112,15 @@ export function UserTable() {
                 variant="ghost"
                 size="xs"
                 disabled={reset.isPending || !user.has_local_credentials}
+                // A disabled button with no explanation reads as a fault in the
+                // page. This one is off for a reason specific to the row: there
+                // is no password to reset for someone who only ever arrives
+                // over the tailnet.
+                title={
+                  user.has_local_credentials
+                    ? undefined
+                    : 'This account has no password. It signs in over the tailnet, where identity comes with the connection.'
+                }
                 onClick={async () => {
                   const issued = await reset.mutateAsync(user.id);
                   if (issued.url) {
@@ -129,6 +138,11 @@ export function UserTable() {
                 size="xs"
                 className="text-destructive"
                 disabled={user.id === me?.id}
+                title={
+                  user.id === me?.id
+                    ? 'You cannot remove your own account. Another administrator has to do it.'
+                    : undefined
+                }
                 onClick={() => setDeleting(user)}
               >
                 Remove

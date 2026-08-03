@@ -20,6 +20,8 @@ import {
 import { EmptyState } from '@/components/composed/empty-state';
 import { cn } from '@/lib/utils';
 import {
+  CAPABILITY_DESCRIPTIONS,
+  isConversational,
   issuableCapabilitySchema,
   type IssuableCapability,
 } from '@/features/models/schema';
@@ -128,15 +130,27 @@ export function ChatPanel() {
         <div ref={bottomRef} />
       </div>
 
-      <label className="flex items-center gap-2 text-sm text-muted-foreground">
-        <input
-          type="checkbox"
-          className="size-4 accent-primary"
-          checked={useKnowledge}
-          onChange={(event) => setUseKnowledge(event.target.checked)}
-        />
-        Answer from the knowledge base
-      </label>
+      <div className="space-y-1">
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <input
+            type="checkbox"
+            className="size-4 accent-primary"
+            checked={useKnowledge}
+            // Disabled mid-stream like the thinking toggle beside it. Both are
+            // read at send time, so a change made while a reply was arriving
+            // silently applied to the next message instead of this one.
+            disabled={isStreaming}
+            onChange={(event) => setUseKnowledge(event.target.checked)}
+          />
+          Answer from the knowledge base
+        </label>
+        {/* What the selected capability is for. The picker is five lowercase
+            words otherwise, and `code` against `chat` is not a guess anyone
+            should have to make from the name alone. */}
+        <p className="text-xs text-muted-foreground">
+          {CAPABILITY_DESCRIPTIONS[capability]}
+        </p>
+      </div>
 
       <form onSubmit={submit} className="flex items-center gap-2">
         <Select
@@ -148,8 +162,16 @@ export function ChatPanel() {
           </SelectTrigger>
           <SelectContent>
             {issuableCapabilitySchema.options.map((option) => (
-              <SelectItem key={option} value={option}>
+              <SelectItem
+                key={option}
+                value={option}
+                // Listed rather than hidden, so the picker still shows what a
+                // key can be issued for, but not selectable here: routing would
+                // send the request to a model that does not generate text.
+                disabled={!isConversational(option)}
+              >
                 {option}
+                {isConversational(option) ? null : ' (not a conversation)'}
               </SelectItem>
             ))}
           </SelectContent>
