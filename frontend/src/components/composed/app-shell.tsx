@@ -14,7 +14,7 @@
  * layer regardless of what this renders.
  */
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -241,10 +241,32 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const assistant = useAssistantContext();
   const [navOpen, setNavOpen] = useState(false);
+  const navPanelRef = useRef<HTMLDivElement | null>(null);
+  const navButtonRef = useRef<HTMLButtonElement | null>(null);
 
   // Closed on every navigation. The panel overlays the content it just sent the
   // reader to, so leaving it open would hide the result of their own tap.
   useEffect(() => setNavOpen(false), [pathname]);
+
+  // The panel is `fixed`, but it sits before the header in the DOM, so opening
+  // it and pressing Tab walked *forward* into the header buttons and never into
+  // the links. Focus moves in on open and back to the button on close, and
+  // Escape dismisses it — the same contract the column menu in DataTable got,
+  // for the same reason.
+  useEffect(() => {
+    if (!navOpen) return;
+
+    navPanelRef.current?.focus();
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setNavOpen(false);
+        navButtonRef.current?.focus();
+      }
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [navOpen]);
 
   // Only the public entrance has a login screen to redirect to.
   const shouldRedirectToLogin =
@@ -348,7 +370,17 @@ export function AppShell({ children }: { children: ReactNode }) {
               className="absolute inset-0 bg-black/40"
               onClick={() => setNavOpen(false)}
             />
-            <div className="absolute inset-y-0 left-0 flex w-64 max-w-[85%] flex-col overflow-y-auto border-r bg-background p-3">
+            <div
+              ref={navPanelRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Navigation"
+              // Focusable only as a target for the effect above, so focus lands
+              // inside the panel and Tab continues through the links rather
+              // than leaving for the header.
+              tabIndex={-1}
+              className="absolute inset-y-0 left-0 flex w-64 max-w-[85%] flex-col overflow-y-auto border-r bg-background p-3 outline-none"
+            >
               <div className="mb-4 flex items-start justify-between gap-2 px-2">
                 <div>
                   <p className="font-heading text-sm font-semibold">
@@ -362,7 +394,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                   variant="ghost"
                   size="icon-sm"
                   aria-label="Close the menu"
-                  onClick={() => setNavOpen(false)}
+                  onClick={() => {
+                    setNavOpen(false);
+                    navButtonRef.current?.focus();
+                  }}
                 >
                   <XIcon />
                 </Button>
@@ -380,6 +415,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <header className="flex items-center justify-between gap-3 border-b px-4 py-2">
             <div className="flex min-w-0 items-center gap-2">
               <Button
+                ref={navButtonRef}
                 variant="ghost"
                 size="icon-sm"
                 className="sm:hidden"

@@ -90,8 +90,14 @@ export function DownloadProgress({
         {/* A terminal job says so. The bar used to stop moving and stay on
             screen at whatever it had reached, which reads the same as a stalled
             download, and nothing ever removed it. */}
+        {/* Deliberately not a live region. The job is polled every two seconds
+            and this line carries the percentage, so announcing it re-read
+            "Downloading llama-3 - 41% - 4.1 GB of 9.8 GB" every two seconds for
+            the length of a multi-gigabyte pull. The running figure is already
+            on the progressbar as aria-valuenow, which assistive technology
+            reports on request rather than unprompted; only the terminal
+            transition is announced, below. */}
         <p
-          aria-live="polite"
           className={cn(
             'text-xs',
             data.state === 'failed'
@@ -120,6 +126,16 @@ export function DownloadProgress({
           </Button>
         ) : null}
       </div>
+
+      {/* The one transition worth interrupting someone for: it is the moment
+          the model becomes loadable, or the moment it turns out it will not. */}
+      <p aria-live="polite" className="sr-only">
+        {data.state === 'succeeded'
+          ? `Finished downloading ${subject}.`
+          : data.state === 'failed'
+            ? `Download of ${subject} failed.`
+            : ''}
+      </p>
     </div>
   );
 }
