@@ -85,6 +85,36 @@ application log line from the first integration test onward. Two independent
 mechanisms, found the same day, both of which made a diagnostic exist and never
 arrive.
 
+### Deployed, and the log immediately said what the probing had inferred
+
+Commit `1bcd12c` is on the Mac Studio: the backend image rebuilt and `gateway`,
+`admin-tailnet` and `admin-public` recreated on it. `migrate` exited 0 — no
+schema change, `alembic upgrade head` is idempotent, and it now runs with the
+`fileConfig` fix. Recreate rather than restart, so requested-versus-actual port
+bindings were compared on all three; all matched. Five entrances answered
+`/healthz` 200.
+
+The verification is the line itself, and it is worth the entry because it turned
+an inference into a statement from the application:
+
+    INFO app.interfaces.http.middleware.geo_middleware
+      perimeter_rejected path=/admin/me code=untrusted_proxy
+      detail=proxy secret missing or wrong
+
+That names which of the three causes fired. Everything above it in this entry
+was established by sending deliberately wrong values from outside and reading
+the shapes that came back; this is the deployment answering directly. The second
+finding confirmed the same way, and more completely than the external probe
+could — the geo filter now records what it judged on:
+
+    INFO ... geo_filter  rejected request from 8.8.8.8 (US)
+    INFO ... geo_middleware  perimeter_rejected code=country_not_allowed detail=country=US ip=8.8.8.8
+
+`ip=8.8.8.8` is the forged value being used as the basis of the decision, which
+is the whole of the `X-Forwarded-For` finding stated by the thing that was
+fooled. Six perimeter events recorded in the first three minutes, against zero
+in the entire life of the deployment before this.
+
 ### An acceptance script, because neither failure shows up in a status code
 
 `scripts/verify-public-entrance.sh` runs what was done by hand here: the tag, the
