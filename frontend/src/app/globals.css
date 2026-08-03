@@ -60,9 +60,13 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
+  /* The variable `next/font` actually defines in the root layout. Naming the
+     theme token after itself resolves to nothing, which left `font-sans` — and
+     `font-heading` below, and so every page title — falling back to the
+     browser default while Geist was downloaded and never used. */
+  --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  --font-heading: var(--font-geist-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);

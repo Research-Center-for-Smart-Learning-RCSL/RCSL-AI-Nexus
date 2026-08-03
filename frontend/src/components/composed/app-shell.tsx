@@ -40,6 +40,7 @@ import { Badge } from '@/components/ui/badge';
 import { ErrorState } from '@/components/composed/error-state';
 import { Logo } from '@/components/composed/logo';
 import { Spinner } from '@/components/composed/spinner';
+import { ThemeToggle } from '@/components/composed/theme-toggle';
 import { useSession, useSessionExpiry } from '@/lib/session';
 import { TAILSCALE_CONNECTION_LOST } from '@/features/auth/messages';
 import { AssistantContextProvider } from '@/features/assistant/context';
@@ -264,6 +265,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </p>
             </div>
             <div className="flex items-center gap-2">
+              <ThemeToggle />
               {/* Account settings only apply where local credentials exist. */}
               {authMode !== 'tailnet' ? (
                 <Button variant="ghost" size="sm" render={<Link href="/account" />}>
