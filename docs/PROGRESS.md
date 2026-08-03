@@ -15,6 +15,47 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-03
+
+### The country database stopped ageing, four days after the mechanism to stop it existed
+
+`launchd/refresh-geolite2.sh` was written on 2026-07-30 and did nothing until
+today, because its plist was never installed, because the licence key was never
+placed. The database was seven days old with nothing scheduled to replace it —
+the same outcome as having no mechanism at all, which is the point worth
+keeping: **a written script and an installed daemon are different states, and
+only one of them is a control.** The key went into `secrets/maxmind_license_key`
+(0600, no trailing newline, though the script strips whitespace anyway), the
+script ran by hand, and the plist went in afterwards. Loaded in the system
+domain, running as `rcslmac1` so it can reach the user's Docker socket, `state =
+not running` because it is calendar-scheduled rather than `RunAtLoad`, firing
+Wednesdays at 05:30.
+
+The hand run did the whole path in two seconds: download, the two validity
+checks, atomic replace, and `docker compose restart gateway admin-public` — the
+tailnet entrance deliberately not cycled, since it does not enforce the filter.
+
+**The restart is also the only verification available, and that is worth
+stating.** There is no endpoint that reports which database a running container
+has open, and geoip2 opens the file once at startup. What makes the restart
+evidence rather than a hope is `build_geo_filter` refusing to start without the
+file in production: both services came back up and answered `/healthz` 200 on
+the tailnet address, so each opened a database, and the only one on disk was the
+new one. A probe of `127.0.0.1:8000` answered nothing, which is §3.3 working
+rather than a fault — five of the entrances bind the tailnet address, and a
+loopback probe is the wrong question here.
+
+**One thing the run surfaced: the new file's mtime is MaxMind's publish date,
+not the download date** — `tar` preserves the archive's timestamp and `mv`
+carries it across. So today's fresh download is dated 2026-07-31, and the
+script's own staleness guard, which reads `stat -f %m`, measures **how old the
+data is** rather than **how long refreshes have been failing**. The first is
+closer to what matters, so this is left as it is; the log line it prints
+(`refreshes have been failing`) is the part that would misattribute, and only in
+the case where MaxMind itself went a month without publishing. Recorded rather
+than fixed, because the fix is to separate the two claims and the message has
+never fired.
+
 ## 2026-08-02
 
 ### The administrator got public-entrance credentials, and the last two events fired

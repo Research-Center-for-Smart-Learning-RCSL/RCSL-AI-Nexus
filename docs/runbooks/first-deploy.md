@@ -1121,6 +1121,9 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
 - [ ] 在專案目錄底下建 `data/`，把檔案放成 `data/GeoLite2-Country.mmdb`。compose 會把
   `./data` 唯讀掛進 gateway 與 admin 容器。
 
+這一步只發生一次，之後不會有任何東西告訴你這份資料庫該更新了。排程更新在 **§7**，跟其他
+LaunchDaemon 放在一起——它要跑得起來，得先有 repo、有 `secrets/`，而且 stack 已經在跑。
+
 ---
 
 ## 6. 取得專案並設定
@@ -1301,6 +1304,37 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
   tail -20 /opt/homebrew/var/log/nexus-reconcile.log
   ```
 
+- [ ] **裝 GeoLite2 更新的 LaunchDaemon。** §5 那份資料庫放進去之後就停在那天了。MaxMind
+  一週發布兩次，IP 段會在國家之間搬家，所以一份不動的副本**越放越錯，而且兩個方向都
+  錯**：該放行的被擋、該擋的被放行。而且它是安靜的——country filter 照常運作，只是依據過
+  期的事實。保持更新也是 MaxMind 授權條款的要求，不是偏好。
+
+  先到 MaxMind 帳號頁建立**永久 License Key**（不是第一次下載用的臨時 token；排程工作要
+  的是長效那一種）：
+
+  ```sh
+  printf '%s' 'YOUR_MAXMIND_LICENSE_KEY' > secrets/maxmind_license_key
+  chmod 600 secrets/maxmind_license_key
+  bash launchd/refresh-geolite2.sh     # 先手動跑，確認金鑰真的能下載
+  ```
+
+  沒有金鑰時腳本會 `FATAL` 並保留舊資料庫不動，所以這一步真正驗證的是金鑰能用、下載得
+  到、檔案通過格式與大小檢查。**這一步要在 stack 起來之後跑**：資料庫有換的話腳本會
+  `docker compose restart gateway admin-public`——geoip2 只在啟動時開一次檔，不重啟等於沒
+  換——容器不存在時那行會回非零，讓一次正確的設定看起來像失敗。這裡是 restart 不是
+  recreate，所以不會重建 port binding，§1.1 那個開機競態不會從這裡被重新引入。上游沒有新
+  版時它會說 `database unchanged upstream` 然後什麼都不做。
+
+  ```sh
+  sudo install -o root -g wheel -m 644 \
+    launchd/online.rcsl.refresh-geolite2.plist /Library/LaunchDaemons/
+  sudo launchctl load -w /Library/LaunchDaemons/online.rcsl.refresh-geolite2.plist
+  ```
+
+  每週三 05:30。**失敗不會有人通知你**（health-check daemon 不看這個），但下一次執行開頭
+  的 STALENESS 檢查會在檔案超過 30 天時大聲抱怨，log 在
+  `/opt/homebrew/var/log/nexus-geolite2.log`。
+
 - [ ] **裝健康監測的 LaunchDaemon（狀態變了會寄信）。** 上面那個 daemon 修的是開機那一
   刻。它修不好、或者它自己沒跑的時候，狀態會跟 2026-07-26 那次一模一樣：容器 running、
   gateway healthy、平台從 tailnet 打不到，而**沒有任何東西會說**。那次是靠人坐下來讀四份
@@ -1330,7 +1364,8 @@ Production 下 country filter 找不到這個檔會**拒絕啟動**（這是刻�
 
   **改 plist 之後一定要重裝＋重載，改腳本不用。** plist 上的 `ProgramArguments` 指向工作樹
   裡的 `.sh`，所以腳本一存檔下次執行就是新的；但 `/Library/LaunchDaemons/` 裡那份 plist 是
-  **複本**，repo 裡改了不會自動生效。這三個 daemon 都一樣。確認的方式是比對，不是相信：
+  **複本**，repo 裡改了不會自動生效。這四個 daemon 都一樣（ollama、reconcile-port-bindings、
+  health-check、refresh-geolite2）。確認的方式是比對，不是相信：
 
   ```sh
   diff <(plutil -p /Library/LaunchDaemons/online.rcsl.health-check.plist) \
