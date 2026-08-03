@@ -24,6 +24,7 @@ from app.infrastructure.di import (
     build_concurrency_limiter,
     build_runtimes,
 )
+from app.infrastructure.logging_config import configure_logging
 from app.interfaces.http.errors import install_error_handlers
 from app.interfaces.http.middleware.geo_filter import build_geo_filter
 from app.interfaces.http.middleware.metrics import MetricsMiddleware
@@ -56,6 +57,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    # Before anything else builds a logger, so no startup line is lost
+    # to the WARNING-level fallback handler this replaces.
+    configure_logging(settings)
 
     app = FastAPI(
         title="RCSL AI Nexus Gateway",

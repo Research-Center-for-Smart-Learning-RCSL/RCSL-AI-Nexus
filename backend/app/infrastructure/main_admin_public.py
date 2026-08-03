@@ -24,6 +24,7 @@ from app.infrastructure.admin_composition import (
     mount_admin_routers,
 )
 from app.infrastructure.config import get_settings
+from app.infrastructure.logging_config import configure_logging
 from app.interfaces.http.errors import install_error_handlers
 from app.interfaces.http.middleware.csrf import CsrfMiddleware
 from app.interfaces.http.middleware.geo_middleware import GeoFilterMiddleware
@@ -61,6 +62,9 @@ class StripTailscaleHeadersMiddleware(BaseHTTPMiddleware):
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    # Before anything else builds a logger, so no startup line is lost
+    # to the WARNING-level fallback handler this replaces.
+    configure_logging(settings)
 
     app = FastAPI(
         title="RCSL AI Nexus Admin (public)",
