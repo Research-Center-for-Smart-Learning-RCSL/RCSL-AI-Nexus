@@ -14,7 +14,7 @@
  * layer regardless of what this renders.
  */
 
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -25,13 +25,16 @@ import {
   KeyIcon,
   LibraryIcon,
   LogOutIcon,
+  MenuIcon,
   MessageSquareIcon,
   Building2Icon,
   RouteIcon,
   ScrollTextIcon,
   ServerIcon,
+  SparklesIcon,
   UserCogIcon,
   UsersIcon,
+  XIcon,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -43,7 +46,10 @@ import { Spinner } from '@/components/composed/spinner';
 import { ThemeToggle } from '@/components/composed/theme-toggle';
 import { useSession, useSessionExpiry } from '@/lib/session';
 import { TAILSCALE_CONNECTION_LOST } from '@/features/auth/messages';
-import { AssistantContextProvider } from '@/features/assistant/context';
+import {
+  AssistantContextProvider,
+  useAssistantContext,
+} from '@/features/assistant/context';
 import { AssistantDrawer } from '@/features/assistant/components/assistant-drawer';
 
 type NavItem = {
@@ -139,6 +145,48 @@ function isActive(pathname: string | null, href: string): boolean {
   return pathname?.startsWith(href) ?? false;
 }
 
+/**
+ * The link list, shared by the sidebar and the narrow-screen panel.
+ *
+ * One definition rather than two: a nav that existed twice is a nav where one
+ * copy quietly falls behind, and the role filtering below is the part that must
+ * not diverge.
+ */
+function NavLinks({
+  items,
+  pathname,
+  onNavigate,
+}: {
+  items: NavItem[];
+  pathname: string | null;
+  onNavigate?: () => void;
+}) {
+  return (
+    <nav className="space-y-0.5">
+      {items.map((item) => {
+        const active = isActive(pathname, item.href);
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            onClick={onNavigate}
+            aria-current={active ? 'page' : undefined}
+            className={cn(
+              'flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm',
+              active
+                ? 'bg-muted font-medium text-foreground'
+                : 'text-muted-foreground hover:bg-muted/50',
+            )}
+          >
+            {item.icon}
+            {item.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
 function SessionExpiryWarning() {
   const { msRemaining, shouldWarn } = useSessionExpiry();
   if (!shouldWarn || msRemaining === null) return null;
@@ -155,6 +203,12 @@ export function AppShell({ children }: { children: ReactNode }) {
     useSession();
   const router = useRouter();
   const pathname = usePathname();
+  const assistant = useAssistantContext();
+  const [navOpen, setNavOpen] = useState(false);
+
+  // Closed on every navigation. The panel overlays the content it just sent the
+  // reader to, so leaving it open would hide the result of their own tap.
+  useEffect(() => setNavOpen(false), [pathname]);
 
   // Only the public entrance has a login screen to redirect to.
   const shouldRedirectToLogin =
@@ -219,7 +273,17 @@ export function AppShell({ children }: { children: ReactNode }) {
   const visible = NAV.filter((item) => !item.adminOnly || isAdmin);
 
   return (
-    <div className="flex flex-1 flex-col">
+    <div
+      className={cn(
+        'flex flex-1 flex-col',
+        // The panel is 24rem and fixed to the right edge. Reserving the same
+        // width from `lg` up is what turns it from something that covers the
+        // rightmost table columns into something that sits beside them. Below
+        // `lg` there is no width to spare, so it overlays and the header button
+        // stays available to dismiss it.
+        assistant.isOpen && 'lg:pr-96',
+      )}
+    >
       <SessionExpiryWarning />
       <div className="flex flex-1">
         <aside className="hidden w-56 shrink-0 border-r p-3 sm:block">
@@ -234,56 +298,119 @@ export function AppShell({ children }: { children: ReactNode }) {
               {authMode ?? 'unknown'}
             </Badge>
           </div>
-          <nav className="space-y-0.5">
-            {visible.map((item) => {
-              const active = isActive(pathname, item.href);
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={cn(
-                    'flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm',
-                    active
-                      ? 'bg-muted font-medium text-foreground'
-                      : 'text-muted-foreground hover:bg-muted/50',
-                  )}
-                >
-                  {item.icon}
-                  {item.label}
-                </Link>
-              );
-            })}
-          </nav>
+          <NavLinks items={visible} pathname={pathname} />
         </aside>
+
+        {/* The same links for anything narrower than the sidebar's breakpoint.
+            Below 640px the aside is display:none, and without this there was no
+            way at all to reach another screen short of typing the URL. */}
+        {navOpen ? (
+          <div className="fixed inset-0 z-50 sm:hidden">
+            <button
+              type="button"
+              aria-label="Close the menu"
+              className="absolute inset-0 bg-black/40"
+              onClick={() => setNavOpen(false)}
+            />
+            <div className="absolute inset-y-0 left-0 flex w-64 max-w-[85%] flex-col overflow-y-auto border-r bg-background p-3">
+              <div className="mb-4 flex items-start justify-between gap-2 px-2">
+                <div>
+                  <p className="font-heading text-sm font-semibold">
+                    RCSL AI Nexus
+                  </p>
+                  <Badge variant="outline" className="mt-1">
+                    {authMode ?? 'unknown'}
+                  </Badge>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Close the menu"
+                  onClick={() => setNavOpen(false)}
+                >
+                  <XIcon />
+                </Button>
+              </div>
+              <NavLinks
+                items={visible}
+                pathname={pathname}
+                onNavigate={() => setNavOpen(false)}
+              />
+            </div>
+          </div>
+        ) : null}
 
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="flex items-center justify-between gap-3 border-b px-4 py-2">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{me.display_name}</p>
-              <p className="truncate text-xs text-muted-foreground">
-                {me.login} - {me.role}
-              </p>
+            <div className="flex min-w-0 items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="sm:hidden"
+                aria-label="Open the menu"
+                aria-expanded={navOpen}
+                onClick={() => setNavOpen(true)}
+              >
+                <MenuIcon />
+              </Button>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{me.display_name}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {me.login} - {me.role}
+                </p>
+              </div>
             </div>
             <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={
+                  assistant.isOpen
+                    ? 'Close the assistant'
+                    : 'Open the assistant'
+                }
+                aria-expanded={assistant.isOpen}
+                onClick={() => assistant.setOpen(!assistant.isOpen)}
+                className={cn(assistant.isOpen && 'bg-muted text-foreground')}
+              >
+                <SparklesIcon />
+              </Button>
               <ThemeToggle />
               {/* Account settings only apply where local credentials exist. */}
               {authMode !== 'tailnet' ? (
-                <Button variant="ghost" size="sm" render={<Link href="/account" />}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Account"
+                  render={<Link href="/account" />}
+                >
                   <UserCogIcon />
-                  Account
+                  {/* The label is the first thing to go when the header has to
+                      share a narrow row with the menu button and the identity
+                      block; the icon still carries the meaning, and the
+                      aria-label above keeps the name for anyone not seeing it. */}
+                  <span className="hidden md:inline">Account</span>
                 </Button>
               ) : null}
               {/* No session on the tailnet, so nothing to sign out of. */}
               {authMode !== 'tailnet' ? (
-                <Button variant="outline" size="sm" onClick={() => void signOut()}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label="Sign out"
+                  onClick={() => void signOut()}
+                >
                   <LogOutIcon />
-                  Sign out
+                  <span className="hidden md:inline">Sign out</span>
                 </Button>
               ) : null}
             </div>
           </header>
 
-          <main className="min-w-0 flex-1 p-4">{children}</main>
+          {/* A flex column, so a page that wants the remaining height can ask
+              for it with `flex-1` instead of guessing at the chrome above it in
+              viewport units. */}
+          <main className="flex min-w-0 flex-1 flex-col p-4">{children}</main>
         </div>
       </div>
 
