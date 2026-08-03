@@ -17,6 +17,43 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-03
 
+### The deploy, and a page whose own HTML could not confirm it
+
+Commits `a5ab7a7` and `7bb1ed4` are on the Mac Studio. Only the frontend changed,
+so only the one shared image was rebuilt (`ea97a6c52ada` → `35924b43dd63`) and
+only `frontend-tailnet` and `frontend-public` were recreated. No backend change,
+no migration.
+
+**Recreate, not restart, so the port forwards were checked.** A forward is
+created with the container, which is why the reconciler uses `--force-recreate`
+and why `restart` cannot repair a lost binding — and it is the same mechanism the
+§1.1 boot race turns on. Requested and actual were compared on both containers
+afterwards rather than assumed: `127.0.0.1:3000` and `100.108.250.62:3001`, both
+matching. `tailscaled` was up throughout, so there was no race to lose; the check
+is cheap and the failure it looks for is silent.
+
+**The page could not be verified the obvious way.** `/api-docs` is a client
+component, so the served HTML is a 12 KB shell containing none of the new text —
+a `curl | grep` came back empty against a correct deploy, which is the shape of
+result that gets read as a failed one. Verification moved to the build output
+inside the running container, and **the two checks that carried the weight were
+the negative ones**: `three share 400` and `vector_store_unavailable` are absent.
+Those are the review's findings, so their absence proves the image holds the
+corrected page rather than the first draft. Grepping only for the new strings
+would have passed on either version, because the draft contained them too.
+
+Six entrances answered 200 (both admin apps, the gateway, both frontends,
+Grafana), eleven services up, and the health daemon's state file said `OK` with
+no `failing` event across the recreate.
+
+**The GeoLite2 daemon is loaded and has never run.** `launchctl print` shows it
+scheduled, and `/opt/homebrew/var/log/nexus-geolite2.log` does not exist — the
+refresh that happened today was a hand run whose output went to a terminal. So
+what is proven is the script working and launchd holding the job; what is not
+proven is launchd *firing* it, which is a different claim and the one the log
+will carry on Wednesday at 05:30. The same distinction the health daemon needed a
+boot to settle, where every mail before it had come from a hand run.
+
 ### The country database stopped ageing, four days after the mechanism to stop it existed
 
 `launchd/refresh-geolite2.sh` was written on 2026-07-30 and did nothing until
