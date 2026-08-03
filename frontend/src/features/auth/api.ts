@@ -93,9 +93,22 @@ export async function changePassword(
   });
 }
 
-/** Re-enrol TOTP from account settings. Returns fresh provisioning material. */
-export async function beginTotpReenrolment(): Promise<Enrolment> {
-  return enrolmentSchema.parse(await api.post<unknown>('/me/totp'));
+/**
+ * Re-enrol TOTP from account settings. Returns fresh provisioning material.
+ *
+ * The current password is required and is not optional politeness: replacing
+ * the second factor replaces a bearer credential, so the endpoint proves the
+ * first one exactly as a password change does. This sent no body at all until
+ * the account screen was built and finally called it, which the endpoint would
+ * have refused with a 422 for a missing `current_password`.
+ *
+ * The new secret is held server-side for minutes and is not written to the user
+ * row, so abandoning the flow leaves the working authenticator untouched.
+ */
+export async function beginTotpReenrolment(input: {
+  current_password: string;
+}): Promise<Enrolment> {
+  return enrolmentSchema.parse(await api.post<unknown>('/me/totp', input));
 }
 
 export async function confirmTotpReenrolment(input: {

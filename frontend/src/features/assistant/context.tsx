@@ -68,6 +68,16 @@ type AssistantContextValue = {
   readDraft: () => ApiKeyDraft | undefined;
   applyPatch: (patch: FormPatch) => void;
   register: (registration: AssistantRegistration) => () => void;
+  /**
+   * Whether the panel is showing.
+   *
+   * Held here rather than inside the drawer because two things outside it now
+   * depend on the answer: the shell header owns the button that opens it, and
+   * the shell reserves room for the panel on a wide screen so it stops covering
+   * the table the question is about.
+   */
+  isOpen: boolean;
+  setOpen: (open: boolean) => void;
 };
 
 const AssistantContext = createContext<AssistantContextValue | null>(null);
@@ -81,6 +91,7 @@ export function AssistantContextProvider({ children }: { children: ReactNode }) 
     canApply: boolean;
   }>(NOTHING);
   const stack = useRef<AssistantRegistration[]>([]);
+  const [isOpen, setOpen] = useState(false);
 
   const sync = useCallback(() => {
     const top = stack.current.at(-1);
@@ -118,8 +129,10 @@ export function AssistantContextProvider({ children }: { children: ReactNode }) 
       readDraft: () => stack.current.at(-1)?.readDraft?.(),
       applyPatch: (patch) => stack.current.at(-1)?.applyPatch?.(patch),
       register,
+      isOpen,
+      setOpen,
     }),
-    [active, register],
+    [active, register, isOpen],
   );
 
   return (

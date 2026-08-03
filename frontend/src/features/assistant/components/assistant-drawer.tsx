@@ -16,7 +16,7 @@
  */
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { SparklesIcon, XIcon } from 'lucide-react';
+import { XIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -83,9 +83,9 @@ function Turn({
 }
 
 export function AssistantDrawer() {
-  const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState('');
   const context = useAssistantContext();
+  const { isOpen: open, setOpen } = context;
   const { turns, isStreaming, store, send, cancel, clear } = useAssistant();
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -105,26 +105,22 @@ export function AssistantDrawer() {
     context.applyPatch(proposalToFormPatch(proposal.fields));
   }
 
-  if (!open) {
-    return (
-      <Button
-        type="button"
-        variant="outline"
-        onClick={() => setOpen(true)}
-        className="fixed right-4 bottom-4 z-40 shadow-md"
-        aria-label="Open the assistant"
-      >
-        <SparklesIcon className="size-4" />
-        Assistant
-      </Button>
-    );
-  }
+  // Nothing to render when closed: the button that opens it lives in the shell
+  // header. It used to float at the bottom-right corner, which is exactly where
+  // the chat composer puts its own Stop and Clear buttons, so on the one screen
+  // where both are in reach they sat on top of each other.
+  if (!open) return null;
 
   return (
     <aside
       // Not a modal. The operator is meant to read the answer and type into the
       // form at the same time, and a dialog that traps focus would make the one
       // workflow this exists for impossible.
+      //
+      // On a wide screen the shell reserves the same width as padding, so the
+      // panel sits beside the content rather than over it. Narrower than that
+      // there is no room to reserve and it does cover the page, which is why the
+      // header button stays visible underneath to close it again.
       aria-label="Management assistant"
       className="bg-background fixed inset-y-0 right-0 z-40 flex w-full max-w-sm flex-col border-l shadow-lg"
     >
