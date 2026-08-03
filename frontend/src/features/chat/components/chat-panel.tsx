@@ -119,13 +119,29 @@ export function ChatPanel() {
         ))}
 
         {isStreaming ? (
-          <div className="rounded-lg px-3 py-2 ring-1 ring-foreground/10">
+          <div
+            className="rounded-lg px-3 py-2 ring-1 ring-foreground/10"
+            aria-busy="true"
+          >
             <p className="mb-1 text-xs font-medium text-muted-foreground">
               Assistant
             </p>
             <StreamMessage store={store} />
           </div>
         ) : null}
+
+        {/* The state of the reply, not the reply itself. Marking the message
+            body as a live region would re-announce the whole answer on every
+            token; a screen reader user got nothing at all instead. This says
+            when a reply starts and when it is complete, and the finished turn
+            above is then there to be read at leisure. */}
+        <p aria-live="polite" className="sr-only">
+          {isStreaming
+            ? 'Generating a reply.'
+            : turns.length > 0
+              ? 'Reply complete.'
+              : ''}
+        </p>
 
         <div ref={bottomRef} />
       </div>
