@@ -193,7 +193,13 @@ export function DocumentTable({ collectionId }: DocumentTableProps) {
         isLoading={isLoading}
         error={error}
         onRetry={() => void refetch()}
-        searchPlaceholder="Search this page"
+        // Matches the server page exactly, so the table's own pager never
+        // engages. It defaults to 20, which split each 25-row page into a
+        // "Page 1 of 2" sitting directly above a server pager reading
+        // "1-25 of N" — two sets of Previous/Next, three clicks apart in
+        // meaning, on the same screen.
+        pageSize={PAGE_SIZE}
+        searchPlaceholder="Filter the documents below"
         emptyTitle="No documents"
         emptyDescription={
           collectionId

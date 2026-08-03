@@ -59,14 +59,27 @@ export function DashboardOverview() {
         />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <MetricChart
-          title="Requests, last 24 hours"
-          series={requests}
-          isLoading={usage.isLoading}
+      {/* The charts read a second endpoint, and its failure used to be silent:
+          with no data and nothing loading, MetricChart says "No activity in
+          this range", which is a claim about the deployment rather than about
+          the request. An operator checking whether traffic had stopped would
+          have been told that it had. */}
+      {usage.error ? (
+        <ErrorState
+          title="Could not load the usage charts"
+          error={usage.error}
+          onRetry={() => void usage.refetch()}
         />
-        <MetricChart title="Tokens, last 24 hours" series={tokens} isLoading={usage.isLoading} />
-      </div>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <MetricChart
+            title="Requests, last 24 hours"
+            series={requests}
+            isLoading={usage.isLoading}
+          />
+          <MetricChart title="Tokens, last 24 hours" series={tokens} isLoading={usage.isLoading} />
+        </div>
+      )}
 
       <p className="text-xs text-muted-foreground">
         Request and token counts come from usage records. Live operational
