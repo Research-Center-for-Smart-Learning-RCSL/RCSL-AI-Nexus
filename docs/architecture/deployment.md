@@ -124,9 +124,29 @@ Four items, none large:
 3. **Issue Let's Encrypt certificates.** Port 80 is already open, so HTTP-01 validation works directly.
 4. **Confirm nginx does not log request bodies** and that no Lua script intercepts these paths. Bodies are not logged by default; this is a confirmation, not a change.
 
+### The one way this goes wrong, found on the first real attempt
+
+**Every `proxy_set_header` below must end up inside the `location` block that actually serves the request.** nginx inherits them all-or-nothing: a level inherits the set from above *only if it declares none of its own*, so a single `proxy_set_header` in a `location` silently discards every one inherited from the `server` block. There is no warning, `nginx -t` passes, and the configuration file reads exactly as intended.
+
+This is not hypothetical. On 2026-08-03 the administrator entered the directives into Nginx Proxy Manager's **Custom Nginx Configuration** field, which is inserted at *server* level, while NPM's generated `location /` carries its own `proxy_set_header` set — so all four of ours were dropped. Both header controls failed at once and nothing upstream showed it: `client_max_body_size`, `proxy_buffering` and `proxy_read_timeout` are not `proxy_set_header` and inherit normally, so everything else behaved. See [PROGRESS.md](../PROGRESS.md) 2026-08-03.
+
+Three consequences worth carrying:
+
+- **Verify with `nginx -T`, not the file or the UI.** It prints the configuration nginx actually loaded. The check is whether the lines appear *inside* `location`, not whether they appear.
+- **If you write your own `location`, re-declare what the generated one had.** The same rule applies in reverse: your block now discards the proxy's own `Host`, `X-Forwarded-Proto`, `Upgrade` and `Connection`. Copy them out of `nginx -T` rather than from memory. This platform reads neither `Host` nor `X-Forwarded-Proto`, so those two cost nothing here, but `Upgrade`/`Connection` are what a websocket support toggle exists to set.
+- **`X-Forwarded-For` is replaced, never added alongside.** nginx does not de-duplicate `proxy_set_header`; declaring it twice sends the header twice, and `client_ip.py` reads the *first* value, so leaving the proxy's own `$proxy_add_x_forwarded_for` next to ours restores the defect it was written to fix.
+
+`scripts/verify-public-entrance.sh` tests all of this from outside and distinguishes "no header set" from "wrong value set", which look identical from a single probe.
+
 ### nginx configuration
 
 ```nginx
+# http level. The zone the management block's limit_req names below; without
+# it nginx refuses to load the configuration with "unknown limit_req zone".
+# Referenced here since this section was written and defined nowhere until
+# 2026-08-03, so the template as published could not start.
+limit_req_zone $binary_remote_addr zone=admin_login:10m rate=10r/m;
+
 # Redirect plain HTTP for both hostnames, leaving the ACME path reachable
 server {
     listen 80;
@@ -145,7 +165,12 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/ai.nexus.rcsl.online/privkey.pem;
     add_header Strict-Transport-Security "max-age=31536000" always;
 
-    client_max_body_size 64m;          # knowledge base uploads (Phase 2)
+    # Knowledge base uploads. Deliberately *looser* than the application's own
+    # 32 MiB (`domain/services/upload_policy.py`), so ours is the limit that
+    # fires and the caller gets an error naming the reason. Set it tighter and
+    # nginx rejects the request itself, with its own HTML 413 in place of the
+    # upload dialog's message. Entered as 10m on the first attempt.
+    client_max_body_size 64m;
 
     limit_req zone=admin_login burst=10 nodelay;
 

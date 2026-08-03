@@ -85,6 +85,65 @@ application log line from the first integration test onward. Two independent
 mechanisms, found the same day, both of which made a diagnostic exist and never
 arrive.
 
+### The configuration was correct, and correct in the wrong place
+
+The administrator sent a screenshot and it matched the template line for line.
+The checks still failed. Both statements were true.
+
+**The first thing that had to go was the diagnosis, not the configuration.** The
+script reported "nginx is not setting this header" on the strength of one probe
+— a deliberately wrong value coming back 400 — and that probe cannot support it.
+Three states produce that result differently:
+
+| | wrong value sent | real value sent |
+|---|---|---|
+| A: nginx sets nothing | 400 | passes |
+| B: nginx sets the correct secret | passes | passes |
+| C: nginx sets some other value | 400 | 400 |
+
+A wrong value is refused in both A and C, so the message was accusing the
+administrator of one specific mistake while the evidence covered two — and C,
+a placeholder left in place or a secret that never arrived, is *exactly* what a
+correct-looking screenshot suggests. Sending the real value separates them:
+it passed, so the state is A. **Nothing is being set at all**, and the value in
+the screenshot is not the problem.
+
+That leaves placement, and one mechanism accounts for the whole failure.
+`proxy_set_header` is inherited all-or-nothing: a level takes the set from above
+only if it declares none of its own. NPM's **Custom Nginx Configuration** field
+is inserted at *server* level; its generated `location /` carries its own
+`proxy_set_header` directives, more of them with the websocket toggle on. So all
+four of ours were discarded before a request was ever proxied — `X-Nexus-Proxy`,
+the `X-Forwarded-For` override, and both `Tailscale-*` blanks. Two symptoms, one
+cause, and both of today's findings explained by it. The same field's
+`client_max_body_size`, `proxy_buffering` and `proxy_read_timeout` are not
+`proxy_set_header`, inherit normally, and worked — which is why everything else
+looked healthy.
+
+**A third finding came out of reading the screenshot rather than probing.**
+`client_max_body_size` was `10m` on the management host. That directive *is*
+live, and 10 MiB is tighter than the application's own 32 MiB
+(`upload_policy.py`), whose docstring says in as many words that nginx is set to
+64m so ours is the limit that fires and the caller gets an error naming the
+reason. Inverted, a 15 MB PDF meets nginx's HTML 413 instead of the upload
+dialog's message. The template in deployment.md now carries that reasoning
+beside the number instead of in a source file nobody configuring a proxy reads.
+
+`limit_req` was missing too and is deliberately not being asked for yet. It is
+the second line on a control the application already enforces — `LoginThrottle`,
+measured here on 2026-08-02 at twelve attempts producing six failures and
+exactly one throttle row — and requesting it means explaining that its
+`limit_req_zone` goes at a *third* level again, to someone who has just lost a
+round trip to levels. It follows once the entrance works. What did get fixed is
+that `limit_req_zone` was never defined anywhere in deployment.md while §5's
+template referenced the zone, so that template could not have loaded as
+published.
+
+Also recorded because it is what made three of the missing directives harmless:
+this platform reads neither `Host` nor `X-Forwarded-Proto`. Checked rather than
+assumed, and worth knowing before anyone else audits a proxy configuration
+against the template.
+
 ### Deployed, and the log immediately said what the probing had inferred
 
 Commit `1bcd12c` is on the Mac Studio: the backend image rebuilt and `gateway`,
