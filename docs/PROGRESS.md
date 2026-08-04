@@ -17,6 +17,74 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-04
 
+### The last key was revoked, and the list it left behind needed a filter
+
+`qwen7b` is revoked. It was the only unrevoked key on the platform and the
+reason given for keeping the old `api.nexus.rcsl.online` name alive as a 301 —
+a reason that does not survive looking it up. **The holder was the
+administrator themselves**, not an external caller, and its whole history was
+two requests and 33 tokens on 2026-07-26, the day it was issued. The 56
+requests and 101k tokens in the same period carry a null `api_key_id`: that is
+admin chat, which uses no key at all. Nothing depended on it.
+
+Revoked through the admin API rather than with an `UPDATE`, so the audit log
+carries `api_key.revoked` against the account that asked. Doing it in SQL would
+have produced the same row in `api_keys` and no record that anyone did it,
+which is the half of §12 that took a sweep to notice was missing the first
+time. Two things the attempt ran into, both of them controls working: the
+tailnet entrance still requires the CSRF double-submit on a POST, and the
+`__Host-` cookie it issues is `Secure`, so the token has to be carried
+deliberately rather than picked up by a cookie jar over loopback http.
+
+**The screen this left behind is what the filter is for.** Seven keys, all
+revoked — six single-use verification keys from the morning sweep and this one
+— so the API keys table was entirely history, and the row anybody would come
+back for is one that does not exist yet. Revoked keys are now hidden by
+default, with the count in the toggle: `Show 7 revoked` says both that they
+exist and where they went, where a bare "Show revoked" would leave someone
+hunting for a key they know they created. The toggle is absent when there is
+nothing to hide.
+
+The part worth keeping is the empty state. Filtering every row out leaves the
+table looking exactly like a fresh deployment, and the stock message would then
+tell someone with seven keys to go and issue one. It says "No active keys" and
+names the way back instead. **A default that hides needs two things, not one:
+a way to reverse it, and a signal that it is on** — the second is the one that
+gets left out, and it is the one that turns a filter into a disappearance.
+
+Expired keys are deliberately not covered. They become inert without anyone
+acting, and lapsing is often exactly what someone came to look for; one control
+meaning both would answer neither question.
+
+**A review then found the change committing the exact fault it was written to
+prevent.** All of the reasoning above was applied to the unfiltered list, and
+`DataTable` filters again afterwards with its search box. So typing the name of
+a hidden key — the most natural way to look for a key you know you created —
+emptied the table and answered with the caller's `emptyDescription`: *"No API
+keys. Issue a key to let an application reach the gateway."* Told to someone
+holding seven of them. The follow-on was worse: with a search active and the
+message advising "Show 7 revoked", clicking it made the screen **less**
+informative, because the message reverted to the generic one.
+
+The fix belongs one level down rather than in this screen. **An empty result
+from a search is the table's own story, and no caller's `emptyDescription` is
+ever true about it** — every one in this codebase describes an empty dataset,
+which is a false statement about a table whose rows a query merely did not
+match. `DataTable` now says "No matches" with the query and a Clear search
+button, and falls through to the caller's message only when nothing is typed.
+That fixes every table at once; this screen was just the one where the wrong
+message was insulting enough to notice.
+
+Three smaller ones from the same review, all real: the toggle set `aria-pressed`
+*and* swapped its label, so a screen reader announced the state twice in
+opposite directions (`aria-pressed` dropped — the label is the mechanism that
+also works for someone who cannot tell a pressed variant from an unpressed
+one); the permission comment on the Issue-key button had been left stranded
+above the new fragment, attached to the toggle, which has no permission gate at
+all; and both the comment and this entry worked their example from `Show 6
+revoked` while describing seven keys all revoked, which is what the label would
+actually say. Seven tests now, including the search path that started it.
+
 ### Redeployed, and the build refused for a file it had never been given
 
 Everything from today went out at once — the rename, the dependency bumps, own
