@@ -102,6 +102,15 @@ class Settings(BaseSettings):
     """How often the admin app probes each node and writes the observed status,
     so a routing requirement of an online node reflects reality rather than the
     value provisioning wrote once. Zero or negative disables the loop."""
+
+    retention_sweep_interval_seconds: int = 24 * 3600
+    """How often stored retention windows are applied.
+
+    A day rather than an hour: retention is measured in months, so sweeping
+    more often deletes the same rows no sooner, and being a day late costs a
+    day of rows that were already past their window. Zero or negative disables
+    the loop, which is how a deployment opts out of automatic deletion while
+    keeping the manual purge."""
     """Capacity of the machine the runtimes are on.
 
     The memory budget refuses a load that would exceed a fraction of this, and

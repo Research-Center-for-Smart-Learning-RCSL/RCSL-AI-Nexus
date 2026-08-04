@@ -30,6 +30,7 @@ import {
   Building2Icon,
   RouteIcon,
   ScrollTextIcon,
+  Trash2Icon,
   ServerIcon,
   SparklesIcon,
   UserCogIcon,
@@ -138,6 +139,15 @@ const NAV: NavItem[] = [
     label: 'Users',
     icon: <UsersIcon className="size-4" />,
     requires: 'user:read',
+  },
+  {
+    href: '/retention',
+    label: 'Retention',
+    icon: <Trash2Icon className="size-4" />,
+    // Admin-only, like Tenants above it: `retention:write` is in
+    // ADMIN_ONLY_SCOPES because a tenant administrator who could purge could
+    // erase the record of what they did inside the tenant they administer.
+    requires: 'retention:write',
   },
   {
     href: '/tenants',

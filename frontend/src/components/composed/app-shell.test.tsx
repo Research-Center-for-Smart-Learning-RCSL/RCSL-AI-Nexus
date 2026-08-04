@@ -95,6 +95,7 @@ const ALL: ScopeName[] = [
   'logs:read',
   'knowledge:read',
   'knowledge:write',
+  'retention:write',
 ];
 
 const BASE: ScopeName[] = [
@@ -172,6 +173,7 @@ describe('the links a role can see', () => {
       'API keys',
       'API',
       'Users',
+      'Retention',
       'Tenants',
       'Chat',
     ]);
@@ -214,16 +216,18 @@ describe('the links a role can see', () => {
     ]);
   });
 
-  it('shows an auditor every screen, which is the point of the role', () => {
+  it('shows an auditor every screen but the one that deletes', () => {
     // Worth pinning because it looks like a mistake. An auditor holds a read
-    // scope for everything, so the nav is indistinguishable from an admin's;
-    // what differs is inside each screen, where the write controls are gated on
-    // the write scopes the role does not have. A future nav item that an
-    // auditor should *not* see will fail here and should.
+    // scope for everything, so the nav is nearly indistinguishable from an
+    // admin's; what differs is inside each screen, where the write controls are
+    // gated on the write scopes the role does not have. The exception is
+    // Retention, which is admin-only — a role that writes nothing must not be
+    // able to delete everything.
     signedInWith(SCOPES.auditor);
     render(<AppShell>content</AppShell>);
 
     expect(sidebarLinks()).toHaveLength(12);
+    expect(sidebarLinks()).not.toContain('Retention');
   });
 
   it('gives the narrow-screen panel the same links as the sidebar', async () => {

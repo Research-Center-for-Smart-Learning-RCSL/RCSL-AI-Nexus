@@ -37,6 +37,7 @@ from app.infrastructure.di import (
     build_totp,
 )
 from app.infrastructure.heartbeat import run_heartbeat
+from app.infrastructure.retention_sweep import run_retention_sweep
 from app.interfaces.http.middleware.geo_filter import build_geo_filter
 from app.interfaces.http.routers import (
     admin_chat,
@@ -52,6 +53,7 @@ from app.interfaces.http.routers import (
     metrics,
     models,
     nodes,
+    retention,
     roles,
     routing_policies,
     tenants,
@@ -120,13 +122,27 @@ async def admin_lifespan(app: FastAPI, *, run_node_heartbeat: bool = True) -> As
             run_heartbeat(app, settings.node_heartbeat_interval_seconds)
         )
 
+    # The retention sweep, gated on the same flag as the heartbeat. It is not a
+    # node probe, but it shares the property that made that flag necessary:
+    # both admin applications run this lifespan, and a background task that
+    # writes belongs to whichever one the test in hand meant to exercise. A
+    # non-positive interval disables it, which is how a deployment keeps the
+    # manual purge and opts out of the automatic one.
+    retention: asyncio.Task[None] | None = None
+    if run_node_heartbeat and settings.retention_sweep_interval_seconds > 0:
+        retention = asyncio.create_task(
+            run_retention_sweep(app, settings.retention_sweep_interval_seconds)
+        )
+
     try:
         yield
     finally:
-        if heartbeat is not None:
-            heartbeat.cancel()
+        for task in (heartbeat, retention):
+            if task is None:
+                continue
+            task.cancel()
             with suppress(asyncio.CancelledError):
-                await heartbeat
+                await task
         app.state.geo_filter.close()
         await app.state.cache.close()
         await dispose_engine()
@@ -168,6 +184,7 @@ def mount_admin_routers(app: FastAPI) -> None:
         dashboard.router,
         usage.router,
         logs.router,
+        retention.router,
         knowledge.router,
         admin_chat.router,
         # Admin entrances only, and deliberately not mounted on the gateway:

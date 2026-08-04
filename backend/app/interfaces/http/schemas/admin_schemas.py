@@ -32,6 +32,7 @@ from app.domain.entities.knowledge import (
 )
 from app.domain.entities.model import Model, RuntimeKind
 from app.domain.entities.node import Node
+from app.domain.entities.retention import RetentionPolicy
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.tenant import Tenant
 from app.domain.entities.user import User
@@ -797,3 +798,43 @@ class RetrievedPassageResponse(BaseModel):
 
 class KnowledgeSearchResponse(BaseModel):
     passages: list[RetrievedPassageResponse]
+
+
+# --- Retention -----------------------------------------------------------
+
+
+class RetentionPolicyResponse(BaseModel):
+    dataset: str
+    days: int
+    updated_at: datetime | None
+    updated_by: str | None
+    """Null while the dataset is still on the default nobody has changed, which
+    the screen shows as "default" rather than as an empty author."""
+
+    @classmethod
+    def of(cls, policy: RetentionPolicy) -> RetentionPolicyResponse:
+        return cls(
+            dataset=policy.dataset.value,
+            days=policy.days,
+            updated_at=policy.updated_at,
+            updated_by=policy.updated_by,
+        )
+
+
+class RetentionPreviewResponse(BaseModel):
+    dataset: str
+    days: int
+    affected: int
+
+
+class PurgeOutcomeResponse(BaseModel):
+    dataset: str
+    cutoff: datetime
+    deleted: int
+
+
+class SetRetentionPolicyRequest(BaseModel):
+    days: int = Field(ge=1)
+    """`ge=1` only keeps the field a positive number; the real floor is
+    `MINIMUM_RETENTION_DAYS` and is enforced in the use case, so a caller that
+    never touches this schema meets the same rule."""

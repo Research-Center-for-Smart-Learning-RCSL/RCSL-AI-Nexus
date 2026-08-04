@@ -20,6 +20,7 @@ from app.adapters.persistence.sqlalchemy_models import (
     ModelRow,
     NodeRow,
     RecoveryCodeRow,
+    RetentionPolicyRow,
     RoutingPolicyRow,
     TenantRow,
     UsageRecordRow,
@@ -36,6 +37,7 @@ from app.domain.entities.knowledge import (
 )
 from app.domain.entities.model import Model, ModelState, ResourceProfile, RuntimeKind
 from app.domain.entities.node import Node, NodeStatus
+from app.domain.entities.retention import RetentionDataset, RetentionPolicy
 from app.domain.entities.routing_policy import (
     Requirement,
     RoutingCandidate,
@@ -409,4 +411,18 @@ def usage_to_row(usage: UsageRecord) -> UsageRecordRow:
         latency_ms=usage.latency_ms,
         completed=usage.completed,
         at=usage.at,
+    )
+
+
+def retention_row_to_domain(row: RetentionPolicyRow) -> RetentionPolicy:
+    # `dataset` is validated on the way in — the use case takes a
+    # `RetentionDataset` and the column is written from `.value` — so a row that
+    # no longer matches the enum is a dataset that was removed from the code
+    # while its row stayed. Constructing the enum here surfaces that as a
+    # failure to read the policy rather than as a purge aimed at nothing.
+    return RetentionPolicy(
+        dataset=RetentionDataset(row.dataset),
+        days=row.days,
+        updated_at=row.updated_at,
+        updated_by=row.updated_by,
     )

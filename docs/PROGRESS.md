@@ -17,6 +17,133 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-04
 
+### Records now have an expiry date, and an administrator can bring it forward
+
+The growth audit ended with a decision to make rather than a fix to apply, and
+the administrator made it: **360 days for everything, settable in the UI, with
+a manual purge that can be aimed at one dataset.** The three questions it turned
+on were answered as well — audit entries are deletable, `retention:write` is
+admin-only, and the sweep runs daily.
+
+**Deleting audit entries is a choice with a cost, made in front of the cost.**
+The alternative offered was to keep the purge but write an undeletable record of
+each one; what was chosen is the fully open version, where the entry recording a
+purge is itself removable by a later purge. So the platform administrator can
+erase their own trail. That is now what the platform does, and it is written
+down in `security.md` §12.1 rather than mitigated in code, because a control
+that half-implements a rejected design is worse than the design that was
+chosen.
+
+`retention:write` is admin-only and joins `tenant:write` in `ADMIN_ONLY_SCOPES`
+for a related reason: a `tenant_admin` who could purge could erase the record of
+what they did inside the tenant they administer, and the audit log's whole value
+is that it is written by a wider authority than the one being recorded.
+
+**Two tables, and the enum is the allowlist.** `audit_log` and `usage_records`
+are the only things that grow without a person deciding, and the dataset a
+request names is a `RetentionDataset`, not a table name — these values reach a
+`DELETE`, so what is safe to delete from is decided in the domain rather than at
+the edge. `/admin/retention/users/purge` is a 422, and there is a test that says
+so.
+
+**The count is the feature.** "Keep 90 days" is an abstraction until something
+says it removes 4,000 entries, and that sentence is the difference between
+saving thoughtfully and saving. So the preview runs against the number in the
+field rather than the number in the database, before the save rather than after
+it, and the confirm dialog repeats the count rather than the window — it is what
+the reader is agreeing to. The preview is a separate endpoint rather than a
+dry-run flag, because a dry run sharing a code path with the real thing is one
+edit away from deleting during a preview.
+
+Three smaller decisions worth their lines. The floor is 30 days and a shorter
+window is **refused rather than clamped**, since storing a number nobody typed
+and reporting success puts the gap between choice and effect where nobody
+re-reads. A purge may name a window narrower than the policy without changing
+it, which is the "clear this one thing" case. And a dataset with no stored row
+reports the default rather than being omitted, so a fresh deployment shows the
+number that governs rather than an empty screen implying nothing expires.
+
+The scheduled half sleeps before its first sweep, like the node heartbeat beside
+it — without that, every test that builds the admin app would purge whatever
+fixture data it had just written. Both admin entrances run it, which is safe
+because `DELETE ... WHERE at < cutoff` run twice deletes nothing the second time.
+
+Two things the tests caught while being written. The new domain error had no
+entry in `STATUS_MAP`, so a window of 7 days answered **500** — an input error
+reported as a server fault, which is exactly the class of thing that gets
+investigated as an outage. And the migration was chained to `f7a9d24c8b16`,
+which stopped being the head this morning when `prompt_tokens` landed; alembic
+refused with "multiple head revisions" rather than picking one, which is the
+right failure. 686 backend tests and 218 frontend, and the live database is at
+`a1b2c3d4e5f6` with both datasets reporting the 360-day default.
+
+### The entrance is green on both new names
+
+`verify-public-entrance.sh`: **9 passed, 0 failed, 0 skipped**, the first clean
+run under `llm.rcsl.online` and `llmapi.rcsl.online`. Both present valid
+certificates, `llmapi/healthz` is answered by the gateway and `llmapi/` returns
+the application's own 404 rather than the proxy's, the four header directives
+are in the right place on both hosts, and a forged `Tailscale-User-Login` is
+refused. The administrator migrated rather than duplicated: the two `nexus`
+names are gone.
+
+The rename is therefore complete end to end — configuration, documentation,
+images, and the proxy — and the certificate question it was made for came out
+as predicted, with the existing `*.rcsl.online` wildcard covering both
+single-label names.
+
+### What grows without a bound, and the one thing that already had
+
+Asked in the abstract — "is there anything that grows forever, like log
+retention?" — and worth answering with measurements from the running machine
+rather than from the shape of the code. Most of it is in better condition than
+the question implies, and the one real leak was not in the platform at all.
+
+**Bounded already.** Redis holds two keys and both carry a TTL, so sessions,
+rate-limit counters, job progress and cache entries all expire by construction
+— there is no key without one. Prometheus runs `--storage.tsdb.retention.time=30d`
+and sits at 70 MB for nine days of three targets, so its steady state is a few
+hundred megabytes. `invitations` and `recovery_codes` are bounded by the number
+of accounts. The knowledge base and its Qdrant collections are bounded by what
+a curator uploads, which is a person making a decision each time.
+
+**Unbounded but slow, and needing a stated policy rather than a fix.**
+`audit_log` (112 rows) and `usage_records` (65 rows) are append-only with
+nothing that prunes them, and nothing should prune them casually: an audit log
+whose old entries vanish is worth less than one that grows, and usage records
+are the accounting the quotas are measured against. At 160 kB and 120 kB after
+nine days, neither is a capacity problem this year. What is missing is the
+**decision** — how long an entry is kept and who may delete one — recorded
+before the first person asks the platform to forget something.
+
+**Unbounded and worth fixing.** No service declares a `logging:` block and the
+daemon sets no default, so every container writes a `json-file` log with **no
+rotation**. Today that is a few hundred kilobytes and Grafana is the largest at
+530 kB; under real gateway traffic it is the first thing that would fill a disk,
+and it fills it silently. A `max-size`/`max-file` pair per service is the whole
+fix.
+
+**And the one that had already grown: 1.7 GB of orphaned Postgres data.**
+Sixteen dangling anonymous volumes, about 120 MB each, dated from 2026-07-27
+onwards — one per integration-test run, including two from this morning. The
+`postgres` image declares `/var/lib/postgresql/data` as a `VOLUME`, so the
+recipe in the README creates an anonymous volume every time, and `--rm` does not
+reliably remove it. **Confirmed by experiment rather than inferred**: dangling
+count 16 before running the documented command and removing the container, 17
+after.
+
+The README recipe now mounts that path as `--tmpfs` with `uid=70`, the alpine
+image's `postgres` user, without which `initdb` cannot write to it. Measured the
+same way: 16 before, 16 after. Nothing to leak, and the test database is in RAM,
+which is the smaller benefit. `-fv` is on the teardown line for anyone who drops
+the tmpfs.
+
+The general lesson is worth more than the gigabyte: **a leak in a documented
+command is a leak in everyone's habits.** This one was in the file every
+contributor is told to start from, it fired on every integration run for nine
+days, and nothing in the platform's own logs, metrics or dashboards would ever
+have mentioned it.
+
 ### One symptom, two causes, and neither was the width someone had set
 
 Reported as one bug — text running past the right edge, in the chat capability
@@ -5579,6 +5706,14 @@ implementation:
   domain for the data plane. Either removes the accepted risk in `security.md`
   section 15.1, where inference traffic passes through a third-party machine in
   plaintext. Deferred, not settled.
+- **How long an audit entry and a usage record are kept, and who may delete
+  one.** Both tables are append-only with nothing that prunes them, which is the
+  right default and not a policy. Neither is near a capacity problem — 160 kB
+  and 120 kB after nine days — so this is wanted before somebody asks the
+  platform to forget something, not because of disk. The answer constrains the
+  backup story too, and `usage_records` is what quotas are measured against, so
+  a retention window shorter than the longest quota period would be a
+  correctness bug rather than a cleanup. See the 2026-08-04 growth audit.
 - **Where the identity comes from.** No logo; the drawn one was rejected.
 - **Whether the admin API should be reachable publicly at all.** It is designed
   for it and the entrance exists, but nothing depends on it yet, and closing it

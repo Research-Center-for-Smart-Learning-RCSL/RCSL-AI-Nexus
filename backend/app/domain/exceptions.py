@@ -182,6 +182,14 @@ class InvalidNodeAddressError(DomainError):
     public_message = "Node address must be inside the tailnet range."
 
 
+class RetentionWindowTooShortError(DomainError):
+    code = "retention_window_too_short"
+    public_message = "Records must be kept for at least the minimum window."
+    """Refused rather than clamped: storing a number the administrator did not
+    type, and reporting success, puts the gap between what was chosen and what
+    governs somewhere nobody re-reads."""
+
+
 # --- Identity ------------------------------------------------------------
 
 

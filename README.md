@@ -37,14 +37,27 @@ suite can never reach a real database by accident.
 
 ```bash
 docker run --rm -d --name nexus-pg-tmp -p 127.0.0.1:15432:5432 \
+  --tmpfs /var/lib/postgresql/data:uid=70,gid=70 \
   -e POSTGRES_USER=nexus -e POSTGRES_PASSWORD=devpw -e POSTGRES_DB=nexus \
   postgres:17-alpine
 
 TEST_DATABASE_URL=postgresql+asyncpg://nexus:devpw@127.0.0.1:15432/nexus uv run pytest
+
+docker rm -fv nexus-pg-tmp
 ```
 
 These tests drop and recreate the schema on every run, which is why they must
 never be pointed at anything you care about.
+
+**The `--tmpfs` line is not a speed trick, though it is also that.** The
+`postgres` image declares `/var/lib/postgresql/data` as a `VOLUME`, so without
+it Docker creates an anonymous volume per run — and `--rm` does not reliably
+take it away. Measured on the Mac Studio on 2026-08-04: sixteen orphaned
+Postgres data directories, about 1.7 GB, one per integration run since the
+project started. Putting the data directory in RAM means there is nothing to
+leak; `uid=70` is the `postgres` user in the alpine image, without which
+`initdb` cannot write to the mount. `-fv` on the teardown covers anyone who
+drops the `--tmpfs`.
 
 `AUTH_MODE=dev` disables the trusted-proxy check and resolves the caller to the
 peer address, which is what lets the stack run without `tailscale serve` and

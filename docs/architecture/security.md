@@ -796,6 +796,34 @@ The practical position:
 
 **Nine of the twelve classes above have been observed on the deployment, not just implemented.** As of 2026-08-02 the live `audit_log` holds rows for sign-in, sign-out, failed attempts, the limiter firing, bootstrap, invitation reissue and acceptance, TOTP enrolment, API key issuance, model download/load/unload, routing policy saves, all four knowledge-base actions, and authorization refusals. The three with no rows — **recovery code use, node registration, and user role changes** — are absent because those actions have never been performed here: one user, so no role to change; a single node written by `provision` rather than through the write endpoint; and no reason to spend one of ten recovery codes to watch a row appear. That is a different thing from a recording that does not work, and keeping the two apart is the point of this list: this document's own history is of controls that were designed, written down, marked done, and not actually in force.
 
+### 12.1 The Audit Log Is Deletable, and by Whom
+
+Since 2026-08-04 a `retention:write` holder can set how long audit entries are
+kept and can purge them ahead of that (§12 events still record as before; this
+is about how long the rows survive). The default is 360 days.
+
+**This weakens the audit log, deliberately and with the alternative on the
+table.** The rejected design kept the purge but wrote a record of each one that
+no later purge could remove. What is implemented instead is the fully open
+version: `retention.purged` is recorded like any other administrative action,
+and a subsequent purge of `audit_log` removes that record too. The consequence
+is exact and worth stating plainly: **a platform administrator can erase the
+evidence of what they did.** The log defends against a compromised gateway, a
+confused operator, and a dispute about what happened — not against the person
+holding `retention:write`.
+
+Three things bound it. `retention:write` is in `ADMIN_ONLY_SCOPES`, so a
+`tenant_admin` cannot erase their own trail inside the tenant they administer,
+which is the case this would otherwise have created. The floor is 30 days, so a
+standing policy cannot be set to something that forgets faster than an incident
+is usually reported. And the dataset is a closed enum reaching the delete, so
+"purge" can never be pointed at `users` or `api_keys`.
+
+What would restore the property, if it is ever wanted: ship audit rows off the
+machine as they are written — a syslog sink or an append-only bucket — so that
+deleting the table locally stops being the same as deleting the record. That is
+a Phase 3 item and is not built.
+
 **The gateway does not write audit rows, and that is a decision rather than an omission.** Its database account may INSERT into `usage_records` and nothing else (§6). Granting it `audit_log` would let a compromised gateway write into the record that exists to describe the compromise, which is a poor trade for capturing one event: a key reaching for a capability it was not issued for. That refusal is a 403 in the application log and in the usage series, and it is the one item on this list the audit log does not hold.
 
 **A value that does not fit is trimmed, not dropped.** Postgres refuses an over-long string rather than truncating it, and `PostgresAudit.record` swallows its own failures so that a failed audit write cannot turn a successful action into a 500. Those two together mean an unbounded value silently loses the event — and `target` on an authorization failure is the request path, which nothing bounds. The writer trims to each column's width with a marker, so padding a URL cannot suppress the record of someone probing.
