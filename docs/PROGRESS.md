@@ -17,6 +17,40 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-04
 
+### Both runtime advisories are closed, and one of them was called unfixable twice
+
+The two that reach the deployed images are gone. `pip-audit` against the
+production resolution reports **no known vulnerabilities**, and `pnpm audit`
+lists no `sharp` and no `postcss`. What is left is ten advisories, every one of
+them development scope — `undici`, `ip-address`, `fast-uri`, `brace-expansion`,
+`@hono/node-server`, mostly arriving through `shadcn` and the MCP SDK — and
+none of them is in anything shipped.
+
+**`cryptography` 49.0.0 → 50.0.0** (GHSA, PKCS#7 `EnvelopedData` decryption
+exposes a Bleichenbacher oracle through distinguishable errors and timing). It
+is a **direct** dependency, declared `>=44.0`, so the floor moved with it rather
+than being pinned in the lockfile alone. The vulnerable path is one this
+platform never calls — nothing here decrypts PKCS#7 — so the real exposure was
+low and the bump was one line either way. 577 backend tests and strict mypy over
+159 files are unaffected.
+
+**`sharp` 0.34.5 → 0.35.3**, overridden in `pnpm-workspace.yaml`. This is the
+advisory two earlier entries called upstream and unfixable from here, which was
+true when they were written: sharp inherits four libvips CVEs and `next` pins
+its minor, so nothing could move until sharp 0.35.0 shipped with libvips 8.18.3.
+It has, so it did. The override now resolves 0.35.3 and the loaded binary
+reports `libvips 8.18.3`.
+
+Two things this turned up that are worth keeping. **Verify the resolution from
+where the consumer resolves it, not from the project root** — `require('sharp')`
+fails there under pnpm's layout, because sharp is `next`'s optional dependency
+and is never hoisted; resolving with `paths: [next's directory]` is what proves
+the thing Next will actually load. And **"upstream and unfixable" is a statement
+with a date on it**: it was recorded twice here, correctly both times, and the
+only work needed to falsify it was to look again once a release existed.
+`next build` still produces all 21 pages, 193 frontend tests and lint pass, and
+`pnpm install --frozen-lockfile` is consistent, which is the check CI runs.
+
 ### The public hostnames became single-label, which is a certificate decision
 
 `ai.nexus.rcsl.online` and `api.nexus.rcsl.online` are now `llm.rcsl.online` and
