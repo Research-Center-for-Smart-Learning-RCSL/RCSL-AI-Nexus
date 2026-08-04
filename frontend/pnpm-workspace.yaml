@@ -19,3 +19,8 @@ ignoredBuiltDependencies:
 
 overrides:
   postcss: '>=8.5.23'
+  # `next` declares sharp as an optional dependency and pins the minor, so the
+  # libvips advisories (CVE-2026-33327/33328/35590/35591) could not be reached
+  # from here until 0.35.0 shipped. This is not a dead dependency: two screens
+  # render `next/image`, and the standalone server uses sharp to optimise them.
+  sharp: '>=0.35.0'
