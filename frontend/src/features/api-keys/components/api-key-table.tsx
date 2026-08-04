@@ -38,6 +38,48 @@ export function ApiKeyTable() {
   const [revoking, setRevoking] = useState<ApiKey | null>(null);
 
   /**
+   * Revoked keys are hidden by default, and the toggle carries their count.
+   *
+   * Hiding them is the useful default: a revoked key is final — the backend
+   * refuses to edit one — so it can never be anything but history, and a list
+   * that is mostly history is one nobody scans for the row they came for. This
+   * deployment reached seven keys of which six were single-use verification
+   * keys revoked minutes after being issued.
+   *
+   * What stops that default from being a disappearance is the **count in the
+   * label**. "Show 7 revoked" says both that they exist and where they went;
+   * a bare "Show revoked" would leave someone hunting for a key they know they
+   * created. The button is absent entirely when there are none, because a
+   * control that filters nothing is a question the reader has to answer for no
+   * reason.
+   *
+   * The search box filters again, after this, and an empty result there is the
+   * table's own story to tell — `DataTable` says so rather than falling through
+   * to the caller's "no keys yet" message, which would be a false statement
+   * about a table whose rows the query merely did not match.
+   *
+   * Deliberately not persisted. The preference is worth a click, and a stored
+   * one would outlive the situation that motivated it — the next visit is
+   * usually about an active key.
+   *
+   * Expired keys are **not** covered by this. They are inert for a different
+   * reason and become so without anyone acting; conflating the two would let
+   * one control mean "hide what I revoked" and "hide what lapsed" at once, and
+   * the second is often exactly what someone came to look for.
+   */
+  const [showRevoked, setShowRevoked] = useState(false);
+
+  const revokedCount = useMemo(
+    () => (data ?? []).filter((key) => key.revoked_at).length,
+    [data],
+  );
+  const rows = useMemo(() => {
+    if (showRevoked || !data) return data;
+    return data.filter((key) => !key.revoked_at);
+  }, [data, showRevoked]);
+  const everythingIsRevoked = Boolean(data?.length) && rows?.length === 0;
+
+  /**
    * What the caller may act on, matching the scopes the backend actually
    * grants. A member holds `api_key:write_own` (security.md §5.2 grants them
    * their own keys and nothing else), so gating every action on "is an
@@ -145,28 +187,55 @@ export function ApiKeyTable() {
     <>
       <DataTable
         columns={columns}
-        data={data}
+        data={rows}
         isLoading={isLoading}
         error={error}
         onRetry={() => void refetch()}
         searchPlaceholder="Search keys"
-        emptyTitle="No API keys"
-        emptyDescription="Issue a key to let an application reach the gateway."
+        emptyTitle={everythingIsRevoked ? 'No active keys' : 'No API keys'}
+        emptyDescription={
+          // Two different situations that look identical once the rows are
+          // filtered out. Saying "issue a key" to someone whose keys are all
+          // revoked answers a question they did not ask and hides the fact that
+          // the screen is filtered at all.
+          everythingIsRevoked
+            ? `Every key here has been revoked. Use "Show ${revokedCount} revoked" above to see them.`
+            : 'Issue a key to let an application reach the gateway.'
+        }
         getRowId={(row) => row.key_id}
         toolbar={
-          // Both conditions, and neither is redundant. `api_key:write_own` is
-          // what the endpoint requires, and it is not universal any more:
-          // `auditor` deliberately holds no write at all, so "anyone signed in
-          // may issue a key for themselves" stopped being true when that role
-          // arrived and this button would have offered a guaranteed 403. The
-          // id is still needed because the dialog issues to `me.id`, and
-          // without one the request carries an empty owner.
-          me?.id && can('api_key:write_own') ? (
-            <Button size="sm" onClick={() => setCreateOpen(true)}>
-              <PlusIcon />
-              Issue key
-            </Button>
-          ) : null
+          <>
+            {/* No `aria-pressed`. The label already changes to name the action,
+                and a toggle that does both announces "Hide 2 revoked, pressed"
+                — the state twice, in opposite directions. One mechanism or the
+                other; the label is the one that also works for someone who can
+                see the button but not tell a pressed variant from an unpressed
+                one. */}
+            {revokedCount ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setShowRevoked((shown) => !shown)}
+              >
+                {showRevoked
+                  ? `Hide ${revokedCount} revoked`
+                  : `Show ${revokedCount} revoked`}
+              </Button>
+            ) : null}
+            {/* Both conditions, and neither is redundant. `api_key:write_own`
+                is what the endpoint requires, and it is not universal any more:
+                `auditor` deliberately holds no write at all, so "anyone signed
+                in may issue a key for themselves" stopped being true when that
+                role arrived and this button would have offered a guaranteed
+                403. The id is still needed because the dialog issues to
+                `me.id`, and without one the request carries an empty owner. */}
+            {me?.id && can('api_key:write_own') ? (
+              <Button size="sm" onClick={() => setCreateOpen(true)}>
+                <PlusIcon />
+                Issue key
+              </Button>
+            ) : null}
+          </>
         }
       />
 

@@ -248,12 +248,37 @@ export function DataTable<TData, TValue>({
                   colSpan={table.getVisibleLeafColumns().length}
                   className="p-0"
                 >
-                  <EmptyState
-                    title={emptyTitle}
-                    description={emptyDescription}
-                    action={emptyAction}
-                    className="border-0"
-                  />
+                  {/* An active search is its own reason for an empty table, and
+                      not the caller's to explain: every `emptyDescription` in
+                      this codebase describes an empty *dataset* ("Issue a key to
+                      let an application reach the gateway"), which is a false
+                      statement about a table holding rows the query did not
+                      match — and the worse for being addressed to someone who
+                      typed the name of a row they know exists. The caller's
+                      message is restored the moment the query is cleared. */}
+                  {globalFilter ? (
+                    <EmptyState
+                      title="No matches"
+                      description={`Nothing here matches "${globalFilter}".`}
+                      action={
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setGlobalFilter('')}
+                        >
+                          Clear search
+                        </Button>
+                      }
+                      className="border-0"
+                    />
+                  ) : (
+                    <EmptyState
+                      title={emptyTitle}
+                      description={emptyDescription}
+                      action={emptyAction}
+                      className="border-0"
+                    />
+                  )}
                 </TableCell>
               </TableRow>
             ) : (
