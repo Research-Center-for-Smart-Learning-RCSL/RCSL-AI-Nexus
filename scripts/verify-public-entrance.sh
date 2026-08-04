@@ -44,10 +44,64 @@ fail() { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; printf '        %s\n' "$2"; 
 skip() { printf '  \033[33mSKIP\033[0m  %s\n' "$1"; printf '        %s\n' "$2"; SKIP=$((SKIP + 1)); }
 head_() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
+# A function because section 4 can end the run early, and the counts have to be
+# reported the same way from both places.
+summary() {
+  printf '\n\033[1m%s passed, %s failed, %s skipped\033[0m\n' "$PASS" "$FAIL" "$SKIP"
+  [ "$FAIL" -eq 0 ] || exit 1
+  exit 0
+}
+
 # Status code only. --max-time so a hung proxy fails the check rather than the
 # person running it.
 status() { curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$@" 2>/dev/null; }
 body() { curl -s --max-time 15 "$@" 2>/dev/null; }
+
+# Why the entrance is not answering, as one word.
+#
+# The first version of this script read %{ssl_verify_result} and called anything
+# non-zero an invalid certificate. That value is 1 whenever the handshake did
+# not complete, so four unrelated states produced one message — and the hint it
+# printed alongside ("a *.rcsl.online wildcard does not cover a two-label name")
+# named a certificate-scope problem as the cause. On 2026-08-04 the actual cause
+# was that both proxy hosts had been removed from NPM, and the script sent the
+# reader to look at certificates. This is the same defect as the one section 4
+# documents: one probe, several causes, and a confident message for the wrong
+# one. Certificate scope is a real failure and its note belongs in `cert`, where
+# the handshake got far enough for the certificate to be the thing at fault.
+#
+# curl's exit code carries the distinction the status code cannot: 000 is every
+# one of these. `unrecognized name` is TLS alert 112, sent when no server block
+# matches the SNI -- the name is not configured, which is not a TLS fault at all.
+entrance_state() {
+  local h="$1"
+  local out
+  local rc
+  out="$(curl -sv -o /dev/null --max-time 15 "https://$h/" 2>&1)"
+  rc=$?
+  case "$rc" in
+    0)  echo ok ;;
+    6)  echo dns ;;
+    7)  echo refused ;;
+    28) echo timeout ;;
+    35) if printf '%s' "$out" | grep -qi 'unrecognized name'; then
+          echo unconfigured
+        else
+          echo handshake
+        fi ;;
+    51|60) echo cert ;;
+    *)  echo "curl$rc" ;;
+  esac
+}
+
+# Corroborates `unconfigured` from the other side. NPM answers port 80 for a
+# name it does not know with its own stock welcome page, so seeing it means the
+# proxy is running and this hostname has no host entry -- as opposed to nginx
+# being down, which cannot answer anything. Distinguishing those two decides
+# whether the administrator restores a host or starts a service.
+serves_npm_default_site() {
+  body "http://$1/" | grep -q 'successfully started the Nginx Proxy Manager'
+}
 
 SECRET=""
 if [ -s "$SECRET_FILE" ]; then
@@ -76,42 +130,97 @@ for p in (d.get("Peer") or {}).values():
   fi
 fi
 
-# --- 2. TLS ------------------------------------------------------------------
-head_ "2. TLS"
+# --- 2. TLS, and whether the entrance answers at all -------------------------
+head_ "2. TLS and the entrance answering at all"
+
+# Recorded so sections 3-5 can skip rather than report a second failure with a
+# third explanation. Every check below sends an HTTPS request to one of these
+# two names; if the name does not answer, none of them is testing what it says.
+ADMIN_STATE="$(entrance_state "$ADMIN_HOST")"
+API_STATE="$(entrance_state "$API_HOST")"
 
 for h in "$ADMIN_HOST" "$API_HOST"; do
-  V="$(curl -s -o /dev/null -w '%{ssl_verify_result}' --max-time 15 "https://$h/" 2>/dev/null)"
-  if [ "$V" = "0" ]; then
-    pass "$h presents a valid certificate"
-  else
-    fail "$h presents a valid certificate" \
-      "ssl_verify_result=$V. Note a *.rcsl.online wildcard does NOT cover a two-label name like this one."
-  fi
+  if [ "$h" = "$ADMIN_HOST" ]; then ST="$ADMIN_STATE"; else ST="$API_STATE"; fi
+  case "$ST" in
+    ok)
+      pass "$h presents a valid certificate" ;;
+    unconfigured)
+      if serves_npm_default_site "$h"; then
+        fail "$h is configured on the proxy" \
+          "the proxy is running and has no host entry for this name: TLS alert 112 (unrecognized name) on 443, and port 80 answers with NPM's stock welcome page. The certificate is not the problem and may well still be present under SSL Certificates. Restore the proxy host (deployment.md section 5), and re-read the placement warning there before saving: the four proxy_set_header directives must end up inside the location block that serves the request."
+      else
+        fail "$h is configured on the proxy" \
+          "TLS alert 112 (unrecognized name): no server block matches this name, so nginx refused before any certificate was chosen. Either the host entry is gone or it is bound to a different name."
+      fi ;;
+    cert)
+      fail "$h presents a valid certificate" \
+        "the handshake reached the certificate and it was rejected. Note a *.rcsl.online wildcard does NOT cover a two-label name like this one." ;;
+    handshake)
+      fail "$h completes a TLS handshake" \
+        "the connection was accepted and the handshake failed before the certificate. Protocol or cipher mismatch, or something on 443 that is not a TLS server." ;;
+    refused)
+      fail "$h answers on 443" \
+        "connection refused. nginx is not listening -- a stopped service, not a configuration error. Nothing below can run until it is back." ;;
+    timeout)
+      fail "$h answers on 443" \
+        "no answer within 15s. A firewall dropping the packets looks exactly like this; a refusal does not." ;;
+    dns)
+      fail "$h resolves" \
+        "the name does not resolve. Nothing here reaches the proxy at all." ;;
+    *)
+      fail "$h answers on 443" "curl exited ${ST#curl}, which this script does not classify." ;;
+  esac
 done
 
 # --- 3. Reaching our backends, not the proxy's own pages ---------------------
 head_ "3. Requests reach this deployment"
 
-H="$(body "https://$API_HOST/healthz")"
-case "$H" in
-  *'"status"'*'"ok"'*) pass "$API_HOST/healthz is served by the gateway" ;;
-  *) fail "$API_HOST/healthz is served by the gateway" "got: ${H:0:120}" ;;
-esac
+# An empty body is not evidence about what serves a path. When the entrance is
+# down these read "got: " three times, which says nothing and still counts as
+# three distinct failures next to section 2's one real one.
+DOWN="the entrance is not answering (see check 2), so this cannot be tested"
 
-R="$(body "https://$API_HOST/")"
-case "$R" in
-  *'"detail"'*) pass "$API_HOST/ returns the application's 404, not the proxy's" ;;
-  *) fail "$API_HOST/ returns the application's 404, not the proxy's" "got: ${R:0:120}" ;;
-esac
+if [ "$API_STATE" != "ok" ]; then
+  skip "$API_HOST/healthz is served by the gateway" "$DOWN"
+  skip "$API_HOST/ returns the application's 404, not the proxy's" "$DOWN"
+else
+  H="$(body "https://$API_HOST/healthz")"
+  case "$H" in
+    *'"status"'*'"ok"'*) pass "$API_HOST/healthz is served by the gateway" ;;
+    *) fail "$API_HOST/healthz is served by the gateway" "got: ${H:0:120}" ;;
+  esac
 
-L="$(body "https://$ADMIN_HOST/login")"
-case "$L" in
-  *'<!DOCTYPE html>'*) pass "$ADMIN_HOST/login is served by the management UI" ;;
-  *) fail "$ADMIN_HOST/login is served by the management UI" "got: ${L:0:120}" ;;
-esac
+  R="$(body "https://$API_HOST/")"
+  case "$R" in
+    *'"detail"'*) pass "$API_HOST/ returns the application's 404, not the proxy's" ;;
+    *) fail "$API_HOST/ returns the application's 404, not the proxy's" "got: ${R:0:120}" ;;
+  esac
+fi
+
+if [ "$ADMIN_STATE" != "ok" ]; then
+  skip "$ADMIN_HOST/login is served by the management UI" "$DOWN"
+else
+  L="$(body "https://$ADMIN_HOST/login")"
+  case "$L" in
+    *'<!DOCTYPE html>'*) pass "$ADMIN_HOST/login is served by the management UI" ;;
+    *) fail "$ADMIN_HOST/login is served by the management UI" "got: ${L:0:120}" ;;
+  esac
+fi
 
 # --- 4. The two header controls ---------------------------------------------
 head_ "4. Perimeter headers (the two that fail silently)"
+
+# Both remaining sections probe ADMIN_HOST only. Neither can distinguish a
+# stripped header from a request that never arrived, so if the entrance is down
+# they are not weaker evidence -- they are none, and reporting them as failures
+# competes with the one finding that is real.
+if [ "$ADMIN_STATE" != "ok" ]; then
+  skip "nginx sets X-Nexus-Proxy" "$DOWN"
+  skip "nginx overwrites X-Forwarded-For (forged address discarded)" "$DOWN"
+  head_ "5. Forged tailnet identity (security.md section 14)"
+  skip "forged Tailscale-User-Login is refused" "$DOWN"
+  summary
+fi
 
 # Three states are possible and one test cannot separate them, which is worth
 # spelling out because the wrong diagnosis sends the administrator looking in
@@ -191,5 +300,4 @@ case "$S6" in
 esac
 
 # --- summary -----------------------------------------------------------------
-printf '\n\033[1m%s passed, %s failed, %s skipped\033[0m\n' "$PASS" "$FAIL" "$SKIP"
-[ "$FAIL" -eq 0 ] || exit 1
+summary

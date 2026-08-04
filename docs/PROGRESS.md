@@ -15,6 +15,61 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-04
+
+### The entrance is off, and the script blamed the certificates
+
+Both hostnames stopped answering overnight. The administrator has taken the two
+proxy hosts down while working on yesterday's header placement, so this is
+intended and temporary — but nothing about the way it presents says so, and the
+first reading available was that the entrance had broken worse.
+
+openresty itself is still up. What is gone is the two host entries: 443 answers
+TLS alert 112 (`unrecognized name`) for every SNI, **including a name invented
+for the test**, which is what separates "no server block matches" from "our two
+certificates are bad"; and port 80 serves NPM's stock welcome page for both
+names. Nothing on this side is involved: gateway, both frontends and
+admin-tailnet all answer 200 on the tailnet, and the proxy still carries
+`tag:ntnu-proxy`.
+
+**The two header defects from 2026-08-03 are hidden, not fixed.** They are
+properties of a configuration that is not currently loaded, and they return the
+moment the hosts come back unless the four `proxy_set_header` directives move
+inside the generated `location`. The entrance being down is the reason the
+script can no longer see them, which is exactly why those checks now skip rather
+than pass.
+
+### One probe, four causes, and a confident message for the wrong one
+
+`verify-public-entrance.sh` reported 8 failures, and the first of them said to
+go and look at certificate scope. It read `%{ssl_verify_result}` and called any
+non-zero value an invalid certificate — but that value is 1 whenever the
+handshake did not complete at all, so a removed host, a stopped nginx, a dropped
+packet and a genuinely bad certificate all arrived as one message, carrying a
+hint about `*.rcsl.online` not covering two-label names. That hint is correct in
+one of the four states and misleading in the other three, and today was one of
+the three. This is the same shape as the `X-Nexus-Proxy` diagnosis corrected
+yesterday: a single probe cannot support the accusation the message makes.
+
+`entrance_state` now classifies by curl's exit code, which distinguishes what
+the status code cannot — every one of these is `000`. `unrecognized name` is
+corroborated from port 80: NPM answers a name it does not know with its own
+welcome page, so seeing it means the proxy is *running* and the host entry is
+missing, which is the difference between restoring a host and starting a
+service. Certificate scope keeps its note, in the one branch where the handshake
+got far enough for the certificate to be at fault.
+
+Sections 3–5 skip when the entrance is not answering instead of failing three
+more times with `got: ` and once with `unexpected status 000`. An empty body is
+not evidence about what serves a path, and four hollow failures competing with
+one real one is how the real one gets read past. **1 passed, 2 failed, 6 skipped**,
+against 1/8/0 before, and the two failures name the cause and the fix.
+
+Five of the seven branches were exercised end to end by pointing the script at
+substitute hosts — `ok`, `cert` (expired and self-signed), `dns`, `refused`, and
+`unconfigured` against the live entrance. `timeout` and `handshake` are not
+covered: both need conditions that cannot be produced from here.
+
 ## 2026-08-03
 
 ### The public entrance went live, and two controls were reporting nothing
