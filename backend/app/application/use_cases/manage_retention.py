@@ -138,8 +138,7 @@ class ManageRetention:
         if effective < MINIMUM_RETENTION_DAYS:
             raise RetentionWindowTooShortError(
                 detail=(
-                    f"purge window must be at least {MINIMUM_RETENTION_DAYS} days,"
-                    f" got {effective}"
+                    f"purge window must be at least {MINIMUM_RETENTION_DAYS} days, got {effective}"
                 )
             )
 
