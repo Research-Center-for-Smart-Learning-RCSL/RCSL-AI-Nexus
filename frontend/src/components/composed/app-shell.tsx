@@ -108,7 +108,12 @@ const NAV: NavItem[] = [
     href: '/usage',
     label: 'Usage',
     icon: <ActivityIcon className="size-4" />,
-    requires: 'usage:read_all',
+    // `read_own`, not `read_all`: since 2026-08-04 the screen serves both, and
+    // the narrower scope is held by every human role, so this link is visible to
+    // everyone and shows each reader what they are entitled to. The Dashboard
+    // above keeps `usage:read_all`, because platform totals have no own-usage
+    // equivalent to fall back to.
+    requires: 'usage:read_own',
   },
   {
     href: '/logs',
@@ -463,6 +468,12 @@ export function AppShell({ children }: { children: ReactNode }) {
                   variant="ghost"
                   size="sm"
                   aria-label="Account"
+                  // This renders an anchor, not a button. Without saying so,
+                  // Base UI keeps native button semantics for an element that
+                  // has none, and warns. A link that navigates is the correct
+                  // element here — it is Ctrl-clickable and has an href — so
+                  // the prop follows the markup rather than the other way.
+                  nativeButton={false}
                   render={<Link href="/account" />}
                 >
                   <UserCogIcon />

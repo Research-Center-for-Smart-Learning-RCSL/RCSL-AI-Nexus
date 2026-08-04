@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ErrorState } from '@/components/composed/error-state';
 import { MetricChart, type MetricSeries } from '@/components/composed/metric-chart';
+import { useSession } from '@/lib/session';
 import { useUsage } from '@/features/usage/hooks/use-usage';
 import { USAGE_RANGES, type UsageAnalytics, type UsageRange } from '@/features/usage/schema';
 
@@ -28,13 +29,21 @@ function byCapabilitySeries(data: UsageAnalytics): MetricSeries[] {
 
 export function UsageAnalyticsView() {
   const [range, setRange] = useState<UsageRange>('24h');
-  const { data, isLoading, error, refetch } = useUsage(range);
+  // Which usage this screen is for is a property of the reader, so it is
+  // resolved here rather than passed in: the page above is a server component
+  // and has no session to ask. Everybody holds `usage:read_own`, so there is no
+  // third branch where the screen has nothing to show.
+  const { can } = useSession();
+  const mine = !can('usage:read_all');
+  const { data, isLoading, error, refetch } = useUsage(range, { mine });
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">
-          From usage records, per tenant. Live operational metrics are in Grafana.
+          {mine
+            ? 'Your own usage: everything your API keys produced, plus your admin chat. Other accounts are not counted.'
+            : 'From usage records, per tenant. Live operational metrics are in Grafana.'}
         </p>
         <div className="flex gap-1">
           {USAGE_RANGES.map((r) => (

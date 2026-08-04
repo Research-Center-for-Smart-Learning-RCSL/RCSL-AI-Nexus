@@ -325,6 +325,26 @@ def test_the_gateway_endpoint_tells_the_ui_where_to_send_a_key(admin: TestClient
     assert admin.get("/admin/gateway").json()["capabilities"] == ["chat"]
 
 
+def test_own_usage_is_served_from_its_own_path(admin: TestClient) -> None:
+    """Wiring, which is the half the unit tests cannot reach.
+
+    `/admin/usage/me` has to resolve to its own route rather than being
+    swallowed by anything, build through the same DI as `/admin/usage`, and
+    return the shape the charts already parse. What it *counts* is asserted in
+    `test_logs_and_usage.py` against real rows, and the scope it demands in
+    `test_read_audit_and_usage.py`; this is the third piece, and the one that
+    would break by editing a decorator.
+    """
+    mine = admin.get("/admin/usage/me", params={"range": "24h"})
+
+    assert mine.status_code == 200, mine.text
+    body = mine.json()
+    assert body["bucket"] == "hour"
+    assert body["totals"] == []
+    assert body["by_capability"] == []
+    assert set(body) == set(admin.get("/admin/usage", params={"range": "24h"}).json())
+
+
 def _in_days(days: int) -> str:
     """A date the expiry rules will still accept when this is next run.
 

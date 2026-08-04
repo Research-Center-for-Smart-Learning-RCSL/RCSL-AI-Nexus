@@ -197,6 +197,11 @@ class MeteredUsageRepository:
         return await self._inner.totals_since(since)
 
     async def bucketed_usage(
-        self, since: datetime, until: datetime, unit: BucketUnit
+        self,
+        since: datetime,
+        until: datetime,
+        unit: BucketUnit,
+        *,
+        actor_id: str | None = None,
     ) -> list[UsageBucket]:
-        return await self._inner.bucketed_usage(since, until, unit)
+        return await self._inner.bucketed_usage(since, until, unit, actor_id=actor_id)

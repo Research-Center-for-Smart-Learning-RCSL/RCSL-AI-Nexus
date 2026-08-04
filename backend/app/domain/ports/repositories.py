@@ -254,13 +254,27 @@ class UsageRepositoryPort(Protocol):
         ...
 
     async def bucketed_usage(
-        self, since: datetime, until: datetime, unit: BucketUnit
+        self,
+        since: datetime,
+        until: datetime,
+        unit: BucketUnit,
+        *,
+        actor_id: str | None = None,
     ) -> list[UsageBucket]:
         """Usage grouped by time bucket and capability, for the analytics charts.
 
         One query grouped by `(date_trunc(unit, at), capability)`; the use case
         folds the rows into per-bucket totals and per-capability series. Scoped,
         so a tenant's charts show only its own traffic.
+
+        `actor_id` narrows further, to the usage attributed to one account, which
+        is what `usage:read_own` grants sight of. It filters on `actor_id` rather
+        than `api_key_id` because the gateway resolves an API key to its
+        **owner** (`api_key_auth.py` builds the actor with `id=key.owner_id`), so
+        one account's usage is every row its keys produced plus anything it ran
+        through the admin chat, and no join is needed to say so. Keyword-only:
+        the difference between the tenant's figures and one person's is not
+        something to express as a third positional argument.
         """
         ...
 

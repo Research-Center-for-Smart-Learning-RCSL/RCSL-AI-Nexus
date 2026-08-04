@@ -17,6 +17,69 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-04
 
+### A scope nobody could spend, and the nav that had no test
+
+Two things, found by asking whether the sidebar varied by role. It already did —
+that landed this morning — so the work became verifying it rather than building
+it, and the verification is what turned up both.
+
+**Every nav entry's `requires` matches the scope its screen's own first request
+demands.** Checked one by one against the `authz.require(...)` in each use case:
+Dashboard and Usage against `read_dashboard` and `read_usage_analytics`, Logs
+against `read_audit_log`, and so on. The three entries that deliberately declare
+nothing — API keys, API, Chat — are correct too, because every role holds
+`api_key:read_own` and `chat:use`. So the invariant the nav table claims for
+itself holds with no exceptions: **a hidden link and a 403 mean the same
+thing.**
+
+**`usage:read_own` was granted to every human role and required by nothing.** It
+has been in `_BASE_SCOPES` since the roles existed, described there as part of
+what having an account is worth — and no endpoint asked for it, so a member
+could not see their own figures anywhere in the UI. `/admin/usage/me` now
+answers it, and the Usage screen serves whichever question the reader is
+entitled to ask.
+
+The attribution is by **actor**, not by key, which is worth stating because it
+is what makes the answer useful: the gateway resolves an API key to its owner
+(`api_key_auth.py` builds the actor with `id=key.owner_id`), so one account's
+usage is every row its keys produced — current, rotated, revoked — plus its
+admin-chat traffic, with no join and nothing to remember. The filter is applied
+*inside* the tenant scope rather than instead of it, and the integration test
+asserts exactly that by planting the same actor id under a second tenant.
+
+Two separate paths rather than one endpoint that quietly returns less to a
+narrower caller. A chart that silently changes what it counts based on who is
+looking is one nobody can compare with anyone else's, and the scope it checks
+would stop matching what it returns.
+
+**The nav had no test, and neither did `can`.** `app-shell.tsx` carried the
+filtering, the shared definition behind both the sidebar and the mobile panel,
+and the guard that redirects an out-of-scope URL — none of it covered, in a file
+that changed shape twice in one day (`adminOnly` to per-scope this morning,
+`usage:read_all` to `usage:read_own` this afternoon). Neither change is visible
+to a type checker. Fifteen tests now cover it, driven by **scope sets rather
+than role names**: the authoritative role table is the backend's, and asserting
+a frontend copy of it would only prove the copy matches itself.
+
+The one that took a correction while being written: an `auditor` sees **every**
+link, identical to an admin. That looks like a bug and is the role working — it
+holds a read scope for everything, and what differs is inside each screen, where
+the write controls are gated separately. The test now pins the count so a future
+entry an auditor should not see fails here.
+
+`can`'s own contract moved to `lib/session.test.tsx`, where it belongs: an
+**absent** scope list falls back to the old `role === 'admin'` boolean, an
+**empty** one grants nothing even to an admin, and neither grants anything while
+the query is still pending. The absent case is not hypothetical in this
+deployment — the last deploy recreated `admin-public` alone, so a frontend newer
+than its backend is an ordering that really happens, and answering "holds
+nothing" during it would empty the nav for everyone and explain nothing.
+
+Rendering the shell in a test also surfaced a Base UI warning nobody had seen:
+the Account button and the not-found link render as anchors while claiming
+native button semantics. Both now say `nativeButton={false}`. **A component that
+had never been mounted in a test had never printed its warnings either.**
+
 ### Both runtime advisories are closed, and one of them was called unfixable twice
 
 The two that reach the deployed images are gone. `pip-audit` against the

@@ -153,3 +153,48 @@ async def test_usage_buckets_by_hour_and_capability(session) -> None:
         (11, "chat"): (2, 15),
         (11, "embed"): (1, 3),
     }
+
+
+async def test_own_usage_narrows_by_actor_and_still_by_tenant(session) -> None:
+    """The `actor_id` filter, which only SQL can be wrong about.
+
+    The unit tests fold a Python stand-in for `date_trunc`, so the thing they
+    cannot prove is that the predicate reaches the query and lands *inside* the
+    tenant scope rather than replacing it. Both halves are asserted here: the
+    other account's row in the same tenant is excluded, and the same actor id
+    in another tenant is excluded too.
+    """
+    a = await _tenant(session, "A")
+    b = await _tenant(session, "B")
+
+    def rec(tenant: str, actor: str, at: datetime, tokens: int) -> UsageRecord:
+        return UsageRecord(
+            id=str(uuid.uuid4()),
+            actor_id=actor,
+            api_key_id="k",
+            capability="chat",
+            model_alias="m",
+            tokens=tokens,
+            latency_ms=1,
+            completed=True,
+            at=at,
+            tenant_id=tenant,
+        )
+
+    repo_a = PostgresUsageRepository(session, a)
+    await repo_a.record(rec(a, "mine", NOW.replace(hour=10, minute=30), 7))
+    await repo_a.record(rec(a, "mine", NOW.replace(hour=11, minute=15), 5))
+    await repo_a.record(rec(a, "theirs", NOW.replace(hour=11, minute=20), 100))
+    # The same person's id under another tenant. Reachable only if the actor
+    # filter were applied instead of the tenant one rather than alongside it.
+    await PostgresUsageRepository(session, b).record(
+        rec(b, "mine", NOW.replace(hour=11, minute=30), 1000)
+    )
+    await session.flush()
+
+    since = NOW - timedelta(hours=24)
+    until = NOW + timedelta(hours=1)
+    buckets = await repo_a.bucketed_usage(since, until, "hour", actor_id="mine")
+
+    got = {b.bucket_start.hour: (b.requests, b.tokens) for b in buckets}
+    assert got == {10: (1, 7), 11: (1, 5)}

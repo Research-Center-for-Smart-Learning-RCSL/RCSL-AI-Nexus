@@ -17,7 +17,13 @@ export default function NotFound() {
         title="No such screen"
         description="The address does not match any page in the management UI. It may have been a stale bookmark."
         action={
-          <Button variant="outline" size="sm" render={<Link href="/chat" />}>
+          // An anchor, so it must not claim native button semantics.
+          <Button
+            variant="outline"
+            size="sm"
+            nativeButton={false}
+            render={<Link href="/chat" />}
+          >
             Go to Chat
           </Button>
         }

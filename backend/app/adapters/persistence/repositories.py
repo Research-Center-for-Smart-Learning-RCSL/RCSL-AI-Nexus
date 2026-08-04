@@ -672,11 +672,22 @@ class PostgresUsageRepository(_TenantScoped):
         return int(row[0] or 0), int(row[1] or 0)
 
     async def bucketed_usage(
-        self, since: datetime, until: datetime, unit: BucketUnit
+        self,
+        since: datetime,
+        until: datetime,
+        unit: BucketUnit,
+        *,
+        actor_id: str | None = None,
     ) -> list[UsageBucket]:
         # `unit` reaches date_trunc as a bind parameter, not interpolated text,
         # and the use case restricts it to the BucketUnit literals regardless.
         bucket = func.date_trunc(unit, UsageRecordRow.at)
+        where = [UsageRecordRow.at >= since, UsageRecordRow.at < until]
+        # Narrowed *inside* `_scope`, never instead of it: one account's usage is
+        # still read within its tenant's boundary, so an actor id that belonged
+        # to another tenant would select nothing rather than crossing it.
+        if actor_id is not None:
+            where.append(UsageRecordRow.actor_id == actor_id)
         rows = await self._session.execute(
             self._scope(
                 select(
@@ -688,7 +699,7 @@ class PostgresUsageRepository(_TenantScoped):
                         func.sum(UsageRecordRow.tokens + UsageRecordRow.prompt_tokens), 0
                     ),
                 )
-                .where(UsageRecordRow.at >= since, UsageRecordRow.at < until)
+                .where(*where)
                 .group_by(bucket, UsageRecordRow.capability)
                 .order_by(bucket),
                 UsageRecordRow.tenant_id,
