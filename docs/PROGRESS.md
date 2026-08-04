@@ -17,6 +17,71 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-04
 
+### A sweep of the whole platform, now that there is a way in to sweep it with
+
+Everything that can be exercised from this machine was, because until this
+morning most of it could not be reached and "it was fine last week" had stopped
+meaning anything. Nothing is broken. Four things are worth acting on and none of
+them is a failure, which is why they are written down rather than fixed on the
+spot.
+
+What passed: eleven services running with **zero restarts** and every healthcheck
+green, `migrate` correctly `Exited (0)`; all six published bindings held by the
+kernel; four launchd daemons installed; every health and readiness endpoint 200
+with `database`, `cache` and `runtime` all true on both the admin and gateway
+apps; Prometheus scraping three targets up and `/metrics` served under its
+bearer token; Alembic at `f7a9d24c8b16` with `current == heads`; Postgres, Redis
+and Qdrant reachable, Ollama holding three models; **633 backend tests** (547
+unit, 86 integration against a throwaway database) and **180 frontend tests**,
+with `tsc --noEmit` and eslint clean; fourteen admin API surfaces answering; and
+no traceback anywhere in 24 hours of logs — every line that greps as an error is
+an expected refusal logged at WARNING.
+
+**Inference works end to end through the public entrance**, which is the first
+time that has been true. `POST https://api.nexus.rcsl.online/v1/chat/completions`
+returns `OK` with `finish_reason: stop`, the streaming path returns 99 SSE frames
+reassembling to the same answer and terminating with `[DONE]`, an invalid key is
+refused 401, and the gateway refuses a request that did not come through the
+proxy exactly as the admin entrance does. A first attempt looked like a defect —
+empty `content` — and was not: `max_tokens: 20` truncates `glm47-flash` while it
+is still reasoning, and `content` is legitimately empty until the thinking ends.
+Worth remembering before reporting the next one: **a reasoning model on a short
+budget produces exactly what a broken response mapper produces.**
+
+Four temporary API keys were issued during this and all four are revoked; the
+one active key is the pre-existing `qwen7b`.
+
+#### Four things to decide about
+
+**Prompt tokens are not counted, anywhere.** `RouteChatRequest` records
+`tokens=produced` and the response carries `Usage(completion_tokens=tokens,
+total_tokens=tokens)`, so `prompt_tokens` is the schema default of `0`. Ollama
+reported 34 prompt tokens for the same call. Two consequences: an OpenAI client
+computing cost from the envelope is given a wrong number, and
+`quota_tokens_per_day` does not charge for input at all, so a caller can send
+arbitrarily large prompts free. On unified memory, prompt evaluation is real
+work.
+
+**`observed_at` means "last changed", not "last observed".** `observe_models`
+skips the write when the observation is unchanged, so the model rows have read
+`2026-07-30` for five days while the heartbeat has been sweeping every 30
+seconds. That is correct behaviour and an unreadable field: a model steadily
+observed for five days and a heartbeat that died five days ago are the same row.
+It is the ambiguity `check-platform-health.sh` argues against in its own header.
+
+**That health script cannot see two of the services it is meant to watch.**
+`EXPECTED_SERVICES` lists nine and omits `parser` and `qdrant`, both long-lived.
+If either disappeared the sweep would report success — the enumeration error the
+script's own comments warn about, in the script that warns about it.
+
+**Both admin applications run their own heartbeat.** `admin_lifespan` is shared,
+so `admin-public` and `admin-tailnet` each sweep the same nodes and models every
+30 seconds against the same rows. Harmless while writes are change-only, and not
+obviously intended.
+
+Smaller: `/admin/knowledge/collections` reports none while Qdrant holds
+`kb_default`.
+
 ### Two defects in the second step of sign-in, and neither was reachable until today
 
 Reported as "the TOTP field will not take input". It was two independent
@@ -136,6 +201,13 @@ and nothing else — and only `admin-public` was recreated. The tailnet entrance
 still answers `auth_mode: tailnet`, and the entrance is still 9/0/0. The
 browser itself was not driven; what was verified is the value on the wire and
 the two conditions that read it.
+
+**Confirmed end to end later the same day**, once the two login-form defects
+below were also fixed: a real sign-in from a browser reached the login screen
+rather than "Tailscale connection lost", and returned a session. That exercises
+the whole chain in one go — the four nginx headers, the trusted-proxy check,
+the country filter, CSRF and the session cookie — every segment of which was
+broken this morning.
 
 ### The entrance came back with the headers still missing, and the 400 is not the page
 
