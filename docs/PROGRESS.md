@@ -17,6 +17,73 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-04
 
+### The entrance came back with the headers still missing, and the 400 is not the page
+
+The administrator restored `ai.nexus.rcsl.online` and moved the directives into
+an NPM **Custom Location** — `Define location: /`, forwarding to
+`TAILNET_IP:3001` — re-declaring NPM's own generated set (`Host`,
+`X-Forwarded-Scheme`, `X-Forwarded-Proto`, `X-Real-IP`, `Upgrade`, `Connection`)
+alongside our four. That is what [deployment.md](./architecture/deployment.md)
+section 5 asks for, and the configuration as written is correct. It is not the
+configuration nginx is running.
+
+`api.nexus.rcsl.online` was not restored: still TLS alert 112 (`unrecognized
+name`) on 443 and NPM's stock welcome page on 80. One of the two hosts is back,
+so the script's sections 3–5 run against the management host instead of
+skipping — **4 passed, 3 failed, 2 skipped**, against 1/2/6 this morning.
+
+**The paired probe says nothing is being set, which is the same state as
+2026-08-03.** A deliberately wrong `X-Nexus-Proxy` returns 400; the real value
+returns **401**. If nginx set the header at all — right value or wrong — the
+caller's own would be overwritten and both probes would return the same thing.
+They differ, so what the application reads is the caller's header and nginx is
+contributing nothing. The wrong-value branch is ruled out twice here: by the
+probe, and by the person who entered it confirming the field holds the real
+secret and was masked only when it was pasted.
+
+`X-Forwarded-For` corroborates it independently. With the real secret and a
+forged `X-Forwarded-For: 8.8.8.8` the request is judged American and refused
+`country_not_allowed`. The block the administrator sent sets `$remote_addr`,
+which would have discarded the forged value; what is running is NPM's own
+`$proxy_add_x_forwarded_for`, which appends, and `client_ip.py` reads the first
+value. Two directives out of one block, both absent, one cause — and no single
+probe would have established either alone.
+
+**The 400 in the browser is not the page.** `/` and `/login` return 200: they
+are served by `frontend-public`, which checks nothing. Every `/admin/*` call
+underneath returns `{"code":"untrusted_proxy"}`. The UI shell loads and each
+request it makes is refused, which is what "the site 400s" looks like from a
+browser, and it locates the fault precisely — routing is right and only the
+header is wrong. The refused requests arrive from `172.19.0.3`, the frontend
+container, so openresty is reaching `TAILNET_IP:3001` exactly as configured.
+
+No request through this entrance has ever returned 2xx. Across the retained
+logs `/admin/*` on the public app is 64×401, 58×400, 7×403 and nothing else —
+and every one of those 401s is a probe that supplied the secret itself, which is
+the defect rather than an exception to it.
+
+### Why a correct configuration is not the loaded one
+
+Not established from here; it needs `nginx -T` on the proxy to settle. The
+leading candidate is that a Custom Location whose path is `/` collides with the
+`location /` NPM generates for the same host — nginx refuses a duplicate
+`location`, the reload fails, and the previously loaded configuration keeps
+serving. That presents exactly as observed: the UI shows the new directives and
+behaviour is what it was before them.
+
+What to check, in order. That `X-Nexus-Proxy` appears **inside** a `location` in
+`nginx -T` output, rather than merely appearing — that distinction is the whole
+of the 2026-08-03 finding and it survives a change of field. That
+`X-Forwarded-For` is declared **once** in that block and set to `$remote_addr`,
+since nginx does not de-duplicate `proxy_set_header` and one inherited from
+NPM's `proxy.conf` sitting beside ours restores the forgery. And whether the
+reload reported `duplicate location "/"`.
+
+The security consequence changed shape today rather than easing. This morning
+the forged-`X-Forwarded-For` hole sat behind an entrance that answered nothing.
+The management host now answers the internet with the hole live: the country
+filter and every per-key CIDR allowlist are set by the caller.
+
 ### The entrance is off, and the script blamed the certificates
 
 Both hostnames stopped answering overnight. The administrator has taken the two
