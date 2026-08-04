@@ -602,6 +602,63 @@ substitute hosts — `ok`, `cert` (expired and self-signed), `dns`, `refused`, a
 `unconfigured` against the live entrance. `timeout` and `handshake` are not
 covered: both need conditions that cannot be produced from here.
 
+### A "postcss and sharp, upstream and unfixable" advisory turned out to be one of them
+
+Dependabot flagged `postcss` again — CVE-2026-45623, GHSA-6g55-p6wh-862q, an
+arbitrary-file-read: `PreviousMap` follows the `sourceMappingURL` path out of a
+CSS comment with no scheme check and no traversal check, `path.join` does not
+block `..`, and the first ~10 bytes of whatever it reads leak through the
+`JSON.parse` `SyntaxError` message the caller sees. The 2026-07-30 entry above
+called this one upstream and unfixable from here; it was not.
+
+`pnpm-lock.yaml` carried two copies of `postcss`: `8.5.22` from
+`tailwindcss`/`@tailwindcss/postcss`, already past the patched `8.5.12`, and
+`8.4.31` — the vulnerable one — pinned exactly, not as a range, inside
+`next@15.5.21`'s own `package.json`. Nothing in this project's `package.json`
+names `postcss` at all, so pnpm had no lower bound of its own to fall back on.
+
+`overrides: { postcss: ">=8.5.23" }` in `frontend/pnpm-workspace.yaml` forces
+the second copy onto the same patched line as the first — `next`'s snapshot in
+the lockfile now reads `postcss: 8.5.25` where it read `8.4.31`. `pnpm audit` no
+longer lists it, `pnpm build` still produces every page (the exact path the
+override touches, since Tailwind's postcss pipeline runs at build time), and
+the 193-test suite and lint are unaffected. The four remaining advisories from
+2026-07-30 are three; `sharp` is the one still actually upstream.
+
+**The floor is `8.5.23` rather than the `8.5.12` this fix was written with**,
+and the two revisions between those numbers are the useful part. `postcss` was
+patched twice more while the change sat in review, both times for the same
+`sourceMappingURL` reader: Dependabot alert #6 (path traversal, patched
+`8.5.18`), and then an advisory for the *incomplete fix* of the very one this
+entry opens with — arbitrary `.map` read when `from` is unset, vulnerable
+through `8.5.22`, patched `8.5.23`. So the original floor would have permitted
+five versions still vulnerable to the first, and the resolved `8.5.22` was
+itself vulnerable to the second, which Dependabot had not yet raised. `pnpm
+audit` found it and now reports no `postcss` advisory at all.
+
+**And the override was in the file pnpm is in the middle of abandoning.** It
+was written as `pnpm.overrides` in `package.json`, which is precisely what
+`pnpm-workspace.yaml`'s own comment has warned about since 2026-07-26, when the
+build-script allowlist was found sitting there being silently ignored. What
+made this one hard to see is that it *worked*: pnpm 10.17.1 still honours the
+field, `packageManager` pins that version, and CI installs through it, so every
+check was green. pnpm 11 ignores the field and says so — the warning appears on
+any `pnpm` command run outside the pin, which on this machine is the Homebrew
+one. So the failure was scheduled rather than absent: the first regeneration
+under a newer pnpm restores `next`'s exact `postcss@8.4.31` and no test fails.
+Moved to `overrides:` in `pnpm-workspace.yaml`, verified by deleting the
+`package.json` field entirely and watching the lockfile still follow an edit to
+the workspace file.
+
+Three things worth keeping. **An override floor is a promise about future
+resolutions; only the lockfile says anything about this one** — reading the
+range against the advisory catches what a green audit of the current tree
+cannot. **A fix for a path-handling bug is a place to expect a second
+advisory**, since the incomplete-fix advisory here is the same code, the same
+reporter, and three weeks later. And **a pinned toolchain hides deprecations
+rather than protecting you from them**: the pin is why this was invisible, and
+the machine that ignored the pin is what surfaced it.
+
 ## 2026-08-03
 
 ### The public entrance went live, and two controls were reporting nothing
