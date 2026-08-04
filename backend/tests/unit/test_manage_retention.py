@@ -136,7 +136,9 @@ async def test_a_dataset_nobody_configured_still_reports_the_default() -> None:
 async def test_setting_a_window_records_who_set_it_and_audits_the_change() -> None:
     use_case, _, _, trail = _build()
 
-    policy = await use_case.set_policy(_actor(Scope.RETENTION_WRITE), RetentionDataset.AUDIT_LOG, 90)
+    policy = await use_case.set_policy(
+        _actor(Scope.RETENTION_WRITE), RetentionDataset.AUDIT_LOG, 90
+    )
 
     assert policy.days == 90
     assert policy.updated_by == "admin@example.test"
@@ -224,9 +226,7 @@ async def test_a_purge_narrower_than_the_floor_is_refused() -> None:
     use_case, audit_rows, _, _ = _build(audit=_rows_spanning_a_year())
 
     with pytest.raises(RetentionWindowTooShortError):
-        await use_case.purge(
-            _actor(Scope.RETENTION_WRITE), RetentionDataset.AUDIT_LOG, days=1
-        )
+        await use_case.purge(_actor(Scope.RETENTION_WRITE), RetentionDataset.AUDIT_LOG, days=1)
 
     assert audit_rows.deleted_at_cutoffs == []
 
