@@ -51,7 +51,18 @@ async def read_me(
 
     return MeResponse(
         id=user.id,
-        auth_mode=settings.auth_mode,
+        # The entrance this request actually arrived through, not the
+        # deployment-wide setting. `settings.auth_mode` reads `tailnet` in any
+        # real deployment, so the public entrance answered `tailnet` here even
+        # after the 401 envelope was fixed to say `local` — and the UI prefers
+        # this field over the 401 hint, so a signed-in user on the public
+        # entrance lost the Account button, Sign out, the password form and
+        # TOTP re-enrolment, on the only entrance that has any of them.
+        #
+        # `actor.source` is set by whichever resolver authenticated the
+        # request: `local` for a session, `tailnet` (or `dev`) for the header.
+        # It cannot disagree with how the caller got here.
+        auth_mode=actor.source,
         login=user.login,
         display_name=user.display_name,
         role=user.role.value,

@@ -25,6 +25,7 @@ from app.domain.entities.user import User
 from app.domain.exceptions import UserAlreadyExistsError, UserNotFoundError
 from app.domain.ports.repositories import InvitationRepositoryPort, UserRepositoryPort
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
+from app.domain.services.grantable_roles import assert_may_grant
 from app.domain.services.token_service import TokenService
 from app.shared.clock import Clock
 
@@ -70,6 +71,11 @@ class IssueInvitation:
         tenant_id: str | None = None,
     ) -> IssuedInvitation:
         self._authz.require(actor, Scope.USER_WRITE)
+        # `USER_WRITE` says an account may be created, not that it may be
+        # created with any role. Without this a `tenant_admin` invites an
+        # `admin`, and the response carries the single-use link to onboard as
+        # one. See domain/services/grantable_roles.py.
+        assert_may_grant(self._authz, actor, role)
 
         normalised = login.strip().lower()
         if await self._users.get_by_login(normalised) is not None:

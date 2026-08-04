@@ -131,8 +131,15 @@ async def observe_models(
         # sweep ran every thirty seconds, which made a model steadily observed
         # for five days and a heartbeat dead for five days the same row — the
         # ambiguity `check-platform-health.sh` argues against in its own
-        # header. The churn this was avoiding also halved on 2026-08-04, when
-        # the sweep stopped running in both admin entrances at once.
+        # header.
+        #
+        # It is not free, and the first version of this comment understated it
+        # by calling the cost "halved". The sweep running in one entrance
+        # rather than two is a halving; this write is 0 → N per sweep, each in
+        # its own `session_scope()` transaction, so it is a steady floor of N
+        # transactions every thirty seconds where there was none. N is the
+        # model count — three here — and a single batched UPDATE would buy the
+        # same freshness if that ever stops being small.
         #
         # Except when there is nothing to stamp: `set_observed` nulls
         # `observed_at` along with the state, so rewriting an already-null row

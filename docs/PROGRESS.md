@@ -17,6 +17,71 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-04
 
+### A review found three serious defects in the day's work, two of them mine
+
+Run against the seven commits. Nine findings, all real; the three that mattered
+were verified here before being fixed, because a review is a claim until it is
+reproduced.
+
+**The prompt-token quota was bypassable, by the change that added it.**
+`max_tokens: 1` in front of a context-filling prompt cost one token of quota.
+The ceiling check ran first and `break` left the runtime's terminal event
+unread — the only place `prompt_eval_count` appears — so the figure was zero on
+exactly the requests designed to abuse it. Reproduced with a probe before
+touching anything: `max_tokens=1 -> billed 1, prompt_tokens 0`. **The comment I
+wrote asserted the opposite in as many words** ("Truncation at the ceiling is
+not affected: Ollama's own done chunk arrives on the same token"), which was
+true about when the event *arrives* and wrong about whether anything reads it.
+A confident comment on an unverified claim is worse than none, because it is
+what the next reader checks instead of the code.
+
+Now the loop reads past the ceiling without forwarding, which costs nothing —
+the runtime is told `num_predict = ceiling`, so its terminal event is the next
+one — bounded by `_TERMINAL_EVENT_DRAIN_LIMIT` for a runtime that ignores that.
+Two things fell out of doing it: drained content is *not* billed, since it was
+withheld from the caller; and the terminal frame the client sees now keys on
+whether one was **forwarded** rather than whether upstream sent one, or a
+truncated stream would have ended with no terminal frame at all.
+
+**Adding `tenant_admin` opened a path to platform `admin`.** `USER_WRITE`
+answers "may this caller create accounts" and never answered "with which role",
+which was invisible while `admin` was the only holder and nothing sat above it.
+A `tenant_admin` could invite an account with `role: admin`, take the
+single-use onboarding link out of the same response body, and hold every scope
+— including the `TENANT_WRITE` the role is explicitly denied, and every
+platform-global scope the tenant boundary does not cover. The new §5.2 table
+said "deliberately cannot create a tenant" while the role could create somebody
+who could.
+
+Closed with one rule in `domain/services/grantable_roles.py`: **you may grant a
+role only if you already hold everything it confers.** It needs no table, and
+it keeps being true for roles added later by people who never read that file.
+`tenant_admin` can still staff its own tenant — `curator`, `auditor`, `user`,
+its own role — and cannot reach `operator` or `admin`.
+
+**The `auth_mode` fix from this morning was half a fix.** `install_error_handlers`
+was corrected to say `local`; `GET /admin/me` still answered
+`settings.auth_mode`, and the UI prefers that field over the 401 hint. So a
+*signed-in* user on the public entrance was still told `tailnet`, which hides
+the Account button, Sign out, the password form and TOTP re-enrolment — on the
+one entrance that has any of them. It now answers `actor.source`, set by
+whichever resolver authenticated the request, so it cannot disagree with how
+the caller actually arrived. This morning's PROGRESS entry described the 401
+half in detail and did not mention this one.
+
+Six smaller findings, all fixed: `can()` falling back to the old boolean when a
+backend does not send scopes at all, because frontend and backend are separate
+images and this deploy recreated `admin-public` alone — "no scopes reported"
+would have emptied the nav for everyone including `admin`; the "Issue key"
+button and `canManageKey` still assuming everyone may write their own keys,
+which stopped being true when `auditor` arrived; a 422 still naming two of six
+roles; `ROLE_SCOPES` exported as the live dict rather than a `MappingProxyType`,
+in a module whose first line argues nothing may grant itself a scope; a
+heartbeat comment calling a 0 → N write cost a "halving"; and **a test of mine
+that asserted on a labelled scope while claiming to cover the unlabelled
+fallback** — it could not have failed, which reads as coverage and is worse
+than an absence.
+
 ### The account screen answers "why can I not see that screen"
 
 The permissions list is on `/account` too, from `me.scopes` — the scopes the

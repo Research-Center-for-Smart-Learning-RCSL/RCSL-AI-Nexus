@@ -61,10 +61,11 @@ export type Me = {
   /**
    * What this account may do, resolved server-side from the role.
    *
-   * Optional so a frontend deployed against an older backend degrades to an
-   * empty list rather than crashing on parse — `can()` then answers false for
-   * everything, which hides controls rather than offering ones the server will
-   * refuse.
+   * Optional so a frontend deployed against an older backend degrades rather
+   * than crashing on parse. Absent is not the same as empty, and `can()`
+   * treats it differently: an empty list means this account holds nothing, and
+   * a missing one means the server did not say, in which case the old
+   * `role === 'admin'` answer is used until it does.
    */
   scopes?: ScopeName[];
   /** null on the tailnet, which has no session at all. */
@@ -193,6 +194,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // question the expensive one.
   const held = useMemo(() => new Set(data?.scopes ?? []), [data?.scopes]);
 
+  /**
+   * Whether the server told us anything about scopes at all.
+   *
+   * Absent means an older backend, and the frontend and backend are separate
+   * images recreated independently — the last deploy recreated `admin-public`
+   * alone — so frontend-ahead-of-backend is an ordering that really happens
+   * here. Answering false for everything in that window would empty the nav
+   * for every account including `admin`, bounce them off `/` to `/chat`, and
+   * show no error explaining why: a management UI locked out by a deploy
+   * order. Falling back to the old boolean keeps the previous behaviour until
+   * the backend catches up.
+   */
+  const scopesReported = Array.isArray(data?.scopes);
+  const isAdmin = data?.role === 'admin';
+
   const value = useMemo<SessionValue>(() => {
     let status: SessionStatus;
     if (data) status = 'authenticated';
@@ -209,17 +225,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       status,
       error: error ?? null,
       authMode,
-      // Built from the list the server sent. An account whose scopes have not
-      // arrived yet — loading, or an older backend that does not send them —
-      // holds none, so controls stay hidden until the answer is known rather
-      // than flashing and disappearing.
-      can: (scope: ScopeName) => held.has(scope),
-      isAdmin: data?.role === 'admin',
+      // Built from the list the server sent. When no list arrived at all, fall
+      // back to the boolean this replaced rather than to "holds nothing" — see
+      // `scopesReported`. Still false for everyone while the query is pending,
+      // so controls fill in rather than flashing and disappearing.
+      can: (scope: ScopeName) =>
+        scopesReported ? held.has(scope) : Boolean(data) && isAdmin,
+      isAdmin,
       hasSession: Boolean(data?.session_expires_at),
       refresh,
       signOut,
     };
-  }, [data, error, isPending, unauthorizedHint, held, refresh, signOut]);
+  }, [data, error, isPending, unauthorizedHint, held, scopesReported, isAdmin, refresh, signOut]);
 
   return (
     <SessionContext.Provider value={value}>{children}</SessionContext.Provider>

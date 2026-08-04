@@ -11,6 +11,9 @@ answers. That is what makes adding a role cheap and adding one safe.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
+
 from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.exceptions import NotAuthorizedError
 
@@ -137,11 +140,18 @@ narrowing and belongs in this docstring with its reason. A scope that becomes
 admin-only *without* being added here fails `test_role_scopes.py`, which is the
 point of writing it down."""
 
-ROLE_SCOPES: dict[Role, frozenset[Scope]] = _BY_ROLE
+ROLE_SCOPES: Mapping[Role, frozenset[Scope]] = MappingProxyType(_BY_ROLE)
 """Read-only view for callers that describe the model rather than enforce it —
 the `/admin/roles` catalogue the settings UI renders. Exported so the screen
 explaining these roles is generated from the same table that grants them, and
-cannot drift from it."""
+cannot drift from it.
+
+Genuinely read-only, via `MappingProxyType`. Binding it straight to `_BY_ROLE`
+handed every importer — a router, a test — a reference to the dict this module
+enforces from, so a stray `ROLE_SCOPES[role] = ...` would have rewritten live
+authorization. For a module whose first line argues that no database row may
+grant itself a scope, leaving the table writable from anywhere that imports it
+was the wrong shape."""
 
 ASSIGNABLE_ROLES: tuple[Role, ...] = (
     Role.ADMIN,
