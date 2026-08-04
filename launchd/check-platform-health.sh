@@ -52,7 +52,13 @@ STATE_FILE="/opt/homebrew/var/nexus-health.state"
 # Long-lived services, which is every compose service except `migrate`. `migrate`
 # is a one-shot job and is correctly `Exited (0)` after a boot; treating it as
 # expected-running would alert on every reboot forever.
-EXPECTED_SERVICES="postgres redis prometheus grafana gateway admin-public admin-tailnet frontend-public frontend-tailnet"
+#
+# `parser` and `qdrant` were missing from this list until 2026-08-04, so either
+# could have stopped without the sweep noticing — the list is compared against,
+# and a service absent from it is a service nothing asks about. That is the
+# enumeration error the header above argues against, in the list the argument
+# is about. Anything added to docker-compose.yml belongs here on the same day.
+EXPECTED_SERVICES="postgres redis prometheus grafana gateway admin-public admin-tailnet frontend-public frontend-tailnet parser qdrant"
 
 # Boot grace. The reconciler owns the first minutes: it waits for the tailnet
 # address, the daemon, and the container set to settle, which can legitimately

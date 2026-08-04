@@ -123,10 +123,30 @@ async def observe_models(
         else:
             observed = ModelState.NOT_DOWNLOADED
 
-        if model.observed_state is observed and model.observed_memory_gb == observed_gb:
+        unchanged = model.observed_state is observed and model.observed_memory_gb == observed_gb
+
+        # An unchanged observation is still rewritten, so that `observed_at`
+        # means *last observed* rather than *last changed*. Writing only on
+        # change left these rows stamped 2026-07-30 for five days while the
+        # sweep ran every thirty seconds, which made a model steadily observed
+        # for five days and a heartbeat dead for five days the same row — the
+        # ambiguity `check-platform-health.sh` argues against in its own
+        # header. The churn this was avoiding also halved on 2026-08-04, when
+        # the sweep stopped running in both admin entrances at once.
+        #
+        # Except when there is nothing to stamp: `set_observed` nulls
+        # `observed_at` along with the state, so rewriting an already-null row
+        # buys no freshness and is pure churn. A model on another node, or one
+        # whose runtime has no adapter, stays untouched.
+        if unchanged and observed is None:
             continue
-        changed += 1
         await write_observation(model.id, observed, observed_gb)
+        if unchanged:
+            continue
+        # Counted and logged only on a change: the return value feeds the
+        # "what did this sweep do" line, and logging an unchanged observation
+        # thirty times a minute would bury the transitions that matter.
+        changed += 1
         logger.info(
             "model %s observed %s (intent %s)",
             model.alias,

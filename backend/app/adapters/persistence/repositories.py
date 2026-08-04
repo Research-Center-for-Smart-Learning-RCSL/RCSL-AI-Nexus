@@ -614,10 +614,16 @@ class PostgresUsageRepository(_TenantScoped):
         self._session.add(row)
 
     async def tokens_used_today(self, api_key_id: str) -> int:
+        # Both halves. `quota_tokens_per_day` charged for generated tokens
+        # alone until 2026-08-04, so a caller could fill the context window on
+        # every request and spend none of its quota doing it — on this
+        # hardware, prompt evaluation is most of the wait.
         since = datetime.now(UTC) - timedelta(days=1)
         total = await self._session.scalar(
             self._scope(
-                select(func.coalesce(func.sum(UsageRecordRow.tokens), 0)).where(
+                select(
+                    func.coalesce(func.sum(UsageRecordRow.tokens + UsageRecordRow.prompt_tokens), 0)
+                ).where(
                     UsageRecordRow.api_key_id == api_key_id,
                     UsageRecordRow.at >= since,
                 ),
@@ -652,7 +658,12 @@ class PostgresUsageRepository(_TenantScoped):
                 self._scope(
                     select(
                         func.count(),
-                        func.coalesce(func.sum(UsageRecordRow.tokens), 0),
+                        # Both halves, matching the quota: a dashboard that
+                        # counted only output would disagree with the number
+                        # the caller is actually charged.
+                        func.coalesce(
+                            func.sum(UsageRecordRow.tokens + UsageRecordRow.prompt_tokens), 0
+                        ),
                     ).where(UsageRecordRow.at >= since),
                     UsageRecordRow.tenant_id,
                 )
@@ -672,7 +683,10 @@ class PostgresUsageRepository(_TenantScoped):
                     bucket.label("bucket"),
                     UsageRecordRow.capability,
                     func.count(),
-                    func.coalesce(func.sum(UsageRecordRow.tokens), 0),
+                    # Both halves, as above, so the chart and the quota agree.
+                    func.coalesce(
+                        func.sum(UsageRecordRow.tokens + UsageRecordRow.prompt_tokens), 0
+                    ),
                 )
                 .where(UsageRecordRow.at >= since, UsageRecordRow.at < until)
                 .group_by(bucket, UsageRecordRow.capability)

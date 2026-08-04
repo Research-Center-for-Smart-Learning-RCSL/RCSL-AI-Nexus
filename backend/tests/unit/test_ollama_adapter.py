@@ -66,6 +66,54 @@ async def test_generate_streams_chunks_and_reconciles_the_token_count(patch_http
     assert chunks[-1].finish_reason == "stop"
 
 
+async def test_prompt_eval_count_is_carried_on_the_terminal_chunk(patch_httpx) -> None:
+    """Ollama has always sent `prompt_eval_count`; nothing read it until
+    2026-08-04, so every prompt was free of quota.
+
+    Once, on the terminal chunk, because that is how the runtime reports it —
+    for the whole request rather than incrementally. A consumer that summed it
+    per chunk would multiply the prompt by the length of the stream.
+    """
+    events = [
+        {"message": {"content": "Hel"}, "done": False},
+        {"message": {"content": "lo"}, "done": False},
+        {
+            "message": {"content": ""},
+            "done": True,
+            "done_reason": "stop",
+            "eval_count": 5,
+            "prompt_eval_count": 34,
+        },
+    ]
+    patch_httpx(lambda request: httpx.Response(200, content=ndjson(*events)))
+
+    chunks = []
+    async with aclosing(OllamaAdapter("http://ollama.invalid").generate("llama3", MESSAGES)) as s:
+        async for chunk in s:
+            chunks.append(chunk)
+
+    assert sum(c.prompt_tokens for c in chunks) == 34, "carried exactly once, not per chunk"
+    assert chunks[-1].prompt_tokens == 34
+    assert all(c.prompt_tokens == 0 for c in chunks[:-1])
+
+
+async def test_a_runtime_that_omits_prompt_eval_count_reports_zero(patch_httpx) -> None:
+    """Zero rather than a guess. Unknown and none are the same number here,
+    and inventing one would put a fabricated figure into a quota."""
+    events = [
+        {"message": {"content": "Hi"}, "done": False},
+        {"message": {"content": ""}, "done": True, "done_reason": "stop", "eval_count": 1},
+    ]
+    patch_httpx(lambda request: httpx.Response(200, content=ndjson(*events)))
+
+    chunks = []
+    async with aclosing(OllamaAdapter("http://ollama.invalid").generate("llama3", MESSAGES)) as s:
+        async for chunk in s:
+            chunks.append(chunk)
+
+    assert sum(c.prompt_tokens for c in chunks) == 0
+
+
 async def test_generate_closes_the_upstream_request_on_early_exit(patch_httpx) -> None:
     """The guarantee the whole streaming design rests on.
 

@@ -17,6 +17,74 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-04
 
+### The Users screen could not edit a user, and both reports were the same gap
+
+Reported as two problems — a display name that cannot be changed, and an
+administrator who cannot promote anyone — and they are one missing dialog.
+
+`PATCH /admin/users/{id}` works, `updateUser` wraps it, `updateUserSchema`
+validates it and `useUpdateUser` wraps that. **The hook had no caller anywhere
+in the application.** So a display name was whatever it was given at invitation
+and could never be corrected, and nobody could be promoted — which is the one
+operation that lets a second administrator exist, on an instance that has
+exactly one account.
+
+The backend was never at fault and was checked rather than assumed: `PATCH` of
+a display name returns 200, and changing *your own* role returns 403, which is
+the guard `ManageUsers.update` documents. The new dialog mirrors that refusal
+instead of discovering it — the role control is disabled for yourself, with the
+reason attached, rather than offering an edit the server will reject.
+
+It is mounted only while a row is selected, so the form's defaults and
+`useUpdateUser(id)` both belong to that row. Keeping one instance and swapping
+the prop would leave both pointing at whoever was edited first — the same
+reconciliation trap that ate every keystroke in the login form earlier today,
+and the reason it is worth stating twice.
+
+Four tests, in a directory that had none until this morning.
+
+### The four findings from the sweep, all addressed
+
+**Prompt tokens are counted now.** `prompt_eval_count` was in every Ollama
+response and read by nothing. It is carried on the terminal chunk — once, for
+the whole request, because summing it per chunk would multiply the prompt by
+the length of the stream — recorded in a new `usage_records.prompt_tokens`
+column, and summed alongside `tokens` by the quota and by both usage
+aggregates, so the dashboard and the charge agree. The envelope now reports
+`prompt_tokens: 10, completion_tokens: 102, total_tokens: 112` where it
+reported zero input for every request before.
+
+A second column rather than a wider `tokens`, so rows written before today keep
+meaning what they said instead of being reinterpreted as totals they never
+were. One honest gap remains and is commented where it matters: a client that
+disconnects mid-answer records zero prompt tokens, because the terminal chunk
+is the only place the figure appears. Closing that needs a count taken before
+generation, which no runtime port offers.
+
+**`observed_at` means last observed.** An unchanged observation is restamped
+instead of skipped, so the field answers the question its name asks. Verified
+by sampling: four stamps in eighty seconds, exactly thirty seconds apart.
+Still not *counted* as a change — the sweep's return value answers "what
+moved", and a transition buried under thirty restamps a minute is one nobody
+sees. A model that cannot be observed at all is still left untouched, because
+`set_observed` nulls the timestamp along with the state and rewriting an
+already-null row buys no freshness.
+
+**One heartbeat, not two.** `admin_lifespan` takes `run_node_heartbeat`, and
+the public entrance passes `False`. The tailnet entrance owns the sweep: it is
+the internal one, and a background database writer in the process that faces
+the internet buys nothing. The thirty-second spacing above is the evidence —
+two sweepers would have averaged fifteen.
+
+That change is also what made the restamping affordable, which is why the test
+that asserted the old behaviour could be rewritten rather than argued with: its
+stated reason was "both admin entrances run this sweep", and now they do not.
+
+**The health script watches everything again.** `EXPECTED_SERVICES` was missing
+`parser` and `qdrant`; all eleven long-lived compose services are checked
+against it now, verified by comparing the list to `docker compose config
+--services`.
+
 ### A sweep of the whole platform, now that there is a way in to sweep it with
 
 Everything that can be exercised from this machine was, because until this

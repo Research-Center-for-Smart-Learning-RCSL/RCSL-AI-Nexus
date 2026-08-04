@@ -405,6 +405,7 @@ def usage_to_row(usage: UsageRecord) -> UsageRecordRow:
         capability=usage.capability,
         model_alias=usage.model_alias,
         tokens=usage.tokens,
+        prompt_tokens=usage.prompt_tokens,
         latency_ms=usage.latency_ms,
         completed=usage.completed,
         at=usage.at,

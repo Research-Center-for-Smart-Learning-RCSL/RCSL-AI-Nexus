@@ -13,6 +13,8 @@ See docs/architecture/security.md section 5.1.
 
 from __future__ import annotations
 
+from functools import partial
+
 from fastapi import FastAPI, Request
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
@@ -71,7 +73,10 @@ def create_app() -> FastAPI:
         docs_url=None if settings.is_production else "/docs",
         openapi_url=None if settings.is_production else "/openapi.json",
         debug=False,
-        lifespan=admin_lifespan,
+        # No node heartbeat here. The lifespan is shared with the tailnet
+        # entrance, which owns the sweep; running it in both had the two
+        # processes writing the same rows every thirty seconds.
+        lifespan=partial(admin_lifespan, run_node_heartbeat=False),
     )
 
     # Starlette runs middleware in reverse order of registration, so the last

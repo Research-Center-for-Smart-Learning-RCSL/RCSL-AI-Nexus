@@ -51,8 +51,13 @@ PEPPER = "test-pepper"
 class StubRuntime:
     """Stands in for Ollama. Records whether it was closed on early exit."""
 
-    def __init__(self, chunks: int = 3) -> None:
+    def __init__(self, chunks: int = 3, prompt_tokens: int = 0) -> None:
         self._chunks = chunks
+        self._prompt_tokens = prompt_tokens
+        """Carried on the terminal chunk, as a real runtime reports it. Zero by
+        default so every case written before prompt tokens existed still
+        describes the same request."""
+
         self.cleaned_up = False
         self.seen_ref: str | None = None
         self.seen_max_tokens: int | None = None
@@ -75,7 +80,12 @@ class StubRuntime:
         try:
             for i in range(self._chunks):
                 yield CompletionChunk(delta=f"tok{i} ", token_count=1)
-            yield CompletionChunk(delta="", finish_reason="stop", token_count=0)
+            yield CompletionChunk(
+                delta="",
+                finish_reason="stop",
+                token_count=0,
+                prompt_tokens=self._prompt_tokens,
+            )
         finally:
             self.cleaned_up = True
 
@@ -447,6 +457,46 @@ async def test_quota_is_enforced(client) -> None:
     assert second.status_code == 429
     assert second.json()["error"]["code"] == "quota_exceeded"
     assert second.headers["Retry-After"]
+
+
+async def test_the_envelope_reports_prompt_tokens(client) -> None:
+    """`prompt_tokens` was the schema default of 0 on every response until
+    2026-08-04, while the runtime was reporting a real figure all along. An
+    OpenAI client computes cost from these three numbers, so a zero here is a
+    wrong answer rather than a missing one."""
+    test_client, _, _ = client
+    test_client.app.state.runtimes = {RuntimeKind.OLLAMA: StubRuntime(chunks=3, prompt_tokens=34)}
+
+    response = test_client.post(
+        "/v1/chat/completions",
+        json={"model": "chat", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert response.status_code == 200
+    usage = response.json()["usage"]
+    assert usage["prompt_tokens"] == 34
+    assert usage["completion_tokens"] == 3
+    assert usage["total_tokens"] == 37, "the total is both halves, not the generated half"
+
+
+async def test_quota_counts_the_prompt_as_well_as_the_answer(client) -> None:
+    """Charging for output alone let a caller fill the context window on every
+    request and spend none of its quota doing it, which on this hardware is
+    most of the work. One request of 3 generated + 34 read exceeds a quota of
+    10; before, it counted as 3 and the key would have run all day."""
+    test_client, _, _ = client
+    test_client.app.state.runtimes = {RuntimeKind.OLLAMA: StubRuntime(chunks=3, prompt_tokens=34)}
+    token = await issue_key(quota_tokens_per_day=10)
+    test_client.headers["Authorization"] = f"Bearer {token}"
+
+    body = {"model": "chat", "messages": [{"role": "user", "content": "hi"}]}
+
+    first = test_client.post("/v1/chat/completions", json=body)
+    assert first.status_code == 200, "the first request is still within quota"
+
+    second = test_client.post("/v1/chat/completions", json=body)
+    assert second.status_code == 429
+    assert second.json()["error"]["code"] == "quota_exceeded"
 
 
 async def test_rate_limit_is_enforced(client) -> None:

@@ -60,7 +60,17 @@ from app.interfaces.http.routers import (
 
 
 @asynccontextmanager
-async def admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def admin_lifespan(app: FastAPI, *, run_node_heartbeat: bool = True) -> AsyncIterator[None]:
+    """Shared startup for both admin entrances.
+
+    `run_node_heartbeat` exists because this lifespan is shared and the
+    heartbeat is not shareable: with both applications using it unqualified,
+    `admin-public` and `admin-tailnet` each swept the same nodes and models
+    every thirty seconds and wrote to the same rows. One owner is enough, and
+    the tailnet entrance is the right one — it is the internal entrance, and
+    giving a background database writer to the process that faces the internet
+    buys nothing.
+    """
     settings: Settings = get_settings()
     init_engine(settings)
 
@@ -104,7 +114,7 @@ async def admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
     # so a lifespan that opens and closes quickly (every test) cancels it before
     # it touches the database. Disabled by a non-positive interval.
     heartbeat: asyncio.Task[None] | None = None
-    if settings.node_heartbeat_interval_seconds > 0:
+    if run_node_heartbeat and settings.node_heartbeat_interval_seconds > 0:
         heartbeat = asyncio.create_task(
             run_heartbeat(app, settings.node_heartbeat_interval_seconds)
         )

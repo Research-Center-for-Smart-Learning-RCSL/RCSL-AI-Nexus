@@ -183,6 +183,7 @@ class RouteChatRequest:
         ceiling = min(max_tokens or self._max_tokens_ceiling, self._max_tokens_ceiling)
 
         produced = 0
+        prompt_tokens = 0
         completed = False
         truncated = False
         upstream_finished = False
@@ -203,6 +204,11 @@ class RouteChatRequest:
             ) as upstream:
                 async for chunk in upstream:
                     produced += chunk.token_count
+                    # Assigned, not accumulated: the runtime reports it once
+                    # for the whole request, on the terminal chunk. Summing
+                    # would multiply it by the length of the stream.
+                    if chunk.prompt_tokens:
+                        prompt_tokens = chunk.prompt_tokens
                     if chunk.finish_reason:
                         upstream_finished = True
                     yield chunk
@@ -255,6 +261,17 @@ class RouteChatRequest:
                         capability=capability,
                         model_alias=target.alias,
                         tokens=produced,
+                        # Zero when the stream did not reach its terminal
+                        # chunk, because that is the only place the runtime
+                        # reports the figure. A client that disconnects
+                        # mid-answer is therefore under-charged for a prompt
+                        # the hardware did read. Recording the honest zero
+                        # beats inventing a number; closing it needs a count
+                        # taken before generation starts, which no runtime
+                        # port currently offers. Truncation at the ceiling is
+                        # not affected: Ollama's own done chunk arrives on the
+                        # same token, so that path still sees it.
+                        prompt_tokens=prompt_tokens,
                         latency_ms=int((self._monotonic() - started) * 1000),
                         completed=completed,
                         at=self._clock.now(),
