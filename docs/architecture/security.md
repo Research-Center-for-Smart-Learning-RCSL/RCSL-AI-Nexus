@@ -275,7 +275,7 @@ The cost of enforcing in the application is that traffic still reaches the Mac S
 **(b) Fixed caller addresses: nginx allowlist.** Once callers are known, ask the proxy administrator for a default-deny allowlist:
 
 ```nginx
-# in the api.nexus.rcsl.online server block
+# in the llmapi.rcsl.online server block
 allow 203.0.113.10;
 allow 198.51.100.0/24;
 deny  all;
@@ -1059,9 +1059,11 @@ Recorded explicitly so they are not later mistaken for oversights, with the cond
 
 ### 15.4 Wildcard DNS on a Shared Domain
 
-**Situation.** `*.rcsl.online` resolves every subdomain to the proxy host. Anyone able to obtain a vhost there can serve content under a plausible-looking name, which assists phishing. This also means `ai.nexus.rcsl.online` depends on no one ever creating a `nexus.rcsl.online` node in the zone, which would break resolution.
+**Situation.** `*.rcsl.online` resolves every subdomain to the proxy host. Anyone able to obtain a vhost there can serve content under a plausible-looking name, which assists phishing.
 
-**Why accepted.** The domain is maintained by someone else and the wildcard predates this project. Worth raising with its administrator, and worth requesting explicit A records for the two hostnames this project uses rather than relying on wildcard synthesis.
+**Half of this was closed on 2026-08-04.** The hostnames were `ai.nexus.rcsl.online` and `api.nexus.rcsl.online`, which resolved only by multi-label synthesis and so depended on no one ever creating a `nexus.rcsl.online` node in the zone — a single addition by the domain's administrator, who has no reason to consult this project, would have taken both entrances down at once. `llm.rcsl.online` and `llmapi.rcsl.online` are single-label and carry no such dependency. The rename was cheap because a hostname is not a trust boundary here: the perimeter is the `X-Nexus-Proxy` secret and the client address, neither of which reads the name ([deployment.md](./deployment.md) §2).
+
+**Why the rest is accepted.** The wildcard itself remains, and with it the phishing surface, because the domain is maintained by someone else and the wildcard predates this project. Worth raising with its administrator, and worth requesting explicit A records for the two hostnames this project uses rather than relying on the wildcard at all.
 
 ### 15.5 The Gateway Reaching the Tailnet Admin Entrance — Resolved
 

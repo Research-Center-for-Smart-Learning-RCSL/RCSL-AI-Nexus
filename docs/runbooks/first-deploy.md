@@ -1185,8 +1185,8 @@ LaunchDaemon 放在一起——它要跑得起來，得先有 repo、有 `secret
   | `ENV` | `production` |
   | `AUTH_MODE` | `tailnet`（見下方註）|
   | `TAILNET_IP` | 第 4 步取得的 `100.x.y.z` |
-  | `PROXY_HOSTNAME` | `api.nexus.rcsl.online` |
-  | `ADMIN_BASE_URL` | `https://ai.nexus.rcsl.online` |
+  | `PROXY_HOSTNAME` | `llmapi.rcsl.online` |
+  | `ADMIN_BASE_URL` | `https://llm.rcsl.online` |
   | `GATEWAY_BASE_URL` | 留空（見下方註）|
   | `NODE_TOTAL_MEMORY_GB` | `64`（要對上這台的實際記憶體）|
   | `ALLOWED_COUNTRIES` | `TW,AU` |
@@ -1195,7 +1195,7 @@ LaunchDaemon 放在一起——它要跑得起來，得先有 repo、有 `secret
   `COOKIE_SECURE` 保持 `true`、`CACHE_BACKEND` 保持 `redis`。
 
   註：`GATEWAY_BASE_URL` 是發卡畫面與 `/api-docs` 頁面上顯示給使用者複製的推論
-  端點。留空會從 `PROXY_HOSTNAME` 推導成 `https://api.nexus.rcsl.online`，這正是
+  端點。留空會從 `PROXY_HOSTNAME` 推導成 `https://llmapi.rcsl.online`，這正是
   本部署要的值，所以不用填。只有在對外 origin 與 `PROXY_HOSTNAME` 不同時才設它。
   它不能從請求讀出來——渲染那段程式碼片段的請求打的是管理入口，不是被描述的那個
   主機。填錯的後果是使用者拿到一段貼上去連不到的範例，而錯誤會出現在別人的終端機裡。
@@ -1560,15 +1560,20 @@ LaunchDaemon 放在一起——它要跑得起來，得先有 repo、有 `secret
 
 1. 安裝 Tailscale 加入 tailnet，打上 `tag:ntnu-proxy`（ACL 靠這個把它限制在它需要的
    三個埠）。
-2. 加兩個 nginx server block（`ai.nexus.rcsl.online` 與 `api.nexus.rcsl.online`），
+2. 加兩個 nginx server block（`llm.rcsl.online` 與 `llmapi.rcsl.online`），
    外加 HTTP 轉 HTTPS。設定範本在 deployment.md §5。
-3. 簽 Let's Encrypt 憑證（port 80 已開，HTTP-01 可直接驗）。
+3. 兩個名稱各要有憑證。兩者都是單層名字，現有的 `*.rcsl.online` wildcard 憑證
+   直接涵蓋，通常把 server block 指過去就好、不必另簽。真的沒有可用的 wildcard
+   才簽 Let's Encrypt（port 80 已開，HTTP-01 可直接驗）。
 4. 確認：`proxy_buffering off`、`proxy_read_timeout` 夠長、**不記錄 request body**、
    `X-Forwarded-For` 用「覆寫」(`$remote_addr`) 而非附加、並送出 `X-Nexus-Proxy` 共享
    密鑰（等於你的 `proxy_shared_secret`）。
 
-另外請他們為兩個名稱給**明確的 A record**，不要只靠 wildcard 合成（見 security.md
-§15.4：一旦有人在 zone 裡新增 `nexus.rcsl.online` 節點，wildcard 合成會失效）。
+另外可以請他們為兩個名稱給**明確的 A record**，不要只靠 wildcard。這在 2026-08-04
+改名之後從「會壞」降級為「比較乾淨」：舊的 `ai.nexus`／`api.nexus` 是兩層名字，靠
+wildcard 多層合成才解得出來，任何人在 zone 裡新增一個 `nexus` 節點就會讓兩個入口
+同時消失；`llm` 與 `llmapi` 是單層，沒有這個依賴。剩下的理由是 security.md §15.4
+的另一半：wildcard 讓**任何**子網域都指向那台 proxy，明確的 A record 收掉的是那個。
 
 ---
 
@@ -1594,8 +1599,8 @@ LaunchDaemon 放在一起——它要跑得起來，得先有 repo、有 `secret
 
 ## 10. AGPL 義務（別忘）
 
-兩個公開網址都會觸發 AGPL §13：任何連上 `ai.nexus.rcsl.online` 或
-`api.nexus.rcsl.online` 的人，有權取得「正在運行的那個版本」的原始碼，包含在地修改。
+兩個公開網址都會觸發 AGPL §13：任何連上 `llm.rcsl.online` 或
+`llmapi.rcsl.online` 的人，有權取得「正在運行的那個版本」的原始碼，包含在地修改。
 這是持續性的營運義務，不是一次性手續。保持部署版本可識別、原始碼可取得。見
 [deployment.md](../architecture/deployment.md) §8.1。
 

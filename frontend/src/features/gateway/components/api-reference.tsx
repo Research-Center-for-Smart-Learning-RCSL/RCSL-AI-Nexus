@@ -18,7 +18,7 @@ import { useAssistantSurface } from '@/features/assistant/context';
  *
  * Rendered from the live deployment rather than written as prose, so the base
  * URL and the capability list are the real ones. A page that hardcoded
- * `api.nexus.rcsl.online` would be wrong on every other deployment and nobody
+ * `llmapi.rcsl.online` would be wrong on every other deployment and nobody
  * would notice.
  *
  * Audited field by field against `routers/chat.py`, `schemas/chat_schemas.py`,
