@@ -137,6 +137,7 @@ async def _collect(
     parts: list[str] = []
     reasoning: list[str] = []
     tokens = 0
+    prompt_tokens = 0
     finish_reason: str | None = None
 
     async with aclosing(
@@ -146,6 +147,10 @@ async def _collect(
             parts.append(chunk.delta)
             reasoning.append(chunk.reasoning)
             tokens += chunk.token_count
+            # Assigned rather than summed: reported once, on the terminal
+            # chunk, for the whole request.
+            if chunk.prompt_tokens:
+                prompt_tokens = chunk.prompt_tokens
             finish_reason = chunk.finish_reason or finish_reason
 
     return ChatCompletionResponse(
@@ -161,5 +166,13 @@ async def _collect(
                 finish_reason=finish_reason or "stop",
             )
         ],
-        usage=Usage(completion_tokens=tokens, total_tokens=tokens),
+        # `prompt_tokens` was left at the schema default of 0 until 2026-08-04,
+        # so this envelope reported zero input for every request while the
+        # runtime was reporting a real figure. An OpenAI client computes cost
+        # from these three numbers.
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=tokens,
+            total_tokens=prompt_tokens + tokens,
+        ),
     )

@@ -24,6 +24,7 @@ import {
   useUsers,
 } from '@/features/users/hooks/use-users';
 import { InviteUserDialog } from '@/features/users/components/invite-user-dialog';
+import { EditUserDialog } from '@/features/users/components/edit-user-dialog';
 import { ROLE_LABELS, type User } from '@/features/users/schema';
 
 export function UserTable() {
@@ -34,6 +35,7 @@ export function UserTable() {
   const reset = useIssuePasswordReset();
 
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [editing, setEditing] = useState<User | null>(null);
   const [deleting, setDeleting] = useState<User | null>(null);
   const [linkAcknowledged, setLinkAcknowledged] = useState(false);
   const [issuedLink, setIssuedLink] = useState<{
@@ -93,6 +95,13 @@ export function UserTable() {
           if (!isAdmin) return null;
           return (
             <div className="flex justify-end gap-1">
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => setEditing(user)}
+              >
+                Edit
+              </Button>
               <Button
                 variant="ghost"
                 size="xs"
@@ -184,6 +193,18 @@ export function UserTable() {
       />
 
       <InviteUserDialog open={inviteOpen} onOpenChange={setInviteOpen} />
+
+      {/* Mounted only while a row is selected, so the dialog's form defaults
+          and its `useUpdateUser(id)` both belong to that row. Keeping it
+          mounted and swapping the prop leaves both pointing at whoever was
+          edited first. */}
+      {editing ? (
+        <EditUserDialog
+          user={editing}
+          isSelf={editing.id === me?.id}
+          onClose={() => setEditing(null)}
+        />
+      ) : null}
 
       <SecretDialog
         open={Boolean(issuedLink)}

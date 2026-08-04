@@ -200,6 +200,10 @@ class OllamaAdapter:
                             reasoning=reasoning,
                             finish_reason=_finish_reason(event.get("done_reason")),
                             token_count=correction,
+                            # Reported once, here, for the whole request.
+                            # Ollama has always sent it; nothing read it until
+                            # 2026-08-04, so every prompt was free of quota.
+                            prompt_tokens=int(event.get("prompt_eval_count") or 0),
                         )
                         return
 

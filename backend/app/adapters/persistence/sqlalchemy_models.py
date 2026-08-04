@@ -216,6 +216,15 @@ class UsageRecordRow(Base):
     capability: Mapped[str] = mapped_column(String(64))
     model_alias: Mapped[str] = mapped_column(String(128))
     tokens: Mapped[int] = mapped_column(Integer)
+    """Tokens generated. Still means only that after `prompt_tokens` arrived,
+    so historical rows are not silently reinterpreted as totals."""
+
+    prompt_tokens: Mapped[int] = mapped_column(Integer, server_default="0")
+    """Tokens read. `server_default` rather than a Python default so the
+    backfill of existing rows is the migration's job and not every writer's;
+    every row written before 2026-08-04 is genuinely zero, because nothing
+    counted them."""
+
     latency_ms: Mapped[int] = mapped_column(Integer)
     completed: Mapped[bool] = mapped_column(Boolean)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

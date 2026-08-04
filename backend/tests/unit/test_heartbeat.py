@@ -129,9 +129,21 @@ async def test_observation_records_the_runtime_own_memory_figure() -> None:
     assert writes == [("id-glm", ModelState.LOADED, 38.0)]
 
 
-async def test_unchanged_observation_is_not_rewritten() -> None:
-    """Both admin entrances run this sweep; identical writes every interval
-    would churn the table for nothing, same rule as the node status half."""
+async def test_unchanged_observation_is_rewritten_but_not_counted() -> None:
+    """`observed_at` has to mean *last observed*, so a steady observation is
+    restamped rather than skipped.
+
+    It was skipped until 2026-08-04, and the model rows then read `2026-07-30`
+    for five days while the sweep ran every thirty seconds — so a model
+    observed steadily for five days and a heartbeat that died five days ago
+    were the same row, with no way to tell which. The churn that skipping
+    avoided was also being paid twice at the time, because both admin
+    entrances ran the sweep; only the tailnet one does now.
+
+    Still not *counted*: the return value answers "what moved", and a
+    transition buried under thirty restamps a minute is a transition nobody
+    sees.
+    """
     models = [_model("glm", observed=ModelState.LOADED, observed_gb=38.0)]
     runtime = FakeRuntime(
         residency=RuntimeResidency(resident={"glm": 38.0}, on_disk=frozenset({"glm"}))
@@ -142,7 +154,7 @@ async def test_unchanged_observation_is_not_rewritten() -> None:
         return models
 
     assert await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes), "a") == 0
-    assert writes == []
+    assert writes == [("id-glm", ModelState.LOADED, 38.0)], "restamped, so the row stays readable"
 
 
 async def test_unobservable_runtime_clears_a_stale_observation() -> None:

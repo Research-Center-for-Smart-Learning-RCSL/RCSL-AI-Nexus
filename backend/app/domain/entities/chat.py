@@ -34,6 +34,22 @@ class CompletionChunk:
     """Tokens represented by this chunk. Summed to record usage even when a
     stream ends early, so a client disconnect still bills what was produced."""
 
+    prompt_tokens: int = 0
+    """Tokens the model *read*, carried once on the terminal chunk.
+
+    On the terminal chunk only because a runtime reports it once, at the end,
+    for the whole request — it is not incremental like `token_count`, and
+    summing it per chunk would multiply it by the length of the stream.
+
+    Recorded separately from `token_count` rather than folded into it because
+    the two are different work at different prices, and because an OpenAI
+    client reads `prompt_tokens` and `completion_tokens` as distinct fields.
+    Zero when a runtime does not report it, which is honest: unknown and none
+    are the same number here, and the alternative was reporting a made-up one.
+    Counted nowhere at all until 2026-08-04, which left `quota_tokens_per_day`
+    charging for output only — a caller could send a context-filling prompt
+    every time and never spend quota on it."""
+
     reasoning: str = ""
     """Incremental reasoning from a thinking model, kept separate from `delta`.
 

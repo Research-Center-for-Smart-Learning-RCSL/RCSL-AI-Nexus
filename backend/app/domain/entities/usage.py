@@ -31,6 +31,10 @@ class UsageRecord:
     capability: str
     model_alias: str
     tokens: int
+    """Tokens generated. Kept meaning exactly that when `prompt_tokens` was
+    added, so rows written before 2026-08-04 stay true rather than being
+    reinterpreted as totals they never held."""
+
     latency_ms: int
     completed: bool
     """False when the stream ended early, e.g. the client disconnected.
@@ -42,3 +46,12 @@ class UsageRecord:
     tenant_id: str = DEFAULT_TENANT_ID
     """The tenant of the actor the usage is attributed to, so per-tenant usage
     reads only see their own. Stamped by the scoped usage repository on write."""
+
+    prompt_tokens: int = 0
+    """Tokens read. Zero on every row written before 2026-08-04, and on any
+    runtime that does not report the figure.
+
+    Quota and every usage total sum this alongside `tokens`, because the
+    caller asked the hardware to do both halves of the work. Charging for
+    output alone meant a context-filling prompt cost nothing, on a machine
+    where prompt evaluation is most of the wait."""
