@@ -95,6 +95,14 @@ class Settings(BaseSettings):
     triggers land under HF_HOME, which the Compose file bind-mounts onto the host
     HuggingFace cache the native server reads; see adapters/runtime/mlx_adapter.py."""
 
+    host_metrics_url: str = "http://host.docker.internal:9101/host"
+    """Where the launchd host-metrics agent answers.
+
+    Loopback on the Mac, reached the same way as the runtimes, and for the same
+    reason: a container on macOS reads a Linux VM's memory and disk, not the
+    machine's. Optional infrastructure — an unreachable agent makes the panel
+    say "not reporting" rather than failing a request."""
+
     node_id: str = "local"
     node_name: str = "local"
     node_total_memory_gb: float = 64.0

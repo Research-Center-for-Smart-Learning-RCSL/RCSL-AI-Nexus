@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 
+import { HostStatusCard } from '@/features/host/components/host-status-card';
 import { NodeTable } from '@/features/nodes/components/node-table';
 
 export const metadata: Metadata = { title: 'Nodes' };
@@ -16,6 +17,10 @@ export default function NodesPage() {
           range before it is stored.
         </p>
       </div>
+      {/* Above the table: what the machine has left is the thing an operator
+          came to check before loading a model, and the registry row underneath
+          says what is loaded rather than whether there is room for more. */}
+      <HostStatusCard />
       <NodeTable />
     </div>
   );

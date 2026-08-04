@@ -25,6 +25,7 @@ from app.adapters.crypto.pyotp_totp import PyotpTotp
 from app.adapters.crypto.secret_box import FernetSecretBox
 from app.adapters.crypto.zxcvbn_policy import ZxcvbnPasswordPolicy
 from app.adapters.http.egress_guard import TailnetEgressGuard
+from app.adapters.http.host_metrics import HttpHostStatus
 from app.adapters.http.node_health import RuntimeNodeHealth
 from app.adapters.http.parser_client import HttpDocumentParser
 from app.adapters.metrics.prometheus import MeteredUsageRepository
@@ -72,6 +73,7 @@ from app.application.use_cases.manage_users import ManageUsers
 from app.application.use_cases.pending_enrolment import PendingEnrolment
 from app.application.use_cases.read_audit_log import ReadAuditLog
 from app.application.use_cases.read_dashboard import ReadDashboard
+from app.application.use_cases.read_host_status import ReadHostStatus
 from app.application.use_cases.read_usage_analytics import ReadUsageAnalytics
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.application.use_cases.search_knowledge import SearchKnowledge
@@ -801,4 +803,11 @@ def build_manage_retention(request: Request, session: SessionDep) -> ManageReten
         authz=request.app.state.authz,
         audit=get_audit(request),
         clock=SystemClock(),
+    )
+
+
+def build_read_host_status(request: Request, settings: SettingsDep) -> ReadHostStatus:
+    return ReadHostStatus(
+        host=HttpHostStatus(settings.host_metrics_url),
+        authz=request.app.state.authz,
     )
