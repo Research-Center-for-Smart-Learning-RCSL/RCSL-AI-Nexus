@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 
 import { AppShell } from '@/components/composed/app-shell';
@@ -154,6 +155,7 @@ function sidebarLinks(): string[] {
 
 beforeEach(() => {
   replace.mockClear();
+  window.localStorage.clear();
   signedInWith(BASE);
 });
 
@@ -162,20 +164,21 @@ describe('the links a role can see', () => {
     signedInWith(SCOPES.admin);
     render(<AppShell>content</AppShell>);
 
+    // Grouped order: Work, Fleet, Insight, Administration.
     expect(sidebarLinks()).toEqual([
-      'Dashboard',
+      'Chat',
+      'API keys',
+      'API',
       'Models',
       'Routing',
       'Nodes',
       'Knowledge',
+      'Dashboard',
       'Usage',
       'Logs',
-      'API keys',
-      'API',
       'Users',
-      'Retention',
       'Tenants',
-      'Chat',
+      'Retention',
     ]);
   });
 
@@ -186,7 +189,7 @@ describe('the links a role can see', () => {
     signedInWith(SCOPES.user);
     render(<AppShell>content</AppShell>);
 
-    expect(sidebarLinks()).toEqual(['Usage', 'API keys', 'API', 'Chat']);
+    expect(sidebarLinks()).toEqual(['Chat', 'API keys', 'API', 'Usage']);
   });
 
   it('shows an operator the fleet and withholds the screens that grant things', () => {
@@ -208,11 +211,11 @@ describe('the links a role can see', () => {
     render(<AppShell>content</AppShell>);
 
     expect(sidebarLinks()).toEqual([
-      'Knowledge',
-      'Usage',
+      'Chat',
       'API keys',
       'API',
-      'Chat',
+      'Knowledge',
+      'Usage',
     ]);
   });
 
@@ -234,7 +237,6 @@ describe('the links a role can see', () => {
     // One definition serves both, and this is the assertion that keeps it that
     // way: a second copy of the nav is a copy that falls behind on the next
     // scope change, and the one that falls behind is the one nobody looks at.
-    const userEvent = (await import('@testing-library/user-event')).default;
     signedInWith(SCOPES.operator);
     render(<AppShell>content</AppShell>);
 
@@ -285,5 +287,73 @@ describe('a URL the account has no scope for', () => {
     render(<AppShell>content</AppShell>);
 
     expect(replace).not.toHaveBeenCalled();
+  });
+});
+
+describe('the collapsible groups', () => {
+  it('offers no group a role has nothing in', () => {
+    // An empty heading is worse than the flat list this replaced: it names a
+    // capability the reader does not have and then offers nothing behind it.
+    signedInWith(SCOPES.user);
+    render(<AppShell>content</AppShell>);
+
+    const aside = screen.getByRole('complementary');
+    expect(within(aside).getByRole('button', { name: /Work/ })).toBeInTheDocument();
+    expect(within(aside).queryByRole('button', { name: /Fleet/ })).toBeNull();
+    expect(within(aside).queryByRole('button', { name: /Administration/ })).toBeNull();
+  });
+
+  it('folds a group away and remembers it', async () => {
+    const user = userEvent.setup();
+    signedInWith(SCOPES.admin, '/chat');
+    render(<AppShell>content</AppShell>);
+
+    expect(sidebarLinks()).toContain('Models');
+    await user.click(screen.getByRole('button', { name: /Fleet/ }));
+
+    expect(sidebarLinks()).not.toContain('Models');
+    expect(screen.getByRole('button', { name: /Fleet/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    expect(JSON.parse(window.localStorage.getItem('nexus.nav.collapsed') ?? '[]')).toContain(
+      'fleet',
+    );
+  });
+
+  it('will not fold away the group holding the current page', async () => {
+    // Otherwise the reader collapses Fleet while standing on Models, the
+    // highlighted item disappears, and the sidebar stops saying where they are
+    // — the one thing it is for. The fold is still recorded and takes effect
+    // once they navigate elsewhere.
+    const user = userEvent.setup();
+    signedInWith(SCOPES.admin, '/models');
+    render(<AppShell>content</AppShell>);
+
+    await user.click(screen.getByRole('button', { name: /Fleet/ }));
+
+    expect(sidebarLinks()).toContain('Models');
+    expect(JSON.parse(window.localStorage.getItem('nexus.nav.collapsed') ?? '[]')).toContain(
+      'fleet',
+    );
+  });
+
+  it('starts from what was folded last time', () => {
+    window.localStorage.setItem('nexus.nav.collapsed', JSON.stringify(['administration']));
+    signedInWith(SCOPES.admin, '/chat');
+    render(<AppShell>content</AppShell>);
+
+    expect(sidebarLinks()).not.toContain('Users');
+    expect(sidebarLinks()).toContain('Models');
+  });
+
+  it('ignores a stored value it cannot use rather than failing to render', () => {
+    // A UI preference. The cost of a bad value is one lost fold, and code that
+    // rehabilitates malformed JSON is code nobody can justify.
+    window.localStorage.setItem('nexus.nav.collapsed', '{not json');
+    signedInWith(SCOPES.admin, '/chat');
+    render(<AppShell>content</AppShell>);
+
+    expect(sidebarLinks()).toContain('Users');
   });
 });
