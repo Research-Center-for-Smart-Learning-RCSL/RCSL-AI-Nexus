@@ -208,17 +208,37 @@ export function LogsTable() {
                     <div className="text-xs text-muted-foreground">{entry.actor_source}</div>
                   </TableCell>
                   <TableCell className="font-mono text-xs">{entry.action}</TableCell>
-                  <TableCell className="max-w-[16rem] truncate" title={entry.target ?? undefined}>
-                    {entry.target ?? '-'}
+                  {/* The width has to constrain a block *inside* the cell, not
+                      the cell. `max-width` on a `td` is advisory under the
+                      automatic table layout every table here uses: the column
+                      is sized from its content first, so the cap was ignored,
+                      `truncate` had nothing to truncate against, and a long
+                      value widened the whole table until it ran past the right
+                      edge — visible as overflow rather than as an ellipsis,
+                      and only reachable through the wrapper's horizontal
+                      scrollbar. An inner div is an ordinary block box and
+                      honours the cap. */}
+                  <TableCell title={entry.target ?? undefined}>
+                    <div className="max-w-[16rem] truncate">
+                      {entry.target ?? '-'}
+                    </div>
                   </TableCell>
                   <TableCell>
                     <OutcomeBadge outcome={entry.outcome} />
                   </TableCell>
                   <TableCell
-                    className="max-w-[20rem] truncate text-xs text-muted-foreground"
+                    className="text-xs text-muted-foreground"
                     title={detailText(entry.detail)}
                   >
-                    {detailText(entry.detail) || '-'}
+                    {/* The widest column in practice and the one that showed
+                        the defect: `detail` is every key and value of an audit
+                        entry joined into one line, so it is routinely longer
+                        than the viewport. The `title` carries the full text for
+                        a hover; the ellipsis is what tells anyone there is more
+                        to hover over. */}
+                    <div className="max-w-[20rem] truncate">
+                      {detailText(entry.detail) || '-'}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))

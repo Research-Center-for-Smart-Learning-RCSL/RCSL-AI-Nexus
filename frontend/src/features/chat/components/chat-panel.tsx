@@ -187,7 +187,17 @@ export function ChatPanel() {
                 disabled={!isConversational(option)}
               >
                 {option}
-                {isConversational(option) ? null : ' (not a conversation)'}
+                {/* Its own element rather than appended to the label. As part
+                    of the same string it inherited the item's `nowrap`, tripled
+                    the row's width, and — while the popup was pinned to the
+                    trigger — was clipped to something like "embedding (not a
+                    conv". The disabled state was legible only to whoever
+                    already knew what it said. */}
+                {isConversational(option) ? null : (
+                  <span className="text-xs text-muted-foreground">
+                    not a conversation
+                  </span>
+                )}
               </SelectItem>
             ))}
           </SelectContent>

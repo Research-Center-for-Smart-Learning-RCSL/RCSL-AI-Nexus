@@ -17,6 +17,43 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-04
 
+### One symptom, two causes, and neither was the width someone had set
+
+Reported as one bug — text running past the right edge, in the chat capability
+picker and in the Logs `Detail` column. They share nothing but the symptom.
+
+**The picker.** `embedding` and `rerank` are listed and disabled on purpose:
+the chat screen shows what a key can be issued for, and routing either of them
+would send the request to a model that does not generate text. Two things
+together made that unreadable. The popup was pinned to `w-(--anchor-width)` —
+the trigger's width, and the trigger is `w-36` — with `overflow-x-hidden`, and
+the explanation was appended to the option's own label, inheriting the item's
+`whitespace-nowrap`. So it was cut off around `embedding (not a conv`, with no
+ellipsis and no scrollbar to reveal the rest: **the disabled state was legible
+only to someone who already knew what it said.**
+
+The popup now sizes to its content, floored at the trigger width and capped at
+`--available-width`, and the reason is its own muted element. **A trigger is
+sized for the selected value; the list is not**, and that is the assumption the
+pinned width encoded. Fixed in `ui/select.tsx`, so it is every picker in the
+platform rather than this one.
+
+**The Logs column was not a width problem at all.** Both cells carried
+`max-w-[16rem] truncate` directly on the `<td>`, and under the automatic table
+layout every table here uses, `max-width` on a cell is advisory: the column is
+sized from its content first. The cap was ignored, `truncate` had nothing to
+truncate against, and a long value widened the whole table until it ran past
+the edge — reachable only through the wrapper's horizontal scrollbar, and never
+showing the ellipsis that would have said there was more. `detail` is every key
+and value of an audit entry joined into one line, so it is routinely longer
+than the viewport, which is why that column showed it first. Moving the cap to
+a block inside the cell is the whole fix. The pattern appears nowhere else.
+
+Neither of these can be proved by a test here: jsdom does no layout, so the
+causal chain above is read from the CSS rather than watched in a browser. What
+a test could pin is the structural half — that the cap lives on an inner block
+and not on the cell — which is exactly what a future edit would undo.
+
 ### The last key was revoked, and the list it left behind needed a filter
 
 `qwen7b` is revoked. It was the only unrevoked key on the platform and the
