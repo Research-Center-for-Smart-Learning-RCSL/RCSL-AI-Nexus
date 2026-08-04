@@ -345,6 +345,56 @@ def test_own_usage_is_served_from_its_own_path(admin: TestClient) -> None:
     assert set(body) == set(admin.get("/admin/usage", params={"range": "24h"}).json())
 
 
+def test_retention_is_configurable_and_purges_what_it_says(admin: TestClient) -> None:
+    """The wiring, over HTTP, against the real table.
+
+    What the unit tests cannot reach: that the migration ran, that the upsert
+    round-trips, and that a purge aimed at one dataset reports the same number
+    it deleted. The audit trail is the observable side — this deployment writes
+    an entry per request, so purging `usage_records` leaves entries behind and
+    the count is checkable.
+    """
+    defaults = admin.get("/admin/retention")
+    assert defaults.status_code == 200, defaults.text
+    assert {p["dataset"] for p in defaults.json()} == {"audit_log", "usage_records"}
+    assert {p["days"] for p in defaults.json()} == {360}
+    assert all(p["updated_by"] is None for p in defaults.json())
+
+    saved = admin.put("/admin/retention/usage_records", json={"days": 90})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["days"] == 90
+    assert saved.json()["updated_by"]
+
+    # Read back through a second request, so this is the stored row rather than
+    # the one just constructed in memory.
+    stored = {p["dataset"]: p for p in admin.get("/admin/retention").json()}
+    assert stored["usage_records"]["days"] == 90
+    assert stored["audit_log"]["days"] == 360, "the other dataset is untouched"
+
+    # Nothing here is 90 days old, so the honest answer to both is zero.
+    preview = admin.get("/admin/retention/usage_records/preview")
+    assert preview.status_code == 200, preview.text
+    assert preview.json() == {"dataset": "usage_records", "days": 90, "affected": 0}
+
+    purged = admin.post("/admin/retention/usage_records/purge")
+    assert purged.status_code == 200, purged.text
+    assert purged.json()["deleted"] == 0
+    assert purged.json()["cutoff"]
+
+
+def test_a_window_under_the_floor_is_refused_over_http(admin: TestClient) -> None:
+    refused = admin.put("/admin/retention/audit_log", json={"days": 7})
+    assert refused.status_code == 400, refused.text
+    assert admin.get("/admin/retention").json()[0]["days"] == 360
+
+
+def test_an_unknown_dataset_is_not_reachable(admin: TestClient) -> None:
+    """The enum is the allowlist. A table name taken from the caller is the
+    shape of this feature that would have been a very bad idea."""
+    assert admin.get("/admin/retention/users/preview").status_code == 422
+    assert admin.post("/admin/retention/users/purge").status_code == 422
+
+
 def _in_days(days: int) -> str:
     """A date the expiry rules will still accept when this is next run.
 

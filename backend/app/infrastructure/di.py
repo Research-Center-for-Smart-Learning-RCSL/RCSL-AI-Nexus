@@ -37,11 +37,14 @@ from app.adapters.persistence.repositories import (
     PostgresKnowledgeRepository,
     PostgresModelRepository,
     PostgresNodeRepository,
+    PostgresRecordPurge,
+    PostgresRetentionPolicyRepository,
     PostgresRoutingPolicyRepository,
     PostgresTenantRepository,
     PostgresUsageRepository,
     PostgresUserRepository,
 )
+from app.adapters.persistence.sqlalchemy_models import AuditLogRow, UsageRecordRow
 from app.adapters.runtime.mlx_adapter import MlxAdapter
 from app.adapters.runtime.ollama_adapter import OllamaAdapter
 from app.adapters.session.session_store import SessionData, SessionStore
@@ -62,6 +65,7 @@ from app.application.use_cases.manage_knowledge import ManageKnowledge
 from app.application.use_cases.manage_models import ManageModels
 from app.application.use_cases.manage_nodes import ManageNodes
 from app.application.use_cases.manage_own_account import ManageOwnAccount
+from app.application.use_cases.manage_retention import ManageRetention
 from app.application.use_cases.manage_routing_policies import ManageRoutingPolicies
 from app.application.use_cases.manage_tenants import ManageTenants
 from app.application.use_cases.manage_users import ManageUsers
@@ -73,6 +77,7 @@ from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.application.use_cases.search_knowledge import SearchKnowledge
 from app.domain.entities.actor import Actor
 from app.domain.entities.model import RuntimeKind
+from app.domain.entities.retention import RetentionDataset
 from app.domain.ports.infrastructure_ports import CachePort
 from app.domain.ports.model_runtime_port import ModelRuntimePort
 from app.domain.ports.repositories import UsageRepositoryPort
@@ -776,4 +781,24 @@ def build_manage_own_account(
         audit=request.app.state.audit,
         clock=SystemClock(),
         issuer=settings.totp_issuer,
+    )
+
+
+def build_manage_retention(request: Request, session: SessionDep) -> ManageRetention:
+    """No `TenantIdDep`, unlike every neighbour in this file.
+
+    Retention is platform-wide and its scope is admin-only, so the repositories
+    here are deliberately unscoped: a purge confined to the caller's tenant
+    would delete less than the number it reported, and a policy that differed
+    per tenant is not the thing the administrator was offered.
+    """
+    return ManageRetention(
+        policies=PostgresRetentionPolicyRepository(session),
+        purges={
+            RetentionDataset.AUDIT_LOG: PostgresRecordPurge(session, AuditLogRow),
+            RetentionDataset.USAGE_RECORDS: PostgresRecordPurge(session, UsageRecordRow),
+        },
+        authz=request.app.state.authz,
+        audit=get_audit(request),
+        clock=SystemClock(),
     )

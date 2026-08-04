@@ -97,6 +97,17 @@ class Scope(StrEnum):
     KNOWLEDGE_READ = "knowledge:read"
     KNOWLEDGE_WRITE = "knowledge:write"
 
+    RETENTION_WRITE = "retention:write"
+    """Set how long records are kept, and delete them ahead of that.
+
+    One scope for reading the policy and for acting on it, because there is no
+    audience for the first without the second: the number is only interesting
+    to whoever can change it. Admin-only, and the reason is the same one that
+    makes `tenant:write` admin-only — it has no smaller sensible holder. A
+    tenant administrator who could purge would be able to remove the record of
+    what they did inside their own tenant, which is the one boundary the audit
+    log exists to see across."""
+
 
 @dataclass(frozen=True, slots=True)
 class Actor:

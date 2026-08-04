@@ -21,6 +21,24 @@
 
 name: rcsl-ai-nexus
 
+# Container logs, capped. The `json-file` driver's default is **no rotation**,
+# and neither Compose nor the daemon on this machine set one, so every service
+# was writing a file that only ever grew — silently, and first on the gateway,
+# which logs a line per request. 10 MB times three files is 30 MB per service
+# and around 330 MB for the stack, which is a ceiling rather than an estimate.
+#
+# `docker compose logs` reads only what is still on disk, so this also decides
+# how far back an incident can be investigated. That is the trade: an unbounded
+# log answers every question until the day it fills the disk and then answers
+# none. Prometheus keeps 30 days of metrics and the audit log keeps its own
+# history in Postgres; these files are for tracebacks and startup failures,
+# which are read within hours or not at all.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 # Only `migrate` carries the build definition for this image, and only
 # `frontend-tailnet` for the frontend one. Declaring `build:` on every service
 # that shares a tag makes Compose build them in parallel, and they then race to
@@ -30,6 +48,7 @@ name: rcsl-ai-nexus
 x-backend: &backend
   image: rcsl-ai-nexus:latest
   restart: unless-stopped
+  logging: *logging
   env_file: [.env]
   environment:
     OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
@@ -212,6 +231,7 @@ services:
     build:
       context: ./backend
     image: rcsl-ai-nexus:latest
+    logging: *logging
     command:
       - sh
       - -c
@@ -364,6 +384,9 @@ services:
   parser:
     image: rcsl-ai-nexus:latest
     restart: unless-stopped
+    # Spelled out rather than merged from *backend: this service deliberately
+    # takes none of that anchor's environment, mounts or dependencies.
+    logging: *logging
     command:
       - uvicorn
       - app.parser.main:app
@@ -399,6 +422,7 @@ services:
     build:
       context: ./frontend
     image: rcsl-ai-nexus-frontend:latest
+    logging: *logging
     restart: unless-stopped
     environment:
       ADMIN_API_URL: http://admin-tailnet:8001
@@ -410,6 +434,7 @@ services:
   frontend-public:
     # Built by frontend-tailnet above; see the note at the top of this file.
     image: rcsl-ai-nexus-frontend:latest
+    logging: *logging
     restart: unless-stopped
     environment:
       ADMIN_API_URL: http://admin-public:8002
@@ -422,6 +447,7 @@ services:
   # No published ports at all. Reached by service name from the data network.
   postgres:
     image: postgres:17-alpine
+    logging: *logging
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-nexus}
@@ -450,6 +476,7 @@ services:
   # research data, and the key below is what makes it authenticated at all.
   qdrant:
     image: qdrant/qdrant:v1.13.0
+    logging: *logging
     restart: unless-stopped
     environment:
       # Read from the mounted files through a shell, so neither key appears in
@@ -483,6 +510,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    logging: *logging
     restart: unless-stopped
     # Redis ships with no password at all. Even on an internal network this is
     # set, because the gateway sits on redis's network legitimately (for
@@ -510,6 +538,7 @@ services:
   # Prometheus has no authentication and Grafana ships with admin/admin.
   prometheus:
     image: prom/prometheus:v3.1.0
+    logging: *logging
     restart: unless-stopped
     # No published port at all. Reachable only by Grafana over metrics-viz, and
     # scraping the apps over metrics-gateway and metrics-admin. Exposing it would
@@ -527,6 +556,7 @@ services:
 
   grafana:
     image: grafana/grafana:11.5.1
+    logging: *logging
     restart: unless-stopped
     # The three hardening points security.md section 6 requires of Grafana:
     # replace the default password (from a file secret, not the environment),

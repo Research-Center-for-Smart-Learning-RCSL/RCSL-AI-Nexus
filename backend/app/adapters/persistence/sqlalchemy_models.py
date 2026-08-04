@@ -304,5 +304,32 @@ class AuditLogRow(Base):
     outcome: Mapped[str] = mapped_column(String(16))
     detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    """Append-only by convention and by the migration account's grants; there
-    is no update or delete path in any repository."""
+    """Append-only except through retention.
+
+    It was append-only outright until 2026-08-04, when a `retention:write`
+    holder gained the ability to set a window and to purge ahead of it. The
+    gateway still cannot touch this table at all — its account holds `INSERT`
+    on `usage_records` and nothing else (`db_roles.py`), which is the guarantee
+    that actually constrains the untrusted side. What changed is that the
+    administrator's own account, which always had `DELETE` here, now has a
+    supported path to it. See `security.md` §12.1.
+    """
+
+
+class RetentionPolicyRow(Base):
+    """One row per dataset, written the first time somebody sets it.
+
+    The absence of a row means the default in `domain/entities/retention.py`,
+    which is why there is no migration seeding one: a seeded default is a
+    decision nobody made, wearing the name of whoever ran the migration.
+    """
+
+    __tablename__ = "retention_policies"
+
+    dataset: Mapped[str] = mapped_column(String(32), primary_key=True)
+    days: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_by: Mapped[str] = mapped_column(String(255))
+    """Display name rather than an id, and denormalised on purpose: the row has
+    to stay readable after the account that set it is deleted, which is the
+    same reason `audit_log` stores one."""

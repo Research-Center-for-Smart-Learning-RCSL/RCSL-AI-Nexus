@@ -45,6 +45,7 @@ from app.adapters.persistence.sqlalchemy_models import (
     ModelRow,
     NodeRow,
     RecoveryCodeRow,
+    RetentionPolicyRow,
     RoutingPolicyRow,
     TenantRow,
     UsageRecordRow,
@@ -62,6 +63,7 @@ from app.domain.entities.knowledge import (
 )
 from app.domain.entities.model import Model, ModelState
 from app.domain.entities.node import Node, NodeStatus
+from app.domain.entities.retention import RetentionDataset, RetentionPolicy
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.tenant import Tenant
 from app.domain.entities.usage import BucketUnit, UsageBucket, UsageRecord
@@ -965,3 +967,72 @@ class PostgresAuditLogRepository(_TenantScoped):
         )
         total = await self._session.scalar(stmt)
         return int(total or 0)
+
+
+class PostgresRecordPurge:
+    """Counting and deleting by age, for one table.
+
+    Constructed with the row class rather than subclassed per dataset: the two
+    tables this serves have nothing in common but an indexed `at` column, and a
+    class each would be two copies of the same four lines drifting apart.
+
+    Not `_TenantScoped`, and that is the point rather than an omission — see
+    `RecordPurgePort`. Retention is platform-wide, held by an administrator who
+    is not confined to a tenant, and a purge that quietly spared other tenants
+    would report a count that did not describe what it did.
+    """
+
+    def __init__(
+        self, session: AsyncSession, row: type[UsageRecordRow] | type[AuditLogRow]
+    ) -> None:
+        self._session = session
+        self._row = row
+
+    async def count_older_than(self, cutoff: datetime) -> int:
+        total = await self._session.scalar(
+            select(func.count()).select_from(self._row).where(self._row.at < cutoff)
+        )
+        return int(total or 0)
+
+    async def delete_older_than(self, cutoff: datetime) -> int:
+        result = cast(
+            CursorResult[Any],
+            await self._session.execute(delete(self._row).where(self._row.at < cutoff)),
+        )
+        return int(result.rowcount or 0)
+
+
+class PostgresRetentionPolicyRepository:
+    """The configured windows. No tenant scope, for the reason above."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_policies(self) -> list[RetentionPolicy]:
+        rows = await self._session.scalars(select(RetentionPolicyRow))
+        return [m.retention_row_to_domain(row) for row in rows]
+
+    async def get_policy(self, dataset: RetentionDataset) -> RetentionPolicy | None:
+        row = await self._session.get(RetentionPolicyRow, dataset.value)
+        return m.retention_row_to_domain(row) if row else None
+
+    async def set_policy(self, policy: RetentionPolicy) -> None:
+        # Upsert rather than read-then-write: two administrators saving the same
+        # screen at once should leave the later value, not an integrity error
+        # on a primary key neither of them chose.
+        stmt = pg_insert(RetentionPolicyRow).values(
+            dataset=policy.dataset.value,
+            days=policy.days,
+            updated_at=policy.updated_at,
+            updated_by=policy.updated_by,
+        )
+        await self._session.execute(
+            stmt.on_conflict_do_update(
+                index_elements=[RetentionPolicyRow.dataset],
+                set_={
+                    "days": stmt.excluded.days,
+                    "updated_at": stmt.excluded.updated_at,
+                    "updated_by": stmt.excluded.updated_by,
+                },
+            )
+        )

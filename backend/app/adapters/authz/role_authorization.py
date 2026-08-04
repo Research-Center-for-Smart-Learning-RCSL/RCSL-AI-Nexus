@@ -130,7 +130,7 @@ _BY_ROLE: dict[Role, frozenset[Scope]] = {
     Role.SERVICE: _SERVICE_SCOPES,
 }
 
-ADMIN_ONLY_SCOPES = frozenset({Scope.TENANT_WRITE})
+ADMIN_ONLY_SCOPES = frozenset({Scope.TENANT_WRITE, Scope.RETENTION_WRITE})
 """Scopes no role but `admin` holds — listed, rather than left to be discovered.
 
 Creating a tenant is the one operation with no smaller holder, because a tenant
@@ -138,7 +138,16 @@ is the boundary every other role is confined by: granting the power to draw one
 is granting the power to step outside it. Adding to this set is a deliberate
 narrowing and belongs in this docstring with its reason. A scope that becomes
 admin-only *without* being added here fails `test_role_scopes.py`, which is the
-point of writing it down."""
+point of writing it down.
+
+`retention:write` joined it on 2026-08-04 for a related reason. It sets how
+long records are kept and deletes them ahead of that, including audit entries.
+Held by a `tenant_admin` it would let the holder erase the record of what they
+did inside the tenant they administer — the audit log's whole value is that it
+is written by a wider authority than the one being recorded. The platform
+administrator can still erase their own trail; that is the deliberate choice
+made when this was designed, and it is recorded in `security.md` §12.1 rather
+than mitigated here."""
 
 ROLE_SCOPES: Mapping[Role, frozenset[Scope]] = MappingProxyType(_BY_ROLE)
 """Read-only view for callers that describe the model rather than enforce it —
