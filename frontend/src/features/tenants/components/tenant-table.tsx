@@ -12,7 +12,8 @@ import { CreateTenantDialog } from '@/features/tenants/components/create-tenant-
 import type { Tenant } from '@/features/tenants/schema';
 
 export function TenantTable() {
-  const { isAdmin } = useSession();
+  const { can } = useSession();
+  const mayWrite = can('tenant:write');
   const { data, isLoading, error, refetch } = useTenants();
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -58,7 +59,7 @@ export function TenantTable() {
         emptyDescription="Every account belongs to a tenant. Create one to isolate a group's users and keys."
         getRowId={(row) => row.id}
         toolbar={
-          isAdmin ? (
+          mayWrite ? (
             <Button size="sm" onClick={() => setCreateOpen(true)}>
               <PlusIcon />
               Create tenant

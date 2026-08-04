@@ -29,7 +29,8 @@ function summariseCandidates(policy: RoutingPolicy): string {
 }
 
 export function PolicyTable() {
-  const { isAdmin } = useSession();
+  const { can } = useSession();
+  const mayWrite = can('routing:write');
   const { data, isLoading, error, refetch } = useRoutingPolicies();
   const models = useModels();
   const remove = useDeleteRoutingPolicy();
@@ -85,7 +86,7 @@ export function PolicyTable() {
         cell: ({ row }) => {
           // Role gating here is a usability affordance only; the use case layer
           // authorises every action server-side.
-          if (!isAdmin) return null;
+          if (!mayWrite) return null;
           const policy = row.original;
           return (
             <div className="flex justify-end gap-1">
@@ -112,7 +113,7 @@ export function PolicyTable() {
         },
       },
     ],
-    [isAdmin],
+    [mayWrite],
   );
 
   return (
@@ -128,7 +129,7 @@ export function PolicyTable() {
         emptyDescription="Without a policy, the gateway answers every request for that capability with 'no model available'."
         getRowId={(row) => row.capability}
         toolbar={
-          isAdmin ? (
+          mayWrite ? (
             <Button
               size="sm"
               disabled={uncovered.length === 0}

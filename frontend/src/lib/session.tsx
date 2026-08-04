@@ -29,7 +29,22 @@ import {
 } from '@/lib/api-client';
 
 export type AuthMode = 'tailnet' | 'local' | 'dev';
-export type Role = 'admin' | 'user';
+export type Role =
+  | 'admin'
+  | 'tenant_admin'
+  | 'operator'
+  | 'curator'
+  | 'auditor'
+  | 'user';
+
+/**
+ * A single permission, mirroring `Scope` in the backend.
+ *
+ * Kept as a string union rather than validated against a list, because the
+ * server is the only authority on what a scope means and an unknown one here
+ * should narrow the UI, not break it.
+ */
+export type ScopeName = string;
 
 export type Me = {
   /**
@@ -43,6 +58,15 @@ export type Me = {
   login: string;
   display_name: string;
   role: Role;
+  /**
+   * What this account may do, resolved server-side from the role.
+   *
+   * Optional so a frontend deployed against an older backend degrades to an
+   * empty list rather than crashing on parse — `can()` then answers false for
+   * everything, which hides controls rather than offering ones the server will
+   * refuse.
+   */
+  scopes?: ScopeName[];
   /** null on the tailnet, which has no session at all. */
   session_expires_at: string | null;
 };
@@ -63,7 +87,26 @@ export type SessionValue = {
    * genuinely do not know yet.
    */
   authMode: AuthMode | null;
-  /** Convenience flags. Role gating in the UI is an affordance, not a control. */
+  /**
+   * Whether this account holds a scope. **The** question to ask before showing
+   * a control.
+   *
+   * `isAdmin` was the only question available until 2026-08-04 and was asked in
+   * forty-five places, which works while there are two roles and misleads as
+   * soon as there are six: an `operator` would have been shown a read-only
+   * fleet it can in fact write, and an `auditor` an Invite button the server
+   * refuses. Gating on the permission asks what the server will actually
+   * decide.
+   *
+   * Still an affordance and not a control — security.md §5.2 — because every
+   * request is checked again on arrival.
+   */
+  can: (scope: ScopeName) => boolean;
+  /**
+   * True only for the full platform administrator. Deliberately narrow: it now
+   * means "holds every scope", so it is the right question for nothing except
+   * the few places that really do mean *that* role. Prefer `can`.
+   */
   isAdmin: boolean;
   hasSession: boolean;
   refresh: () => Promise<void>;
@@ -145,6 +188,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, [queryClient]);
 
+  // A Set rather than an array scan: `can` is called on nearly every render of
+  // every gated control, and rebuilding it per call would make the cheap
+  // question the expensive one.
+  const held = useMemo(() => new Set(data?.scopes ?? []), [data?.scopes]);
+
   const value = useMemo<SessionValue>(() => {
     let status: SessionStatus;
     if (data) status = 'authenticated';
@@ -161,12 +209,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       status,
       error: error ?? null,
       authMode,
+      // Built from the list the server sent. An account whose scopes have not
+      // arrived yet — loading, or an older backend that does not send them —
+      // holds none, so controls stay hidden until the answer is known rather
+      // than flashing and disappearing.
+      can: (scope: ScopeName) => held.has(scope),
       isAdmin: data?.role === 'admin',
       hasSession: Boolean(data?.session_expires_at),
       refresh,
       signOut,
     };
-  }, [data, error, isPending, unauthorizedHint, refresh, signOut]);
+  }, [data, error, isPending, unauthorizedHint, held, refresh, signOut]);
 
   return (
     <SessionContext.Provider value={value}>{children}</SessionContext.Provider>

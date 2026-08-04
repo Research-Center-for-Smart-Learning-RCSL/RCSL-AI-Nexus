@@ -79,8 +79,32 @@ class MeResponse(BaseModel):
     login: str
     display_name: str
     role: str
+    scopes: list[str] = Field(default_factory=list)
+    """What this caller may do, resolved from the role by `AuthorizationPort`.
+
+    Sent so the UI can gate on the permission rather than on the role name. It
+    branched on `isAdmin` in forty-five places, which is a question with two
+    answers on a platform that now has six roles: `operator` would have been
+    shown a read-only fleet it can in fact write, and `auditor` an Invite
+    button the server refuses. Not a secret — it is derived from a hardcoded
+    table and every entry is documented in security.md §5.2 — and not a
+    control either: the server checks the same scopes on every request, and
+    §5.2's "UI-level role gating is a usability affordance only" still holds."""
+
     session_expires_at: datetime | None = None
     """None on the tailnet entrance, which has no session at all."""
+
+
+class RoleResponse(BaseModel):
+    """One row of the role catalogue.
+
+    Carries the scope list rather than prose. The wording that explains a role
+    to a person is copy and lives in the UI; the list of what it actually
+    grants is derived from the authorization table, so the two cannot disagree
+    about the part that matters."""
+
+    role: str
+    scopes: list[str]
 
 
 class UserResponse(BaseModel):

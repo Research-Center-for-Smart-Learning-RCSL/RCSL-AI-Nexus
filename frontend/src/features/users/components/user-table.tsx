@@ -28,7 +28,11 @@ import { EditUserDialog } from '@/features/users/components/edit-user-dialog';
 import { ROLE_LABELS, type User } from '@/features/users/schema';
 
 export function UserTable() {
-  const { isAdmin, me } = useSession();
+  const { can, me } = useSession();
+  // `user:write` rather than "is an administrator": `tenant_admin` holds it
+  // for its own tenant, and `auditor` and `operator` may read this table
+  // without being offered actions the server will refuse.
+  const mayWrite = can('user:write');
   const { data, isLoading, error, refetch } = useUsers();
   const remove = useDeleteUser();
   const reinvite = useIssueInvitation();
@@ -92,7 +96,7 @@ export function UserTable() {
         enableHiding: false,
         cell: ({ row }) => {
           const user = row.original;
-          if (!isAdmin) return null;
+          if (!mayWrite) return null;
           return (
             <div className="flex justify-end gap-1">
               <Button
@@ -167,7 +171,7 @@ export function UserTable() {
         },
       },
     ],
-    [isAdmin, me, reinvite, reset],
+    [mayWrite, me, reinvite, reset],
   );
 
   return (
@@ -183,7 +187,7 @@ export function UserTable() {
         emptyDescription="Invite someone to give them access to the management UI."
         getRowId={(row) => row.id}
         toolbar={
-          isAdmin ? (
+          mayWrite ? (
             <Button size="sm" onClick={() => setInviteOpen(true)}>
               <PlusIcon />
               Invite user

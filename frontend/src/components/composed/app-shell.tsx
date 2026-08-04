@@ -44,7 +44,7 @@ import { ErrorState } from '@/components/composed/error-state';
 import { Logo } from '@/components/composed/logo';
 import { Spinner } from '@/components/composed/spinner';
 import { ThemeToggle } from '@/components/composed/theme-toggle';
-import { useSession, useSessionExpiry } from '@/lib/session';
+import { useSession, useSessionExpiry, type ScopeName } from '@/lib/session';
 import { TAILSCALE_CONNECTION_LOST } from '@/features/auth/messages';
 import {
   AssistantContextProvider,
@@ -56,37 +56,44 @@ type NavItem = {
   href: string;
   label: string;
   icon: ReactNode;
-  adminOnly?: boolean;
+  /**
+   * The scope the screen's own first request needs. Absent means everyone.
+   */
+  requires?: ScopeName;
 };
 
-// adminOnly mirrors the scopes in adapters/authz. The dashboard needs
-// usage:read_all and the model registry needs model:read, neither of which a
-// `user` holds (security.md section 5.2), so both would 403 for one. A `user`
-// sees Chat and their own API keys.
+// Each entry names the scope its screen actually needs, rather than the
+// `adminOnly: true` this was until 2026-08-04. That flag was accurate while
+// there were two roles and wrong the moment there were six: it would have
+// hidden Models and Nodes from an `operator` whose whole job is those screens,
+// and shown Users to an `auditor` who can read it but not act on it. The
+// scopes below are the ones the corresponding endpoints require, so a hidden
+// screen and a 403 mean the same thing.
+
 const NAV: NavItem[] = [
   {
     href: '/',
     label: 'Dashboard',
     icon: <GaugeIcon className="size-4" />,
-    adminOnly: true,
+    requires: 'usage:read_all',
   },
   {
     href: '/models',
     label: 'Models',
     icon: <BoxIcon className="size-4" />,
-    adminOnly: true,
+    requires: 'model:read',
   },
   {
     href: '/routing-policies',
     label: 'Routing',
     icon: <RouteIcon className="size-4" />,
-    adminOnly: true,
+    requires: 'routing:read',
   },
   {
     href: '/nodes',
     label: 'Nodes',
     icon: <ServerIcon className="size-4" />,
-    adminOnly: true,
+    requires: 'node:read',
   },
   {
     href: '/knowledge',
@@ -95,19 +102,19 @@ const NAV: NavItem[] = [
     // knowledge:read is an admin scope. Retrieval for the chat happens
     // server-side under the caller's tenant, so a `user` never needs the
     // screen to have their questions answered from these documents.
-    adminOnly: true,
+    requires: 'knowledge:read',
   },
   {
     href: '/usage',
     label: 'Usage',
     icon: <ActivityIcon className="size-4" />,
-    adminOnly: true,
+    requires: 'usage:read_all',
   },
   {
     href: '/logs',
     label: 'Logs',
     icon: <ScrollTextIcon className="size-4" />,
-    adminOnly: true,
+    requires: 'logs:read',
   },
   {
     href: '/api-keys',
@@ -125,13 +132,13 @@ const NAV: NavItem[] = [
     href: '/users',
     label: 'Users',
     icon: <UsersIcon className="size-4" />,
-    adminOnly: true,
+    requires: 'user:read',
   },
   {
     href: '/tenants',
     label: 'Tenants',
     icon: <Building2Icon className="size-4" />,
-    adminOnly: true,
+    requires: 'tenant:read',
   },
   {
     href: '/chat',
@@ -235,7 +242,7 @@ function SessionExpiryWarning() {
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const { me, status, authMode, isAdmin, error, refresh, signOut } =
+  const { me, status, authMode, can, error, refresh, signOut } =
     useSession();
   const router = useRouter();
   const pathname = usePathname();
@@ -278,14 +285,16 @@ export function AppShell({ children }: { children: ReactNode }) {
     router.replace(`/login?next=${next}`);
   }, [shouldRedirectToLogin, pathname, router]);
 
-  // A signed-in `user` who navigates to an admin-only route directly (the
-  // dashboard is the index, so this includes just opening the app) is sent to
-  // the one screen they can use, rather than left on a page whose data 403s.
-  // The nav already hides these links; this covers the URL bar and bookmarks.
+  // Someone who navigates to a route their scopes do not cover (the dashboard
+  // is the index, so this includes just opening the app) is sent to the one
+  // screen everybody can use, rather than left on a page whose data 403s. The
+  // nav already hides these links; this covers the URL bar and bookmarks.
   const onForbiddenRoute =
     status === 'authenticated' &&
-    !isAdmin &&
-    NAV.some((item) => item.adminOnly && isActive(pathname, item.href));
+    NAV.some(
+      (item) =>
+        item.requires && !can(item.requires) && isActive(pathname, item.href),
+    );
 
   useEffect(() => {
     if (onForbiddenRoute) router.replace('/chat');
@@ -328,7 +337,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   if (!me) return null; // Redirecting.
 
-  const visible = NAV.filter((item) => !item.adminOnly || isAdmin);
+  const visible = NAV.filter((item) => !item.requires || can(item.requires));
 
   return (
     <div

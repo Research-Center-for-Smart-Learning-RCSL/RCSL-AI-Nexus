@@ -55,6 +55,10 @@ async def read_me(
         login=user.login,
         display_name=user.display_name,
         role=user.role.value,
+        # From the actor, not re-derived from `user.role`: the actor's scopes
+        # are what the request was actually authorized with, so the UI is told
+        # the same thing the server will enforce.
+        scopes=sorted(scope.value for scope in actor.scopes),
         session_expires_at=session.expires_at if session else None,
     )
 

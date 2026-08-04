@@ -6,8 +6,35 @@ import { z } from 'zod';
  * the UI only learns whether they are set.
  */
 
-export const roleSchema = z.enum(['admin', 'user']);
+/**
+ * Mirrors `Role` in the backend, minus `service`, which belongs to an API key
+ * and is never assignable to a person — `ASSIGNABLE_ROLES` omits it there for
+ * the same reason.
+ *
+ * Order is widest authority first, and it is a presentation choice rather than
+ * a ranking: these do not nest. A `curator` may rewrite the knowledge base an
+ * `operator` cannot touch, and an `operator` may restart a node a
+ * `tenant_admin` cannot.
+ */
+export const roleSchema = z.enum([
+  'admin',
+  'tenant_admin',
+  'operator',
+  'curator',
+  'auditor',
+  'user',
+]);
 export type Role = z.infer<typeof roleSchema>;
+
+/** One entry of `GET /admin/roles`. The scope list is generated from the same
+ *  table the backend enforces, so this screen cannot describe a permission the
+ *  platform does not grant. */
+export const roleCatalogueEntrySchema = z.object({
+  role: roleSchema,
+  scopes: z.array(z.string()),
+});
+export const roleCatalogueSchema = z.array(roleCatalogueEntrySchema);
+export type RoleCatalogueEntry = z.infer<typeof roleCatalogueEntrySchema>;
 
 export const userSchema = z.object({
   id: z.string(),
@@ -59,6 +86,63 @@ export const invitationSchema = z.object({
 export type Invitation = z.infer<typeof invitationSchema>;
 
 export const ROLE_LABELS: Record<Role, string> = {
-  admin: 'Administrator',
+  admin: 'Platform administrator',
+  tenant_admin: 'Tenant administrator',
+  operator: 'Operator',
+  curator: 'Knowledge curator',
+  auditor: 'Auditor',
   user: 'User',
+};
+
+/**
+ * What each role is *for*, in one line, and what it deliberately cannot do.
+ *
+ * The picker offered role names and nothing else until 2026-08-04, so choosing
+ * between `operator` and `tenant_admin` meant reading the source. This is the
+ * prose half; the exact scope list beside it comes from `GET /admin/roles` and
+ * is generated from the authorization table, so the wording here can go out of
+ * date without the permissions display going wrong with it.
+ */
+export const ROLE_DESCRIPTIONS: Record<Role, string> = {
+  admin:
+    'Everything, across every tenant. The only role that can create a tenant — the boundary all the others are confined by.',
+  tenant_admin:
+    'Full authority inside their own tenant: its people, its API keys, its knowledge base. Reads the fleet but cannot change it, and cannot create a tenant.',
+  operator:
+    'Runs the fleet — models, nodes, routing policies — and grants nobody access. Deliberately cannot invite users, change roles, or issue keys for anyone else.',
+  curator:
+    'Maintains the knowledge base and nothing else. Separate because knowledge documents shape what the models answer, which is authority worth granting on purpose.',
+  auditor:
+    'Reads everything and changes nothing — usage, logs, models, nodes, users. Holds no write at all, not even to their own API keys.',
+  user: 'Uses the chat UI, manages their own API keys, sees their own usage.',
+};
+
+/**
+ * Plain-language names for the scopes the catalogue returns, so the detail is
+ * readable by whoever is choosing a role rather than only by whoever wrote it.
+ *
+ * A scope with no entry falls back to its own identifier: an unnamed permission
+ * should still be *shown*, because omitting it would understate what a role
+ * grants, which is the one direction this screen must not be wrong in.
+ */
+export const SCOPE_LABELS: Record<string, string> = {
+  'chat:use': 'Use the chat UI',
+  'model:read': 'View models',
+  'model:write': 'Load, unload and register models',
+  'routing:read': 'View routing policies',
+  'routing:write': 'Change routing policies',
+  'api_key:read_own': 'View their own API keys',
+  'api_key:write_own': 'Create and revoke their own API keys',
+  'api_key:write_any': "Create and revoke anyone's API keys",
+  'user:read': 'View accounts',
+  'user:write': 'Invite, edit and remove accounts',
+  'node:read': 'View nodes',
+  'node:write': 'Manage nodes',
+  'tenant:read': 'View tenants',
+  'tenant:write': 'Create and change tenants',
+  'usage:read_own': 'See their own usage',
+  'usage:read_all': "See everyone's usage",
+  'logs:read': 'Read the audit log',
+  'knowledge:read': 'Read the knowledge base',
+  'knowledge:write': 'Add and remove knowledge documents',
 };

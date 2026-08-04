@@ -24,7 +24,7 @@ function formatDate(value: string | null): string {
 }
 
 export function ApiKeyTable() {
-  const { me, isAdmin } = useSession();
+  const { me, can } = useSession();
   // No draft and nothing to apply: there is no form here. The surface alone is
   // what the assistant needs, so a question about rotating or revoking a key is
   // answered in the context of the screen asking it. A dialog opened from this
@@ -40,13 +40,17 @@ export function ApiKeyTable() {
   /**
    * What the caller may act on, matching the scopes the backend actually
    * grants. A member holds `api_key:write_own` (security.md §5.2 grants them
-   * their own keys and nothing else), so gating every action on `isAdmin`
-   * offered them a page that could only ever be empty and read-only while the
-   * API would have accepted the request.
+   * their own keys and nothing else), so gating every action on "is an
+   * administrator" offered them a page that could only ever be empty and
+   * read-only while the API would have accepted the request.
+   *
+   * The scope, not the role: `tenant_admin` holds `api_key:write_any` within
+   * its tenant, and `operator` deliberately does not hold it at all.
    */
+  const mayWriteAny = can('api_key:write_any');
   const viewer = useMemo(
-    () => ({ id: me?.id ?? null, isAdmin }),
-    [me?.id, isAdmin],
+    () => ({ id: me?.id ?? null, mayWriteAny }),
+    [me?.id, mayWriteAny],
   );
 
   const columns = useMemo<ColumnDef<ApiKey>[]>(

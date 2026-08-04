@@ -16,19 +16,12 @@ import {
 import { Form } from '@/components/ui/form';
 import { FormField } from '@/components/composed/form-field';
 import { DisabledReason } from '@/components/composed/disabled-reason';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { describeError } from '@/components/composed/error-state';
+import { RolePicker } from '@/features/users/components/role-picker';
 import { useUpdateUser } from '@/features/users/hooks/use-users';
 import {
-  roleSchema,
-  ROLE_LABELS,
   updateUserSchema,
+  type Role,
   type UpdateUserInput,
   type User,
 } from '@/features/users/schema';
@@ -115,22 +108,11 @@ export function EditUserDialog({
               label="Role"
               disabled={isSelf}
               render={(field) => (
-                <Select
-                  value={field.value as string}
-                  onValueChange={(value) => field.onChange(value)}
+                <RolePicker
+                  value={field.value as Role}
+                  onChange={(role) => field.onChange(role)}
                   disabled={isSelf}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {roleSchema.options.map((role) => (
-                      <SelectItem key={role} value={role}>
-                        {ROLE_LABELS[role]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                />
               )}
             />
           </DisabledReason>

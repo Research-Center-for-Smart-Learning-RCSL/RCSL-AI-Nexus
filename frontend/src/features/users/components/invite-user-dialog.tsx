@@ -15,21 +15,14 @@ import {
 } from '@/components/ui/dialog';
 import { Form } from '@/components/ui/form';
 import { FormField } from '@/components/composed/form-field';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { OneTimeSecret } from '@/components/composed/one-time-secret';
 import { describeError } from '@/components/composed/error-state';
+import { RolePicker } from '@/features/users/components/role-picker';
 import { useCreateUser } from '@/features/users/hooks/use-users';
 import {
   createUserSchema,
-  roleSchema,
-  ROLE_LABELS,
   type CreateUserInput,
+  type Role,
 } from '@/features/users/schema';
 
 export function InviteUserDialog({
@@ -124,21 +117,10 @@ export function InviteUserDialog({
                   name="role"
                   label="Role"
                   render={(field) => (
-                    <Select
-                      value={field.value as string}
-                      onValueChange={(value) => field.onChange(value)}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {roleSchema.options.map((role) => (
-                          <SelectItem key={role} value={role}>
-                            {ROLE_LABELS[role]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <RolePicker
+                      value={field.value as Role}
+                      onChange={(role) => field.onChange(role)}
+                    />
                   )}
                 />
                 {create.error ? (

@@ -8,6 +8,7 @@ import {
   deleteUser,
   issueInvitation,
   issuePasswordReset,
+  listRoles,
   listUsers,
   updateUser,
 } from '@/features/users/api';
@@ -20,7 +21,21 @@ import { describeError } from '@/components/composed/error-state';
 export const userKeys = {
   all: ['users'] as const,
   list: () => [...userKeys.all, 'list'] as const,
+  roles: () => ['roles'] as const,
 };
+
+/**
+ * The role catalogue. A fixed table on the server, so it is cached for the
+ * session rather than refetched: it can only change when the backend is
+ * redeployed, which ends the session anyway.
+ */
+export function useRoles() {
+  return useQuery({
+    queryKey: userKeys.roles(),
+    queryFn: listRoles,
+    staleTime: Infinity,
+  });
+}
 
 /**
  * `enabled` exists because listing users needs `user:read`, which only an

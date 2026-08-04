@@ -52,6 +52,7 @@ from app.interfaces.http.routers import (
     metrics,
     models,
     nodes,
+    roles,
     routing_policies,
     tenants,
     usage,
@@ -155,6 +156,7 @@ def mount_admin_routers(app: FastAPI) -> None:
 
     for router in (
         me.router,
+        roles.router,
         users.router,
         invitations.router,
         models.router,

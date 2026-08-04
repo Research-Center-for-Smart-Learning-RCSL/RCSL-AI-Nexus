@@ -374,7 +374,7 @@ The Phase 2 observability stack (Prometheus and Grafana, §13.0) ships the *emis
 - Request body size limits, at both nginx and the application.
 - **`/openapi.json` and `/docs` are disabled on the gateway** and served only by the admin applications. Public API documentation is written separately rather than exposing internal schemas. That documentation now exists, as the `/api-docs` page of the management UI: the endpoint, the bearer header, the capability-rather-than-model convention, the request fields and the error code table. Until 2026-07-28 it did not, which made this a trade with nothing on the other side of it — an integrator had no description of the wire contract from any source. The page renders the live base URL and capability list rather than prose, so it cannot describe a deployment other than the one serving it. `GET /v1/models` answers the same question on the wire, for client libraries that ask before a person does.
 
-  **The trade is only as good as the page is complete, and on 2026-07-30 it was audited against the wire for the first time.** Everything the page says is accurate; five things it does not say are not. The one that matters here rather than in [ROADMAP.md](../ROADMAP.md) is that `use_knowledge` and `knowledge_collection` are part of the gateway's public request schema and the page never mentions them — so a capability of this deployment is reachable by anyone who guesses the field name and discoverable by nobody who reads the documentation, which is the opposite of what disabling the schema endpoints was meant to achieve. Also missing: that `temperature`, `top_p`, `n`, `stop`, `tools` and `response_format` are accepted and silently ignored; that a stream failing after the first byte is a 200 carrying an error frame with no `[DONE]`; that `usage.prompt_tokens` is always 0 and streaming reports no usage at all; and five reachable error codes (`vector_store_unavailable`, `runtime_capability_unsupported`, `model_not_found`, `untrusted_proxy`, and the 500 `internal_error` fallback). Recorded in [PROGRESS.md](../PROGRESS.md) 2026-07-30; **until they are closed, this bullet describes an intention more completely than it describes the deployment.**
+  **The trade is only as good as the page is complete, and on 2026-07-30 it was audited against the wire for the first time.** Everything the page says is accurate; five things it does not say are not. The one that matters here rather than in [ROADMAP.md](../ROADMAP.md) is that `use_knowledge` and `knowledge_collection` are part of the gateway's public request schema and the page never mentions them — so a capability of this deployment is reachable by anyone who guesses the field name and discoverable by nobody who reads the documentation, which is the opposite of what disabling the schema endpoints was meant to achieve. Also missing: that `temperature`, `top_p`, `n`, `stop`, `tools` and `response_format` are accepted and silently ignored; that a stream failing after the first byte is a 200 carrying an error frame with no `[DONE]`; that streaming reports no usage at all; and five reachable error codes (`vector_store_unavailable`, `runtime_capability_unsupported`, `model_not_found`, `untrusted_proxy`, and the 500 `internal_error` fallback). Recorded in [PROGRESS.md](../PROGRESS.md) 2026-07-30; **until they are closed, this bullet describes an intention more completely than it describes the deployment.**
 
 ## 5. Identity and Authorization
 
@@ -414,16 +414,28 @@ This is the same reasoning as §1: **isolation is guaranteed by socket binding, 
 
 ### 5.2 Roles and Where Authorization Lives
 
-| Role | Permissions |
-|---|---|
-| `admin` | Model lifecycle, routing policies, API key issuance and revocation, node management, user roles, all usage and logs |
-| `user` | Use the chat UI, manage their own API keys, view their own usage |
+| Role | Permissions | Deliberately cannot |
+|---|---|---|
+| `admin` | Everything, across every tenant | — |
+| `tenant_admin` | Its own tenant's people, API keys and knowledge base; reads the fleet | Create a tenant, or change models, nodes or routing |
+| `operator` | Model lifecycle, nodes, routing policies, all usage and logs | Invite users, change roles, or issue a key for anyone else |
+| `curator` | Read and write the knowledge base | Anything outside it |
+| `auditor` | Read everything — usage, logs, models, nodes, users, tenants | Write anything at all, including their own API keys |
+| `user` | Use the chat UI, manage their own API keys, view their own usage | Read the model registry or the node addresses |
+
+`service` is the seventh entry in the enum and is not in this table: it belongs to an API key, never a person, and holds `chat:use` and `usage:read_own` whatever capability list the key was issued with.
+
+**These do not nest.** A `curator` may rewrite the knowledge base that an `operator` cannot touch; an `operator` may restart a node that a `tenant_admin` cannot. The only ordering that holds is that `admin` is a superset of all of them, so nothing in the UI or the backend may compare two roles for seniority.
+
+**The tenant boundary is not a role.** It is structural: `di.py` builds `ManageUsers` and its neighbours with a tenant-scoped repository, so `user:write` reaches only the caller's own tenant whoever holds it. That is why `tenant_admin` is an ordinary role rather than a second dimension — the only powers that cross tenants are the platform-global ones (tenants, nodes, models, routing), and it simply lacks their write scopes.
+
+**Two invariants are enforced by `tests/unit/test_role_scopes.py` rather than by review.** `_ADMIN_SCOPES` is `frozenset(Scope)`, so a scope added later reaches `admin` automatically and no other role — which is how the roles above would quietly rot, a new feature at a time. The test requires every scope to reach some non-`admin` role, or to be listed in `ADMIN_ONLY_SCOPES` with its reason. Only `tenant:write` is listed: a tenant is the boundary the others are confined by, so granting the power to draw one is granting the power to step outside it.
 
 **The chat UI is served by the admin API (`/admin/chat`), not the public gateway.** It reuses the same `RouteChatRequest` use case but authorizes by user identity rather than an API key, so operators need not mint keys for themselves and internal traffic is not subject to the public geo and CIDR restrictions. The §4.3 resource guardrails still apply, because they protect the hardware rather than the perimeter.
 
 Authorization is enforced in `application/use_cases`, not in the domain (which should not know who is calling) and not in routers (where a second entrance to the same use case would eventually miss the check). Each use case declares its required scope; `AuthorizationPort` and `AuditPort` are domain ports so that "authorized and audited" is structural. See [backend.md](./backend.md) §7.
 
-UI-level role gating is a usability affordance only.
+UI-level role gating is a usability affordance only. It gates on the **scope**, not the role: `GET /admin/me` returns the caller's resolved scope list and the frontend asks `can('model:write')` rather than "is this an administrator". That question had two answers in forty-five places, which was right while there were two roles and wrong the moment there were six — it would have hidden the Models screen from the `operator` whose whole job it is. The server checks the same scopes on arrival regardless, so this remains an affordance.
 
 ### 5.3 Local Credentials, TOTP, and Sessions
 
