@@ -17,6 +17,62 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-04
 
+### Redeployed, and the build refused for a file it had never been given
+
+Everything from today went out at once — the rename, the dependency bumps, own
+usage, the nav tests. `docker compose build` failed on the first attempt, and
+the failure was the useful part.
+
+**`pnpm-workspace.yaml` was never copied into the frontend image.** The `deps`
+stage takes `package.json` and `pnpm-lock.yaml` and nothing else, so the file
+that has held this project's pnpm settings since 2026-07-26 — moved there
+precisely because pnpm 10 stopped reading them from `package.json` — has never
+been present at the only point where pnpm reads them. Moving the `postcss`
+override into it turned that from silent into fatal: the lockfile records an
+`overrides:` block, the config declaring it was absent, and `--frozen-lockfile`
+refused rather than resolving something different from what was locked.
+
+Worth being exact about what was broken before today, because it is less than it
+first looks. The missing file meant the **build-script allowlist** was absent
+from the image, and pnpm's default with no allowlist is to run **no** dependency
+build scripts. So the effect was the safe direction of the failure — nothing
+unapproved ran — and the one entry the allowlist permits, `esbuild`, matters
+only to the test runner, which does not run in the image. Nothing was
+mis-built. What was wrong was that the intent was stated in the repository and
+enforced nowhere in the artefact, which is the same shape of defect as the
+original one that put the file there.
+
+The lesson generalises past this repository: **a config file only counts where
+the tool runs, and a Docker stage that copies dependency manifests by name will
+silently omit the one added later.** `--frozen-lockfile` is what turned it into
+an error, by comparing the lockfile against a configuration that was not there.
+
+The deploy itself: eleven services up, `migrate` `Exited (0)`, gateway and
+parser healthy, all three applications answering `/healthz` and `/readyz` with
+`database`, `cache` and `runtime` true, no traceback in the logs. The containers
+carry the new configuration (`PROXY_HOSTNAME=llmapi.rcsl.online`,
+`ADMIN_BASE_URL=https://llm.rcsl.online`) and the new code: `/admin/usage/me`
+answers 401 rather than 404, which separates "route exists, no identity" from
+"route absent" — a nonexistent sibling path returns 404 from the same entrance,
+which is what makes that distinction mean anything. The shipped frontend bundle
+contains `usage:read_own`, so the nav change is in the image rather than only in
+the tree.
+
+**Half the entrance had already moved under us.** `verify-public-entrance.sh`
+reports **6 passed, 1 failed, 2 skipped**: `llm.rcsl.online` is live and
+`ai.nexus.rcsl.online` is gone, so the administrator migrated the management
+host rather than adding a second one. `llmapi.rcsl.online` is not configured yet
+and `api.nexus.rcsl.online` still answers, so the data plane is still on the old
+name — which is the safe order, since it is the one with an external caller
+holding a base URL.
+
+The part that matters most in that run: **checks 4 and 5 pass on the new host.**
+The four `proxy_set_header` directives are in the right place first time — a
+wrong `X-Nexus-Proxy` and the real one both return 401, and a forged
+`X-Forwarded-For` and a forged `Tailscale-User-Login` are both discarded. That
+trap cost four days across two placements last week, and rebuilding under a new
+hostname was exactly the occasion to repeat it.
+
 ### A scope nobody could spend, and the nav that had no test
 
 Two things, found by asking whether the sidebar varied by role. It already did —
