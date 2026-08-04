@@ -54,16 +54,39 @@ DEADLINE=$((SECONDS + 600))
 # one-shot job and is correctly `Exited (0)` after a boot. Named rather than
 # enumerated, for the reason precondition 3 explains: a list built from what is
 # running cannot contain a service that is not running, which is the exact case
-# this script now has to detect. check-platform-health.sh carries the same list
-# for the same reason; a service added to docker-compose.yml has to be added to
-# both or neither will notice it is gone.
-EXPECTED_SERVICES="postgres redis prometheus grafana gateway admin-public admin-tailnet frontend-public frontend-tailnet"
+# this script now has to detect.
+#
+# Derived from the compose file, with the literal below as the fallback. Keeping
+# it by hand did not work: `parser` and `qdrant` were missing from it from the
+# day they were added to docker-compose.yml until 2026-08-04, and this list
+# drives both the settle precondition and the `docker compose up -d` repair. On
+# a boot where Docker restores nothing — the 2026-07-26 19:10 path, which is the
+# whole reason the repair branch exists — those two would have been left down
+# while this script logged `all expected services running` and exited 0. The
+# component whose job is the repair was structurally blind to a third of what it
+# was repairing, which is this document's recurring defect in the list the
+# argument about that defect is about.
+#
+# check-platform-health.sh derives its copy the same way and for the same reason.
+EXPECTED_SERVICES="postgres redis prometheus grafana gateway admin-public admin-tailnet frontend-public frontend-tailnet parser qdrant"
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*"; }
 
 log "reconcile starting"
 
 cd "$REPO" || { log "FATAL: cannot cd to $REPO"; exit 1; }
+
+# After the cd, because `docker compose config` reads the compose file from the
+# working directory. Before that it would have failed silently every time and
+# left the literal standing, which is the shape of bug this derivation exists to
+# remove rather than reproduce.
+DERIVED_SERVICES="$(docker compose config --services 2>/dev/null | grep -vx 'migrate' | tr '\n' ' ')"
+if [ -n "$DERIVED_SERVICES" ]; then
+  EXPECTED_SERVICES="${DERIVED_SERVICES% }"
+else
+  log "WARNING: could not derive the service list from docker compose config; using the built-in list"
+fi
+log "expecting: $EXPECTED_SERVICES"
 
 # TAILNET_IP is read from the same .env that docker-compose.yml interpolates,
 # so the address this waits for cannot drift from the address it binds.

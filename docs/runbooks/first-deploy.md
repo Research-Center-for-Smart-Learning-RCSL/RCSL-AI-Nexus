@@ -1353,7 +1353,12 @@ LaunchDaemon 放在一起——它要跑得起來，得先有 repo、有 `secret
   printf '%s' 'nexus-alerts@gmail.com' > secrets/alert_smtp_account
   printf '%s' 'xxxxxxxxxxxxxxxx'       > secrets/alert_smtp_password
   chmod 600 secrets/alert_smtp_account secrets/alert_smtp_password
-  bash launchd/check-platform-health.sh     # 先手動跑，確認信真的寄得出去
+
+  # 先空跑：每一項檢查都會跑，但信只印在終端機、不寄出，state 檔也不寫。
+  # 兩者都重要——空跑如果寫了 state，就會把當天的摘要日期用掉，真正的那次反而不寄了。
+  NEXUS_HEALTH_DRY_RUN=1 bash launchd/check-platform-health.sh
+
+  bash launchd/check-platform-health.sh     # 再真的跑一次，確認信真的寄得出去
   ```
 
   ```sh
@@ -1402,12 +1407,28 @@ LaunchDaemon 放在一起——它要跑得起來，得先有 repo、有 `secret
   `prometheus` pause 起來，舊版腳本 exit 0、state 檔還是 `OK`、一封信都不寄；改過的版本
   `failing: services,` 並在三秒後寄出。
 
-  只有狀態**改變**才寄信：壞了寄一封、同樣的壞法不再重複寄、修好寄一封。另外每天一封
-  heartbeat。
+  **兩級，而且這個分法就是設計本身（2026-08-04）。** Tier 1 是「現在就壞了」：進 signature，
+  一變就立刻寄。Tier 2 是「快壞了、正在惡化」——到期、過期、成長——**不進 signature、也永遠
+  不會自己寄信**，一天一次在摘要信裡講。理由是把「金鑰十四天後到期」放進 signature，subject
+  就會連續十四天寫著 FAILING，而一個沒有意義的 subject 比沒有 subject 更糟。有前置時間的東西
+  等摘要，沒有前置時間的東西才吵醒人。
+
+  所以總共只有兩種信：
+
+  - **狀態變化信**（事件觸發，每五分鐘評估）：壞了寄一封、同樣的壞法不再重複寄、修好寄一封。
+    穩態下是 0 封。
+  - **每日摘要**（每天 08:00 起，一天一封，好壞都寄）：目前狀態、Tier 2 警告、「檢查過而且沒
+    問題」的數字、過去 24 小時的應用層統計（取自 Prometheus）、過去 24 小時的狀態變化。
+
+  摘要的時間是**固定的 08:00**，不是「距上一封滿 24 小時」。舊版是後者，而且任何一封信都會重設
+  它的計時器，所以送達時間會在一天之中漂移，「今天那封還沒來」根本不是一句講得出口的話。固定
+  時刻才讓「沒來」變成可讀的訊號，而那正是摘要唯一的存在理由。
 
   **它看得到什麼、看不到什麼。** 它跑在被它監測的機器上，所以它報得出「機器活著但服務不
-  通」——也就是實際發生過的那種故障——但報不出「機器關機了」。每天那封 heartbeat 就是補這
-  個：**信停了就是有事，即使一封告警都沒收到。** 這是唯一能讓沉默變成訊號的辦法。
+  通」——也就是實際發生過的那種故障——但報不出「機器關機了」。每天那封摘要就是補這
+  個：**信停了就是有事，即使一封告警都沒收到。** 但這一句要誠實：它需要有人注意到一封信**沒
+  有**來，而人不擅長這件事。真正的解法是外部的 dead man's switch（健康時往外 ping，對方超時
+  才寄信），目前**刻意還沒做**，所以這仍然是整套裡最弱的一個關節。
 
   第一次跑會寄一封 `monitoring started`，那封信本身就是在測 mail path，而 mail path 是整套
   裡唯一沒辦法靠「看它有沒有動」來驗證的部分。
@@ -1415,9 +1436,16 @@ LaunchDaemon 放在一起——它要跑得起來，得先有 repo、有 `secret
   ```sh
   tail -20 /opt/homebrew/var/log/nexus-health.log   # 只記事件，平常是空的
   ls -l /opt/homebrew/var/nexus-health.state        # mtime 就是上次執行時間
+  cat /opt/homebrew/var/nexus-health.state          # 三行：signature／上次摘要日期／重啟次數
   ```
 
   log 平常空著是正常的，所以「它到底有沒有在跑」不要從 log 判斷，看 state 檔的 mtime。
+
+  **state 檔是三行的**（2026-08-04 從兩行擴充）：第一行 tier 1 signature，第二行上一封摘要的
+  日期 `YYYY-MM-DD`，第三行上次看到的各容器重啟次數。每一條寫入路徑都必須寫滿三行——包含開機
+  寬限期那條提早離開的路徑。只寫兩行的話重啟基準每次開機都會被吃掉，而重啟檢查會就這樣安靜地
+  停止工作。第二行在 2026-08-04 之前放的是 Unix 時間戳（那時摘要還是滾動式的 heartbeat）；舊值
+  不會被當成日期解析，會被讀成「還沒寄過摘要」，於是下一次執行就補寄一封，這是刻意的升級路徑。
 
   **手動跑的那一次不會出現在 log 裡。** 輸出的重導向寫在 plist 上，不在腳本裡，所以你在
   終端機跑它，訊息就只出現在終端機。手動跑的紀錄是 state 檔和那封信，不是

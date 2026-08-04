@@ -331,6 +331,35 @@ services:
       - metrics_scrape_token
       # The full key: ingestion creates the collection and writes passages.
       - qdrant_api_key
+    # Same probe as the gateway, on this entrance's port. Both admin entrances
+    # went without one until 2026-08-04, which left them the only long-lived
+    # backend services whose health nothing evaluated: `docker compose ps` could
+    # only say `Up`, and the health sweep in launchd/check-platform-health.sh
+    # reads `.State.Health.Status`, so for these two it read `none` and moved on.
+    #
+    # **What this signal means is "the process is alive and serving HTTP", and
+    # nothing more.** `/healthz` checks nothing on purpose (health.py), so this
+    # reports `healthy` with Postgres face down — a variant of the state
+    # deployment.md records as looking entirely correct under `docker compose
+    # ps`, which is the first thing the runbook tells an operator to run.
+    # Whether the dependencies are reachable is a different question, asked
+    # separately by the /readyz probes in the health sweep; do not read a green
+    # `ps` as an answer to it.
+    #
+    # `/healthz` rather than `/readyz` remains the right choice, but not for the
+    # reason health.py gives for it. Nothing in this deployment acts on an
+    # unhealthy container: there is no orchestrator and no autoheal, and
+    # `restart: unless-stopped` reacts only to a container *exiting*, so the
+    # unhealthy mark triggers precisely nothing. The actual reason is that the
+    # two signals are worth keeping apart — probe /readyz here and "the process
+    # is dead" and "Postgres is down" become the same indicator, in the one
+    # place somebody looks before they know which they are dealing with.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8001/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   # --- control plane, public entrance -------------------------------------
   # A separate service, not a second port on the one above: the two trust
@@ -361,6 +390,14 @@ services:
       - proxy_shared_secret
       - metrics_scrape_token
       - qdrant_api_key
+    # See admin-tailnet's, above; this is the same probe on 8002, and it carries
+    # the same warning — `healthy` here is liveness, not readiness.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8002/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   # --- document parser ----------------------------------------------------
   # The container that reads attacker-supplied bytes, and the only one this
