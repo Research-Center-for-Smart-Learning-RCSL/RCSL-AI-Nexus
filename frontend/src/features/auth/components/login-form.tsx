@@ -52,7 +52,15 @@ export function LoginForm({ redirectTo = '/' }: { redirectTo?: string }) {
 
   if (login.step === 'password') {
     return (
-      <Form {...passwordForm}>
+      // `key` on each of the three branches below, because they occupy the
+      // same position in the returned tree and differ only in which form's
+      // `control` they carry. Without it React reconciles them as one
+      // component and reuses the mounted `Controller`, whose registration
+      // stays bound to the previous form: after the password step the
+      // verification-code input rendered, accepted focus, and dropped every
+      // keystroke — typed characters never appeared, and the submitted value
+      // was always empty. See login-form.test.tsx.
+      <Form key="password" {...passwordForm}>
         <form
           className="space-y-4"
           onSubmit={passwordForm.handleSubmit(login.submitPassword)}
@@ -94,7 +102,7 @@ export function LoginForm({ redirectTo = '/' }: { redirectTo?: string }) {
 
   if (useRecoveryCode) {
     return (
-      <Form {...recoveryForm}>
+      <Form key="recovery" {...recoveryForm}>
         <form
           className="space-y-4"
           onSubmit={recoveryForm.handleSubmit(login.submitRecoveryCode)}
@@ -124,7 +132,7 @@ export function LoginForm({ redirectTo = '/' }: { redirectTo?: string }) {
   }
 
   return (
-    <Form {...totpForm}>
+    <Form key="totp" {...totpForm}>
       <form
         className="space-y-4"
         onSubmit={totpForm.handleSubmit(login.submitTotp)}

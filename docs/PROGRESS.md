@@ -17,6 +17,48 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-04
 
+### Two defects in the second step of sign-in, and neither was reachable until today
+
+Reported as "the TOTP field will not take input". It was two independent
+defects sitting on top of each other, either of which alone makes the step
+impassable, and the account had no other way in: the recovery-code route was
+broken by the first of them too.
+
+**The field dropped every keystroke.** `LoginForm` returns three branches —
+password, TOTP, recovery code — from the same position, differing only in which
+form's `control` they carry. React reconciles them as one component and reuses
+the mounted `Controller`, whose registration stays bound to the previous form.
+The input rendered, took focus, and showed nothing: the value went to a form
+nobody was reading and the displayed `value` came from a field nobody was
+writing. A `key` per branch forces the remount that re-registers it.
+
+**The submission was a dead end.** `loginStepTwoSchema` required `challenge`,
+which is not a form field — it lives in `useLogin` state and is attached by
+`submitTotp` on the way to the API. The resolver rejected the only shape the
+form could hold, so `handleSubmit` never called the hook, and the error was
+attached to a name no `FormField` renders: no request, no message, nothing.
+
+Diagnosis was slower than it should have been because the first probe was
+written against a synthetic harness rather than the component. `FormField` with
+the TOTP props accepts and displays typing perfectly *when it is mounted
+directly* — which is true, and which sent the search towards CSS and the
+browser, neither of which was involved. The step transition is the whole
+defect, and only rendering the real component through it shows that. **Reaching
+for the real thing early would have cost less than the two rounds spent proving
+things about a stand-in.**
+
+Each fix is attributed rather than assumed: with the `key` reverted, "shows the
+typed code" fails `'' != '123456'` and the recovery route fails with it; with
+the schema reverted, typing displays and only the submission fails. 180 frontend
+tests pass, `tsc --noEmit` and eslint are clean, and the entrance is still
+9/0/0 after redeploying both frontends from one image.
+
+`src/features/auth/components/` had no tests at all, which is why two defects
+sat in the one screen standing between the public entrance and everything
+behind it. It has five now. Both were also invisible for the ordinary reason:
+until this morning no request reached this application, so nobody had ever got
+as far as the second step.
+
 ### The entrance passes everything, and the defect underneath it was waiting
 
 **9 passed, 0 failed, 0 skipped at 10:14, the first time
