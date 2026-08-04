@@ -15,8 +15,17 @@ export const loginStepOneSchema = z.object({
 });
 export type LoginStepOneInput = z.infer<typeof loginStepOneSchema>;
 
+/**
+ * What the second-step *form* holds, which is the code and nothing else.
+ *
+ * `challenge` used to be required here and is not a field: it is held in
+ * `useLogin` state and attached by `submitTotp` on its way to the API. The
+ * resolver therefore failed on every submission, `handleSubmit` never called
+ * the hook, and the error was attached to a name no `FormField` renders — so
+ * entering a correct code produced no request, no error and no visible change.
+ * A form schema describes the form; the request shape is `api.ts`'s business.
+ */
 export const loginStepTwoSchema = z.object({
-  challenge: z.string().min(1),
   code: z.string().regex(/^\d{6}$/, 'Six digits.'),
 });
 export type LoginStepTwoInput = z.infer<typeof loginStepTwoSchema>;
