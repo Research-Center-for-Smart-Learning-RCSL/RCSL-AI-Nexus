@@ -106,7 +106,13 @@ describe('editing a user', () => {
     );
 
     await user.click(screen.getByRole('combobox'));
-    await user.click(screen.getByRole('option', { name: 'Platform administrator' }));
+    // `findByRole`, not `getByRole`. The picker's popup is portalled and
+    // mounts a frame after the click, so a synchronous query raced it: this
+    // failed roughly one full-suite run in five and never in isolation, which
+    // is the signature of a test that passes because the machine is idle.
+    await user.click(
+      await screen.findByRole('option', { name: 'Platform administrator' }),
+    );
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() =>
