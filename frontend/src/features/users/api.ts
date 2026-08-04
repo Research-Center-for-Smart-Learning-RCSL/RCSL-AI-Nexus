@@ -1,15 +1,29 @@
 import { api } from '@/lib/api-client';
 import {
   invitationSchema,
+  roleCatalogueSchema,
   userListSchema,
   userSchema,
   type CreateUserInput,
   type Invitation,
+  type RoleCatalogueEntry,
   type UpdateUserInput,
   type User,
 } from '@/features/users/schema';
 
 const BASE = '/users';
+
+/**
+ * What each role actually grants, from the table the backend enforces.
+ *
+ * Fetched rather than hardcoded so the screen explaining the roles cannot
+ * describe a permission the platform does not grant. Readable by any
+ * authenticated caller: it is a fixed table and says nothing about who holds
+ * which role.
+ */
+export async function listRoles(): Promise<RoleCatalogueEntry[]> {
+  return roleCatalogueSchema.parse(await api.get<unknown>('/roles'));
+}
 
 export async function listUsers(): Promise<User[]> {
   return userListSchema.parse(await api.get<unknown>(BASE));

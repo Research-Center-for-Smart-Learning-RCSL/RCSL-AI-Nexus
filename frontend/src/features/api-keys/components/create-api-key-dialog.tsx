@@ -50,12 +50,16 @@ export function CreateApiKeyDialog({
   /** Whose key this is by default: the caller's own. */
   ownerId: string;
 }) {
-  const { isAdmin } = useSession();
+  const { can } = useSession();
+  // The two scopes are asked for separately because they are held separately:
+  // `api_key:write_any` is what lets a caller issue on someone else's behalf,
+  // and `user:read` is what lets the picker be populated at all. An `operator`
+  // holds the second and not the first — it may look users up but may not
+  // issue for them — so asking one question would have offered a picker whose
+  // submission the server refuses.
+  const mayWriteAny = can('api_key:write_any');
   const issue = useIssueApiKey();
-  // `api_key:write_any` is what lets an administrator issue on someone's
-  // behalf, and the endpoint has taken `owner_id` all along. Fetched only for
-  // them, because listing users needs a scope a member does not hold.
-  const owners = useUsers({ enabled: isAdmin && open });
+  const owners = useUsers({ enabled: mayWriteAny && can('user:read') && open });
   const [plaintext, setPlaintext] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   // Captured at issue rather than read back off the form, which is reset when
@@ -186,7 +190,7 @@ export function CreateApiKeyDialog({
                   description="Shown alongside the key id for identification."
                 />
 
-                {isAdmin ? (
+                {mayWriteAny ? (
                   <FormField
                     control={form.control}
                     name="owner_id"

@@ -19,8 +19,16 @@ import type { User } from '@/features/users/schema';
  */
 
 const updateUser = vi.fn();
+// `listRoles` too: the role picker fetches the catalogue so it can show what
+// each role actually grants, and a module mock that omits an export the
+// component imports fails at import time rather than at the assertion.
+const listRoles = vi.fn(async () => [
+  { role: 'user', scopes: ['chat:use'] },
+  { role: 'admin', scopes: ['chat:use', 'user:write'] },
+]);
 vi.mock('@/features/users/api', () => ({
   updateUser: (...args: unknown[]) => updateUser(...args),
+  listRoles: () => listRoles(),
 }));
 
 vi.mock('sonner', () => ({
@@ -98,7 +106,7 @@ describe('editing a user', () => {
     );
 
     await user.click(screen.getByRole('combobox'));
-    await user.click(screen.getByRole('option', { name: 'Administrator' }));
+    await user.click(screen.getByRole('option', { name: 'Platform administrator' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() =>

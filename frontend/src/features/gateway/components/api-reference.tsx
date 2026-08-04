@@ -249,15 +249,16 @@ export function ApiReference() {
           </dd>
           <dt className="font-mono text-muted-foreground">usage</dt>
           <dd>
-            <strong>
-              <code>prompt_tokens</code> is not reported.
-            </strong>{' '}
-            It is always <code>0</code>, and <code>total_tokens</code>{' '}
-            consequently equals <code>completion_tokens</code> rather than the
-            sum of both. Do not use these figures for input-side cost
-            accounting; count your own prompt if you need it. The platform meters
-            produced tokens only, so the quota on your key is spent by the same
-            number reported here.
+            All three figures are reported, and <code>total_tokens</code> is the
+            sum of both sides. The quota on your key is spent by that same
+            total, so a large prompt costs you whether or not the answer is
+            long — on this hardware, reading the prompt is most of the work.
+            <br />
+            <strong>One exception worth knowing:</strong> if you disconnect
+            before the response completes, <code>prompt_tokens</code> is
+            recorded as <code>0</code> for that call. The runtime reports the
+            figure only with its final chunk, so an abandoned request is
+            under-counted rather than estimated.
           </dd>
           <dt className="font-mono text-muted-foreground">
             usage, when streaming

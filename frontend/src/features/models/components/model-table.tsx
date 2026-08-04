@@ -27,7 +27,8 @@ import { RUNTIME_LABELS, type Model } from '@/features/models/schema';
 const DOWNLOAD_JOB_KEY = 'nexus.models.download-job';
 
 export function ModelTable() {
-  const { isAdmin } = useSession();
+  const { can } = useSession();
+  const mayWrite = can('model:write');
   const { data, isLoading, error, refetch } = useModels();
   const nodes = useNodes();
   const load = useLoadModel();
@@ -160,7 +161,7 @@ export function ModelTable() {
             model.state === 'downloading';
           // Role gating here is a usability affordance only. The use case layer
           // authorises every one of these actions server-side.
-          if (!isAdmin) return null;
+          if (!mayWrite) return null;
           return (
             <div className="flex justify-end gap-1">
               {/* The offered actions mirror the use cases' own preconditions,
@@ -227,7 +228,7 @@ export function ModelTable() {
         },
       },
     ],
-    [isAdmin, load, unload, download],
+    [mayWrite, load, unload, download],
   );
 
   return (
@@ -252,7 +253,7 @@ export function ModelTable() {
         emptyDescription="Register a model to make it available to routing policies."
         getRowId={(row) => row.id}
         toolbar={
-          isAdmin ? (
+          mayWrite ? (
             <Button
               size="sm"
               onClick={() => {

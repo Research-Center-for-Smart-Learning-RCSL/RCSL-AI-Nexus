@@ -166,23 +166,26 @@ describe('toDateInput', () => {
 
 describe('canManageKey', () => {
   it('lets an owner manage their own key', () => {
-    expect(canManageKey(KEY, { id: 'u2', isAdmin: false })).toBe(true);
+    expect(canManageKey(KEY, { id: 'u2', mayWriteAny: false })).toBe(true);
   });
 
   it('refuses a member somebody else’s key', () => {
-    expect(canManageKey(KEY, { id: 'someone-else', isAdmin: false })).toBe(
+    expect(canManageKey(KEY, { id: 'someone-else', mayWriteAny: false })).toBe(
       false,
     );
   });
 
-  it('lets an administrator manage any key', () => {
-    expect(canManageKey(KEY, { id: 'admin-1', isAdmin: true })).toBe(true);
+  it('lets anyone holding api_key:write_any manage any key', () => {
+    // The scope, not the role. `tenant_admin` holds it inside its own tenant
+    // and `operator` deliberately does not hold it at all, so asking "is an
+    // administrator" would have been right about one of the three.
+    expect(canManageKey(KEY, { id: 'admin-1', mayWriteAny: true })).toBe(true);
   });
 
   it('refuses everything when the viewer is unknown', () => {
     // `me` is null while the session loads and after a 401. Comparing against
     // it would otherwise make an unidentified viewer an owner of nothing in
     // particular.
-    expect(canManageKey(KEY, { id: null, isAdmin: false })).toBe(false);
+    expect(canManageKey(KEY, { id: null, mayWriteAny: false })).toBe(false);
   });
 });

@@ -18,7 +18,8 @@ import { NodeFormDialog } from '@/features/nodes/components/node-form-dialog';
 import { RUNTIME_LABELS, type Node } from '@/features/nodes/schema';
 
 export function NodeTable() {
-  const { isAdmin } = useSession();
+  const { can } = useSession();
+  const mayWrite = can('node:write');
   const { data, isLoading, error, refetch } = useNodes();
   const check = useCheckNodeHealth();
   const remove = useDeleteNode();
@@ -72,7 +73,7 @@ export function NodeTable() {
           const node = row.original;
           // Role gating here is a usability affordance only; the use case layer
           // authorises every one of these actions server-side.
-          if (!isAdmin) return null;
+          if (!mayWrite) return null;
           return (
             <div className="flex justify-end gap-1">
               <Button
@@ -106,7 +107,7 @@ export function NodeTable() {
         },
       },
     ],
-    [isAdmin, check],
+    [mayWrite, check],
   );
 
   return (
@@ -122,7 +123,7 @@ export function NodeTable() {
         emptyDescription="Register a compute node to attach models to it."
         getRowId={(row) => row.id}
         toolbar={
-          isAdmin ? (
+          mayWrite ? (
             <Button
               size="sm"
               onClick={() => {

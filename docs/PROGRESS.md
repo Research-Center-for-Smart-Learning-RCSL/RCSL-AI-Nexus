@@ -17,6 +17,90 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-04
 
+### Four more roles, and a UI that says what they mean
+
+Two roles for a platform with a knowledge base, a fleet, tenants and an audit
+log. The gap between them was the whole of the problem: `user` held four scopes
+and `admin` held all nineteen, so anybody who needed to load a model also got
+the power to invite people and read every log line.
+
+**The expensive part turned out to be already built.** Authorization is
+scope-based — `_BY_ROLE` is a hardcoded table and use cases declare a scope —
+so a role is an enum member and a `frozenset`. Nothing branches on a role name
+in the backend, and the hardcoding that exists so no database row can grant
+itself a scope is also what makes adding one safe. No migration: `users.role`
+is a `String(16)` with no enum constraint, and the four new names fit.
+
+| Role | Has | Deliberately lacks |
+|---|---|---|
+| `tenant_admin` | its tenant's people, keys, knowledge; reads the fleet | creating tenants; any fleet write |
+| `operator` | models, nodes, routing, logs, all usage | inviting, promoting, issuing keys for others |
+| `curator` | the knowledge base | everything else |
+| `auditor` | every read there is | every write, including its own API keys |
+
+**`tenant_admin` is not a second dimension, and checking that was the part
+worth doing carefully.** The tenant boundary is already structural: `di.py`
+builds `ManageUsers` with a *tenant-scoped* repository, so `user:write`
+reaches only the holder's own tenant whoever holds it. The only powers that
+cross tenants are the platform-global ones — tenants, nodes, models, routing —
+so the role is expressible by omitting their write scopes, and one dimension
+still does the job. Two dimensions would have been a rewrite of every
+repository construction for no additional confinement.
+
+`operator` is the split that motivated the rest: running a platform and
+deciding who may reach it are different jobs, and an operator who can issue a
+key can hand themselves everything else in the table. `auditor` drops
+`API_KEY_WRITE_OWN`, which every other human role gets from the base set —
+an auditor who can mint a key can act through the gateway, and then their visit
+is no longer only a read. `curator` exists because §7.3 treats knowledge
+documents as a prompt-injection surface: whoever writes them shapes what the
+models answer, which is authority worth granting on purpose.
+
+**The rot this invites is now a failing test rather than a review note.**
+`_ADMIN_SCOPES` is `frozenset(Scope)`, so every scope added later reaches
+`admin` automatically and no new role — each feature quietly narrowing the
+roles beneath it. `test_role_scopes.py` requires every scope to reach some
+non-`admin` role or to be named in `ADMIN_ONLY_SCOPES` with its reason. Only
+`tenant:write` is named, and the reason is that a tenant is the boundary the
+other roles are confined by. Same shape as `EXPECTED_SERVICES` listing nine of
+eleven services this morning: a list nothing compares against is a list that
+drifts.
+
+**The UI asked the wrong question in forty-five places.** `isAdmin` is a
+boolean, and it was the gate on every screen and every row action. It would
+have hidden Models and Nodes from the `operator` whose entire job they are, and
+shown an Invite button to an `auditor` the server refuses. `GET /admin/me` now
+returns the caller's resolved scopes and the frontend asks `can('model:write')`
+— the same question the server will answer, so a hidden control and a 403 mean
+the same thing. Still an affordance, not a control.
+
+**And the picker now explains itself**, which is what was actually asked for.
+It offered six words, which is enough to choose between `admin` and `user` and
+nowhere near enough to choose between `operator` and `tenant_admin` — the two
+that differ in exactly the way that matters, one running the hardware and
+granting nobody access, the other the reverse. Each role now shows a sentence
+saying what it is for and what it deliberately cannot do, and beneath it the
+real permission list from `GET /admin/roles`, generated from the same table
+`RoleAuthorization` enforces. Two layers because they fail differently: if the
+sentence drifts it reads oddly, but the list cannot claim a permission the
+platform does not grant. A scope with no plain-language name is shown by its
+identifier rather than omitted — understating what a role grants is the one
+direction this screen must not be wrong in.
+
+#### A documented decision was reversed, on purpose
+
+ROADMAP's `prompt_tokens` item said to count it *without* changing what the
+quota meters, "so that a documented figure and a billed one do not silently
+become the same number". This morning's change did exactly that. It was
+deliberate and requested, and the argument is that a quota charging for output
+alone is not a limit on the work asked for — a caller could fill the context
+window every request and spend none of it. So the two figures are now the same
+number, and the obligation transfers: `/api-docs` said in as many words that
+`prompt_tokens` is never reported and the quota meters produced tokens only,
+which stopped being true at 11:00 and is corrected. **The reversal is recorded
+rather than quietly performed**, because a decision overturned without a note
+is indistinguishable from one nobody knew about.
+
 ### The Users screen could not edit a user, and both reports were the same gap
 
 Reported as two problems — a display name that cannot be changed, and an
