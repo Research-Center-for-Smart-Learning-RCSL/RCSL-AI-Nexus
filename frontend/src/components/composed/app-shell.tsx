@@ -14,12 +14,13 @@
  * layer regardless of what this renders.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   ActivityIcon,
   BookOpenIcon,
+  ChevronRightIcon,
   BoxIcon,
   GaugeIcon,
   KeyIcon,
@@ -71,96 +72,142 @@ type NavItem = {
 // scopes below are the ones the corresponding endpoints require, so a hidden
 // screen and a 403 mean the same thing.
 
-const NAV: NavItem[] = [
+type NavGroup = {
+  id: string;
+  label: string;
+  items: NavItem[];
+};
+
+// Grouped by what the reader came to do, not by which part of the backend
+// serves it. Thirteen flat entries is a list nobody scans; four named groups is
+// a list somebody skips three quarters of.
+//
+// The grouping also happens to fall along role lines, which is the sign it is
+// the right cut rather than a tidy one: a `user` sees Work and one entry of
+// Insight, a `curator` sees Work and Knowledge, an `operator` sees Fleet and
+// Insight and none of Administration. Nobody is shown a group they have no
+// business in, because a group with no visible items is not rendered at all.
+const NAV_GROUPS: NavGroup[] = [
   {
-    href: '/',
-    label: 'Dashboard',
-    icon: <GaugeIcon className="size-4" />,
-    requires: 'usage:read_all',
+    id: 'work',
+    label: 'Work',
+    // No `requires` on any of these: every role holds `chat:use` and
+    // `api_key:read_own`, so this group is the one thing an account is worth on
+    // its own and is never empty for anyone signed in.
+    items: [
+      {
+        href: '/chat',
+        label: 'Chat',
+        icon: <MessageSquareIcon className="size-4" />,
+      },
+      {
+        href: '/api-keys',
+        label: 'API keys',
+        icon: <KeyIcon className="size-4" />,
+      },
+      {
+        // Not adminOnly, for the same reason API keys is not: the people who
+        // need to know how to call the gateway are the ones holding a key.
+        href: '/api-docs',
+        label: 'API',
+        icon: <BookOpenIcon className="size-4" />,
+      },
+    ],
   },
   {
-    href: '/models',
-    label: 'Models',
-    icon: <BoxIcon className="size-4" />,
-    requires: 'model:read',
+    id: 'fleet',
+    label: 'Fleet',
+    items: [
+      {
+        href: '/models',
+        label: 'Models',
+        icon: <BoxIcon className="size-4" />,
+        requires: 'model:read',
+      },
+      {
+        href: '/routing-policies',
+        label: 'Routing',
+        icon: <RouteIcon className="size-4" />,
+        requires: 'routing:read',
+      },
+      {
+        href: '/nodes',
+        label: 'Nodes',
+        icon: <ServerIcon className="size-4" />,
+        requires: 'node:read',
+      },
+      {
+        href: '/knowledge',
+        label: 'Knowledge',
+        icon: <LibraryIcon className="size-4" />,
+        // knowledge:read is an admin scope. Retrieval for the chat happens
+        // server-side under the caller's tenant, so a `user` never needs the
+        // screen to have their questions answered from these documents.
+        requires: 'knowledge:read',
+      },
+    ],
   },
   {
-    href: '/routing-policies',
-    label: 'Routing',
-    icon: <RouteIcon className="size-4" />,
-    requires: 'routing:read',
+    id: 'insight',
+    label: 'Insight',
+    items: [
+      {
+        href: '/',
+        label: 'Dashboard',
+        icon: <GaugeIcon className="size-4" />,
+        requires: 'usage:read_all',
+      },
+      {
+        href: '/usage',
+        label: 'Usage',
+        icon: <ActivityIcon className="size-4" />,
+        // `read_own`, not `read_all`: since 2026-08-04 the screen serves both,
+        // and the narrower scope is held by every human role, so this link is
+        // visible to everyone and shows each reader what they are entitled to.
+        // The Dashboard above keeps `usage:read_all`, because platform totals
+        // have no own-usage equivalent to fall back to.
+        requires: 'usage:read_own',
+      },
+      {
+        href: '/logs',
+        label: 'Logs',
+        icon: <ScrollTextIcon className="size-4" />,
+        requires: 'logs:read',
+      },
+    ],
   },
   {
-    href: '/nodes',
-    label: 'Nodes',
-    icon: <ServerIcon className="size-4" />,
-    requires: 'node:read',
-  },
-  {
-    href: '/knowledge',
-    label: 'Knowledge',
-    icon: <LibraryIcon className="size-4" />,
-    // knowledge:read is an admin scope. Retrieval for the chat happens
-    // server-side under the caller's tenant, so a `user` never needs the
-    // screen to have their questions answered from these documents.
-    requires: 'knowledge:read',
-  },
-  {
-    href: '/usage',
-    label: 'Usage',
-    icon: <ActivityIcon className="size-4" />,
-    // `read_own`, not `read_all`: since 2026-08-04 the screen serves both, and
-    // the narrower scope is held by every human role, so this link is visible to
-    // everyone and shows each reader what they are entitled to. The Dashboard
-    // above keeps `usage:read_all`, because platform totals have no own-usage
-    // equivalent to fall back to.
-    requires: 'usage:read_own',
-  },
-  {
-    href: '/logs',
-    label: 'Logs',
-    icon: <ScrollTextIcon className="size-4" />,
-    requires: 'logs:read',
-  },
-  {
-    href: '/api-keys',
-    label: 'API keys',
-    icon: <KeyIcon className="size-4" />,
-  },
-  {
-    // Not adminOnly, for the same reason API keys is not: the people who need
-    // to know how to call the gateway are the ones holding a key.
-    href: '/api-docs',
-    label: 'API',
-    icon: <BookOpenIcon className="size-4" />,
-  },
-  {
-    href: '/users',
-    label: 'Users',
-    icon: <UsersIcon className="size-4" />,
-    requires: 'user:read',
-  },
-  {
-    href: '/retention',
-    label: 'Retention',
-    icon: <Trash2Icon className="size-4" />,
-    // Admin-only, like Tenants above it: `retention:write` is in
-    // ADMIN_ONLY_SCOPES because a tenant administrator who could purge could
-    // erase the record of what they did inside the tenant they administer.
-    requires: 'retention:write',
-  },
-  {
-    href: '/tenants',
-    label: 'Tenants',
-    icon: <Building2Icon className="size-4" />,
-    requires: 'tenant:read',
-  },
-  {
-    href: '/chat',
-    label: 'Chat',
-    icon: <MessageSquareIcon className="size-4" />,
+    id: 'administration',
+    label: 'Administration',
+    items: [
+      {
+        href: '/users',
+        label: 'Users',
+        icon: <UsersIcon className="size-4" />,
+        requires: 'user:read',
+      },
+      {
+        href: '/tenants',
+        label: 'Tenants',
+        icon: <Building2Icon className="size-4" />,
+        requires: 'tenant:read',
+      },
+      {
+        href: '/retention',
+        label: 'Retention',
+        icon: <Trash2Icon className="size-4" />,
+        // Admin-only: `retention:write` is in ADMIN_ONLY_SCOPES because a
+        // tenant administrator who could purge could erase the record of what
+        // they did inside the tenant they administer.
+        requires: 'retention:write',
+      },
+    ],
   },
 ];
+
+/** Flattened, for the route guard below. One source, so a screen cannot be
+ *  reachable by URL and absent from the nav, or the reverse. */
+const NAV: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
 
 function isActive(pathname: string | null, href: string): boolean {
   if (href === '/') return pathname === '/';
@@ -174,6 +221,55 @@ function isActive(pathname: string | null, href: string): boolean {
  * copy quietly falls behind, and the role filtering below is the part that must
  * not diverge.
  */
+const COLLAPSED_KEY = 'nexus.nav.collapsed';
+
+/**
+ * Which groups the reader has folded away, remembered across navigations.
+ *
+ * Read after mount rather than during render: this component is server-rendered
+ * and `localStorage` does not exist there, so reading it inline would either
+ * throw or produce markup that disagrees with the client's first paint. The
+ * first render is therefore "everything open", which is also the right default
+ * — a nav that starts collapsed hides the thing the reader came for, and the
+ * clutter this fixes is worth one click to fold, not a hunt to unfold.
+ *
+ * A bad value in storage is discarded rather than repaired. It is a UI
+ * preference; the cost of getting it wrong is one lost fold, and code that
+ * carefully rehabilitates malformed JSON is code nobody can justify.
+ */
+function useCollapsedGroups(): [Set<string>, (id: string) => void] {
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    try {
+      const stored: unknown = JSON.parse(
+        window.localStorage.getItem(COLLAPSED_KEY) ?? '[]',
+      );
+      if (Array.isArray(stored)) {
+        setCollapsed(new Set(stored.filter((id): id is string => typeof id === 'string')));
+      }
+    } catch {
+      // Unparseable or unavailable storage: keep the default.
+    }
+  }, []);
+
+  const toggle = useCallback((id: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      try {
+        window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+      } catch {
+        // Private browsing, or a full quota. The fold still works for this
+        // session; only its memory is lost, which is not worth an error.
+      }
+      return next;
+    });
+  }, []);
+
+  return [collapsed, toggle];
+}
+
 function NavLinks({
   items,
   pathname,
@@ -206,6 +302,61 @@ function NavLinks({
         );
       })}
     </nav>
+  );
+}
+
+/**
+ * The grouped nav, shared by the sidebar and the narrow-screen panel.
+ *
+ * One definition rather than two: a nav that existed twice is a nav where one
+ * copy quietly falls behind, and the scope filtering is the part that must not
+ * diverge.
+ *
+ * **A group holding the current page cannot be folded away.** Otherwise the
+ * reader collapses Fleet while standing on Models, the highlighted item
+ * vanishes, and the sidebar stops saying where they are — the one thing it is
+ * for. The fold is remembered, so it takes effect the moment they navigate
+ * elsewhere.
+ */
+function NavGroups({
+  groups,
+  pathname,
+  collapsed,
+  onToggle,
+  onNavigate,
+}: {
+  groups: NavGroup[];
+  pathname: string | null;
+  collapsed: Set<string>;
+  onToggle: (id: string) => void;
+  onNavigate?: () => void;
+}) {
+  return (
+    <div className="space-y-3">
+      {groups.map((group) => {
+        const holdsCurrentPage = group.items.some((item) => isActive(pathname, item.href));
+        const open = holdsCurrentPage || !collapsed.has(group.id);
+        return (
+          <div key={group.id}>
+            <button
+              type="button"
+              onClick={() => onToggle(group.id)}
+              aria-expanded={open}
+              aria-controls={`nav-group-${group.id}`}
+              className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium tracking-wide text-muted-foreground uppercase hover:bg-muted/50"
+            >
+              <ChevronRightIcon
+                className={cn('size-3 transition-transform', open && 'rotate-90')}
+              />
+              {group.label}
+            </button>
+            <div id={`nav-group-${group.id}`} hidden={!open}>
+              <NavLinks items={group.items} pathname={pathname} onNavigate={onNavigate} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -263,6 +414,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const assistant = useAssistantContext();
   const [navOpen, setNavOpen] = useState(false);
+  const [collapsed, toggleGroup] = useCollapsedGroups();
   const navPanelRef = useRef<HTMLDivElement | null>(null);
   const navButtonRef = useRef<HTMLButtonElement | null>(null);
 
@@ -352,7 +504,13 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   if (!me) return null; // Redirecting.
 
-  const visible = NAV.filter((item) => !item.requires || can(item.requires));
+  // Filtered per group, and a group left with nothing is dropped entirely: an
+  // empty heading is worse than the flat list this replaced, because it names a
+  // capability the reader does not have and then offers nothing behind it.
+  const visibleGroups = NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !item.requires || can(item.requires)),
+  })).filter((group) => group.items.length > 0);
 
   return (
     <div
@@ -380,7 +538,12 @@ export function AppShell({ children }: { children: ReactNode }) {
               {authMode ?? 'unknown'}
             </Badge>
           </div>
-          <NavLinks items={visible} pathname={pathname} />
+          <NavGroups
+            groups={visibleGroups}
+            pathname={pathname}
+            collapsed={collapsed}
+            onToggle={toggleGroup}
+          />
         </aside>
 
         {/* The same links for anything narrower than the sidebar's breakpoint.
@@ -426,9 +589,11 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <XIcon />
                 </Button>
               </div>
-              <NavLinks
-                items={visible}
+              <NavGroups
+                groups={visibleGroups}
                 pathname={pathname}
+                collapsed={collapsed}
+                onToggle={toggleGroup}
                 onNavigate={() => setNavOpen(false)}
               />
             </div>
