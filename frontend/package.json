@@ -52,11 +52,6 @@
     "typescript": "^5",
     "vitest": "^3.2.7"
   },
-  "pnpm": {
-    "overrides": {
-      "postcss": ">=8.5.12"
-    }
-  },
   "license": "AGPL-3.0-or-later",
   "packageManager": "pnpm@10.17.1",
   "engines": {
