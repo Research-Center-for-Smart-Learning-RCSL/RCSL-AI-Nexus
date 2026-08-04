@@ -4,7 +4,14 @@
 FROM node:22-alpine AS deps
 WORKDIR /app
 RUN corepack enable
-COPY package.json pnpm-lock.yaml ./
+# `pnpm-workspace.yaml` is not optional and was missing here until 2026-08-04.
+# It is where pnpm 10 reads settings the `pnpm` field in package.json no longer
+# carries: the `overrides` that pin postcss and sharp onto their patched lines,
+# and the build-script allowlist. Without it in this stage `--frozen-lockfile`
+# refuses outright once the lockfile records an override, and before that it
+# built quietly with the allowlist simply absent — the intent stated in the repo
+# and enforced nowhere in the image.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 FROM node:22-alpine AS builder
