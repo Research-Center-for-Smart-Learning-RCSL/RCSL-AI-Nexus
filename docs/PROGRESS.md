@@ -17,6 +17,28 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-04
 
+### The account screen answers "why can I not see that screen"
+
+The permissions list is on `/account` too, from `me.scopes` — the scopes the
+request was actually authorized with, rather than a description of the role's
+name. Shown to everyone rather than only to administrators, because the person
+who asks why the Logs link is missing is by definition the one without
+`logs:read`, and until now the answer existed only in `role_authorization.py`.
+
+`ScopeList` is shared with the role picker. One component, because the rule
+that matters is identical in both and easy to get wrong once: a scope with no
+plain-language name is rendered as its identifier rather than skipped.
+Understating what is granted is the one direction a permissions display must
+never be wrong in — a reader who sees `logs:read` learns something, a reader
+shown nothing concludes there is nothing there.
+
+The empty case is two cases and they are kept apart. An account holding no
+scopes and a server that did not report them are the same empty list and mean
+opposite things, so the screen says which one it is looking at. That branch is
+not decoration: `me.scopes` is optional precisely so a frontend running against
+an older backend degrades instead of crashing, which is exactly when the
+distinction is load-bearing.
+
 ### Four more roles, and a UI that says what they mean
 
 Two roles for a platform with a knowledge base, a fleet, tenants and an audit

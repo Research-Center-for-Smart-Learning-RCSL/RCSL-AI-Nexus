@@ -7,6 +7,8 @@ import { Spinner } from '@/components/composed/spinner';
 import { useSession } from '@/lib/session';
 import { ChangePasswordForm } from '@/features/account/components/change-password-form';
 import { TotpReenrolmentCard } from '@/features/account/components/totp-reenrolment-card';
+import { ScopeList } from '@/features/users/components/scope-list';
+import { ROLE_DESCRIPTIONS, ROLE_LABELS } from '@/features/users/schema';
 
 /**
  * Your own credentials, and nothing else.
@@ -33,13 +35,17 @@ export function AccountSettings() {
 
   if (!me) return null; // The shell is already redirecting.
 
+  // Sorted so the list reads the same on every visit; the server already sorts
+  // it, and this makes the screen independent of that continuing to be true.
+  const scopes = [...(me.scopes ?? [])].sort();
+
   return (
     <div className="max-w-2xl space-y-6">
       <Card>
         <CardHeader>
           <CardTitle>{me.display_name}</CardTitle>
           <CardDescription>
-            {me.login} — {me.role}
+            {me.login} — {ROLE_LABELS[me.role] ?? me.role}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-2">
@@ -47,6 +53,40 @@ export function AccountSettings() {
           <span className="text-sm text-muted-foreground">
             Your display name and role are set by an administrator.
           </span>
+        </CardContent>
+      </Card>
+
+      {/* What this account can actually do, from `GET /admin/me` — the scopes
+          the request was authorized with, not a description of the role name.
+          Shown to everyone rather than only to administrators: "why can I not
+          see the Logs screen" is a question the person without the scope asks,
+          and the answer belongs where they can reach it. */}
+      <Card>
+        <CardHeader>
+          <CardTitle>What you can do</CardTitle>
+          <CardDescription>
+            {ROLE_DESCRIPTIONS[me.role] ??
+              'Your permissions are resolved from your role when each request arrives.'}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {scopes.length > 0 ? (
+            <>
+              <ScopeList scopes={scopes} />
+              <p className="mt-3 text-xs text-muted-foreground">
+                {scopes.length} permission{scopes.length === 1 ? '' : 's'}, from
+                the role above. An administrator changes these by changing your
+                role; they are not editable one by one.
+              </p>
+            </>
+          ) : (
+            // Distinguishes "holds nothing" from "we were not told", which look
+            // identical as an empty list and mean opposite things.
+            <p className="text-sm text-muted-foreground">
+              This entrance did not report your permissions. That is a gap in
+              what the server sent, not a statement that you have none.
+            </p>
+          )}
         </CardContent>
       </Card>
 
