@@ -1,7 +1,5 @@
 'use client';
 
-import { CheckIcon } from 'lucide-react';
-
 import {
   Select,
   SelectContent,
@@ -9,12 +7,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { ScopeList } from '@/features/users/components/scope-list';
 import { useRoles } from '@/features/users/hooks/use-users';
 import {
   roleSchema,
   ROLE_DESCRIPTIONS,
   ROLE_LABELS,
-  SCOPE_LABELS,
   type Role,
 } from '@/features/users/schema';
 
@@ -77,24 +75,7 @@ export function RolePicker({
           <p className="mb-2 text-xs font-medium text-muted-foreground">
             {ROLE_LABELS[value]} can:
           </p>
-          <ul className="grid gap-1 sm:grid-cols-2">
-            {scopes.map((scope) => (
-              <li
-                key={scope}
-                className="flex items-start gap-1.5 text-xs text-muted-foreground"
-              >
-                <CheckIcon
-                  className="mt-0.5 size-3 shrink-0 text-primary"
-                  aria-hidden
-                />
-                {/* Falls back to the identifier. A permission with no wording
-                    is still shown, because leaving it out would understate
-                    what the role grants — the one direction this must not be
-                    wrong in. */}
-                <span>{SCOPE_LABELS[scope] ?? scope}</span>
-              </li>
-            ))}
-          </ul>
+          <ScopeList scopes={scopes} />
         </div>
       ) : null}
     </div>
