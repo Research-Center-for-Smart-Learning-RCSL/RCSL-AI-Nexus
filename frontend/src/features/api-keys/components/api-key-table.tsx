@@ -48,9 +48,10 @@ export function ApiKeyTable() {
    * its tenant, and `operator` deliberately does not hold it at all.
    */
   const mayWriteAny = can('api_key:write_any');
+  const mayWriteOwn = can('api_key:write_own');
   const viewer = useMemo(
-    () => ({ id: me?.id ?? null, mayWriteAny }),
-    [me?.id, mayWriteAny],
+    () => ({ id: me?.id ?? null, mayWriteAny, mayWriteOwn }),
+    [me?.id, mayWriteAny, mayWriteOwn],
   );
 
   const columns = useMemo<ColumnDef<ApiKey>[]>(
@@ -153,10 +154,14 @@ export function ApiKeyTable() {
         emptyDescription="Issue a key to let an application reach the gateway."
         getRowId={(row) => row.key_id}
         toolbar={
-          // Anyone signed in may issue a key for themselves. Gated on the id
-          // rather than the role, because the dialog issues to `me.id` and
+          // Both conditions, and neither is redundant. `api_key:write_own` is
+          // what the endpoint requires, and it is not universal any more:
+          // `auditor` deliberately holds no write at all, so "anyone signed in
+          // may issue a key for themselves" stopped being true when that role
+          // arrived and this button would have offered a guaranteed 403. The
+          // id is still needed because the dialog issues to `me.id`, and
           // without one the request carries an empty owner.
-          me?.id ? (
+          me?.id && can('api_key:write_own') ? (
             <Button size="sm" onClick={() => setCreateOpen(true)}>
               <PlusIcon />
               Issue key

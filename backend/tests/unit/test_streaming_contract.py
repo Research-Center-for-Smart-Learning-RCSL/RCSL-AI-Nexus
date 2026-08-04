@@ -241,6 +241,97 @@ async def test_max_tokens_ceiling_is_enforced_regardless_of_runtime() -> None:
     assert usage.records[0].completed is False, "truncation is not completion"
 
 
+class OllamaShapedRuntime:
+    """The real adapter's shape, which the fake above does not have.
+
+    `FakeRuntime` never emits a terminal chunk, so it cannot show what happens
+    to the figure that only rides on one. Ollama counts each content event as a
+    token and reports `prompt_eval_count` exclusively on its separate `done`
+    event — so anything that stops reading before that event sees no prompt at
+    all.
+    """
+
+    def __init__(self, content_chunks: int = 50, prompt_tokens: int = 500) -> None:
+        self._content = content_chunks
+        self._prompt_tokens = prompt_tokens
+        self.cleaned_up = False
+
+    async def generate(
+        self,
+        ref: str,
+        messages: Sequence[Message],
+        max_tokens: int | None = None,
+        thinking: bool = True,
+    ) -> AsyncIterator[CompletionChunk]:
+        # Honours `max_tokens`, because Ollama does: it is passed as
+        # `num_predict`, so the runtime stops on the same token the ceiling
+        # trips and its terminal event is the very next one. A fake that
+        # ignored it would put the terminal event fifty chunks away and model
+        # a runtime this platform does not have.
+        try:
+            budget = self._content if max_tokens is None else min(self._content, max_tokens)
+            for i in range(budget):
+                yield CompletionChunk(delta=f"tok{i} ", token_count=1)
+            yield CompletionChunk(
+                delta="",
+                finish_reason="stop",
+                token_count=0,
+                prompt_tokens=self._prompt_tokens,
+            )
+        finally:
+            self.cleaned_up = True
+
+
+async def test_the_token_ceiling_does_not_hide_the_prompt_from_the_quota() -> None:
+    """`max_tokens: 1` in front of a context-filling prompt must still be paid for.
+
+    This was the shape of the bypass. Prompt tokens are counted so that a
+    caller cannot fill the context window free of quota — but the ceiling check
+    ran first and `break` left the runtime's terminal event unread, which is
+    the only place the count appears. One token of quota for a hundred thousand
+    tokens of work, from the change that existed to prevent exactly that.
+
+    The fix reads on past the ceiling without forwarding, which costs nothing:
+    the runtime is told `num_predict = ceiling`, so its terminal event is the
+    next one.
+    """
+    runtime = OllamaShapedRuntime(content_chunks=50, prompt_tokens=500)
+    use_case, usage, _ = build(runtime, ceiling=1)
+
+    chunks = []
+    async with aclosing(use_case.execute(ACTOR, "chat", MESSAGES)) as stream:
+        async for chunk in stream:
+            chunks.append(chunk)
+
+    record = usage.records[0]
+    assert record.prompt_tokens == 500, "the prompt was read and must be charged for"
+    assert record.tokens == 1, "output above the ceiling was withheld, so it is not billed"
+
+    # Still exactly one terminal frame, and still honest about why it stopped.
+    # The drained terminal chunk is not forwarded, so this has to be ours.
+    terminal = [c for c in chunks if c.finish_reason]
+    assert len(terminal) == 1, "a truncated stream must end once, not zero or twice"
+    assert terminal[0].finish_reason == "length"
+
+
+async def test_a_runtime_that_never_terminates_does_not_hold_the_request_open() -> None:
+    """The drain is bounded. A runtime ignoring `num_predict` must not be able
+    to keep this generator reading for as long as it feels like streaming."""
+    runtime = FakeRuntime(chunks=10_000)  # no terminal chunk, ever
+    use_case, usage, limiter = build(runtime, ceiling=5)
+
+    chunks = []
+    async with aclosing(use_case.execute(ACTOR, "chat", MESSAGES)) as stream:
+        async for chunk in stream:
+            chunks.append(chunk)
+
+    assert len([c for c in chunks if c.delta]) == 5, "the ceiling still holds"
+    assert usage.records[0].tokens == 5, "drained chunks are not billed"
+    assert usage.records[0].prompt_tokens == 0, "honestly unknown rather than invented"
+    assert limiter.available == limiter.limit, "slot released"
+    assert runtime.cleaned_up is True
+
+
 async def test_wall_clock_deadline_cuts_a_slow_stream_below_the_token_ceiling() -> None:
     """A stream that never reaches the token ceiling must still be bounded.
 

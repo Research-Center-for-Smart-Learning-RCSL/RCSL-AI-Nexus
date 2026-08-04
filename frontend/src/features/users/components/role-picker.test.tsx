@@ -21,7 +21,9 @@ vi.mock('@/features/users/api', () => ({
     },
     {
       role: 'tenant_admin',
-      scopes: ['chat:use', 'user:write', 'api_key:write_any'],
+      // `something:invented` has no entry in SCOPE_LABELS, which is the point:
+      // it is what exercises the fallback the last test asserts on.
+      scopes: ['chat:use', 'user:write', 'api_key:write_any', 'something:invented'],
     },
   ],
 }));
@@ -81,12 +83,20 @@ describe('the role picker', () => {
   it('shows an unnamed scope by its identifier rather than dropping it', async () => {
     // Understating what a role grants is the one direction this screen must
     // not be wrong in, so a permission with no wording still appears.
+    //
+    // This asserted on `api_key:write_any` when first written, which
+    // SCOPE_LABELS *does* name — so it passed without ever reaching the
+    // `?? scope` fallback it claims to cover. A test that cannot fail is worse
+    // than none, because it reads as coverage.
     render(<RolePicker value="tenant_admin" onChange={() => {}} />, {
       wrapper: Wrapper,
     });
 
+    expect(await screen.findByText('something:invented')).toBeInTheDocument();
+    // And the named ones are still rendered in words, not identifiers.
     expect(
-      await screen.findByText("Create and revoke anyone's API keys"),
+      screen.getByText("Create and revoke anyone's API keys"),
     ).toBeInTheDocument();
+    expect(screen.queryByText('api_key:write_any')).not.toBeInTheDocument();
   });
 });

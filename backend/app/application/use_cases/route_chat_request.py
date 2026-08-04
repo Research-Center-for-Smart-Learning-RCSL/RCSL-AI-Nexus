@@ -45,6 +45,15 @@ from app.shared.clock import Clock
 
 logger = logging.getLogger(__name__)
 
+_TERMINAL_EVENT_DRAIN_LIMIT = 8
+"""How many events past the token ceiling to read looking for the terminal one.
+
+The runtime is told `num_predict = ceiling`, so it stops on the same token and
+its terminal event — the only place the prompt token count appears — is the
+very next one. This is the backstop for a runtime that does not honour that,
+so the request cannot be held open by one that keeps streaming. Small on
+purpose: it is a guard, not a budget."""
+
 
 class RouteChatRequest:
     required_scope = Scope.CHAT_USE
@@ -184,6 +193,14 @@ class RouteChatRequest:
 
         produced = 0
         prompt_tokens = 0
+        drained = 0
+        forwarded_terminal = False
+        """Whether a terminal chunk reached the *client*, which is not the same
+        as the upstream having sent one: past the ceiling the terminal chunk is
+        drained for its token count and deliberately not forwarded. Deciding on
+        `upstream_finished` instead would leave a truncated stream with no
+        terminal frame at all."""
+
         completed = False
         truncated = False
         upstream_finished = False
@@ -203,7 +220,6 @@ class RouteChatRequest:
                 runtime.generate(target.ref, messages, ceiling, thinking)
             ) as upstream:
                 async for chunk in upstream:
-                    produced += chunk.token_count
                     # Assigned, not accumulated: the runtime reports it once
                     # for the whole request, on the terminal chunk. Summing
                     # would multiply it by the length of the stream.
@@ -211,10 +227,51 @@ class RouteChatRequest:
                         prompt_tokens = chunk.prompt_tokens
                     if chunk.finish_reason:
                         upstream_finished = True
+
+                    if truncated:
+                        # Past the ceiling: consuming, not forwarding.
+                        #
+                        # Breaking here instead — which is what this did until
+                        # the bug below was found — loses the prompt token
+                        # count entirely, because the runtime reports it only
+                        # on its terminal event and that event had not been
+                        # read yet. `max_tokens: 1` in front of a
+                        # context-filling prompt then cost one token of quota:
+                        # exactly the hole counting prompt tokens was meant to
+                        # close, reopened by the ceiling that runs first.
+                        #
+                        # Draining is cheap and bounded because the runtime was
+                        # told `num_predict = ceiling`, so it stops on the same
+                        # token and its terminal event is the very next one.
+                        # The bound is a backstop for a runtime that ignores
+                        # that, not the expected path.
+                        if upstream_finished:
+                            # The terminal chunk's own count is a reconciliation
+                            # against the runtime's authoritative total, so it
+                            # is billed. The content chunks skipped on the way
+                            # here are not: they were cut off rather than
+                            # delivered, and billing for output withheld from
+                            # the caller would be a charge for our own limit.
+                            produced += chunk.token_count
+                            break
+                        drained += 1
+                        if drained >= _TERMINAL_EVENT_DRAIN_LIMIT:
+                            logger.info(
+                                "%s did not send a terminal event within %s chunks of the "
+                                "ceiling; prompt tokens go unrecorded for this request",
+                                target.ref,
+                                _TERMINAL_EVENT_DRAIN_LIMIT,
+                            )
+                            break
+                        continue
+
+                    produced += chunk.token_count
+                    if chunk.finish_reason:
+                        forwarded_terminal = True
                     yield chunk
                     if produced >= ceiling:
                         truncated = True
-                        break
+                        continue
                     # A wall-clock ceiling as well as a token one. A model
                     # producing slowly enough to stay under the per-read timeout
                     # yet below the token ceiling would otherwise hold a
@@ -235,9 +292,12 @@ class RouteChatRequest:
             # Only when the upstream did not already send a terminal chunk. At
             # the ceiling the two coincide — Ollama is told `num_predict =
             # ceiling`, so its own done chunk arrives on the same token that
-            # trips truncation — and emitting a second terminal frame put a
-            # chunk after the terminal one on the wire for OpenAI clients.
-            if truncated and not upstream_finished:
+            # trips truncation, and the drain above is what reads it — and
+            # emitting a second terminal frame put a chunk after the terminal
+            # one on the wire for OpenAI clients. The drained terminal chunk is
+            # deliberately not forwarded, so this still fires and the client
+            # still sees exactly one terminal frame, reporting `length`.
+            if truncated and not forwarded_terminal:
                 # Report truncation honestly. Reporting "stop" would tell an
                 # OpenAI client the model finished, and those clients decide
                 # whether to continue a reply on exactly this field.

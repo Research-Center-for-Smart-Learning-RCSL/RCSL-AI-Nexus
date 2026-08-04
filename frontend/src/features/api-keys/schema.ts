@@ -163,12 +163,16 @@ export function toDateInput(iso: string): string {
  */
 export function canManageKey(
   key: ApiKey,
-  viewer: { id: string | null; mayWriteAny: boolean },
+  viewer: { id: string | null; mayWriteAny: boolean; mayWriteOwn: boolean },
 ): boolean {
   // `api_key:write_any` rather than "is an administrator". They were the same
   // question while `admin` was the only role holding that scope; `tenant_admin`
   // now holds it too, and `operator` deliberately does not — an operator who
   // can issue a key for somebody else can hand themselves the gateway.
   if (viewer.mayWriteAny) return true;
-  return viewer.id !== null && key.owner_id === viewer.id;
+  // Owning a row is no longer enough on its own. `auditor` holds no write at
+  // all, not even `api_key:write_own`, so its own keys are listed and Rotate
+  // and Revoke are refused — the whole point of the role is that it leaves
+  // only a read behind.
+  return viewer.mayWriteOwn && viewer.id !== null && key.owner_id === viewer.id;
 }

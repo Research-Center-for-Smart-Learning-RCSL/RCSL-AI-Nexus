@@ -18,6 +18,7 @@ from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, EmailStr, Field
 
+from app.adapters.authz.role_authorization import ASSIGNABLE_ROLES
 from app.application.use_cases.read_audit_log import AuditLogPage
 from app.application.use_cases.read_usage_analytics import UsageAnalytics
 from app.domain.entities.actor import Role
@@ -60,13 +61,17 @@ downstream has to wonder."""
 def _human_role(role: Role) -> Role:
     """Refuses the SERVICE role on a human account.
 
-    `Role` has three values, but SERVICE exists for API keys; §5.2 defines only
-    `admin` and `user` for people, whose scopes are the ones designed for a
-    person. Accepting it here would let an administrator create an account in a
-    role whose permissions were meant for a machine credential.
+    `SERVICE` exists for API keys. `ASSIGNABLE_ROLES` is the list a person may
+    hold, and it is every role except that one — accepting it here would create
+    an account whose permissions were designed for a machine credential.
+
+    The message enumerates from that list rather than naming roles inline. It
+    said "role must be 'admin' or 'user'" for a day after there were six, which
+    is a 422 that tells the caller two of the answers it could have given.
     """
     if role is Role.SERVICE:
-        raise ValueError("role must be 'admin' or 'user'")
+        allowed = ", ".join(repr(r.value) for r in ASSIGNABLE_ROLES)
+        raise ValueError(f"role must be one of {allowed}")
     return role
 
 

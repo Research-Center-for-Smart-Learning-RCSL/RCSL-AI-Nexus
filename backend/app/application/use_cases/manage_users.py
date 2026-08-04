@@ -32,6 +32,7 @@ from app.domain.ports.repositories import (
     UserRepositoryPort,
 )
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort, SessionRegistryPort
+from app.domain.services.grantable_roles import assert_may_grant
 from app.shared.clock import Clock
 
 
@@ -70,6 +71,11 @@ class ManageUsers:
         user = await self._require(user_id)
 
         if role is not None and role is not user.role:
+            # Same rule as at creation: a role may only be granted by someone
+            # who already holds everything it confers. Promoting an existing
+            # account is the other half of the same escalation — the caller
+            # then signs in as it, or asks whoever holds it to act.
+            assert_may_grant(self._authz, actor, role)
             if user.id == actor.id:
                 # Demoting yourself is almost always a misclick, and on a
                 # single-administrator instance it is unrecoverable.
