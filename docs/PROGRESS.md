@@ -568,6 +568,29 @@ substitute hosts — `ok`, `cert` (expired and self-signed), `dns`, `refused`, a
 `unconfigured` against the live entrance. `timeout` and `handshake` are not
 covered: both need conditions that cannot be produced from here.
 
+### A "postcss and sharp, upstream and unfixable" advisory turned out to be one of them
+
+Dependabot flagged `postcss` again — CVE-2026-45623, GHSA-6g55-p6wh-862q, an
+arbitrary-file-read: `PreviousMap` follows the `sourceMappingURL` path out of a
+CSS comment with no scheme check and no traversal check, `path.join` does not
+block `..`, and the first ~10 bytes of whatever it reads leak through the
+`JSON.parse` `SyntaxError` message the caller sees. The 2026-07-30 entry above
+called this one upstream and unfixable from here; it was not.
+
+`pnpm-lock.yaml` carried two copies of `postcss`: `8.5.22` from
+`tailwindcss`/`@tailwindcss/postcss`, already past the patched `8.5.12`, and
+`8.4.31` — the vulnerable one — pinned exactly, not as a range, inside
+`next@15.5.21`'s own `package.json`. Nothing in this project's `package.json`
+names `postcss` at all, so pnpm had no lower bound of its own to fall back on.
+
+`pnpm.overrides: { postcss: ">=8.5.12" }` in `frontend/package.json` forces the
+second copy onto the same patched line as the first — `next`'s snapshot in the
+lockfile now reads `postcss: 8.5.22` where it read `8.4.31`. `pnpm audit` no
+longer lists it, `pnpm build` still produces all 21 pages (the exact path the
+override touches, since Tailwind's postcss pipeline runs at build time), and
+the 193-test suite and lint are unaffected. The four remaining advisories from
+2026-07-30 are three; `sharp` is the one still actually upstream.
+
 ## 2026-08-03
 
 ### The public entrance went live, and two controls were reporting nothing
