@@ -460,13 +460,20 @@ class FakeUsage:
         return len(window), sum(r.tokens for r in window)
 
     async def bucketed_usage(
-        self, since: datetime, until: datetime, unit: BucketUnit
+        self,
+        since: datetime,
+        until: datetime,
+        unit: BucketUnit,
+        *,
+        actor_id: str | None = None,
     ) -> list[UsageBucket]:
         # A Python stand-in for date_trunc: enough to fold in the tests. The real
         # SQL bucketing is exercised against Postgres, not here.
         buckets: dict[tuple[datetime, str], list[int]] = {}
         for r in self.records:
             if not (since <= r.at < until):
+                continue
+            if actor_id is not None and r.actor_id != actor_id:
                 continue
             if unit == "hour":
                 start = r.at.replace(minute=0, second=0, microsecond=0)

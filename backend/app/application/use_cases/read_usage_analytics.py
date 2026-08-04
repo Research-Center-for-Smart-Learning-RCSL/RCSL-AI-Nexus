@@ -69,12 +69,32 @@ class ReadUsageAnalytics:
         # The platform-wide usage scope, not usage:read_own: these are the
         # tenant's aggregate figures, the same scope the dashboard totals use.
         self._authz.require(actor, Scope.USAGE_READ_ALL)
+        return await self._analytics(window, actor_id=None)
 
+    async def execute_own(self, actor: Actor, *, window: UsageWindow = "24h") -> UsageAnalytics:
+        """The same charts, narrowed to the caller's own usage.
+
+        A separate method rather than a flag on `execute`, because the scope
+        each one requires is the whole difference between them and a boolean
+        argument would put that decision at the call site. `usage:read_own` is
+        held by every human role — it is part of what having an account is
+        worth — and until this existed nothing in the platform required it, so
+        the grant named a permission with nowhere to spend it.
+
+        Attribution is by actor rather than by key: the gateway resolves an API
+        key to its owner, so this covers every key the account holds, present
+        and revoked, plus its admin-chat traffic. Nobody has to remember which
+        key they used.
+        """
+        self._authz.require(actor, Scope.USAGE_READ_OWN)
+        return await self._analytics(window, actor_id=actor.id)
+
+    async def _analytics(self, window: UsageWindow, *, actor_id: str | None) -> UsageAnalytics:
         delta, unit = _WINDOWS[window]
         until = self._clock.now()
         since = until - delta
 
-        buckets = await self._usage.bucketed_usage(since, until, unit)
+        buckets = await self._usage.bucketed_usage(since, until, unit, actor_id=actor_id)
 
         # One pass folds the per-(bucket, capability) rows into per-bucket totals
         # and per-capability series. Buckets arrive ordered by time, so appending

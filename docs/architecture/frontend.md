@@ -144,6 +144,8 @@ Password strength feedback uses the same zxcvbn threshold the backend enforces, 
 
 Role gating in the UI is a usability affordance, not a security control. Every admin action is authorized server-side in the use case layer ([backend.md](./backend.md) §7); hiding a button never stands in for that.
 
+**The nav gates on scopes, not on roles**, and each entry names the scope its screen's own first request requires — so a hidden link and a 403 are the same statement, one made before the click and one after. This replaced an `adminOnly` flag on 2026-08-04, which was accurate with two roles and wrong with six: it would have hidden Models from the `operator` whose job they are. Three entries declare no scope at all (API keys, API, Chat) because every role holds what they need. One definition feeds both the sidebar and the narrow-screen panel, and a route the caller's scopes do not cover redirects to `/chat` rather than rendering a screen whose data will 403 — that guard is for the address bar and the shared bookmark, which the nav cannot hide. All of it is covered by `app-shell.test.tsx`, which drives on scope sets rather than role names: the role table belongs to the backend, and a frontend copy of it could only assert that the copy matches itself.
+
 ## 4. Type Safety: Types Generated From the Backend
 
 **Not wired.** `src/lib/generated/` holds only a `.gitkeep`, there is no

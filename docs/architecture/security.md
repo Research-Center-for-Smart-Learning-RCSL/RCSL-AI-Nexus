@@ -425,6 +425,8 @@ This is the same reasoning as §1: **isolation is guaranteed by socket binding, 
 
 `service` is the seventh entry in the enum and is not in this table: it belongs to an API key, never a person, and holds `chat:use` and `usage:read_own` whatever capability list the key was issued with.
 
+"View their own usage" became true on 2026-08-04 and was a description of an intention before that. `usage:read_own` was granted from the beginning and **required by nothing**: every usage read demanded `usage:read_all`, so the row in this table named a permission with nowhere to spend it. `GET /admin/usage/me` now answers it, attributed by actor rather than by key, so it covers every key an account holds and its admin-chat traffic alike ([PROGRESS.md](../PROGRESS.md) 2026-08-04). A granted scope that no code path requires is worth looking for elsewhere: it reads as a capability in every review and is not one.
+
 **These do not nest.** A `curator` may rewrite the knowledge base that an `operator` cannot touch; an `operator` may restart a node that a `tenant_admin` cannot. The only ordering that holds is that `admin` is a superset of all of them, so nothing in the UI or the backend may compare two roles for seniority.
 
 **The tenant boundary is not a role.** It is structural: `di.py` builds `ManageUsers` and its neighbours with a tenant-scoped repository, so `user:write` reaches only the caller's own tenant whoever holds it. That is why `tenant_admin` is an ordinary role rather than a second dimension — the only powers that cross tenants are the platform-global ones (tenants, nodes, models, routing), and it simply lacks their write scopes.
