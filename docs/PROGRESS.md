@@ -17,6 +17,40 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-04
 
+### The public hostnames became single-label, which is a certificate decision
+
+`ai.nexus.rcsl.online` and `api.nexus.rcsl.online` are now `llm.rcsl.online` and
+`llmapi.rcsl.online`. The change is on this end only — configuration and
+documentation — and the proxy administrator has been asked for the server
+blocks; **nothing has been redeployed and neither new name answers yet**, so the
+entrance is currently green on names that are being retired.
+
+The renaming itself cost two `.env` values, because **a hostname is not a trust
+boundary in this platform**. `PROXY_HOSTNAME` only feeds `gateway_base_url`, the
+origin shown beside a newly issued key and rendered into `/api-docs`, and
+`ADMIN_BASE_URL` only builds invitation and reset links. There is no
+`TrustedHostMiddleware`, no CORS origin list, and no cookie `domain`; the
+perimeter is the `X-Nexus-Proxy` secret plus the client address, and the
+frontend is entirely same-origin through the Next.js rewrite. Everything else
+touched was a default, a script's default, a comment, or prose.
+
+What the new names buy is not brevity. **A TLS wildcard matches exactly one
+label while a DNS wildcard matches any depth**, which is why the two-label names
+resolved for weeks before they could be served and why each needed its own
+certificate (`ROADMAP.md`, external coordination). `llm` and `llmapi` sit inside
+`*.rcsl.online` on both sides, so the certificate item may reduce to pointing
+the server blocks at a certificate that already exists. The same property closes
+half of `security.md` §15.4: the old names resolved only by multi-label
+synthesis and would both have vanished the moment anyone added a `nexus` node to
+a zone this project does not control. `llmapi` is one word rather than
+`api.llm.rcsl.online` for that reason alone.
+
+Two consequences to expect on cutover rather than discover: session cookies are
+host-only, so every signed-in operator is signed out and enrols again from the
+new origin, and any invitation or reset link already issued points at the old
+host and must be reissued. The old blocks should serve a 301 rather than be
+deleted, since the one active key's holder has the old base URL.
+
 ### A review found three serious defects in the day's work, two of them mine
 
 Run against the seven commits. Nine findings, all real; the three that mattered

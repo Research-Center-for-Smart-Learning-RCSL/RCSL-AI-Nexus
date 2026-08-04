@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     )
 
     tailnet_ip: str = "127.0.0.1"
-    proxy_hostname: str = "api.nexus.rcsl.online"
+    proxy_hostname: str = "llmapi.rcsl.online"
 
     admin_base_url: str = "http://localhost:3000"
     """Origin of the management UI, used to build invitation and reset links.

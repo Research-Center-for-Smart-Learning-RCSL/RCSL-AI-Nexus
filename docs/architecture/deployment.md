@@ -24,17 +24,19 @@ DNS is hosted at **Gandi**, and a wildcard record already exists:
 *.rcsl.online.  A  140.122.250.55
 ```
 
-So `ai.nexus.rcsl.online` and `api.nexus.rcsl.online` already resolve without any DNS change; only openresty server blocks are needed.
+So `llm.rcsl.online` and `llmapi.rcsl.online` already resolve without any DNS change; only openresty server blocks are needed.
 
 | Hostname | Purpose | Plane |
 |---|---|---|
-| `ai.nexus.rcsl.online` | Management UI, public entrance | Control |
-| `api.nexus.rcsl.online` | Gateway inference API | Data |
+| `llm.rcsl.online` | Management UI, public entrance | Control |
+| `llmapi.rcsl.online` | Gateway inference API | Data |
 | `<mac-studio>.<tailnet>.ts.net` | Management UI, tailnet entrance | Control |
 
-Two hostnames rather than one is deliberate: nginx can apply different access rules, rate limits, and logging to each, and the data plane can later move without disturbing the management UI.
+Two hostnames rather than one is deliberate: nginx can apply different access rules, rate limits, and logging to each, and the data plane can later move without disturbing the management UI. It also keeps the session cookie's origin off the data plane — one hostname serving both would put the management session on the same origin as a public, key-authenticated inference API, and collide the two applications' `/healthz` and `/metrics`.
 
-**Wildcard caveat.** Multi-label synthesis from `*.rcsl.online` works, but only while no `nexus.rcsl.online` node exists in the zone. If anyone later adds one, both hostnames stop resolving. Request explicit A records for the two names, or a dedicated `*.nexus.rcsl.online` wildcard. See [security.md](./security.md) §15.4.
+**Both names are single-label, and that is the reason for them.** These replaced `ai.nexus.rcsl.online` and `api.nexus.rcsl.online` on 2026-08-04. A DNS wildcard matches any depth but a **TLS** wildcard matches exactly one label, so the two-label names resolved long before `*.rcsl.online` could serve them and needed certificates of their own ([ROADMAP.md](../ROADMAP.md)). `llm` and `llmapi` are covered by the existing wildcard on both sides, and they no longer depend on nobody ever creating a `nexus.rcsl.online` node in the zone — which was the fragility recorded in [security.md](./security.md) §15.4. `llmapi` is one word rather than `api.llm.rcsl.online` for exactly this reason: a dot there would put the name back outside the wildcard certificate and reintroduce the dependency on the zone's shape.
+
+What remains of §15.4 applies to any name here: the wildcard resolves *every* subdomain to the proxy host, so anyone able to obtain a vhost there can serve content under a plausible name. Explicit A records would close that; the wildcard predates this project and the domain is maintained by someone else.
 
 ## 3. Traffic Paths
 
@@ -48,14 +50,14 @@ Control plane, entrance 1 (tailnet, everyday use)
 
 Control plane, entrance 2 (public, for people without Tailscale)
   browser --public--> openresty --tailnet--> TAILNET_IP:3001 --> frontend-public
-       ai.nexus.rcsl.online                                          |  /admin/* rewrite
+       llm.rcsl.online                                          |  /admin/* rewrite
                                                                      v
                                                                 admin-public:8002
                                           password + TOTP session; strips every Tailscale-* header
 
 Data plane
   external service --public--> openresty --tailnet--> TAILNET_IP:8000 --> gateway
-        api.nexus.rcsl.online                                              API key auth
+        llmapi.rcsl.online                                              API key auth
 ```
 
 API calls are same-origin through the Next.js rewrite, which avoids CORS and third-party cookie problems entirely. See [frontend.md](./frontend.md) §1.
@@ -121,7 +123,7 @@ Four items, none large:
 
 1. **Install Tailscale and join the tailnet**, tagged `tag:ntnu-proxy` so the ACL can restrict it to the three ports it needs ([security.md](./security.md) §3.4).
 2. **Add two nginx server blocks** (below).
-3. **Issue Let's Encrypt certificates.** Port 80 is already open, so HTTP-01 validation works directly.
+3. **Serve a certificate for each name.** Both are single-label, so an existing `*.rcsl.online` wildcard covers them and no issuance may be needed at all — point the server blocks at it. This is new since the rename: the previous two-label names were outside a TLS wildcard's one-label match and each needed its own certificate. If there is no usable wildcard, issue per-name certificates; port 80 is already open, so HTTP-01 validation works directly.
 4. **Confirm nginx does not log request bodies** and that no Lua script intercepts these paths. Bodies are not logged by default; this is a confirmation, not a change.
 
 ### The one way this goes wrong, found on the first real attempt
@@ -150,7 +152,7 @@ limit_req_zone $binary_remote_addr zone=admin_login:10m rate=10r/m;
 # Redirect plain HTTP for both hostnames, leaving the ACME path reachable
 server {
     listen 80;
-    server_name ai.nexus.rcsl.online api.nexus.rcsl.online;
+    server_name llm.rcsl.online llmapi.rcsl.online;
     location /.well-known/acme-challenge/ { root /var/www/certbot; }
     location / { return 301 https://$host$request_uri; }
 }
@@ -159,10 +161,13 @@ server {
 server {
     listen 443 ssl;
     http2 on;
-    server_name ai.nexus.rcsl.online;
+    server_name llm.rcsl.online;
 
-    ssl_certificate     /etc/letsencrypt/live/ai.nexus.rcsl.online/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/ai.nexus.rcsl.online/privkey.pem;
+    # Per-name paths shown for concreteness. A `*.rcsl.online` wildcard covers
+    # this name — both are single-label — so pointing both blocks at the
+    # wildcard is equally correct and is one fewer renewal to forget.
+    ssl_certificate     /etc/letsencrypt/live/llm.rcsl.online/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/llm.rcsl.online/privkey.pem;
     add_header Strict-Transport-Security "max-age=31536000" always;
 
     # Knowledge base uploads. Deliberately *looser* than the application's own
@@ -197,10 +202,10 @@ server {
 server {
     listen 443 ssl;
     http2 on;
-    server_name api.nexus.rcsl.online;
+    server_name llmapi.rcsl.online;
 
-    ssl_certificate     /etc/letsencrypt/live/api.nexus.rcsl.online/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/api.nexus.rcsl.online/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/llmapi.rcsl.online/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/llmapi.rcsl.online/privkey.pem;
     add_header Strict-Transport-Security "max-age=31536000" always;
 
     client_max_body_size 10m;
@@ -284,8 +289,8 @@ The topology is deliberately reversible:
 
 The project is licensed under AGPL-3.0, whose section 13 treats network
 interaction as distribution. Both public hostnames in section 2 are exactly
-the trigger: anyone reaching `ai.nexus.rcsl.online` or
-`api.nexus.rcsl.online` is entitled to the source of the version being run,
+the trigger: anyone reaching `llm.rcsl.online` or
+`llmapi.rcsl.online` is entitled to the source of the version being run,
 including local modifications.
 
 This is an operational obligation, not a one-time licensing formality, so it
@@ -427,7 +432,7 @@ Non-secret values are environment variables; secrets are mounted files read thro
 | `ENV` | `production` | `development` locally |
 | `AUTH_MODE` | `tailnet` / `local` / `dev` | `dev` refuses to start when `ENV=production` |
 | `TAILNET_IP` | `100.x.y.z` | Used for host-side port binding |
-| `PROXY_HOSTNAME` | `api.nexus.rcsl.online` | |
+| `PROXY_HOSTNAME` | `llmapi.rcsl.online` | |
 | `GATEWAY_BASE_URL` | empty | Where callers reach the inference API, shown in the management UI beside a newly issued key. Empty derives `https://` plus `PROXY_HOSTNAME`; set it only when the public origin differs. It cannot be read off the request, because the entrance answering is the admin one, not the one being described |
 | `DATABASE_URL` | `postgresql+asyncpg://...` | Not an environment variable: mounted as the `database_url` secret, a different least-privilege account per service (§6) |
 | `REDIS_URL` | `redis://redis:6379/0` | The password is a separate `redis_password` secret |
