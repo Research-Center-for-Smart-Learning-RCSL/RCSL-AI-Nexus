@@ -32,9 +32,11 @@ REPO="/Users/rcslmac1/dev/RCSL-AI-Nexus"
 export DOCKER_HOST="unix:///Users/rcslmac1/.docker/run/docker.sock"
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-# Where the alert goes. Not a secret; kept here so it is reviewable in git rather
-# than sitting in an untracked file nobody reads.
-ALERT_TO="leolove3very@gmail.com"
+# Where the alerts go. Not a secret; kept here so it is reviewable in git rather
+# than sitting in an untracked file nobody reads. Space-separated: each address
+# gets its own envelope recipient, and the To: header is built from the same list
+# below so what the mail says and what the envelope does cannot drift apart.
+ALERT_TO="leolove3very@gmail.com shaniawang06@gmail.com"
 
 # The sending account and its app password. Two files, following the one-file-per
 # -credential convention in secrets/README.md. Gmail requires the envelope sender
@@ -348,12 +350,24 @@ PASSWORD="$(tr -d '[:space:]' < "$PASSWORD_FILE")"
 
 RECONCILE_TAIL="$(tail -5 /opt/homebrew/var/log/nexus-reconcile.log 2>/dev/null)"
 
+# One envelope recipient per address, and a To: header listing all of them. The
+# header is display only — delivery is decided entirely by --mail-rcpt, so a
+# missing address here would silently not be mailed while the header claimed it
+# was. Both are built from the single ALERT_TO list for that reason. Indexed
+# arrays are bash 3.2; only associative ones are not.
+TO_HEADER=""
+RCPT_ARGS=()
+for addr in $ALERT_TO; do
+  if [ -z "$TO_HEADER" ]; then TO_HEADER="$addr"; else TO_HEADER="$TO_HEADER, $addr"; fi
+  RCPT_ARGS+=(--mail-rcpt "$addr")
+done
+
 MSG="$(mktemp -t nexus-health)" || { log "ERROR: mktemp failed"; exit 1; }
 trap 'rm -f "$MSG"' EXIT
 
 {
   printf 'From: %s\n' "$ACCOUNT"
-  printf 'To: %s\n' "$ALERT_TO"
+  printf 'To: %s\n' "$TO_HEADER"
   printf 'Subject: %s\n' "$SUBJECT"
   printf 'Date: %s\n' "$(date -R)"
   printf 'Content-Type: text/plain; charset=utf-8\n'
@@ -382,7 +396,7 @@ if curl --silent --show-error --ssl-reqd --max-time 60 \
      --url "$SMTP_URL" \
      --user "$ACCOUNT:$PASSWORD" \
      --mail-from "$ACCOUNT" \
-     --mail-rcpt "$ALERT_TO" \
+     "${RCPT_ARGS[@]}" \
      --upload-file "$MSG" 2>&1; then
   log "mailed $KIND to $ALERT_TO"
 else

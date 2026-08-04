@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>online.rcsl.host-metrics</string>
+
+	<!-- Reports the Mac's free memory and free disk over loopback, because a
+	     container on macOS cannot see either: it runs in a Linux VM and would
+	     describe the VM. The reasoning is at the top of host-metrics.py. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>/Users/rcslmac1/dev/RCSL-AI-Nexus/launchd/host-metrics.py</string>
+	</array>
+
+	<!-- /usr/bin/python3, not the project's venv: a launchd job that depends
+	     on a virtualenv breaks the first time the project is rebuilt. The
+	     script is stdlib-only so that this is possible. -->
+
+	<!-- Unprivileged, and the same account as the other jobs here. Nothing in
+	     this service needs more: `vm_stat`, `sysctl` and `statfs` are readable
+	     by any user, which is also the reason the scope stops short of GPU and
+	     thermal readings — `powermetrics` needs root, and running as root to
+	     draw a chart is a trade to make deliberately, not here. -->
+	<key>UserName</key>
+	<string>rcslmac1</string>
+
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+
+	<!-- Throttled so a crash loop backs off instead of spinning. The default
+	     is 10 seconds; a metrics endpoint that is briefly absent costs a gap
+	     in a panel, so there is no reason to retry harder than that. -->
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<key>StandardOutPath</key>
+	<string>/opt/homebrew/var/log/nexus-host-metrics.log</string>
+	<key>StandardErrorPath</key>
+	<string>/opt/homebrew/var/log/nexus-host-metrics.log</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/rcslmac1/dev/RCSL-AI-Nexus</string>
+</dict>
+</plist>
