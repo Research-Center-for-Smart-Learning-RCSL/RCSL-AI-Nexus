@@ -30,8 +30,8 @@
 
 set -uo pipefail
 
-ADMIN_HOST="${ADMIN_HOST:-ai.nexus.rcsl.online}"
-API_HOST="${API_HOST:-api.nexus.rcsl.online}"
+ADMIN_HOST="${ADMIN_HOST:-llm.rcsl.online}"
+API_HOST="${API_HOST:-llmapi.rcsl.online}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SECRET_FILE="$REPO/secrets/proxy_shared_secret"
 
@@ -154,7 +154,7 @@ for h in "$ADMIN_HOST" "$API_HOST"; do
       fi ;;
     cert)
       fail "$h presents a valid certificate" \
-        "the handshake reached the certificate and it was rejected. Note a *.rcsl.online wildcard does NOT cover a two-label name like this one." ;;
+        "the handshake reached the certificate and it was rejected. Both names this script checks are single-label, so a *.rcsl.online wildcard does cover them — which makes scope the unlikely cause here, and expiry or an incomplete chain the likely one." ;;
     handshake)
       fail "$h completes a TLS handshake" \
         "the connection was accepted and the handshake failed before the certificate. Protocol or cipher mismatch, or something on 443 that is not a TLS server." ;;
