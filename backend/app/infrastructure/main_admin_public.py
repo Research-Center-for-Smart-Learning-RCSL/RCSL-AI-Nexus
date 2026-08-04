@@ -105,7 +105,17 @@ def create_app() -> FastAPI:
     # exempt from the perimeter checks so a prober can reach it.
     app.state.expose_readiness_detail = False
 
-    install_error_handlers(app, envelope="admin", auth_mode=settings.auth_mode)
+    # `local`, not `settings.auth_mode`: the value names *this entrance's*
+    # authentication, and the frontend decides from it whether a 401 means
+    # "reconnect to the tailnet" or "go to the login screen". `auth_mode` is
+    # deployment-wide and reads `tailnet` here, so the public entrance was
+    # telling a browser on the internet that its Tailscale connection had
+    # dropped, and `app-shell.tsx` then skipped the redirect to /login — the
+    # front door of the entrance, unreachable, on a control whose whole
+    # purpose is to tell the two entrances apart. This entrance is always
+    # session-based whatever the deployment mode: it is the only one that
+    # mounts the credential flow, below.
+    install_error_handlers(app, envelope="admin", auth_mode="local")
     mount_admin_routers(app)
     # Only this entrance mounts the credential flow. See the tailnet module.
     app.include_router(auth.router, prefix=ADMIN_PREFIX)

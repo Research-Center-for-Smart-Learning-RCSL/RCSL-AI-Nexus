@@ -17,6 +17,84 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-04
 
+### The entrance passes everything, and the defect underneath it was waiting
+
+**9 passed, 0 failed, 0 skipped at 10:14, the first time
+`verify-public-entrance.sh` has been clean.** Both hosts are back, the four
+directives are reaching the request, and `api.nexus.rcsl.online` answers
+`{"status":"ok"}` from the gateway on `/healthz` and the application's
+`{"detail":"Not Found"}` on `/` — checked by body, which is how our 404 is told
+from the proxy's.
+
+The paired probe reversed, which is the part that carries the claim. Sending a
+wrong `X-Nexus-Proxy`, the real one, and none at all now return **401, 401,
+401** — identical, the signature of nginx overwriting whatever the caller sent.
+This morning the same three returned 400, 401, 400, and the divergence was the
+evidence that the application was reading the caller's header. Neither reading
+needs the configuration file to interpret it. A forged `X-Forwarded-For:
+8.8.8.8` now yields `not_authenticated` rather than `country_not_allowed`: the
+forged value is discarded, the real address is judged, and the country filter
+and the per-key CIDR allowlists mean what they say again.
+
+`perimeter_rejected` has stopped in `admin-public`, and `/admin/me` now reaches
+authentication and is refused `no session cookie`. That is the first time a
+request has arrived carrying the header from the entrance itself — the 64
+earlier 401s were all probes supplying the secret by hand, which was the defect
+rather than an exception to it.
+
+**The cause was the duplicate `location`, confirmed by the administrator rather
+than inferred here.** A Custom Location whose path is `/` collides with the
+`location /` NPM generates for the same host; the reload fails and the
+previously loaded configuration keeps serving, which is why the UI showed the
+new directives and behaviour never changed. That was written down as the
+leading candidate earlier the same day, before it was checked. Which route the
+directives finally took is *not* recorded, and `nginx -T` for the `ai.` server
+block is still worth capturing: the next person to rebuild this will otherwise
+walk into the same trap the entry below describes.
+
+One transient worth naming so it is not read as a fault. During the change `/`
+timed out into a 504 while `/login` and `/account` returned 200 and
+`/favicon.ico` returned an immediate 504; the origin answered `/` in 5 ms
+throughout, so nothing on this side was involved. Readings taken while someone
+is saving are not evidence about any configuration, including the one being
+saved.
+
+### A 401 from the public entrance said the tailnet had dropped
+
+Found while verifying the above, live on the entrance that had just come up,
+and fixed in `main_admin_public.py`.
+
+`auth_mode` is echoed on 401 bodies so the frontend — one build serving two
+entrances — can tell "your Tailscale connection dropped" from "go to the login
+screen". `install_error_handlers` says exactly that in its docstring. Both
+applications passed `settings.auth_mode`, which is deployment-wide and reads
+`tailnet` in any real deployment, so the public entrance was answering a
+browser arriving from the internet with `auth_mode: tailnet`. `app-shell.tsx`
+then took both branches on that value: `shouldRedirectToLogin` is
+`authMode !== 'tailnet'`, so the redirect to `/login` was skipped, and the
+unauthenticated branch rendered **"Tailscale connection lost"** with a retry
+button. The front door of the public entrance offered no way in. `/login` sits
+in the `(auth)` route group outside the shell and still worked if typed, so the
+side door was open the whole time.
+
+It survived because the assertion was written for one entrance only:
+`test_a_401_tells_the_frontend_which_entrance_it_reached` covers the tailnet
+application and nothing covered the public one. And it was invisible in
+production because no request had ever got past the perimeter to be refused by
+the application — this is the second defect today that was hidden behind
+another, and both surfaced within the hour the first was fixed.
+
+The fix is the entrance's own mode rather than the deployment's: this
+application is session-based whatever `AUTH_MODE` says, being the only one that
+mounts the credential flow. The missing half of the test now exists and fails
+with `assert 'tailnet' == 'local'` against the previous code. 547 unit tests
+pass. `rcsl-ai-nexus:latest` was rebuilt — the working tree matched `1bcd12c`,
+the commit the running image was built from, so the rebuild carries this change
+and nothing else — and only `admin-public` was recreated. The tailnet entrance
+still answers `auth_mode: tailnet`, and the entrance is still 9/0/0. The
+browser itself was not driven; what was verified is the value on the wire and
+the two conditions that read it.
+
 ### The entrance came back with the headers still missing, and the 400 is not the page
 
 The administrator restored `ai.nexus.rcsl.online` and moved the directives into

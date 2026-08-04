@@ -69,6 +69,28 @@ def test_a_401_tells_the_frontend_which_entrance_it_reached() -> None:
     assert response.json()["auth_mode"] == "tailnet"
 
 
+def test_a_401_from_the_public_entrance_does_not_claim_to_be_the_tailnet() -> None:
+    """The other half of the test above, which was never written.
+
+    `auth_mode` names the entrance, not the deployment, and both applications
+    passed `settings.auth_mode` — one value, `tailnet` in any real deployment.
+    So this entrance told a browser arriving from the internet that its
+    Tailscale connection had dropped, and `app-shell.tsx` skipped the redirect
+    to /login on exactly that reading. It survived because the assertion
+    existed for one entrance only, and it was invisible in production until
+    2026-08-04 because no request had ever got past the perimeter to be
+    refused by the application.
+
+    The fixture above sets `AUTH_MODE=tailnet`, so this fails against the code
+    as it stood.
+    """
+    with TestClient(create_public()) as client:
+        response = client.get("/admin/me", headers=PROXY_HEADERS)
+
+    assert response.status_code == 401
+    assert response.json()["auth_mode"] == "local"
+
+
 def test_public_entrance_refuses_a_request_with_no_session_cookie() -> None:
     with TestClient(create_public()) as client:
         response = client.get("/admin/me", headers=PROXY_HEADERS)
