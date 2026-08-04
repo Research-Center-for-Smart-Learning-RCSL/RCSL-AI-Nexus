@@ -164,7 +164,8 @@ describe('the links a role can see', () => {
     signedInWith(SCOPES.admin);
     render(<AppShell>content</AppShell>);
 
-    // Grouped order: Work, Fleet, Insight, Administration.
+    // Chat is pinned above every group; then Integration, Fleet, Insight,
+    // Administration.
     expect(sidebarLinks()).toEqual([
       'Chat',
       'API keys',
@@ -298,7 +299,7 @@ describe('the collapsible groups', () => {
     render(<AppShell>content</AppShell>);
 
     const aside = screen.getByRole('complementary');
-    expect(within(aside).getByRole('button', { name: /Work/ })).toBeInTheDocument();
+    expect(within(aside).getByRole('button', { name: /Integration/ })).toBeInTheDocument();
     expect(within(aside).queryByRole('button', { name: /Fleet/ })).toBeNull();
     expect(within(aside).queryByRole('button', { name: /Administration/ })).toBeNull();
   });
@@ -355,5 +356,43 @@ describe('the collapsible groups', () => {
     render(<AppShell>content</AppShell>);
 
     expect(sidebarLinks()).toContain('Users');
+  });
+});
+
+describe('the pinned entry', () => {
+  it('sits above every group heading', () => {
+    signedInWith(SCOPES.admin, '/chat');
+    render(<AppShell>content</AppShell>);
+
+    expect(sidebarLinks()[0]).toBe('Chat');
+  });
+
+  it('belongs to no group, so no fold can reach it', async () => {
+    // The failure this prevents: Chat hidden by a preference set weeks earlier,
+    // on the one screen where "I could not find it" is the whole failure — and
+    // the screen an out-of-scope URL redirects to.
+    const user = userEvent.setup();
+    signedInWith(SCOPES.admin, '/usage');
+    render(<AppShell>content</AppShell>);
+
+    for (const group of [/Integration/, /Fleet/, /Insight/, /Administration/]) {
+      const header = screen.queryByRole('button', { name: group });
+      if (header) await user.click(header);
+    }
+
+    expect(sidebarLinks()).toContain('Chat');
+  });
+
+  it('declares no scope, which is why an empty account still sees it', () => {
+    // Every role holds `chat:use`, so Chat asks for nothing and this is what an
+    // account with no scopes at all is left with. The filter that would hide a
+    // pinned entry exists in the code and nothing exercises it today, because
+    // nothing pinned declares a scope — pinned and permitted are separate
+    // properties, and the first pinned item that needs one is where that
+    // matters.
+    signedInWith([]);
+    render(<AppShell>content</AppShell>);
+
+    expect(sidebarLinks()).toEqual(['Chat', 'API keys', 'API']);
   });
 });

@@ -89,25 +89,22 @@ type NavGroup = {
 // business in, because a group with no visible items is not rendered at all.
 const NAV_GROUPS: NavGroup[] = [
   {
-    id: 'work',
-    label: 'Work',
-    // No `requires` on any of these: every role holds `chat:use` and
-    // `api_key:read_own`, so this group is the one thing an account is worth on
-    // its own and is never empty for anyone signed in.
+    id: 'integration',
+    label: 'Integration',
+    // Renamed from 'Work' when Chat was pinned above: what is left is the pair
+    // about calling the gateway from your own code, and a label describing what
+    // the group used to hold is worse than no label.
+    //
+    // No `requires` on either: every role holds `api_key:read_own`, and the
+    // people who need to know how to call the gateway are the ones holding a
+    // key.
     items: [
-      {
-        href: '/chat',
-        label: 'Chat',
-        icon: <MessageSquareIcon className="size-4" />,
-      },
       {
         href: '/api-keys',
         label: 'API keys',
         icon: <KeyIcon className="size-4" />,
       },
       {
-        // Not adminOnly, for the same reason API keys is not: the people who
-        // need to know how to call the gateway are the ones holding a key.
         href: '/api-docs',
         label: 'API',
         icon: <BookOpenIcon className="size-4" />,
@@ -205,9 +202,25 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
+// Pinned above every group, and outside all of them.
+//
+// Chat is the screen with the widest audience and the shortest reason to be
+// open — every role holds `chat:use`, and it is where an out-of-scope URL is
+// redirected to, so it is the one destination that must never be a click behind
+// a fold. Inside a collapsible group it could be hidden by a preference set
+// weeks earlier, on the one screen for which "I could not find it" is the whole
+// failure.
+const PINNED: NavItem[] = [
+  {
+    href: '/chat',
+    label: 'Chat',
+    icon: <MessageSquareIcon className="size-4" />,
+  },
+];
+
 /** Flattened, for the route guard below. One source, so a screen cannot be
  *  reachable by URL and absent from the nav, or the reverse. */
-const NAV: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
+const NAV: NavItem[] = [...PINNED, ...NAV_GROUPS.flatMap((group) => group.items)];
 
 function isActive(pathname: string | null, href: string): boolean {
   if (href === '/') return pathname === '/';
@@ -319,12 +332,14 @@ function NavLinks({
  * elsewhere.
  */
 function NavGroups({
+  pinned,
   groups,
   pathname,
   collapsed,
   onToggle,
   onNavigate,
 }: {
+  pinned: NavItem[];
   groups: NavGroup[];
   pathname: string | null;
   collapsed: Set<string>;
@@ -333,6 +348,10 @@ function NavGroups({
 }) {
   return (
     <div className="space-y-3">
+      {/* Above every heading and inside none of them, so no fold can reach it. */}
+      {pinned.length ? (
+        <NavLinks items={pinned} pathname={pathname} onNavigate={onNavigate} />
+      ) : null}
       {groups.map((group) => {
         const holdsCurrentPage = group.items.some((item) => isActive(pathname, item.href));
         const open = holdsCurrentPage || !collapsed.has(group.id);
@@ -507,6 +526,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   // Filtered per group, and a group left with nothing is dropped entirely: an
   // empty heading is worse than the flat list this replaced, because it names a
   // capability the reader does not have and then offers nothing behind it.
+  // Filtered by the same rule as the groups. Pinned is not exempt from scopes,
+  // only from folding — the two are separate properties and conflating them
+  // would put an unreachable screen at the top of everyone's sidebar the first
+  // time something pinned needs one.
+  const visiblePinned = PINNED.filter((item) => !item.requires || can(item.requires));
   const visibleGroups = NAV_GROUPS.map((group) => ({
     ...group,
     items: group.items.filter((item) => !item.requires || can(item.requires)),
@@ -539,6 +563,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Badge>
           </div>
           <NavGroups
+            pinned={visiblePinned}
             groups={visibleGroups}
             pathname={pathname}
             collapsed={collapsed}
@@ -590,6 +615,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </Button>
               </div>
               <NavGroups
+                pinned={visiblePinned}
                 groups={visibleGroups}
                 pathname={pathname}
                 collapsed={collapsed}
