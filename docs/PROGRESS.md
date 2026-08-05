@@ -118,21 +118,55 @@ over both the pre- and post-parse value instead of narrowing it, since nothing
 in the types enforced which side it was called on — `z.preprocess` makes the
 input type `unknown`, so TypeScript had nothing to object to.
 
-### The context ceiling moved, and why that is not free
+### The context ceiling moved, and it could not move alone
 
-32768 → 131072 tokens. An agent replays the whole conversation every turn and
+32768 → 65536 tokens. An agent replays the whole conversation every turn and
 grows it with file contents and tool output, so it crossed the old ceiling
 within a few rounds and the 413 arrived in the middle of a task rather than at
 the start of one.
 
-This is one of the six resource guardrails security.md §4.3 counts on, and
+**It was briefly 131072, which was wrong, and the reason is worth keeping.**
+Prompt evaluation sends no bytes. So the thing that bounds it is not the
+generation deadline but `REQUEST_TIMEOUT_SECONDS`, the per-read HTTP timeout —
+and at the measured 117.9 tok/s of prompt evaluation on the largest model this
+machine holds, 131072 tokens costs 1112 seconds against a 300 second timeout.
+That is a 96,000-token band where the guardrail admits a request and the
+transport then kills it, and not as a 413 the client can act on: an
+`httpx.ReadTimeout` is not a `DomainError`, so it escaped the router's handler
+as a bare 500, or mid-stream as a connection that simply stopped without
+`[DONE]`. The three numbers are one decision:
+
+    65536 / 117.9 = 556s of prompt evaluation, against a 600s read timeout
+
+**The deadline was the same mistake one layer up.** Its clock started when the
+request reached the runtime, before prompt evaluation, so a large prompt spent
+the budget for the answer on reading the question — 556 seconds of it against
+900. The stream was then cut on its first token reporting
+`finish_reason: "length"`, telling the client the model had talked too much when
+it had not yet started. It now starts at the first chunk, which makes the two
+limits compose rather than overlap: the read timeout bounds reading, the
+deadline bounds writing, and each is the limit that was designed for its job.
+
+That composition has a consequence that the cross-file invariant test did not
+catch, because it was checking the wrong quantity. One request's worst case is
+now 600 + 900 = 1500 seconds, but the test compared the frontend's
+`proxyTimeout` against the deadline alone, so it kept passing with the proxy at
+960 seconds — **the original silent socket reset, moved from 30 seconds to 16
+minutes**, which is the failure that test exists to prevent and the second time
+raising a limit has handed the cut back to the proxy (the first was 2026-07-27).
+`proxyTimeout` is 1560 s and the test now reads both figures out of
+`.env.example` and compares against the sum. Verified by putting 960 back and
+watching it fail.
+
+This is one of the six resource guardrails security.md §4.3 counts on, so
 raising it costs something real: context is superlinear on unified memory and
-measured throughput here already decays from 60.8 to 23.5 tok/s across a single
-generation. What still bounds the damage is that the other five are unchanged,
-and the wall-clock deadline is now the limit that binds a genuinely large
-request. **The hole this would have opened is `tools`**: tool definitions are
-arbitrary JSON that no person types, so a ceiling counting only `messages` would
-have let a caller carry an unbounded payload straight past it. They are counted.
+measured throughput already decays from 60.8 to 23.5 tok/s across a single
+generation. The cost of the read timeout is paid by a *hung* runtime rather than
+a busy one, since a producing stream resets it on every chunk: ten minutes
+holding a slot instead of five. **The hole this would have opened is `tools`**:
+tool definitions are arbitrary JSON that no person types, so a ceiling counting
+only `messages` would have let a caller carry an unbounded payload straight past
+it. They are counted.
 
 ### Review of the tool calling commit, and its four fixes
 

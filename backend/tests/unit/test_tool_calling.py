@@ -31,7 +31,7 @@ from app.domain.entities.chat import (
     ToolChoiceMode,
     ToolDefinition,
 )
-from app.domain.exceptions import RuntimeCapabilityError
+from app.domain.exceptions import NoAvailableModelError, RuntimeCapabilityError
 from app.interfaces.http import sse
 from app.interfaces.http.schemas.chat_schemas import ChatCompletionRequest
 
@@ -563,6 +563,35 @@ async def test_mlx_does_not_report_tool_calls_it_could_not_forward(patch_httpx) 
 
     assert chunks[-1].tool_calls == ()
     assert chunks[-1].finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    ("adapter", "ref"),
+    [(OllamaAdapter, "llama3"), (MlxAdapter, "org/model")],
+)
+async def test_a_read_timeout_is_a_domain_error_not_a_500(adapter, ref, monkeypatch) -> None:
+    """Nothing above the adapter handles an httpx exception.
+
+    The router's handler only knows `DomainError`, so a timeout escaped as an
+    unhandled error with no envelope, or mid-stream as a connection that simply
+    stopped without `[DONE]`. It is a reachable outcome rather than a bug: a
+    prompt near the context ceiling can take longer to evaluate than the read
+    timeout allows, and the runtime sends no bytes at all while it reads.
+    """
+
+    def timing_out(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    transport = httpx.MockTransport(timing_out)
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *a, **kw: original(*a, **{**kw, "transport": transport}),
+    )
+
+    with pytest.raises(NoAvailableModelError):
+        await drain(adapter("http://runtime.invalid").generate(ref, MESSAGES))
 
 
 async def test_an_unenforceable_choice_is_refused_even_with_no_tools(patch_httpx) -> None:

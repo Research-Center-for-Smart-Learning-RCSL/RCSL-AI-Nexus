@@ -280,8 +280,16 @@ class MlxAdapter:
         saw_terminal = False
         pending_calls = _ToolCallAccumulator()
 
-        async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
-            async with client.stream("POST", "/v1/chat/completions", json=payload) as response:
+        # Converted to a `DomainError` for the reason the Ollama adapter spells
+        # out: an httpx exception escapes the router's handler and becomes a 500
+        # with no envelope, and "the prompt took longer to evaluate than the
+        # read timeout allows" is an ordinary, reachable outcome at a large
+        # context rather than a bug.
+        try:
+            async with (
+                httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client,
+                client.stream("POST", "/v1/chat/completions", json=payload) as response,
+            ):
                 await self._raise_for_status(response, ref)
 
                 async for line in response.aiter_lines():
@@ -332,6 +340,12 @@ class MlxAdapter:
                     usage = event.get("usage")
                     if usage and usage.get("completion_tokens") is not None:
                         usage_tokens = int(usage["completion_tokens"])
+        except httpx.TimeoutException as exc:
+            raise NoAvailableModelError(
+                detail=f"mlx timed out for {ref} after {self._timeout.read}s "
+                f"without sending a byte; the prompt may be too long to evaluate "
+                f"within the read timeout"
+            ) from exc
 
         if not saw_terminal:
             # The stream ended without [DONE] or a finish_reason: the server

@@ -444,7 +444,7 @@ Non-secret values are environment variables; secrets are mounted files read thro
 | `SESSION_IDLE_TTL_SECONDS` | `3600` | |
 | `INVITATION_TTL_SECONDS` | `259200` | Invitation and reset link lifetime |
 | `ALLOWED_COUNTRIES` | `TW,AU` | Empty disables the filter |
-| `MAX_CONTEXT_LENGTH` | `131072` | Bounds prompt size before generation starts, tool definitions and replayed tool calls included. Raised from `32768` on 2026-08-05 for agent clients |
+| `MAX_CONTEXT_LENGTH` | `65536` | Bounds prompt size before generation starts, tool definitions and replayed tool calls included. Raised from `32768` on 2026-08-05 for agent clients. **Sized together with `REQUEST_TIMEOUT_SECONDS`**: prompt evaluation sends no bytes, so the read timeout is what bounds it, and at 117.9 tok/s a full context costs 556s against the 600s below |
 | `API_KEY_PEPPER_PREVIOUS` | empty | Set only during a rotation |
 | `GEOIP_DB_PATH` | `/data/GeoLite2-Country.mmdb` | Refreshed weekly by `launchd/refresh-geolite2.sh` (runbook §5.1), which restarts the two enforcing services only when the file actually changed — geoip2 opens the database once at startup, so a swap alone changes nothing. Said "monthly" until 2026-08-03 and described no mechanism that existed |
 | `BOOTSTRAP_ADMIN_LOGIN` | `you@example.com` | Inert once any user exists |
@@ -452,8 +452,8 @@ Non-secret values are environment variables; secrets are mounted files read thro
 | `MAX_TOKENS_CEILING` | `16384` | Counts a thinking model's reasoning as well as its answer |
 | `OLLAMA_KEEP_ALIVE` | `-1` | Residency after a request. `-1` keeps the model loaded, making the registry's `loaded` state true; sent on every generation, since Ollama's own five-minute default applies to any request that omits it |
 | `OLLAMA_THINKING` | `true` | Default only; a request's `think` field overrides it. `false` suppresses thinking. Never sends `think: true`: Ollama refuses it for models that do not support thinking |
-| `REQUEST_TIMEOUT_SECONDS` | `300` | Per-read HTTP timeout to the runtime: bounds a *stalled* stream |
-| `GENERATION_DEADLINE_SECONDS` | `900` | Wall-clock bound on one generation. The frontend's `experimental.proxyTimeout` must stay above it, or a cut arrives with no reason attached |
+| `REQUEST_TIMEOUT_SECONDS` | `600` | Per-read HTTP timeout to the runtime: bounds a *stalled* stream, and therefore **prompt evaluation**, which sends no bytes. Raised from `300` on 2026-08-05 with the context ceiling above |
+| `GENERATION_DEADLINE_SECONDS` | `900` | Wall-clock bound on one generation, counted from the **first chunk** rather than the request, so reading a long prompt does not spend the budget for writing the answer. It therefore composes with the row above: one request's worst case is 25 minutes holding a concurrency slot. The frontend's `experimental.proxyTimeout` must stay above the sum, or a cut arrives with no reason attached |
 | `METRICS_ENABLED` | `true` | Exposes `/metrics`; off lifts the production requirement for a real `metrics_scrape_token` |
 
 **Secrets** (`/run/secrets`, never environment variables)

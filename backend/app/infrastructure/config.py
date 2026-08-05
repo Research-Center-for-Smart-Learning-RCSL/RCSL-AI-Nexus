@@ -208,29 +208,53 @@ class Settings(BaseSettings):
     does not support it. Graded values are not offered — `think: "low"` is
     accepted by Ollama and measurably changes nothing.
     """
-    max_context_length: int = 131072
+    max_context_length: int = 65536
     """Ceiling on a request's input, in tokens, applied as four characters per
     token (`di.py`) before any hardware is committed.
 
-    32768 → 131072 on 2026-08-05, for agent clients. An agent replays the whole
+    32768 → 65536 on 2026-08-05, for agent clients. An agent replays the whole
     conversation on every turn and grows it with file contents and tool output,
-    so it crosses the old ceiling within a few rounds and the 413 arrives in the
+    so it crossed the old ceiling within a few rounds and the 413 arrived in the
     middle of a task rather than at the start of one.
+
+    **This value, `request_timeout_seconds` and `generation_deadline_seconds`
+    are one decision and have to be changed together.** Prompt evaluation
+    produces no bytes, so what bounds it is the per-read timeout, and the
+    arithmetic that ties the three is measured rather than assumed: prompt
+    evaluation on the largest model this machine holds runs at 117.9 tok/s
+    (PROGRESS.md 2026-07-27), so a full context costs
+
+        65536 / 117.9 = 556 seconds
+
+    against a 600 second read timeout. Raising this without raising that gives
+    a ceiling the guardrail admits and the transport then kills — not as a 413,
+    which a client can act on, but as a read timeout part way through. It was
+    briefly set to 131072 against a 300 second timeout, which is that gap 96,000
+    tokens wide.
 
     This is one of the six resource guardrails security.md section 4.3 counts
     on, so raising it costs something real: context is superlinear on unified
-    memory, and measured throughput on this hardware already decays from 60.8
-    to 23.5 tok/s across a single generation. What still bounds the damage is
-    that the other five are unchanged — the concurrency cap, the token ceiling,
-    the per-read timeout, the wall-clock deadline and cancel-on-disconnect —
-    and the wall-clock deadline in particular is now the limit that binds a
-    request whose prompt is genuinely this large.
+    memory, and measured throughput already decays from 60.8 to 23.5 tok/s
+    across a single generation. The other five are unchanged.
 
     A caller cannot smuggle past it through `tools`: tool definitions and prior
     tool calls are counted too (`RouteChatRequest._context_chars`).
     """
 
-    request_timeout_seconds: int = 300
+    request_timeout_seconds: int = 600
+    """Per-read HTTP timeout on a runtime call: the longest gap between bytes.
+
+    **This is what bounds prompt evaluation**, because a runtime reading a long
+    prompt sends nothing at all while it does so. Sized from `max_context_length`
+    above, with room over the 556 seconds a full context costs; the two move
+    together or the larger one is unreachable.
+
+    300 → 600 on 2026-08-05 with the context ceiling. The cost is paid by a
+    *hung* runtime rather than a busy one, since a stream that is producing
+    resets this on every chunk: a runtime that has stopped answering now holds
+    one of `max_concurrent_inference` slots for ten minutes instead of five.
+    """
+
     generation_deadline_seconds: int = 900
     """Wall-clock ceiling on a single generation while it holds a concurrency slot.
 
@@ -241,17 +265,24 @@ class Settings(BaseSettings):
     seconds. At 600 this cut first, and a limit that fires before the one it is
     meant to backstop reports the wrong reason.
 
-    It is still a real bound: fifteen minutes is the longest one caller can
-    hold one of four slots.
+    **Measured from the first chunk, not from the request** (2026-08-05). It
+    bounds a stream that keeps *producing* too slowly to finish, and a runtime
+    evaluating a long prompt produces nothing while it does so, so counting from
+    the request charged the answer's budget for reading the question. At the
+    context ceiling above that is most of it: 556 seconds of prompt evaluation
+    against 900 here, leaving a stream to be cut on its first token and report
+    `finish_reason: "length"` — telling a client the model talked too much when
+    it had not yet started. Prompt evaluation is bounded by
+    `request_timeout_seconds` instead, which is the limit designed for "no bytes
+    for the interval".
 
-    Distinct from `request_timeout_seconds`, which is the per-read HTTP timeout:
-    that bounds a stalled stream (no bytes for the interval), while this bounds a
-    stream that keeps producing slowly enough to stay under it yet below the token
-    ceiling. On unified memory near swap that case can hold a slot for hours, and
-    with only `max_concurrent_inference` slots and no edge protection it is the one
-    guardrail the other three do not cover. Zero or negative disables it. The
-    stream is cut with `finish_reason=length`, the honest signal to an OpenAI
-    client that the model did not finish."""
+    So the two compose rather than overlap, and one request's worst case is
+    their sum: ten minutes reading plus fifteen writing, which is the longest
+    one caller can hold one of `max_concurrent_inference` slots.
+
+    Zero or negative disables it. The stream is cut with
+    `finish_reason=length`, the honest signal to an OpenAI client that the model
+    did not finish."""
 
     api_key_max_lifetime_days: int = 365
     """Ceiling on how far ahead a key may be set to expire.

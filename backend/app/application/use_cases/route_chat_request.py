@@ -260,6 +260,26 @@ class RouteChatRequest:
         truncated = False
         upstream_finished = False
         started = self._monotonic()
+        """When the request reached the runtime. Recorded as `latency_ms`, which
+        is what the caller waited, prompt evaluation included."""
+
+        generating_since: float | None = None
+        """When the first chunk arrived, which is when the *deadline* starts.
+
+        Not `started`. The deadline exists to bound a stream that keeps
+        producing too slowly to finish, and a runtime evaluating a long prompt
+        produces nothing at all while it does so — so measuring from the request
+        spent the generation budget before generation began. At a large context
+        that is most of the budget: prompt evaluation of a full context has been
+        measured on this hardware at over 550 seconds, against a 900 second
+        deadline. The stream was then cut on its first token and reported
+        `finish_reason: "length"`, telling the client the model had talked too
+        much when it had not yet started. What bounds prompt evaluation is the
+        per-read timeout, which is the thing that was designed to: no bytes for
+        the interval. See infrastructure/config.py, where the two are sized
+        together.
+        """
+
         deadline = self._generation_deadline_seconds
 
         try:
@@ -277,6 +297,8 @@ class RouteChatRequest:
                 )
             ) as upstream:
                 async for chunk in upstream:
+                    if generating_since is None:
+                        generating_since = self._monotonic()
                     # Assigned, not accumulated: the runtime reports it once
                     # for the whole request, on the terminal chunk. Summing
                     # would multiply it by the length of the stream.
@@ -336,7 +358,11 @@ class RouteChatRequest:
                     # that is the realistic case. Cutting here reports "length"
                     # through the same block below, the honest signal that the
                     # model did not finish.
-                    if deadline > 0 and self._monotonic() - started > deadline:
+                    #
+                    # Measured from the first chunk, so that time spent reading
+                    # the prompt is not charged against the budget for writing
+                    # the answer. See `generating_since`.
+                    if deadline > 0 and self._monotonic() - generating_since > deadline:
                         truncated = True
                         logger.info(
                             "generation for %s hit the %ss deadline after %s tokens",
