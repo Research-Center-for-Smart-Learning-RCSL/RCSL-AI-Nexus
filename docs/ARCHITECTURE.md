@@ -204,6 +204,20 @@ Phase 1 was **single tenant** and said so, deliberately: an earlier draft descri
 
 **The boundary now exists (Phase 2).** A `Tenant` entity, a `tenant_id` on `users`, `api_keys`, `usage_records` and `audit_log`, and tenant-scoped repositories that filter every read and stamp every write from the actor's tenant, inside the adapter so a use case cannot forget it. `models`, `nodes` and `routing_policies` carry no tenant: they are the shared compute the tenants use. Scope so far is the foundation plus minimal management (create and list tenants). **The knowledge base was built on 2026-07-30 and does plug into this boundary**, enforcing it in three further places: `knowledge_collections` and `knowledge_documents` both carry `tenant_id` and are filtered on it directly, the document storage adapter puts the tenant in the path, and the vector store puts it in the Qdrant collection name — so a search that lost its tenant names a collection that does not exist rather than reading everyone's passages. One read sits outside the boundary and is named in §7.3: ingestion job progress, whose cache entry carries no tenant. See [security.md](./architecture/security.md) §7.3 and [ROADMAP.md](./ROADMAP.md).
 
+### 2.9 Prompt Template (Phase 2, built 2026-08-05)
+
+A named system prompt, tenant-scoped, that a caller selects by name with `"prompt_template"` on the gateway and the admin chat alike. It is inserted whole at the front of the conversation, ahead of any system message the caller sent, which is kept.
+
+| Field | Notes |
+|---|---|
+| `id` | Internal UUID |
+| `tenant_id` | Tenant data, like the knowledge base and unlike models or nodes |
+| `name` | What a caller writes in the request. **Unique per tenant**, not globally — a global constraint would refuse a name because another tenant had taken it, and report that they exist |
+| `description` | For whoever is choosing one. Never sent to a model |
+| `system_prompt` | Sent verbatim. Bounded at 8000 characters, a resource guardrail rather than a security one: the context ceiling is shared with the conversation, the tool definitions and any retrieved passages |
+
+**There is no variable substitution, and that is the design.** A template body is the one message the model treats as authoritative, so a slot in it filled from a request would let a caller write into it — an escalation from asking questions to giving instructions. What a caller chooses is *which* template, not what it says. The full reasoning, and the shape a per-request value would have to take instead, is in [security.md](./architecture/security.md) §7.4.
+
 ## 3. Management Modules
 
 Frontend pages correspond to backend resources. Phase annotations show what actually exists when.
