@@ -26,6 +26,7 @@ CLIENT_IP = "168.95.1.1"  # Chunghwa Telecom; the country filter allows TW and A
 # NEXUS_THINK=false measures what deliberation costs an agent, which pays for it
 # on every tool round trip rather than once per conversation.
 THINK = {"true": True, "false": False}.get(os.environ.get("NEXUS_THINK", ""), None)
+MODEL = os.environ.get("NEXUS_MODEL", "chat")  # the capability, not a model name
 TOTALS = {"turns": 0, "seconds": 0.0, "prompt": 0, "completion": 0}
 
 # --- tools ---------------------------------------------------------------
@@ -79,7 +80,7 @@ CAPITAL_OF = {
 }
 
 
-def call(messages, tools=None, model="chat", think=THINK, timeout=900):
+def call(messages, tools=None, model=MODEL, think=THINK, timeout=900):
     payload = {"model": model, "messages": messages, "stream": False}
     if tools:
         payload["tools"] = tools

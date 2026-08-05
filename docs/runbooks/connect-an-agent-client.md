@@ -44,6 +44,30 @@ on this hardware has been measured spending an entire 16384-token budget without
 producing an answer at all. The setting is per capability precisely so that
 `chat` can keep deliberating while `code` does not.
 
+**On this deployment steps 1–3 are already done**, and there are measured
+numbers under step 3 rather than an argument. The `code` policy points at
+`glm47-flash` with deliberation off (2026-08-05). Running the same
+five-tool-call debugging task three times each way:
+
+| | wall clock | output tokens |
+|---|---|---|
+| deliberating | 9.4 / 11.5 / 12.7 s | 470 / 591 / 654 |
+| answering directly | 6.0 / 6.1 / 7.5 s | 275 / 283 / 366 |
+
+**42% of the clock on 46% of the output, solved 6 times out of 6 either way.**
+Reproduce with `scripts/measure-agent-loop.py`. Note that the saving is in
+*output* tokens: reasoning is never replayed into the next prompt, so it costs
+per turn rather than compounding through the conversation the way tool output
+does.
+
+**The policy names one model and no fallback, deliberately.** `chat` falls back
+to `qwen7b` when `glm47-flash` is not loaded, which is right for a person — a
+smaller answer beats no answer. It is wrong for an agent: a weaker model does
+not fail, it writes worse code, and nothing in the transcript says which model
+wrote it. So `code` returns `503 no_available_model` instead, which is a thing
+the operator can act on. Add a fallback only if you would rather have the work
+done badly than not at all.
+
 ## 2. Issue a key sized for an agent
 
 **API keys**, issue a new one for the `code` capability. Two of the defaults are
