@@ -485,8 +485,99 @@ def test_more_than_one_choice_is_refused() -> None:
         )
 
 
-def test_a_bare_stop_string_is_accepted_as_a_list_of_one() -> None:
+@pytest.mark.parametrize("value", ["END", "User:", "\n\nObservation:", "</tool_call>"])
+def test_a_bare_stop_string_is_accepted_whatever_its_length(value) -> None:
+    """`max_length=4` on the union capped the *string* branch at four
+    characters, because pydantic applies a length rule to every member it fits.
+    Every ordinary stop sequence was refused with a 422 about "items", and the
+    first version of this test used a three-character value, so it passed."""
     request = ChatCompletionRequest.model_validate(
-        {"model": "chat", "messages": [{"role": "user", "content": "hi"}], "stop": "END"}
+        {"model": "chat", "messages": [{"role": "user", "content": "hi"}], "stop": value}
     )
-    assert request.stop_sequences == ("END",)
+    assert request.stop_sequences == (value,)
+
+
+def test_more_than_four_stop_sequences_is_refused() -> None:
+    with pytest.raises(ValueError):
+        ChatCompletionRequest.model_validate(
+            {
+                "model": "chat",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stop": ["a", "b", "c", "d", "e"],
+            }
+        )
+
+
+# --- the finish reason cannot outrun the payload -------------------------
+
+
+async def test_ollama_does_not_report_tool_calls_it_could_not_forward(patch_httpx) -> None:
+    """Every call was dropped for having no name, so there is nothing for the
+    client to execute. Reporting `tool_calls` anyway leaves an agent loop
+    waiting on a call it was never given, with no content to fall back on —
+    the same stall the rewrite exists to prevent, from the other end."""
+    patch_httpx(
+        lambda r: httpx.Response(
+            200,
+            content=ndjson(
+                {
+                    "message": {"content": "", "tool_calls": [{"function": {"arguments": {}}}]},
+                    "done": True,
+                    "done_reason": "tool_calls",
+                }
+            ),
+        )
+    )
+
+    chunks = await drain(
+        OllamaAdapter("http://ollama.invalid").generate("llama3", MESSAGES, tools=[WEATHER])
+    )
+
+    assert chunks[-1].tool_calls == ()
+    assert chunks[-1].finish_reason == "stop"
+
+
+async def test_mlx_does_not_report_tool_calls_it_could_not_forward(patch_httpx) -> None:
+    """A fragment carrying arguments but never a name accumulates into a slot
+    that `drain` discards, so the reason has to be decided after draining
+    rather than from having seen the key."""
+    patch_httpx(
+        lambda r: httpx.Response(
+            200,
+            content=sse_lines(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [{"index": 0, "function": {"arguments": "{}"}}]
+                            },
+                            "finish_reason": "tool_calls",
+                        }
+                    ]
+                }
+            ),
+        )
+    )
+
+    chunks = await drain(MlxAdapter("http://mlx.invalid").generate("org/model", MESSAGES))
+
+    assert chunks[-1].tool_calls == ()
+    assert chunks[-1].finish_reason == "stop"
+
+
+async def test_an_unenforceable_choice_is_refused_even_with_no_tools(patch_httpx) -> None:
+    """Guarding with `if tools and should_send_tools(...)` short-circuits, so a
+    `tool_choice` the runtime cannot honour went unrefused whenever it arrived
+    without tools — 200 and prose, where the docs promise a 400."""
+    patch_httpx(
+        lambda r: httpx.Response(
+            200, content=ndjson({"message": {"content": "ok"}, "done": True, "done_reason": "stop"})
+        )
+    )
+
+    with pytest.raises(RuntimeCapabilityError):
+        await drain(
+            OllamaAdapter("http://ollama.invalid").generate(
+                "llama3", MESSAGES, tool_choice=ToolChoice(mode=ToolChoiceMode.REQUIRED)
+            )
+        )

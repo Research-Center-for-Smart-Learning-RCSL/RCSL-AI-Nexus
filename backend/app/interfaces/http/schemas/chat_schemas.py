@@ -153,10 +153,16 @@ class ChatCompletionRequest(BaseModel):
     seed: int | None = None
     stop: str | list[str] | None = Field(
         default=None,
-        max_length=4,
         description="Up to four stop sequences, as OpenAI allows. A bare string "
         "is accepted as a list of one.",
     )
+    """The count is checked in `_check_stop_count`, deliberately not with
+    `max_length` on this field. Pydantic applies a length constraint to every
+    member of a union it fits, so `max_length=4` meant "at most four items" for
+    the list and **"at most four characters" for the string** — which rejected
+    every ordinary stop sequence (`"User:"`, `"\\n\\nObservation:"`) with a 422
+    whose message talked about items. Its own test used a three-character value
+    and passed."""
     """Forwarded to the runtime, and only when set, so its own defaults stay in
     force otherwise. All four were accepted and silently dropped until
     2026-08-05: `temperature: 0` returned 200 and changed nothing."""
@@ -216,6 +222,14 @@ class ChatCompletionRequest(BaseModel):
     def _check_single_choice(self) -> ChatCompletionRequest:
         if self.n is not None and self.n != 1:
             raise ValueError("n must be 1; this platform serves one choice per request")
+        return self
+
+    @model_validator(mode="after")
+    def _check_stop_count(self) -> ChatCompletionRequest:
+        """Counted after normalisation, so a bare string is one sequence rather
+        than however many characters it has."""
+        if len(self.stop_sequences) > 4:
+            raise ValueError("stop takes at most four sequences")
         return self
 
     @property

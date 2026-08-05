@@ -82,10 +82,19 @@ def _finish_reason(done_reason: str | None, *, called_tools: bool) -> str:
     show the user an answer. Told "stop" it treats the turn as finished and the
     calls are never run, so the conversation stalls with the model waiting on
     results that nobody will produce.
+
+    `called_tools` means "calls are being forwarded", never "the runtime
+    mentioned tool calls". The inverse mistake stalls the loop from the other
+    end: `tool_calls` with an empty list leaves the client waiting to execute
+    something it was never given, and with no content to fall back on.
     """
     if called_tools:
         return "tool_calls"
-    return _FINISH_REASONS.get(done_reason or "stop", "stop")
+    mapped = _FINISH_REASONS.get(done_reason or "stop", "stop")
+    if mapped == "tool_calls":
+        logger.warning("ollama reported done_reason=tool_calls with no usable calls")
+        return "stop"
+    return mapped
 
 
 def _sampling_options(sampling: SamplingOptions | None) -> dict[str, Any]:
@@ -263,7 +272,12 @@ class OllamaAdapter:
         }
         if options:
             payload["options"] = options
-        if tools and should_send_tools(tool_choice, "ollama"):
+        # Consulted before the emptiness check, not after it. Short-circuiting
+        # on `tools` meant a `tool_choice` the runtime cannot honour went
+        # unrefused whenever the caller sent no tools with it, which is 200 and
+        # prose where every piece of documentation promises a 400.
+        send_tools = should_send_tools(tool_choice, "ollama")
+        if tools and send_tools:
             payload["tools"] = _tool_payload(tools)
         # Sent on generation as well as on load. Ollama applies its own default
         # to any request that omits it, so a generate without this silently

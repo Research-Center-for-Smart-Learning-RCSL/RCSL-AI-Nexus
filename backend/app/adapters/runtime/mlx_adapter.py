@@ -74,10 +74,23 @@ def _finish_reason(reason: str | None, *, called_tools: bool) -> str:
     """`tool_calls` wins, for the reason spelled out in the Ollama adapter: an
     agent loop decides whether to execute a call on this field alone, so a
     generation that produced calls and reports "stop" stalls the conversation.
-    A server that already said `tool_calls` agrees, and this changes nothing."""
+    A server that already said `tool_calls` agrees, and this changes nothing.
+
+    `called_tools` must mean "calls are being forwarded", not "the server
+    mentioned tool calls". The inverse error is the same stall from the other
+    end: reporting `tool_calls` with nothing in `tool_calls` leaves the client
+    waiting to execute something it was never given, which is worse than the
+    "stop" this exists to correct, because there is no content to fall back on.
+    """
     if called_tools:
         return "tool_calls"
-    return _FINISH_REASONS.get(reason or "stop", "stop")
+    mapped = _FINISH_REASONS.get(reason or "stop", "stop")
+    if mapped == "tool_calls":
+        # The server ended on tool calls and none survived parsing. Reporting
+        # "stop" at least terminates the turn with whatever content there was.
+        logger.warning("mlx reported finish_reason=tool_calls with no usable calls")
+        return "stop"
+    return mapped
 
 
 def _message_payload(message: Message) -> dict[str, Any]:
@@ -244,7 +257,11 @@ class MlxAdapter:
             # generating rather than producing tokens nobody reads.
             payload["max_tokens"] = max_tokens
         payload.update(_sampling_payload(sampling))
-        if tools and should_send_tools(tool_choice, "mlx_lm.server"):
+        # Evaluated before the emptiness check, for the reason the Ollama
+        # adapter spells out: short-circuiting on `tools` leaves an
+        # unenforceable `tool_choice` unrefused when no tools accompany it.
+        send_tools = should_send_tools(tool_choice, "mlx_lm.server")
+        if tools and send_tools:
             payload["tools"] = [
                 {
                     "type": "function",
@@ -262,7 +279,6 @@ class MlxAdapter:
         usage_tokens: int | None = None
         saw_terminal = False
         pending_calls = _ToolCallAccumulator()
-        called_tools = False
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
             async with client.stream("POST", "/v1/chat/completions", json=payload) as response:
@@ -302,8 +318,12 @@ class MlxAdapter:
                             # own, so the whole calls go out on the terminal
                             # chunk below. Counted here so a disconnect part way
                             # through a call still bills the tokens it took.
+                            #
+                            # Deliberately does not set a "saw tool calls" flag:
+                            # what the finish reason turns on is whether a call
+                            # survives accumulation, which is only knowable at
+                            # the drain below.
                             pending_calls.add(delta_body["tool_calls"])
-                            called_tools = True
                             counted += 1
                         if choice.get("finish_reason"):
                             finish_reason = choice["finish_reason"]
@@ -336,10 +356,13 @@ class MlxAdapter:
                     ref,
                 )
                 correction = 0
+        calls = pending_calls.drain()
         yield CompletionChunk(
             delta="",
-            tool_calls=pending_calls.drain(),
-            finish_reason=_finish_reason(finish_reason, called_tools=called_tools),
+            tool_calls=calls,
+            # From what is actually being forwarded, so the reason and the
+            # payload cannot disagree.
+            finish_reason=_finish_reason(finish_reason, called_tools=bool(calls)),
             token_count=correction,
         )
 
