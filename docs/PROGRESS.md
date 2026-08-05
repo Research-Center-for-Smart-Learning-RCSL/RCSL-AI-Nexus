@@ -91,6 +91,32 @@ Carried out with a single-use key scoped to `chat`, revoked immediately after �
 the seventh such key in this deployment's history, and the reason the API keys
 table hides revoked rows by default.
 
+### The `code` policy exists, and the client does not have to know
+
+Created straight after the measurement: `code` → `glm47-flash`,
+`thinking: false`, written through the admin API so it is validated and
+audited (`routing_policy.saved`, target `code`) rather than inserted by hand.
+
+Two things it verified that the harness could not. A key scoped to `code` sees
+`["code"]` and nothing else from `GET /v1/models`, so the capability filter
+holds on the advertised list as well as on the routing. And a request naming
+`code` with **no `think` field at all** came back with `reasoning_content:
+None` — the policy suppresses deliberation on the server side, so an off-the-
+shelf OpenAI client gets the agent-shaped behaviour without knowing this
+platform has an opinion about it. The same debugging task then ran in 5 turns
+and 5.9 s, matching the `think: false` measurements exactly.
+
+**One model, no fallback, on purpose.** `chat` falls back to `qwen7b` when
+`glm47-flash` is unloaded, which is right for a person: a smaller answer beats
+no answer. It is wrong for an agent. A weaker model does not fail — it writes
+worse code, and nothing in the transcript records which model wrote it, so the
+degradation is discovered later in the work rather than at the request. `code`
+answers `503 no_available_model` instead, whose documented remedy is
+backoff-then-administrator, which is a thing somebody can act on. This is the
+same judgement as `should_send_tools`, `embed`, `unload` and the MLX guard
+above, applied to routing for the first time: refusing beats serving something
+worse without saying so.
+
 ### The unverified MLX tool path is now refused, not merely warned about
 
 Asked whether MLX needs installing, the honest answer turned out to be no, and
