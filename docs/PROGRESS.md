@@ -134,6 +134,45 @@ request. **The hole this would have opened is `tools`**: tool definitions are
 arbitrary JSON that no person types, so a ceiling counting only `messages` would
 have let a caller carry an unbounded payload straight past it. They are counted.
 
+### Review of the tool calling commit, and its four fixes
+
+All four findings were real, and each was verified by reproducing it against
+the running code before anything was changed. Three share a shape worth naming:
+**a rule written when the last message was always the user turn.**
+
+**`max_length=4` on `stop` capped the string at four characters.** The field is
+`str | list[str] | None`, and pydantic applies a length constraint to every
+member of a union it fits — four *items* for the list, four *characters* for the
+string. So `"User:"` and `"\n\nObservation:"` were refused with a 422 whose
+message talked about items. The count is now checked after normalisation, where
+one string is one sequence. **The test written for this field used `"END"`**,
+three characters, so it passed and hid the bug it existed to prevent; the
+replacement is parametrised over realistic sequences. A test that picks the
+smallest legal value tests the smallest legal value.
+
+**Grounding split an assistant tool call from the result answering it.**
+`ground()` inserted the retrieved-context message at `len(messages) - 1`, which
+was the last user turn until this same commit added a `tool` role. In an agent
+conversation the tail is an assistant turn carrying `tool_calls` followed by the
+tool result, so the system message landed *between the pair* — and a chat
+template pairs a tool result with the assistant call immediately preceding it,
+so `use_knowledge: true` on any agent conversation produced a malformed prompt.
+It now anchors on the last user message, which is what the docstring had
+claimed all along and what `query_from` already picked; the two now agree.
+
+**MLX could report `finish_reason: tool_calls` with no tool calls.** The flag
+was set from having seen the key, while the accumulator drops any call that
+never received a name. That is the same stall the finish-reason rewrite exists
+to fix, arriving from the other end and worse: an agent waits to execute
+something it was never given, with no content to fall back on. The reason is now
+derived from what is actually being forwarded, and both adapters refuse to pass
+a runtime's own `tool_calls` claim through when nothing survived parsing.
+
+**An unenforceable `tool_choice` went unrefused when no tools came with it.**
+`if tools and should_send_tools(...)` short-circuits, so `tool_choice:
+"required"` with an empty `tools` array returned 200 and prose where three
+separate pieces of documentation promise a 400. Evaluated unconditionally now.
+
 ### What is not proven
 
 The MLX half. `mlx_lm.server` speaks the OpenAI chat schema, so tools are

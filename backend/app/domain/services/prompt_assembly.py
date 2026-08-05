@@ -80,24 +80,46 @@ def build_context_message(passages: list[RetrievedPassage]) -> Message | None:
 
 
 def ground(messages: list[Message], passages: list[RetrievedPassage]) -> list[Message]:
-    """The conversation with a context message inserted before the last turn.
+    """The conversation with a context message inserted before the last user turn.
 
     Before the final user message rather than at the very front, so the
     passages sit next to the question they were retrieved for; and after any
     existing system message, so the operator's own instructions are not
     displaced by material a user uploaded.
+
+    **The anchor is the last user message, not the last message.** Those were
+    the same thing until a `tool` role existed, and the position was written as
+    `len(messages) - 1` on that assumption. In an agent conversation the tail is
+    normally an assistant turn carrying `tool_calls` followed by the `tool`
+    message answering it, so inserting before the last message put a system
+    message *between the pair* — and a chat template pairs a tool result with
+    the assistant call immediately preceding it, so the prompt was malformed
+    before it ever reached the model. Anchoring here also makes this agree with
+    `query_from`, which picks the same message: the passages sit beside the
+    question they were retrieved for, which is the property the docstring
+    claimed all along.
     """
     context = build_context_message(passages)
     if context is None:
         return list(messages)
 
     grounded = list(messages)
-    # Insert before the last message, which is the turn being answered. An empty
-    # conversation is not something the chat path admits, but appending is the
-    # safe reading if one ever arrives.
-    position = max(len(grounded) - 1, 0)
-    grounded.insert(position, context)
+    grounded.insert(_last_user_index(grounded), context)
     return grounded
+
+
+def _last_user_index(messages: list[Message]) -> int:
+    """Where the final user turn starts, or the end of the conversation.
+
+    Falling back to the end rather than to `len - 1` keeps the tool pairing
+    intact in the case this cannot happen anyway: with no user message
+    `query_from` returns nothing, so retrieval finds nothing and `ground`
+    has already returned. It is the safe reading, not a reachable path.
+    """
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].role is MessageRole.USER:
+            return index
+    return len(messages)
 
 
 def query_from(messages: list[Message]) -> str:

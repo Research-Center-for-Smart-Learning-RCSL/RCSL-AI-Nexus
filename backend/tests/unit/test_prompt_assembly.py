@@ -14,7 +14,7 @@ import re
 
 from app.application.use_cases.ground_chat import GroundChat
 from app.domain.entities.actor import Actor, Role, Scope
-from app.domain.entities.chat import Message, MessageRole
+from app.domain.entities.chat import Message, MessageRole, ToolCall
 from app.domain.entities.knowledge import RetrievedPassage
 from app.domain.services.prompt_assembly import (
     MAX_PASSAGE_CHARS,
@@ -76,6 +76,35 @@ def test_the_operators_system_message_is_not_displaced_by_uploaded_material() ->
     assert grounded[0].content == "You are the lab assistant."
     # Next to the question it was retrieved for, and before it.
     assert grounded[-1].role is MessageRole.USER
+
+
+def test_grounding_does_not_split_an_assistant_tool_call_from_its_result() -> None:
+    """A chat template pairs a tool result with the assistant call immediately
+    before it, so a system message inserted between the two is a malformed
+    prompt rather than a grounded one.
+
+    `ground` anchored on `len(messages) - 1`, which was the last user turn
+    until a `tool` role existed. In an agent conversation the tail is a tool
+    exchange, so grounding landed inside it.
+    """
+    convo = [
+        Message(role=MessageRole.USER, content="What did the March run show?"),
+        Message(
+            role=MessageRole.ASSISTANT,
+            content="",
+            tool_calls=(ToolCall(id="c1", name="read", arguments='{"f":"march"}'),),
+        ),
+        Message(role=MessageRole.TOOL, content="12% gain", tool_call_id="c1", name="read"),
+    ]
+    grounded = ground(convo, [passage("The March run showed a 12% gain.")])
+
+    roles = [m.role for m in grounded]
+    assistant_at = roles.index(MessageRole.ASSISTANT)
+    assert roles[assistant_at + 1] is MessageRole.TOOL, "the pair must stay adjacent"
+    # And beside the question it was retrieved for, which is the user turn
+    # `query_from` also picks.
+    assert grounded[0].role is MessageRole.SYSTEM
+    assert grounded[1].role is MessageRole.USER
 
 
 def test_the_instruction_naming_the_passages_as_data_comes_after_them() -> None:
