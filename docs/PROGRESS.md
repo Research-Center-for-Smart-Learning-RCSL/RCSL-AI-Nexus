@@ -48,6 +48,13 @@ debugging task, the knowledge base end to end, both admin entrances' login
 flows, the least-privilege database split, the unattended-recovery chain
 through two boots with injected faults, and the GeoLite2 refresh.
 
+**One open question, raised today and deliberately not acted on.** Free memory
+on this node swings between roughly 12 GB and 37 GB of 64 depending on whether
+it is serving — the weights are wired during inference and revert to evictable
+file-backed pages when idle. Nothing is degrading (swap is 0 bytes) and the
+leading candidate is to do nothing. See the 2026-08-05 entry and "Open
+decisions".
+
 **Not verified, and the list worth reading before trusting anything else.**
 The network path from the internet to the public entrance, which waits on the
 NTNU proxy administrator and was partly reopened by the 2026-08-04 hostname
@@ -63,6 +70,150 @@ still unverified" further down.
 ---
 
 ## 2026-08-05
+
+### Where the memory went, and whether the SSD can take some of it — OPEN
+
+**Status: measured but undecided. Nothing in this entry has changed the
+deployment.** It is written down because the question came from looking at the
+host status screen — "why is this Mac down to 12.4 GB?" — and the answer turned
+out to be worth keeping, but the interesting half is still unverified. The
+open decision is filed under "Open decisions" below; this is the evidence
+behind it.
+
+#### Measured, on 2026-08-05
+
+Disk was never the issue: 3.5 TB free. It is memory.
+
+| | |
+|---|---|
+| Total / available | 64 GB / 12.1 GB (the agent's figure; the screen said 12.4) |
+| **Wired** | **40.6 GB** |
+| Active / inactive / free | 10.1 / 10.0 / 2.7 GB |
+| Ollama resident, three models | 44.4 GB — `glm-4.7-flash:q8_0` 38.3, `qwen2.5:7b` 5.7, `nomic-embed-text` 0.4 |
+| Compressor | holds 4.0 GB of physical RAM, storing 8.9 GB of logical pages (≈2.2:1) |
+| Swap file | **0 bytes, never grown** |
+
+Three findings, each checked rather than assumed:
+
+**The models never expire, and that is a setting.** `/api/ps` reports
+`expires_at` in the year **2318** for all three, which is `OLLAMA_KEEP_ALIVE=-1`
+made visible.
+
+**The weights are mmapped from the SSD already.** `lsof` shows pid 66053 mapping
+the 31.8 GB blob and pid 22803 mapping qwen's. So "the model in RAM" and "the
+file on SSD" are the same bytes seen twice.
+
+**Which is why a throughput measurement came out wrong, informatively.** Reading
+8 GB from 16 GB into the blob ran at **23.4 GB/s** — memory speed, not SSD
+speed. The pages were already resident, so the read never reached the device.
+A cold-read figure could not be obtained: clearing the cache needs privileges
+this session did not have, and the pages that matter are wired anyway.
+
+#### The inference that was wrong, corrected the same hour
+
+The paragraph that stood here said the 40.6 GB is wired *because* Metal
+requires GPU-accessible memory to stay resident, and drew the conclusion that
+**swap, compression and mmap eviction can never reclaim the weights**. It was
+flagged "inferred from a correlation, not proven — if this is wrong, the
+conclusion is wrong."
+
+It was wrong, and the flag is the only reason it was checked. Re-reading the
+machine twenty minutes later, while writing this entry:
+
+| | at 19:32 | at 19:55 |
+|---|---|---|
+| wired | 40.6 GB | **2.3 GB** |
+| file-backed | — | 43.4 GB |
+| available (the agent's figure) | 12.1 GB | **37.2 GB** |
+
+Nothing was unloaded. Ollama still reported all three models resident and
+`expires_at` still said 2318. **The pages had simply stopped being wired.**
+
+So the experiment the first version should have run:
+
+```
+before generation   2.3 GB wired
+during, +1s        40.8 GB wired      <- wired within a second
+during, +3s        41.3 GB
+just after          40.6 GB
+after 20s idle      40.6 GB           <- not released promptly
+```
+
+**The mechanism was right and the conclusion was not.** Inference does wire the
+weights, in about a second. But the wiring is *transient with a long tail*: it
+survives at least 20 seconds of idle and had gone by the time twenty minutes
+had passed. Idle, the weights are clean **file-backed** pages — the mmapped
+blob — which the OS may evict and re-fault from SSD. That is precisely the
+"spend SSD, pay in latency" behaviour, and **it already happens by itself**.
+
+The exact length of that tail is **not measured**: somewhere between 20 seconds
+and ~20 minutes. Whether the OS actually evicts under pressure, rather than
+merely being free to, is also unmeasured — inactive means reclaimable, not
+reclaimed.
+
+**What this does to the original question.** "Why is this Mac down to 12.4 GB"
+has a different answer than the one above assumed: **12.4 GB is what the
+machine looks like while it is serving, and ~37 GB is what it looks like after
+a while idle.** Both are true; the host status screen shows whichever moment
+you open it. The reading that prompted the question was taken minutes after a
+run of chat requests. That is a transient, not a steady state, and no
+conclusion about headroom should be drawn from a single sample of it.
+
+#### Not measured, and what each would take
+
+- **How long the wiring tail actually is**, now the first question rather than
+  a detail: it is what decides whether "12 GB" or "37 GB" is the number to plan
+  against. Bounded at >20 s and <~20 min, and a sampler running `vm_stat` once
+  a minute after a generation would settle it in one sitting.
+- **Whether the OS evicts those file-backed pages under real pressure**, or
+  merely may. Inactive is reclaimable, not reclaimed, and the difference is the
+  whole of whether the SSD is already doing this work.
+- **The reload cost after a keep-alive expiry.** Still unmeasured, but less
+  interesting than it looked: if idle weights are already evictable, the OS is
+  doing a finer-grained version of the same trade without unloading anything.
+  Measure by unloading `qwen7b` (5 GB, cheap) and timing the reload, then
+  extrapolating — its blob is 4.7 GB against glm's 31.8.
+- **The SSD's cold sequential read.** The ~7 GB/s in conversation is a
+  specification claim for this class of machine, not a measurement of this one.
+- **What `glm-4.7-flash` costs at q4.** Roughly half is the folklore figure.
+  Whether the *quality* is acceptable for `chat` and `code` on this deployment
+  is the actual question, and nothing here has asked it.
+- **Whether 12 GB of headroom survives a full-context request.** The ceiling is
+  65536 tokens and context is superlinear on unified memory; §4.3 counts that
+  as one of the six guardrails. Nobody has driven a request to the ceiling and
+  watched the figure.
+- **A 3 GB discrepancy nobody has explained.** Ollama's `/api/ps` says 38.3 GB
+  for glm; the heartbeat's observation stored 35.7; the declared profile says
+  32. The read-back already closed the 32→35.7 gap (PROGRESS 2026-07-30, KV
+  cache), but 35.7→38.3 is a third number and this is the first time it has
+  been written down.
+
+#### The options, none taken
+
+Ordered by how well each fits, and stated as candidates rather than a plan.
+
+1. **Smaller quantisation.** `q8_0` → `q4_K_M` on glm, roughly 38 → 20 GB. It
+   trades **quality, not speed** — and would likely be *faster*, since memory
+   bandwidth is the bottleneck. Probably the best trade, and the one that needs
+   an evaluation rather than a config change.
+2. **`OLLAMA_KEEP_ALIVE` as a duration.** Worth much less than it looked
+   before the correction above. Unloading is the coarse version of what the OS
+   already does at page granularity when the weights go idle, and it costs a
+   full reload where eviction costs only the pages actually needed again. `-1`
+   looks like the right setting rather than an oversight.
+3. **Nothing — now the leading candidate.** Swap is 0 bytes, the compressor is
+   not straining, the platform is not degrading, and the alarming number turned
+   out to be a transient. "It is tight while serving" is not "it is wrong", and
+   this repository has a habit of fixing things that were not broken.
+
+**What is genuinely not available**, so nobody proposes it: the research
+direction this resembles — Apple's *"LLM in a flash"* (2023), FlexGen,
+DeepSpeed ZeRO-Infinity, which keep weights on flash and stream layers on
+demand with sparsity — is **real work that is not in Ollama or llama.cpp
+today**. `n_gpu_layers` is not it either: on unified memory "CPU" and "GPU" are
+the same RAM, so partial offload moves nothing. What *is* available is the
+thing already happening — mmapped, clean, file-backed weights that the OS is
+free to drop and re-read.
 
 ### Prompt templates, and the feature defined by what it does not do
 
@@ -6712,6 +6863,20 @@ implementation:
   for it and the entrance exists, but nothing depends on it yet, and closing it
   would remove an entire attack surface. Worth asking again once the tailnet
   entrance is in use and it is clear who actually cannot install Tailscale.
+
+- **Whether anything should be done about memory headroom. — OPEN, raised
+  2026-08-05, leading candidate: nothing.** Free memory swings between ~12 GB
+  and ~37 GB of 64 depending on whether the node is serving; inference wires
+  the three permanently-resident models in about a second and idle releases
+  them back to clean file-backed pages the OS may evict and re-read from SSD.
+  The SSD-for-RAM trade this was opened to consider is therefore **already
+  happening**, at page granularity, without a setting. **q4 quantisation** is
+  the one real alternative (≈18 GB back, trading quality rather than speed);
+  **a keep-alive duration** is the coarse version of what the OS already does.
+  Open measurements: the wiring tail's length, whether eviction occurs under
+  pressure, and q4's quality here. Evidence, and the confident wrong inference
+  that preceded it, are in the 2026-08-05 entry at the top of this file.
+  **Nothing has been changed on the deployment.**
 
 ### Standing risks to revisit
 

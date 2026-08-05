@@ -201,6 +201,28 @@ Full list in [security.md](./architecture/security.md) §13, checklist in §14.
 
 No open decisions block Phase 1.
 
+**Open — raised 2026-08-05, nothing changed on the deployment:**
+
+- **Memory headroom, which turned out to be a question about *when* you look.**
+  Free memory on this node swings between ~12 GB and ~37 GB of 64: inference
+  wires the three permanently-resident models (44.4 GB) within a second, and
+  after a long enough idle they revert to clean file-backed pages of the
+  mmapped blob that the OS may evict and re-read from SSD. Measured both ends
+  with nothing unloaded in between. **So the SSD-for-RAM trade this was opened
+  to consider is already happening**, at page granularity, without a setting.
+  What is left to decide is whether anything is worth doing at all — the
+  leading candidate is **nothing**, since swap is at 0 bytes and the platform
+  is not degrading; **q4 quantisation** is the one real alternative (≈18 GB
+  back, trades quality not speed, probably faster since bandwidth is the
+  bottleneck); **a keep-alive duration** is now the weakest, being the coarse
+  version of what the OS already does. Open measurements: the length of the
+  wiring tail (>20 s, <~20 min), whether eviction actually occurs under
+  pressure, and q4's quality here. **An earlier version of this item asserted
+  the weights were permanently unreclaimable; it was labelled unproven, checked
+  because of the label, and was wrong.** Evidence and the failed inference in
+  [PROGRESS.md](./PROGRESS.md) 2026-08-05; guardrail context in
+  [security.md](./architecture/security.md) §4.3
+
 Settled:
 
 - Backend structure: full hexagonal architecture ([backend.md](./architecture/backend.md))

@@ -367,6 +367,14 @@ The memory budget in Phase 1 is **static**: `nodes.total_memory_gb` minus the su
 
 The Phase 2 observability stack (Prometheus and Grafana, §13.0) ships the *emission* side: each application exposes what it is doing at `/metrics`. It does not yet change this check. The `MetricsPort` the budget would read is the *ingestion* side, a live free-memory figure for the node, and a real one only exists on the Mac Studio. So the budget stays static and authoritative until that figure is real, which is the conservative reading of the rule above rather than a gap.
 
+**Free memory on this node swings between roughly 12 GB and 37 GB depending on whether it is serving, and that is a measured property rather than a fault — OPEN, 2026-08-05, nothing changed.** Three models are held resident permanently by `OLLAMA_KEEP_ALIVE=-1` (`/api/ps` reports `expires_at` in the year 2318), totalling 44.4 GB. Inference **wires** those pages within about a second; idle, they revert to clean **file-backed** pages of the mmapped blob, which the OS is free to evict and re-fault from SSD. Measured on this machine: 40.6 GB wired and 12.1 GB available while serving, 2.3 GB wired and 37.2 GB available after twenty minutes idle, with nothing unloaded in between.
+
+Three consequences for this section. **A single sample of free memory is not a capacity measurement** — the host status screen shows whichever moment it is opened, and the alarming reading is the normal one taken during work. **The static budget's conservatism is doing real work here**, since the figure it would replace is this volatile. And **the length of the wiring tail is unmeasured** — bounded only at more than 20 seconds and less than about 20 minutes — which is the number that decides whether 12 or 37 is what a second concurrent load should be planned against.
+
+Two further numbers are unverified and both bear on this row: whether the OS actually evicts those file-backed pages under pressure rather than merely being free to, and whether headroom survives a request at the 65536-token ceiling, where context cost is superlinear. A third is unexplained: Ollama reports 38.3 GB resident for `glm-4.7-flash`, the heartbeat observed 35.7, and the declared profile says 32 — the read-back closed the first gap on 2026-07-30 and nobody has looked at the second.
+
+**An earlier version of this paragraph said the weights are wired and therefore permanently unreclaimable by swap, compression or eviction.** It was recorded as inferred-not-proven, was checked because of that label, and was false within the hour. See [PROGRESS.md](../PROGRESS.md) 2026-08-05, which keeps the wrong version and the experiment that killed it.
+
 ### 4.4 General Public Service Hardening
 
 - No version numbers in responses; `debug=False`; error bodies never carry stack traces, internal model names, or node addresses. Enforced centrally by the error mapping in [backend.md](./backend.md) §5.
