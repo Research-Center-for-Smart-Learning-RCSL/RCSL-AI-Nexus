@@ -1,33 +1,101 @@
+#!/usr/bin/env python3
 """Can a local model actually drive an agent loop?
 
 A ladder, simplest first. Each rung isolates one thing that has to work before
-the next is even meaningful, so a failure says *which* ability is missing
-rather than "the agent did not finish".
+the next is even meaningful, so a failure names *which* ability is missing
+rather than reporting that the agent did not finish.
 
-Run one rung at a time:  python3 agentloop.py 1
+    NEXUS_API_KEY=nx_live_... scripts/measure-agent-loop.py 10
+    NEXUS_API_KEY=nx_live_... scripts/measure-agent-loop.py all
+
+The rungs: 1 emit a call, 2 fill an argument, 3 complete the round trip,
+4 choose between two tools, 5 chain two calls, 6 decline to call when the
+question needs no tool, 7 two calls in one turn, 8 recover from a tool error,
+9 choose from a menu of eight, 10 the real shape — read failing tests, find
+the bug, fix the source, re-run to confirm.
+
+Environment:
+
+    NEXUS_API_KEY      required; a key scoped to the capability below
+    NEXUS_MODEL        the *capability*, not a model name (default: chat)
+    NEXUS_THINK        true/false to override deliberation per request.
+                       Unset asks for nothing, so the routing policy decides,
+                       which is what a real client does. Set it to measure what
+                       deliberation costs: an agent pays it again on every tool
+                       round trip rather than once per conversation.
+    NEXUS_GATEWAY      base URL. Defaults to TAILNET_IP from .env on port 8000,
+                       because the gateway publishes on the tailnet address and
+                       never on loopback or 0.0.0.0
+    NEXUS_PROXY_SECRET  } see below; both default to reading ./secrets
+    NEXUS_CLIENT_IP    an address the country filter allows (default: a TW one)
+
+Standing in for the proxy is not optional. Under ENV=production the gateway
+requires the shared-secret header and refuses to fall back to the peer address
+for `X-Forwarded-For`, so a request straight from the host is a 400
+`untrusted_proxy`. That is the perimeter working; this supplies both headers
+the way openresty would.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.error
-import os
 import urllib.request
+from pathlib import Path
 
-BASE = "http://100.108.250.62:8000/v1/chat/completions"
-KEY = open("/tmp/nexus_test_key").read().strip()
-# The gateway is behind a trusted proxy in production: it requires the shared
-# secret and refuses to fall back to the peer address for X-Forwarded-For, so a
-# direct request is an `untrusted_proxy` 400. This stands in for openresty.
-PROXY_SECRET = open("/Users/rcslmac1/dev/RCSL-AI-Nexus/secrets/proxy_shared_secret").read().strip()
-CLIENT_IP = "168.95.1.1"  # Chunghwa Telecom; the country filter allows TW and AU
-# NEXUS_THINK=false measures what deliberation costs an agent, which pays for it
-# on every tool round trip rather than once per conversation.
-THINK = {"true": True, "false": False}.get(os.environ.get("NEXUS_THINK", ""), None)
+REPO = Path(__file__).resolve().parent.parent
+
+def _default_gateway() -> str:
+    """`TAILNET_IP` from `.env`, not loopback.
+
+    The gateway deliberately publishes on the tailnet address rather than
+    `0.0.0.0` or `127.0.0.1` (see the README, "Two things that look like
+    mistakes"), so a loopback default would fail on every real deployment and
+    succeed only where `TAILNET_IP=127.0.0.1`, which is the dev-machine value
+    in `.env.example`. Reading the same variable Compose reads keeps the two
+    from disagreeing.
+    """
+    env = REPO / ".env"
+    if env.is_file():
+        for line in env.read_text().splitlines():
+            name, _, value = line.partition("=")
+            if name.strip() == "TAILNET_IP" and value.split("#")[0].strip():
+                return f"http://{value.split('#')[0].strip()}:8000"
+    return "http://127.0.0.1:8000"
+
+
+GATEWAY = os.environ.get("NEXUS_GATEWAY", _default_gateway()).rstrip("/")
+BASE = f"{GATEWAY}/v1/chat/completions"
+CLIENT_IP = os.environ.get("NEXUS_CLIENT_IP", "168.95.1.1")  # Chunghwa Telecom, TW
 MODEL = os.environ.get("NEXUS_MODEL", "chat")  # the capability, not a model name
+THINK = {"true": True, "false": False}.get(os.environ.get("NEXUS_THINK", "").lower())
 TOTALS = {"turns": 0, "seconds": 0.0, "prompt": 0, "completion": 0}
+
+
+def _required(env: str, secret_file: str, what: str) -> str:
+    """Resolved on first use rather than at import, so `--help` and a syntax
+    check work on a machine that has neither."""
+    value = os.environ.get(env)
+    if value:
+        return value.strip()
+    path = REPO / "secrets" / secret_file
+    if path.is_file():
+        return path.read_text().strip()
+    sys.exit(f"{what}: set {env}, or run from a checkout with secrets/{secret_file}")
+
+
+def key() -> str:
+    value = os.environ.get("NEXUS_API_KEY")
+    if not value:
+        sys.exit(
+            "NEXUS_API_KEY is not set. Issue a key for the capability under test "
+            "from the management UI (API keys), or see "
+            "docs/runbooks/connect-an-agent-client.md. The plaintext is shown once."
+        )
+    return value.strip()
 
 # --- tools ---------------------------------------------------------------
 
@@ -90,9 +158,11 @@ def call(messages, tools=None, model=MODEL, think=THINK, timeout=900):
         BASE,
         data=json.dumps(payload).encode(),
         headers={
-            "Authorization": f"Bearer {KEY}",
+            "Authorization": f"Bearer {key()}",
             "Content-Type": "application/json",
-            "X-Nexus-Proxy": PROXY_SECRET,
+            "X-Nexus-Proxy": _required(
+                "NEXUS_PROXY_SECRET", "proxy_shared_secret", "the trusted-proxy secret"
+            ),
             "X-Forwarded-For": CLIENT_IP,
         },
     )
@@ -388,14 +458,47 @@ def rung10():
     print(f"  => {'PASS' if fixed and ran_after_fix else 'FAIL'}: fixed the bug and re-ran the tests")
 
 
-RUNGS = {1: rung1, 2: rung2, 3: rung3, 4: rung4, 5: rung5, 6: rung6,
-         7: rung7, 8: rung8, 9: rung9, 10: rung10}
+RUNGS = {
+    1: rung1,
+    2: rung2,
+    3: rung3,
+    4: rung4,
+    5: rung5,
+    6: rung6,
+    7: rung7,
+    8: rung8,
+    9: rung9,
+    10: rung10,
+}
 
-if __name__ == "__main__":
-    which = int(sys.argv[1])
-    print(f"--- rung {which}   think={THINK} ---")
+
+def run(which: int) -> None:
+    for field in TOTALS:
+        TOTALS[field] = type(TOTALS[field])()
+    print(f"--- rung {which}   model={MODEL}  think={THINK} ---")
     RUNGS[which]()
     print(
         f"  TOTAL {TOTALS['turns']} turns  {TOTALS['seconds']:.1f}s  "
         f"prompt={TOTALS['prompt']}  completion={TOTALS['completion']}"
     )
+
+
+def main(argv: list[str]) -> None:
+    if len(argv) != 2 or argv[1] in {"-h", "--help"}:
+        sys.exit(__doc__)
+    if argv[1] == "all":
+        for which in sorted(RUNGS):
+            run(which)
+            print()
+        return
+    try:
+        which = int(argv[1])
+    except ValueError:
+        sys.exit(f"not a rung: {argv[1]!r}. Give 1..{max(RUNGS)} or 'all'.")
+    if which not in RUNGS:
+        sys.exit(f"no rung {which}. Give 1..{max(RUNGS)} or 'all'.")
+    run(which)
+
+
+if __name__ == "__main__":
+    main(sys.argv)

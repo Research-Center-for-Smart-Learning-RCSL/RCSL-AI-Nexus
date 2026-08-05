@@ -91,6 +91,38 @@ Carried out with a single-use key scoped to `chat`, revoked immediately after �
 the seventh such key in this deployment's history, and the reason the API keys
 table hides revoked rows by default.
 
+### The harness I told you to reproduce with could not run
+
+Cleaning up after the measurement turned up the same defect the measurement was
+about. `scripts/measure-agent-loop.py` was committed straight out of the
+scratchpad, and both the commit message and the ROADMAP said "reproduce with
+it" — a claim that was false at the moment it was written.
+
+It read `/tmp/nexus_test_key` and an absolute `/Users/rcslmac1/...` path **at
+module level**, so on any other machine it did not fail at the request, it
+failed at *import*: no `--help`, no usage, no way to discover what it wanted.
+Deleting that temporary key during cleanup broke it on this machine too. It was
+also `-rw-r--r--` beside a sibling script that is executable, and it hardcoded
+this deployment's tailnet address.
+
+Now: configuration by environment with the secrets resolved on first use rather
+than at import, the repository root found from the script's own location, a
+missing key that says how to get one, an `all` mode, and a rung number that is
+not a rung answered with the range. Made executable.
+
+**The default gateway was a bug of its own, and an instructive one.** The
+obvious default is `http://127.0.0.1:8000`; it is wrong on every real
+deployment, because the gateway publishes on the tailnet address and never on
+loopback — the README's "two things that look like mistakes" is precisely this.
+A loopback default would have worked only where `TAILNET_IP=127.0.0.1`, which
+is the dev-machine value in `.env.example`, so it would have passed exactly
+where nobody needs it. It reads `TAILNET_IP` from `.env` now, the same variable
+Compose reads, so the two cannot disagree.
+
+Verified the repair the only way that counts: issued a key, ran the committed
+file by path as a fresh checkout would, watched it solve the task in 5 turns
+and 7.3 s, revoked the key.
+
 ### The `code` policy exists, and the client does not have to know
 
 Created straight after the measurement: `code` → `glm47-flash`,
