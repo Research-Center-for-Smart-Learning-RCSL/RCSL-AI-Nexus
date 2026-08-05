@@ -38,6 +38,7 @@ from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.tenant import Tenant
 from app.domain.entities.user import User
 from app.domain.ports.infrastructure_ports import JobStatus
+from app.domain.services.debug_window import MAX_DEBUG_WINDOW_MINUTES
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -499,9 +500,12 @@ class UpdateApiKeyRequest(BaseModel):
 
 
 class SetDebugWindowRequest(BaseModel):
-    minutes: int = Field(ge=0, le=24 * 60)
-    """0 closes the window. The ceiling is a day, restated from the use case
-    so the form's limit and the rule cannot drift apart silently."""
+    """Shared by the API-key and user windows, which are one control on two
+    credentials (`domain/services/debug_window.py`)."""
+
+    minutes: int = Field(ge=0, le=MAX_DEBUG_WINDOW_MINUTES)
+    """0 closes the window. The ceiling is imported rather than restated, so
+    the form's limit and the rule it enforces cannot drift apart."""
 
 
 class IssuedApiKeyResponse(BaseModel):

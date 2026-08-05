@@ -23,6 +23,7 @@ from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.entities.user import User
 from app.domain.exceptions import (
     LastAdministratorError,
+    ModelStateConflictError,
     NotAuthorizedError,
     UserNotFoundError,
 )
@@ -32,6 +33,7 @@ from app.domain.ports.repositories import (
     UserRepositoryPort,
 )
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort, SessionRegistryPort
+from app.domain.services.debug_window import debug_window_until
 from app.domain.services.grantable_roles import assert_may_grant
 from app.shared.clock import Clock
 
@@ -131,6 +133,40 @@ class ManageUsers:
             actor, "user.disabled" if disabled else "user.enabled", target=user.id
         )
         return replace(user, disabled_at=now if disabled else None)
+
+    async def set_debug_window(self, actor: Actor, user_id: str, *, minutes: int) -> User:
+        """Open, extend, or close (minutes=0) the account's debug window.
+
+        The other half of the switch security.md section 9.2 describes, and
+        the half that covers the case the API-key one cannot: **the management
+        UI carries no API key**. An administrator debugging their own admin
+        session is authenticated by a session cookie, so until this existed
+        there was no credential on which their window could be opened — while
+        `identity.py` had been reading `user.debug_logging_until` and granting
+        on it since the field was first consumed. A read with no writer looks
+        exactly like a working feature.
+
+        No self-guard, unlike role change and disable. Those are escalation
+        and lockout; this only changes what the caller is told about their own
+        failures, and debugging one's own session is the ordinary use.
+        """
+        self._authz.require(actor, Scope.USER_WRITE)
+        until = debug_window_until(self._clock.now(), minutes)
+        user = await self._require(user_id)
+
+        if not await self._users.set_debug_logging_until(user.id, until):
+            # The conditional UPDATE matched nothing, so the account is
+            # disabled — either already, or by a request that landed while
+            # this one was in flight. Both mean the window was not set.
+            raise ModelStateConflictError(detail=f"user {user_id} is disabled")
+
+        await self._audit.record(
+            actor,
+            "user.debug_window_set",
+            target=user.id,
+            detail={"until": until.isoformat() if until else "off"},
+        )
+        return replace(user, debug_logging_until=until)
 
     async def delete(self, actor: Actor, user_id: str) -> None:
         """Removes the account and everything that references it.

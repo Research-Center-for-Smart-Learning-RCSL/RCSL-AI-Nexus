@@ -28,6 +28,7 @@ from app.interfaces.http.schemas.admin_schemas import (
     CreateUserRequest,
     CreateUserResponse,
     InvitationResponse,
+    SetDebugWindowRequest,
     UpdateUserRequest,
     UserResponse,
 )
@@ -100,6 +101,26 @@ async def update_user(
     user = await users.update(actor, user_id, display_name=payload.display_name, role=payload.role)
     if payload.disabled is not None:
         user = await users.set_disabled(actor, user_id, disabled=payload.disabled)
+    return UserResponse.of(user)
+
+
+@router.post("/{user_id}/debug")
+async def set_debug_window(
+    user_id: str,
+    payload: SetDebugWindowRequest,
+    actor: Annotated[Actor, Depends(current_actor)],
+    users: Annotated[ManageUsers, Depends(build_manage_users)],
+) -> UserResponse:
+    """Open (or close, with 0) the window during which error responses to this
+    account carry operator-facing detail.
+
+    Its own verb rather than a `PATCH` field, for the reason the API-key one is:
+    it changes what the platform reveals, not what the account may do, and the
+    audit trail should show it as its own kind of act. This is the half that
+    covers the management UI, which authenticates by session and so has no API
+    key to open a window on.
+    """
+    user = await users.set_debug_window(actor, user_id, minutes=payload.minutes)
     return UserResponse.of(user)
 
 

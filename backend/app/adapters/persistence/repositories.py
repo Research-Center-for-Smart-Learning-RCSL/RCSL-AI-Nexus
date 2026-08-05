@@ -502,6 +502,25 @@ class PostgresUserRepository(_TenantScoped):
             )
         )
 
+    async def set_debug_logging_until(self, user_id: str, until: datetime | None) -> bool:
+        """Targeted and conditional, the same shape as `advance_totp_counter`.
+
+        `disabled_at IS NULL` belongs in the UPDATE rather than in a check
+        before it: a disable landing in between would otherwise leave the
+        window open on an account that can no longer sign in, and the caller
+        would be told it had been set. Returns False so the use case can say
+        which of the two happened.
+        """
+        result = await self._session.execute(
+            self._scope(
+                update(UserRow)
+                .where(UserRow.id == user_id, UserRow.disabled_at.is_(None))
+                .values(debug_logging_until=until),
+                UserRow.tenant_id,
+            )
+        )
+        return (result.rowcount or 0) == 1  # type: ignore[attr-defined]
+
     async def delete(self, user_id: str) -> None:
         await self._session.execute(
             self._scope(delete(UserRow).where(UserRow.id == user_id), UserRow.tenant_id)

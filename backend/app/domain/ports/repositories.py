@@ -187,6 +187,17 @@ class UserRepositoryPort(Protocol):
         a concurrent disable or TOTP-counter advance."""
         ...
 
+    async def set_debug_logging_until(self, user_id: str, until: datetime | None) -> bool:
+        """Open or close the account's debug window, False if it is disabled.
+
+        Conditional on `disabled_at IS NULL` in the UPDATE rather than checked
+        beforehand, for the reason `advance_totp_counter` gives: a read, a
+        Python comparison and a write lets a concurrent disable land in
+        between, and the window would then be open on an account somebody has
+        just shut off.
+        """
+        ...
+
     async def delete(self, user_id: str) -> None: ...
 
     async def count_admins(self) -> int:

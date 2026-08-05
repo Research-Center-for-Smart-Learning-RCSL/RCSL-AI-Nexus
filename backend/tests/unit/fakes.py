@@ -90,6 +90,16 @@ class FakeUsers:
     async def update_profile(self, user_id: str, *, display_name: str, role: str) -> None:
         self.rows[user_id] = replace(self.rows[user_id], display_name=display_name, role=Role(role))
 
+    async def set_debug_logging_until(self, user_id: str, until: datetime | None) -> bool:
+        """Models the conditional UPDATE, including its refusal on a disabled
+        account. A version that always returned True would let the guard's
+        test pass against an implementation that had no guard."""
+        user = self.rows[user_id]
+        if user.disabled_at is not None:
+            return False
+        self.rows[user_id] = replace(user, debug_logging_until=until)
+        return True
+
     async def delete(self, user_id: str) -> None:
         self.rows.pop(user_id, None)
 

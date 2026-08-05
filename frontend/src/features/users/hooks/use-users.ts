@@ -10,6 +10,7 @@ import {
   issuePasswordReset,
   listRoles,
   listUsers,
+  setUserDebugWindow,
   updateUser,
 } from '@/features/users/api';
 import type {
@@ -96,6 +97,28 @@ export function useIssueInvitation() {
 export function useIssuePasswordReset() {
   return useMutation({
     mutationFn: (userId: string) => issuePasswordReset(userId),
+    onError: (error) => toast.error(describeError(error)),
+  });
+}
+
+/**
+ * Opens (minutes > 0) or closes (0) an account's debug window. While it is
+ * open, error responses to that person carry operator-facing detail; the
+ * backend caps it at 24 hours and audits the change.
+ */
+export function useSetUserDebugWindow() {
+  const invalidate = useInvalidateUsers();
+  return useMutation({
+    mutationFn: ({ userId, minutes }: { userId: string; minutes: number }) =>
+      setUserDebugWindow(userId, minutes),
+    onSuccess: async (_user, { minutes }) => {
+      await invalidate();
+      toast.success(
+        minutes > 0
+          ? `Debug window open for ${minutes} minutes. Error responses to this account now carry detail.`
+          : 'Debug window closed.',
+      );
+    },
     onError: (error) => toast.error(describeError(error)),
   });
 }
