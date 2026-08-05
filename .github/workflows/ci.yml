@@ -129,6 +129,24 @@ jobs:
         # explicit rather than environment-dependent.
         run: pnpm install --frozen-lockfile
 
+      # The generated types are committed, so `tsc` above checks the schemas
+      # against whatever was committed rather than against the backend as it is
+      # now. Regenerating here and failing on a diff is what closes that gap: a
+      # backend change that renames or retypes a field turns red in this job
+      # instead of turning up in a browser. uv is installed for this step alone,
+      # which is cheap next to being wrong about the contract.
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Generated API types are current
+        run: |
+          ./scripts/generate-api-types.sh
+          git diff --exit-code -- frontend/src/lib/generated/admin-api.ts || {
+            echo "::error::admin-api.ts is stale. Run scripts/generate-api-types.sh and commit the result."
+            exit 1
+          }
+
       - name: TypeScript
         working-directory: frontend
         run: pnpm exec tsc --noEmit
