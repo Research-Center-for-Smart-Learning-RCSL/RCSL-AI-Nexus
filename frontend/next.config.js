@@ -1,4 +1,4 @@
-﻿/** @type {import('next').NextConfig} */
+/** @type {import('next').NextConfig} */
 
 // The /admin proxy lives in src/middleware.ts, not here. A rewrites() entry is
 // resolved at build time and serialised into the standalone bundle, so the

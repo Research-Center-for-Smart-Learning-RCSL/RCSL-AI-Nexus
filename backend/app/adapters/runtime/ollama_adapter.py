@@ -19,6 +19,7 @@ from typing import Any
 import httpx
 
 from app.adapters.runtime.tool_support import should_send_tools
+from app.adapters.runtime.transport import timeout_detail
 from app.adapters.runtime.validation import assert_valid_model_ref
 from app.domain.entities.chat import (
     CompletionChunk,
@@ -30,7 +31,12 @@ from app.domain.entities.chat import (
     ToolDefinition,
 )
 from app.domain.entities.model import PullProgress, RuntimeResidency
-from app.domain.exceptions import DomainError, ModelNotFoundError, NoAvailableModelError
+from app.domain.exceptions import (
+    DomainError,
+    ModelNotFoundError,
+    NoAvailableModelError,
+    RuntimeCapabilityError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -135,23 +141,46 @@ def _tool_payload(tools: Sequence[ToolDefinition]) -> list[dict[str, Any]]:
 def _arguments_for_upstream(arguments: str) -> Any:
     """Ollama takes a tool call's arguments as an object; the domain holds text.
 
-    Decoded where it can be. Where it cannot, the raw string is sent rather
-    than a substitute: these arguments are model output that this platform
-    passed through verbatim and the client replayed, so a conversation whose
-    model once emitted malformed JSON stays resumable, and Ollama gets to make
-    its own decision about a payload we did not invent.
+    Undecodable arguments are refused here, loudly, as a capability this
+    runtime does not have. The first version sent the raw string instead, on
+    the theory that a conversation whose model once emitted malformed JSON
+    should stay replayable and Ollama should decide — **measured false on
+    0.32.4** (2026-08-05): Ollama types the field as an object and answers 400
+    for any string, malformed or not, so the fallback had no input on which it
+    could succeed. Worse than useless, actively wrong: that 400 came back
+    through `_raise_for_status` as `no_available_model`, whose documented
+    remedy is retry, for a failure that is permanent — a client following the
+    docs would replay the same conversation forever.
+
+    `RuntimeCapabilityError` is the honest classification: the arguments are
+    legal on the wire (they are model output and the schema deliberately admits
+    them), the MLX adapter can carry them (its server takes the string), and
+    this runtime genuinely cannot. A 400 tells the caller the request itself is
+    the problem — repair or drop the turn — where a 503 told them to retry it.
     """
     try:
         return json.loads(arguments)
-    except json.JSONDecodeError:
-        return arguments
+    except json.JSONDecodeError as exc:
+        raise RuntimeCapabilityError(
+            detail=f"ollama takes tool-call arguments as a JSON object and cannot "
+            f"carry arguments that do not parse: {arguments[:200]!r}"
+        ) from exc
 
 
 def _message_payload(message: Message) -> dict[str, Any]:
     payload: dict[str, Any] = {"role": message.role.value, "content": message.content}
     if message.tool_calls:
+        # `id` goes back too. This adapter minted it, the tool message's
+        # `tool_call_id` cites it, and a build that pairs on ids needs both
+        # halves of the pair present — omitting it here pointed the result at
+        # an id that existed nowhere in the history. Verified accepted on
+        # 0.32.4 (2026-08-05); an older build ignores an unknown field, which
+        # is the same argument the two spellings below already rest on.
         payload["tool_calls"] = [
-            {"function": {"name": c.name, "arguments": _arguments_for_upstream(c.arguments)}}
+            {
+                "id": c.id,
+                "function": {"name": c.name, "arguments": _arguments_for_upstream(c.arguments)},
+            }
             for c in message.tool_calls
         ]
     if message.role is MessageRole.TOOL:
@@ -167,12 +196,21 @@ def _message_payload(message: Message) -> dict[str, Any]:
 
 
 def _parse_tool_calls(raw: Any) -> tuple[ToolCall, ...]:
-    """Ollama reports a whole call and gives it no id; OpenAI requires one.
+    """The id is minted here rather than taken from Ollama, on purpose.
 
-    So the id is minted here. It is the handle a client uses to pair its tool
-    result back to the call, and it has to survive the round trip, which means
-    it must be unique within a conversation rather than merely within a chunk —
-    an index would collide across turns and pair a result with the wrong call.
+    It is the handle a client uses to pair its tool result back to the call, so
+    it has to survive the round trip, which means it must be unique within a
+    conversation rather than merely within a chunk — an index would collide
+    across turns and pair a result with the wrong call.
+
+    **Whether Ollama supplies one at all is version-dependent**, which is the
+    reason not to depend on it. It supplied none when this was written; 0.32.4
+    supplies `call_85x6g8ts`-shaped ids (observed 2026-08-05). Neither the
+    presence nor the uniqueness of that field is part of any contract Ollama
+    publishes, and a runtime that restarted the sequence per turn would produce
+    exactly the collision above — silently, as a coherent conversation about the
+    wrong thing. Minting unconditionally costs nothing and depends on nothing:
+    the id is opaque to the client, which only has to echo back what we sent.
     """
     if not isinstance(raw, list):
         return ()
@@ -309,6 +347,16 @@ class OllamaAdapter:
         counted = 0
         saw_done = False
         called_tools = False
+        forwarded_calls: set[tuple[str, str]] = set()
+        """(name, arguments) of every call already yielded, consulted only on
+        the terminal event. On the build this was written against, calls arrive
+        on interim events and the terminal event repeats nothing — but that is
+        observed behaviour, not a contract, and a build that restated the
+        turn's calls in its done event would have an agent execute every one of
+        them twice. Side effects make that the expensive direction to be wrong
+        in, so the terminal event is filtered against what was already sent.
+        Interim events are never filtered: a model that genuinely asks for the
+        same call twice puts both in its own messages, and those go through."""
         # A timeout here is a `DomainError` or it is a 500. Nothing above this
         # layer handles an httpx exception: it escapes the router's handler,
         # which only knows `DomainError`, so before this the honest and
@@ -319,6 +367,7 @@ class OllamaAdapter:
         # 503 rather than a distinct code: the caller's remedy is to retry, and
         # a retry usually works, because the prompt is now in the runtime's
         # prefix cache and evaluation is nearly free the second time.
+        received_any = False
         try:
             async with (
                 httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client,
@@ -329,6 +378,7 @@ class OllamaAdapter:
                 async for line in response.aiter_lines():
                     if not line.strip():
                         continue
+                    received_any = True
                     try:
                         event = json.loads(line)
                     except json.JSONDecodeError:
@@ -347,11 +397,22 @@ class OllamaAdapter:
                     # a question that used its entire token budget thinking.
                     reasoning = message.get("thinking") or ""
                     calls = _parse_tool_calls(message.get("tool_calls"))
-                    if calls:
-                        called_tools = True
 
                     if event.get("done"):
                         saw_done = True
+                        repeated = tuple(
+                            c for c in calls if (c.name, c.arguments) in forwarded_calls
+                        )
+                        if repeated:
+                            logger.warning(
+                                "ollama repeated %s already-forwarded tool call(s) "
+                                "in its done event for %s, dropping the repeats",
+                                len(repeated),
+                                ref,
+                            )
+                            calls = tuple(c for c in calls if c not in repeated)
+                        if calls:
+                            called_tools = True
                         # Ollama reports the authoritative token count only at
                         # the end. Chunks were counted as one apiece so that a
                         # disconnect still bills something sensible, so emit
@@ -393,6 +454,9 @@ class OllamaAdapter:
                         # that is nothing but a call would otherwise be counted
                         # as producing nothing until the terminal correction.
                         counted += 1
+                        if calls:
+                            called_tools = True
+                            forwarded_calls.update((c.name, c.arguments) for c in calls)
                         yield CompletionChunk(
                             delta=delta, reasoning=reasoning, tool_calls=calls, token_count=1
                         )
@@ -407,9 +471,7 @@ class OllamaAdapter:
                     )
         except httpx.TimeoutException as exc:
             raise NoAvailableModelError(
-                detail=f"ollama timed out for {ref} after {self._timeout.read}s "
-                f"without sending a byte; the prompt may be too long to evaluate "
-                f"within the read timeout"
+                detail=timeout_detail("ollama", ref, exc, self._timeout, mid_stream=received_any)
             ) from exc
 
     async def embed(self, ref: str, texts: Sequence[str]) -> list[list[float]]:
