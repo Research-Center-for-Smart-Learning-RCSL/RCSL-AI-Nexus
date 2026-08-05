@@ -38,6 +38,16 @@
  * declares nullable, and the moment it *is* null the parse throws and the
  * screen shows an error instead of a row. So a nullable API field requires a
  * nullable schema, assignable or not.
+ *
+ * **What this cannot cover, so that the list below is not mistaken for
+ * coverage.** The document is generated from `main_admin_tailnet`, so anything
+ * served only by the public entrance — the two-step login challenge, the
+ * invitation-acceptance result — has no type here to check against and is
+ * guarded by its zod schema alone. Those are also the screens with no Playwright
+ * coverage yet (ROADMAP Phase 3), which is worth knowing together rather than
+ * separately. Request bodies are likewise unchecked: a form that sends the wrong
+ * shape is answered by the server with a 422 the operator sees, which is a worse
+ * experience but not a silent one, and it is the responses that fail invisibly.
  */
 
 import type { components } from '@/lib/generated/admin-api';
@@ -52,6 +62,7 @@ import type {
   DocumentText,
   KnowledgeDocument,
   Passage,
+  SearchResponse,
 } from '@/features/knowledge/schema';
 import type { AuditEntry, AuditLogPage } from '@/features/logs/schema';
 import type { DownloadJob, Model, Node } from '@/features/models/schema';
@@ -61,7 +72,8 @@ import type {
   RetentionPreview,
 } from '@/features/retention/schema';
 import type { RoutingPolicy } from '@/features/routing-policies/schema';
-import type { Tenant } from '@/features/tenants/schema';
+import type { CreateTenantResponse, Tenant } from '@/features/tenants/schema';
+import type { UsageAnalytics } from '@/features/usage/schema';
 import type { Invitation, RoleCatalogueEntry, User } from '@/features/users/schema';
 
 type Api = components['schemas'];
@@ -113,6 +125,7 @@ const _role: Agrees<RoleCatalogueEntry, Api['RoleResponse']> = true;
 const _apiKey: Agrees<ApiKey, Api['ApiKeyResponse']> = true;
 const _issuedKey: Agrees<IssuedApiKey, Api['IssuedApiKeyResponse']> = true;
 const _tenant: Agrees<Tenant, Api['TenantResponse']> = true;
+const _createdTenant: Agrees<CreateTenantResponse, Api['CreateTenantResponse']> = true;
 
 // --- the fleet -----------------------------------------------------------
 const _model: Agrees<Model, Api['ModelResponse']> = true;
@@ -126,6 +139,7 @@ const _gateway: Agrees<GatewayInfo, Api['GatewayInfoResponse']> = true;
 const _host: Agrees<HostStatus, Api['HostStatusResponse']> = true;
 const _auditEntry: Agrees<AuditEntry, Api['AuditEntryResponse']> = true;
 const _auditPage: Agrees<AuditLogPage, Api['AuditLogResponse']> = true;
+const _usage: Agrees<UsageAnalytics, Api['UsageAnalyticsResponse']> = true;
 
 // --- knowledge base ------------------------------------------------------
 const _collection: Agrees<Collection, Api['KnowledgeCollectionResponse']> = true;
@@ -133,6 +147,9 @@ const _document: Agrees<KnowledgeDocument, Api['KnowledgeDocumentResponse']> = t
 const _documentPage: Agrees<DocumentPage, Api['KnowledgeDocumentPageResponse']> = true;
 const _documentText: Agrees<DocumentText, Api['DocumentTextResponse']> = true;
 const _passage: Agrees<Passage, Api['RetrievedPassageResponse']> = true;
+// The envelope as well as its members: a rename of `passages` would reach a
+// browser while `RetrievedPassageResponse` stayed perfectly correct.
+const _search: Agrees<SearchResponse, Api['KnowledgeSearchResponse']> = true;
 
 // --- retention -----------------------------------------------------------
 const _retention: Agrees<RetentionPolicy, Api['RetentionPolicyResponse']> = true;

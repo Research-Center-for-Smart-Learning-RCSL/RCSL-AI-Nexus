@@ -16,8 +16,17 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-SPEC="$(mktemp -t nexus-openapi).json"
-trap 'rm -f "$SPEC"' EXIT
+# A directory, and a template carrying X's, because both halves of the obvious
+# one-liner were wrong. `mktemp -t nexus-openapi` is BSD-only: GNU coreutils
+# refuses a template with no X's ("too few X's in template"), so under
+# `set -euo pipefail` this script died on its first working line everywhere
+# except macOS -- including the CI step added to run it. And appending `.json`
+# to the result named a *different* path from the one mktemp created, so the
+# trap removed the suffixed file and left the real one behind: five empty files
+# had accumulated here before this was found.
+WORK="$(mktemp -d -t nexus-openapi-XXXXXX)"
+trap 'rm -rf "$WORK"' EXIT
+SPEC="$WORK/admin-openapi.json"
 
 OUT=frontend/src/lib/generated/admin-api.ts
 

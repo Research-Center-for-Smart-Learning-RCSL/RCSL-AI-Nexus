@@ -39,6 +39,7 @@ from app.interfaces.http.middleware.identity import (
 from app.interfaces.http.middleware.metrics import MetricsMiddleware
 from app.interfaces.http.request_context import RequestContextMiddleware
 from app.interfaces.http.routers import auth
+from app.interfaces.http.schemas.admin_schemas import AdminErrorResponse
 
 STRIPPED_HEADER_PREFIX = b"tailscale-"
 
@@ -74,6 +75,14 @@ def create_app() -> FastAPI:
         docs_url=None if settings.is_production else "/docs",
         openapi_url=None if settings.is_production else "/openapi.json",
         debug=False,
+        # Declares the 422 body the validation handler actually returns.
+        # FastAPI's default is its own `HTTPValidationError`, which stopped
+        # being true when the admin envelope landed; the generated frontend
+        # types were documenting a shape the server does not send.
+        responses={422: {"model": AdminErrorResponse}},
+        # FastAPI's default is its own `HTTPValidationError`, which stopped
+        # being true when the admin envelope landed; the generated frontend
+        # types were documenting a shape the server does not send.
         # No node heartbeat here. The lifespan is shared with the tailnet
         # entrance, which owns the sweep; running it in both had the two
         # processes writing the same rows every thirty seconds.

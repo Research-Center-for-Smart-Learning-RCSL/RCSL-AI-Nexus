@@ -39,6 +39,7 @@ from app.interfaces.http.middleware.csrf import CsrfMiddleware
 from app.interfaces.http.middleware.identity import current_actor, resolve_tailnet_actor
 from app.interfaces.http.middleware.metrics import MetricsMiddleware
 from app.interfaces.http.request_context import RequestContextMiddleware
+from app.interfaces.http.schemas.admin_schemas import AdminErrorResponse
 
 TAILSCALE_IDENTITY_HEADERS = ("tailscale-user-login", "tailscale-user-name")
 
@@ -54,6 +55,14 @@ def create_app() -> FastAPI:
         docs_url="/docs",
         openapi_url="/openapi.json",
         debug=False,
+        # Declares the 422 body the validation handler actually returns.
+        # FastAPI's default is its own `HTTPValidationError`, which stopped
+        # being true when the admin envelope landed; the generated frontend
+        # types were documenting a shape the server does not send.
+        responses={422: {"model": AdminErrorResponse}},
+        # FastAPI's default is its own `HTTPValidationError`, which stopped
+        # being true when the admin envelope landed; the generated frontend
+        # types were documenting a shape the server does not send.
         lifespan=admin_lifespan,
     )
 

@@ -499,6 +499,33 @@ class UpdateApiKeyRequest(BaseModel):
     expires_at: UtcDatetime | None = None
 
 
+class AdminErrorResponse(BaseModel):
+    """The shape every admin error actually has, declared so the document says so.
+
+    FastAPI advertises `HTTPValidationError` — its own `{"detail": [...]}` — for
+    the 422 on every route with a body. Since `_admin_validation_handler` that
+    has been false: the handler returns this instead, and the generated frontend
+    types were documenting a body the server does not send. In a change whose
+    point was making backend/frontend drift a compile error, the one response
+    that provably drifted was the one nothing could check, because it lives in
+    the document rather than in a schema anybody wrote.
+
+    Declared on the admin apps for 422 only. The other statuses carry this same
+    shape and remain undocumented, which is a smaller gap of the same kind: they
+    are raised from `DomainError` rather than from a route signature, so
+    enumerating them per route would be a list to maintain by hand and go stale.
+    """
+
+    code: str
+    """Stable identifier a caller may branch on, e.g. `invalid_request`."""
+
+    message: str
+    """Safe to show a person. Never carries internal detail (security.md §5)."""
+
+    request_id: str | None = None
+    """Matches the `X-Request-Id` header, for quoting into a bug report."""
+
+
 class SetDebugWindowRequest(BaseModel):
     """Shared by the API-key and user windows, which are one control on two
     credentials (`domain/services/debug_window.py`)."""
