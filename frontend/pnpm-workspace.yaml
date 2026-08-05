@@ -24,3 +24,35 @@ overrides:
   # from here until 0.35.0 shipped. This is not a dead dependency: two screens
   # render `next/image`, and the standalone server uses sharp to optimise them.
   sharp: '>=0.35.0'
+  # `shadcn` -> `@modelcontextprotocol/sdk` -> `ajv` pulls in fast-uri 3.1.4.
+  # GHSA-7p8r-x3mc-p8w7 (CVE-2026-18446): fast-uri < 3.1.5 treats `\\`, `/\`,
+  # or `\/` as having no URI authority, folding the rest into the path, while
+  # Node's WHATWG URL (fetch/undici/http) treats `\` like `/` for special
+  # schemes and extracts a different host from the same string. Dev-only
+  # (shadcn CLI), never reaches the build output, but the fix is a one-line
+  # floor and there is no reason to carry a host-confusion bug even there.
+  fast-uri: '^3.1.5'
+  # `shadcn` -> `@modelcontextprotocol/sdk` -> `express-rate-limit` pulls in
+  # ip-address 10.2.0. CVE-2026-69192 (GHSA-mwp4-54f8-5fhr): `Address4` decodes
+  # a leading-zero octet as decimal while URL/DNS resolvers decode it as octal,
+  # so `isPrivate()`-style SSRF guards can misclassify an internal address as
+  # public. Development-only dependency (shadcn CLI), never reaches the build
+  # output, but the fix is a one-line floor and there is no reason to carry it.
+  ip-address: '>=10.3.1'
+  # GHSA-4cwx-7wf7-3272 (CVE-2026-13697): undici's cache interceptor can leak
+  # a private response into the shared cache, or crash, on malformed
+  # `Cache-Control: private` directives. Dev-only (jsdom, shadcn, dotenvx pull
+  # it in transitively), and every dependent already declares a `^7.x` range
+  # that accepts the patch, so this stays on the 7.x line rather than letting
+  # an unbounded range jump to 8.x, which jsdom 29's own range doesn't cover.
+  undici: '^7.29.0'
+  # `shadcn` -> `@modelcontextprotocol/sdk` pulls in `@hono/node-server`
+  # 1.19.15. GHSA-frvp-7c67-39w9: serve-static middleware on Windows decodes
+  # `%5C` before the prefix check, so a request path that looks like it stays
+  # under the mounted prefix can escape it and read files outside the static
+  # root. `@modelcontextprotocol/sdk@1.29.0` declares `^1.19.9`, which does
+  # not reach the fix, so this floor forces the resolution past what the
+  # dependent's own range would pick; upstream's release notes describe v2 as
+  # a public-API-compatible performance rewrite, not a breaking change. Dev
+  # dependency only (shadcn CLI), never reaches the build output.
+  '@hono/node-server': '>=2.0.5'
