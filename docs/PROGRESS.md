@@ -17,6 +17,80 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-05
 
+### A local model does drive an agent loop, and deliberation costs 42% of the wall clock
+
+The question the whole 2026-08-05 tool-calling change was aimed at, and the one
+the code could not answer: *can `glm-4.7-flash` hold up its end?* Measured
+rather than argued, on a ladder of ten rungs, simplest first, so that a failure
+would name the missing ability instead of reporting "the agent did not finish".
+
+All ten passed. Every request was served by `glm47-flash` through the `chat`
+capability — confirmed from `usage_records` rather than from the response, since
+the gateway echoes the capability alias by design and would have looked
+identical had it fallen back to `qwen7b`.
+
+The rungs, in order: emit a call at all; fill an argument from the prompt;
+complete the round trip and use the result; choose between two tools; chain two
+calls where the second needs the first's answer; **not** call anything when the
+question does not need it; two independent calls in one turn; recover from a
+tool error; choose correctly from a menu of eight; and then the one that
+actually resembles the work — *the tests are failing, find out why, fix the
+source, re-run to confirm*, against a fake repository whose bug is `a - b` where
+`a + b` belongs.
+
+It solved that one every time, in six turns and about eleven seconds:
+
+    run_tests → read tests/test_calc.py → read src/calc.py
+    → write_file(src/calc.py, "return a + b") → run_tests → summarise
+
+Nothing in the prompt said where the bug was. It ran the tests, read the
+assertion, read the source, saw the sign, wrote the fix, and re-ran to confirm
+before answering.
+
+**The measurement worth keeping is the cost of thinking.** `OLLAMA_THINKING` is
+true for this deployment and the `chat` policy takes that default, so every one
+of those turns deliberated. Three runs each way, same task:
+
+| | turns | wall clock | completion tokens |
+|---|---|---|---|
+| `think: true` | 6–7 | 9.4 / 11.5 / 12.7 s | 470 / 591 / 654 |
+| `think: false` | 6 | 6.0 / 6.1 / 7.5 s | 275 / 283 / 366 |
+
+**42% of the wall clock and 46% of the output tokens, with the task solved
+6 out of 6 either way.** The ROADMAP predicted the shape of this on
+2026-08-05 — "an agent on `code` deliberates again on *every tool round trip*;
+a ten-step task reasons ten times over" — and this is the number under it. A
+`code` capability should carry `thinking: false`, which is exactly what the
+nullable per-policy column was added for.
+
+One nuance that makes the cost smaller than it first looks: **reasoning is paid
+for in output tokens but is not replayed into the next prompt.** An OpenAI
+client sends back `content` and `tool_calls`, not `reasoning_content`, so
+prompt tokens were within noise of each other either way (≈4.0–4.7k vs
+≈4.1–4.3k). Deliberation costs per turn; it does not compound through the
+context the way tool output does.
+
+Three platform properties fell out of this as evidence rather than assertion.
+**Two independent lookups in one turn arrived as two calls with two distinct
+ids** — the property the "index runs across the whole stream, not per chunk"
+fix exists for, seen from the client's side for the first time.
+**`reasoning_content` and `tool_calls` coexist in one message**, so the
+non-OpenAI extension does not disturb the OpenAI part. And **an actionable tool
+error changed the next argument** rather than producing the same call again:
+`get_population("Taipei")` → `ERROR: try the official name` →
+`get_population("Taipei City")`.
+
+**The perimeter also proved itself, by refusing.** The first request from this
+host came back `untrusted_proxy`: the gateway requires the shared-secret header
+and refuses to fall back to the peer address for `X-Forwarded-For`, so a
+measurement run on the machine has to impersonate openresty to get in at all.
+That is the control working, and it is worth writing down that a direct request
+to the tailnet address is not a way around it.
+
+Carried out with a single-use key scoped to `chat`, revoked immediately after —
+the seventh such key in this deployment's history, and the reason the API keys
+table hides revoked rows by default.
+
 ### The unverified MLX tool path is now refused, not merely warned about
 
 Asked whether MLX needs installing, the honest answer turned out to be no, and
