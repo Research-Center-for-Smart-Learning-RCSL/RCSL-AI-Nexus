@@ -102,17 +102,54 @@ is `docker compose build` with no arguments, or `migrate` and
 `frontend-tailnet` by name.** Naming the service you actually changed is the
 wrong instinct here and reads as the right one.
 
-Smaller, from the same session: `csrf.py`'s module docstring states that "the
-tailnet entrance does not install this". It does — `main_admin_tailnet.py` adds
-`CsrfMiddleware` outermost, which is why a `curl` against 127.0.0.1:8001 needs
-the double-submit pair. Harmless in direction (more protection than described,
-not less), but it is a claim about the system that stopped being true.
+### The two things the deploy walked past, both now closed
 
-And a 422 on the admin entrances is still FastAPI's raw `{"detail":[...]}`,
-carrying neither `code` nor `request_id`. The gateway's 422 gained the OpenAI
-envelope this morning; the admin side kept its own shape, so validation
-failures are the one admin error a caller cannot correlate. Not fixed here,
-recorded so it is not rediscovered.
+**`csrf.py` was still explaining the bug it no longer had.** Its module
+docstring said "the tailnet entrance does not install this. It has no ambient
+credential: identity comes from a header injected by `tailscale serve` on each
+request, and a hostile page cannot cause that header to be added."
+
+That is not a stale sentence. It is the *exact false premise* that commit
+`ec56046` removed on 2026-07-25, whose own message says so: "CSRF was absent
+from the tailnet entrance on the false premise that it has no ambient
+credential. `tailscale serve` attaches the identity header to any request a
+hostile page can provoke, so a body-less POST — revoke, unload, download,
+invalidate an invitation — was cross-site reachable."
+
+The argument's second half is true and irrelevant: the page does not need to
+add the header, because the proxy adds it to anything leaving that device,
+including a request provoked from the browser of somebody signed in to the
+tailnet. A header injected by the proxy is as ambient as a cookie attached by
+the browser.
+
+So the fix landed in `main_admin_tailnet.py` and the reasoning that had caused
+the defect stayed where anyone reasoning about CSRF reads first, for eleven
+days. **A fix that does not reach the explanation leaves the next person the
+same premise to be wrong from** — and this file's history is of a control
+"designed, written down, marked done, and not actually in force", which is the
+same failure with the two halves swapped: in force, and still described as
+absent. Corrected, with the reason recorded rather than the conclusion.
+
+**The admin 422 now looks like every other admin error.** It was FastAPI's raw
+`{"detail": [...]}` — no `code` to branch on and, since this morning, no
+`request_id` to quote, which made a validation failure the one admin error a
+caller could not correlate to a log line. The gateway's 422 was given its
+envelope this morning; the admin side was not, and the asymmetry was invisible
+because both are 422s carrying a readable string *somewhere*.
+
+It cost the operator something concrete, not just consistency. The frontend's
+`messageFor` reads `body.message`, then `body.detail` **if it is a string**;
+pydantic's is a list, so both fell through to `Request failed with status 422.`
+— a status number shown in place of a message that had already named the exact
+field and rule. Three tests pin it now: each envelope's own shape, and one
+asserting directly that neither still answers with a bare `detail` list, which
+is what a regression would look like.
+
+The test for it needed its own correction first. `class Body(BaseModel)`
+declared inside the app factory cannot be resolved by FastAPI from the
+annotation, so `payload` was read as a *query* parameter and the 422 under test
+was about a missing query field rather than a body — passing for the wrong
+reason. Module scope, and a comment saying why.
 
 The tests are the actual deliverable here, because the code was never the hard
 part. The two that existed handed `grant_debug_detail` a value directly, which

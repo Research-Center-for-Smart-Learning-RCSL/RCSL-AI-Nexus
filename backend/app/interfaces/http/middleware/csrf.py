@@ -1,4 +1,4 @@
-"""Double-submit CSRF protection for the public entrance.
+"""Double-submit CSRF protection, on both admin entrances.
 
 The public entrance authenticates with a cookie, which the browser attaches to
 any request the page can be made to issue, so a state-changing request needs
@@ -17,9 +17,21 @@ and still need protection. Once a session exists, `identity.py` additionally
 compares the header against the token held server-side, which is what defeats
 an attacker who can write cookies for this domain but not read them.
 
-**The tailnet entrance does not install this.** It has no ambient credential:
-identity comes from a header injected by `tailscale serve` on each request,
-and a hostile page cannot cause that header to be added.
+**The tailnet entrance installs it too, and the reason it once did not was
+wrong.** The premise was that the entrance has no ambient credential, since
+identity arrives in a header rather than a cookie and a hostile page cannot add
+a header. The second half is true and does not matter: the page does not have
+to add it, because `tailscale serve` attaches it to *any* request that leaves
+that device — including one a hostile page provokes from the browser of
+somebody signed in to the tailnet. A header injected by the proxy is every bit
+as ambient as a cookie attached by the browser.
+
+So a body-less POST — revoke a key, unload a model, start a download,
+invalidate an invitation — was cross-site reachable there until 2026-07-25,
+when `main_admin_tailnet.py` began installing this middleware (commit
+`ec56046`). That fix did not reach this docstring, which went on stating the
+false premise for eleven days, in the file anybody reasoning about CSRF here
+reads first. Corrected 2026-08-05.
 """
 
 from __future__ import annotations

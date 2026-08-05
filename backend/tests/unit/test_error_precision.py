@@ -23,6 +23,7 @@ import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 
 from app.adapters.authz.role_authorization import RoleAuthorization
 from app.adapters.runtime.mlx_adapter import MlxAdapter
@@ -155,6 +156,14 @@ async def test_zero_queue_wait_keeps_the_unbounded_queue() -> None:
 # --- the request id, end to end -------------------------------------------
 
 
+class _Body(BaseModel):
+    """Module scope deliberately. Declared inside `_app`, FastAPI cannot
+    resolve the annotation and reads `payload` as a *query* parameter, so the
+    422 is about a missing query field and the test never exercises a body."""
+
+    minutes: int
+
+
 def _app(envelope: str) -> FastAPI:
     app = FastAPI()
     install_error_handlers(app, envelope=envelope)
@@ -167,6 +176,10 @@ def _app(envelope: str) -> FastAPI:
     @app.get("/explodes")
     async def explodes() -> None:
         raise RuntimeError("wiring mistake")
+
+    @app.post("/validates")
+    async def validates(payload: _Body) -> None:
+        raise AssertionError("unreachable: the body never validates in these tests")
 
     return app
 
@@ -232,6 +245,50 @@ def test_an_expired_debug_window_reverts_to_the_normal_rule() -> None:
 
     body = TestClient(app).get("/fails-expired").json()
     assert "operator-facing context" not in str(body)
+
+
+# --- a malformed request looks like every other error ---------------------
+#
+# FastAPI answers validation with `{"detail": [...]}`, its own shape. The
+# gateway was given the OpenAI envelope on 2026-08-05 because client libraries
+# read `error.message`; the admin entrances kept the raw shape until later the
+# same day, which left a validation failure as the one admin error carrying no
+# `code` and — once the request id existed — no id to quote either.
+
+
+def test_the_gateway_renders_a_malformed_request_in_its_own_envelope() -> None:
+    body = TestClient(_app("openai")).post("/validates", json={"minutes": "soon"}).json()
+
+    assert body["error"]["code"] == "invalid_request"
+    assert body["error"]["request_id"].startswith("req_")
+    # Pydantic's summary names the field and the rule. It describes the
+    # caller's own request, so there is nothing here to withhold.
+    assert "minutes" in body["error"]["message"]
+
+
+def test_the_admin_entrances_render_one_in_theirs() -> None:
+    """The flat shape, with the two keys every other admin error carries.
+
+    Before this, `messageFor` in the frontend read `body.message` and then
+    `body.detail` *if it were a string* — pydantic's is a list, so both fell
+    through and the operator was shown "Request failed with status 422." in
+    place of a message that had already named the field.
+    """
+    response = TestClient(_app("admin")).post("/validates", json={"minutes": "soon"})
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "invalid_request"
+    assert "minutes" in body["message"]
+    assert body["request_id"] == response.headers["X-Request-Id"]
+
+
+def test_neither_entrance_still_answers_with_fastapis_own_shape() -> None:
+    """The defect stated directly: a bare `detail` list is what both used to
+    return, and it is what a regression would look like."""
+    for envelope in ("openai", "admin"):
+        body = TestClient(_app(envelope)).post("/validates", json={"minutes": "soon"}).json()
+        assert not isinstance(body.get("detail"), list), envelope
 
 
 # --- the window on the *user*, from the stored column outward -------------
