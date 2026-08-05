@@ -134,6 +134,8 @@ you about. Try a different model before touching anything else.
 | `413 context_too_long` mid-task | The conversation grew past `MAX_CONTEXT_LENGTH`. Tool definitions and replayed calls count towards it, so a long agent session reaches it by accumulation. Start a fresh conversation, or raise the setting knowing what section 4.3 of security.md says about it |
 | `400 runtime_capability_unsupported` | The client sent `tool_choice: "required"` or named a function. Neither runtime can constrain decoding, so it is refused rather than quietly served as `auto`. Configure the client to send `auto` |
 | `429` early in a task | The key's requests-per-minute limit. See section 2 |
+| `503 runtime_timeout` on long conversations | Prompt evaluation outran the platform's read timeout. Retry immediately, once — the prompt is now in the runtime's prefix cache and the retry is nearly free. If the agent's SDK timeout is shorter than ~1600s it will kill the connection first and you will never see this code; size it up (see `/api-docs`, Timeouts) |
+| `503 overloaded` | Every inference slot was busy for the whole two-minute queue wait. The deployment is full, not broken; back off for `Retry-After` |
 | `400 runtime_capability_unsupported` on a replayed conversation | An assistant turn in the history carries `arguments` that are not valid JSON, and Ollama takes arguments as an object, so the platform refuses before sending. Repair or drop that turn — retrying replays the failure |
 | `422` naming `functions` or `function_call` | The client sent the deprecated OpenAI spellings, which are refused rather than silently ignored (before 2026-08-05 they were dropped, and the client stalled with prose and no error). Configure it to send `tools` / `tool_choice` |
 | Very slow first token on every step | Deliberation is still on for the capability. See section 1, step 3 |
@@ -146,7 +148,21 @@ Two behaviours that are correct but surprising:
   way to bound how many calls a model emits in one turn, and dropping the
   extras here would discard output the model produced and the caller paid for.
 
-## 6. Do not point an agent at MLX yet
+## 6. Debugging an integration
+
+Every response carries `X-Request-Id`, and every error body repeats it as
+`error.request_id`. Quote it when reporting a failure — the platform's log
+keys on it, and it is the difference between an administrator grepping
+timestamps and finding the exact line.
+
+For an active debugging session, open a **debug window** on the key (API keys
+page, the Debug button: one hour per press, capped at 24, audited). While it
+is open, error responses to that key carry `error.detail` — the
+operator-facing explanation that is otherwise log-only, which turns "401
+Authentication required" into "source 203.0.113.9 not permitted for
+nx_live_abc" at exactly the moment you are debugging a CIDR list.
+
+## 7. Do not point an agent at MLX yet
 
 The MLX tool path is written but has never run against a live `mlx_lm.server`.
 A build without tool support will accept the `tools` field and answer with

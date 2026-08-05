@@ -37,6 +37,7 @@ from app.interfaces.http.middleware.identity import (
     session_from_request,
 )
 from app.interfaces.http.middleware.metrics import MetricsMiddleware
+from app.interfaces.http.request_context import RequestContextMiddleware
 from app.interfaces.http.routers import auth
 
 STRIPPED_HEADER_PREFIX = b"tailscale-"
@@ -104,6 +105,9 @@ def create_app() -> FastAPI:
     # than invisible. /metrics itself is exempt from the geo check below and
     # rests on its bearer token; see routers/metrics.py.
     app.add_middleware(MetricsMiddleware)
+    # Outermost, so every response — including one built by a rejecting
+    # perimeter middleware — carries X-Request-Id. See request_context.py.
+    app.add_middleware(RequestContextMiddleware)
 
     # `/readyz` answers only {"ready": bool} here, without naming the failing
     # dependency, because this entrance faces the internet and the endpoint is

@@ -23,6 +23,7 @@ const keys: ApiKey[] = [];
 vi.mock('@/features/api-keys/hooks/use-api-keys', () => ({
   useApiKeys: () => ({ data: keys, isLoading: false, error: null, refetch: vi.fn() }),
   useRevokeApiKey: () => ({ mutateAsync: vi.fn() }),
+  useSetDebugWindow: () => ({ mutate: vi.fn() }),
 }));
 
 vi.mock('@/features/assistant/context', () => ({

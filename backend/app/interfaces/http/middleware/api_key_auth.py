@@ -31,6 +31,7 @@ from app.infrastructure.di import (
     get_usage_repository,
 )
 from app.interfaces.http.middleware.client_ip import resolve_client_ip
+from app.interfaces.http.request_context import grant_debug_detail
 
 BEARER = "bearer "
 
@@ -113,6 +114,11 @@ async def authenticate_api_key(
     now = datetime.now(UTC)
     if not key.is_active(now):
         raise NotAuthenticatedError(detail=f"inactive key {key_id}")
+
+    # As soon as the credential is known, before the checks below: the debug
+    # window exists precisely so that a CIDR, rate-limit or quota refusal can
+    # explain itself to the caller being debugged. See request_context.
+    grant_debug_detail(key.debug_logging_until)
 
     # Evaluated unconditionally, and deliberately not folded into the branch
     # below. Making this conditional on `key.allowed_cidrs` reads as an obvious

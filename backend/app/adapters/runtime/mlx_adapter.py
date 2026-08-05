@@ -44,7 +44,7 @@ import httpx
 
 from app.adapters.runtime.hf_validation import assert_valid_hf_repo_id
 from app.adapters.runtime.tool_support import should_send_tools
-from app.adapters.runtime.transport import timeout_detail
+from app.adapters.runtime.transport import timeout_error
 from app.domain.entities.chat import (
     CompletionChunk,
     Message,
@@ -61,6 +61,7 @@ from app.domain.exceptions import (
     ModelStateConflictError,
     NoAvailableModelError,
     RuntimeCapabilityError,
+    StreamInterruptedError,
 )
 
 logger = logging.getLogger(__name__)
@@ -358,16 +359,14 @@ class MlxAdapter:
                         # consumption is mostly prompt.
                         usage_prompt_tokens = int(usage["prompt_tokens"])
         except httpx.TimeoutException as exc:
-            raise NoAvailableModelError(
-                detail=timeout_detail("mlx", ref, exc, self._timeout, mid_stream=received_any)
-            ) from exc
+            raise timeout_error("mlx", ref, exc, self._timeout, mid_stream=received_any) from exc
 
         if not saw_terminal:
             # The stream ended without [DONE] or a finish_reason: the server
             # restarted, the model was evicted, or the read timeout fired.
             # Returning quietly would let the caller record a complete generation
             # and report "stop" to the client.
-            raise NoAvailableModelError(
+            raise StreamInterruptedError(
                 detail=f"mlx stream for {ref} ended without a terminal frame"
             )
 

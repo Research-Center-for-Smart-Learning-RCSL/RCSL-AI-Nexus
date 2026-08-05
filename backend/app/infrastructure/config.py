@@ -170,6 +170,21 @@ class Settings(BaseSettings):
     caller waits or is refused, and waiting is the better answer at this size.
     """
 
+    queue_wait_seconds: int = 120
+    """How long a request may wait for an inference slot before `503 overloaded`.
+
+    Before 2026-08-05 the queue was unbounded and invisible: a caller arriving
+    with every slot held waited producing zero bytes — no status, no code —
+    until their own client timeout killed the connection, which is
+    indistinguishable from a hung deployment. A slot can legitimately be held
+    for 25 minutes (`request_timeout_seconds` + `generation_deadline_seconds`),
+    so that silence had real depth.
+
+    Two minutes keeps the ordinary case — a slot frees within a typical
+    generation's tail — while refusing loudly, with `Retry-After`, once the
+    wait stops being plausible. Zero or negative restores the unbounded queue.
+    """
+
     max_tokens_ceiling: int = 16384
     """Hard ceiling on tokens per generation, thinking included.
 

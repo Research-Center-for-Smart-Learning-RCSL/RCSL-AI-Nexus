@@ -7,6 +7,7 @@ import {
   issueApiKey,
   listApiKeys,
   revokeApiKey,
+  setDebugWindow,
   updateApiKey,
 } from '@/features/api-keys/api';
 import type {
@@ -61,5 +62,27 @@ export function useRevokeApiKey() {
       await invalidate();
       toast.success('Key revoked. It stops working immediately.');
     },
+  });
+}
+
+/**
+ * Opens (minutes > 0) or closes (0) the key's debug window. While it is open,
+ * error responses to this key carry operator-facing detail; the backend caps
+ * it at 24 hours and audits the change.
+ */
+export function useSetDebugWindow() {
+  const invalidate = useInvalidateApiKeys();
+  return useMutation({
+    mutationFn: ({ keyId, minutes }: { keyId: string; minutes: number }) =>
+      setDebugWindow(keyId, minutes),
+    onSuccess: async (_key, { minutes }) => {
+      await invalidate();
+      toast.success(
+        minutes > 0
+          ? `Debug window open for ${minutes} minutes. Error responses to this key now carry detail.`
+          : 'Debug window closed.',
+      );
+    },
+    onError: (error) => toast.error(describeError(error)),
   });
 }

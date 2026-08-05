@@ -271,7 +271,16 @@ def test_a_wrong_password_reveals_nothing_about_the_account(deployment: None) ->
         known = post(public, "/admin/auth/login", json={"login": INVITEE, "password": "x"})
 
     assert unknown.status_code == known.status_code == 401
-    assert unknown.json() == known.json()
+    # `request_id` is a per-request nonce (2026-08-05), so the two bodies can
+    # no longer be byte-identical. The property this test pins is unchanged —
+    # nothing in the response may correlate with whether the account exists —
+    # and a value freshly minted for every request regardless of its outcome
+    # cannot. Both must carry one, though: an asymmetric presence would itself
+    # be a distinguisher.
+    unknown_body, known_body = unknown.json(), known.json()
+    assert unknown_body.pop("request_id").startswith("req_")
+    assert known_body.pop("request_id").startswith("req_")
+    assert unknown_body == known_body
 
 
 def test_failed_logins_do_not_lock_the_account_out_at_the_per_account_limit(

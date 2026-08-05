@@ -47,6 +47,7 @@ from app.domain.exceptions import (
     RetentionWindowTooShortError,
     RuntimeCapabilityError,
     RuntimeUnavailableError,
+    ServerOverloadedError,
     TotpEnrolmentExpiredError,
     TotpRequiredError,
     UntrustedProxyError,
@@ -57,6 +58,7 @@ from app.domain.exceptions import (
     WeakPasswordError,
 )
 from app.interfaces.http.request_actor import actor_from_request
+from app.interfaces.http.request_context import current_request_id, debug_detail_active
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +101,10 @@ STATUS_MAP: dict[type[DomainError], int] = {
     DocumentParseError: 422,
     RuntimeCapabilityError: 400,
     VectorStoreError: 503,
+    ServerOverloadedError: 503,
+    # RuntimeTimeoutError and StreamInterruptedError are absent on purpose:
+    # they subclass NoAvailableModelError and inherit its 503 through the MRO
+    # walk below, so the split stays a split of *codes*, not of statuses.
 }
 
 OPENAI_ERROR_TYPES: dict[int, str] = {
@@ -120,12 +126,19 @@ def _status_for(exc: DomainError) -> int:
 
 
 def _log(request: Request, exc: DomainError, status: int) -> None:
-    """The operator-facing detail goes to the log, never to the response."""
+    """The operator-facing detail goes to the log, never to the response.
+
+    `request_id` is the same value the caller received in `X-Request-Id` and
+    in `error.request_id`, which is what makes this line findable from a
+    caller's report. `DomainError`'s docstring promised this correlation from
+    the start; until 2026-08-05 nothing implemented it.
+    """
     logger.warning(
-        "domain_error code=%s status=%s path=%s detail=%s",
+        "domain_error code=%s status=%s path=%s request_id=%s detail=%s",
         exc.code,
         status,
         request.url.path,
+        current_request_id(),
         exc.detail,
     )
 
@@ -195,17 +208,34 @@ def error_response(
         headers["Retry-After"] = str(exc.retry_after_seconds)
     elif isinstance(exc, QuotaExceededError):
         headers["Retry-After"] = "3600"
+    elif isinstance(exc, ServerOverloadedError):
+        headers["Retry-After"] = str(exc.retry_after_seconds)
+
+    request_id = current_request_id()
 
     if envelope == "openai":
-        body: dict[str, object] = {
-            "error": {
-                "type": OPENAI_ERROR_TYPES.get(status, "api_error"),
-                "code": exc.code,
-                "message": exc.public_message,
-            }
+        error: dict[str, object] = {
+            "type": OPENAI_ERROR_TYPES.get(status, "api_error"),
+            "code": exc.code,
+            "message": exc.public_message,
         }
+        if request_id is not None:
+            # An extra key inside the envelope; OpenAI client libraries ignore
+            # what they do not know. It repeats the X-Request-Id header because
+            # bodies get pasted into bug reports and headers do not.
+            error["request_id"] = request_id
+        if debug_detail_active() and exc.detail:
+            # The one condition under which operator-facing detail leaves the
+            # process: an administrator opened a time-boxed debug window on
+            # this credential. See request_context.grant_debug_detail.
+            error["detail"] = exc.detail
+        body: dict[str, object] = {"error": error}
     else:
         body = {"code": exc.code, "message": exc.public_message}
+        if request_id is not None:
+            body["request_id"] = request_id
+        if debug_detail_active() and exc.detail:
+            body["detail"] = exc.detail
         if status == 401 and auth_mode is not None:
             body["auth_mode"] = auth_mode
         if isinstance(exc, InsufficientMemoryError):
@@ -253,6 +283,42 @@ def install_error_handlers(
     if envelope == "openai":
         app.add_exception_handler(RequestValidationError, _openai_validation_handler)
 
+    async def handle_unanticipated(request: Request, exc: Exception) -> JSONResponse:
+        """The 500, with an envelope and the request id.
+
+        Until 2026-08-05 this response was the framework's bare
+        `Internal Server Error` text — the one non-JSON body the API could
+        produce, on exactly the status where a client most needs to degrade
+        gracefully, and with nothing the caller could quote to an operator.
+        The traceback still goes only to the log; what the caller gets is the
+        id that finds it.
+
+        Registered on `Exception`, which Starlette wires into
+        `ServerErrorMiddleware` — *outside* `RequestContextMiddleware`, so the
+        header added there is absent on this path and is set here instead.
+        The contextvar is still readable because the middleware deliberately
+        does not reset it on the way out.
+        """
+        request_id = current_request_id()
+        logger.exception("unhandled_error path=%s request_id=%s", request.url.path, request_id)
+        if envelope == "openai":
+            error: dict[str, object] = {
+                "type": "api_error",
+                "code": "internal_error",
+                "message": "An internal error occurred.",
+            }
+            if request_id is not None:
+                error["request_id"] = request_id
+            body: dict[str, object] = {"error": error}
+        else:
+            body = {"code": "internal_error", "message": "An internal error occurred."}
+            if request_id is not None:
+                body["request_id"] = request_id
+        headers = {"X-Request-Id": request_id} if request_id is not None else None
+        return JSONResponse(status_code=500, content=body, headers=headers)
+
+    app.add_exception_handler(Exception, handle_unanticipated)
+
 
 async def _openai_validation_handler(request: Request, exc: Exception) -> JSONResponse:
     """A malformed request, in the envelope the caller's library parses.
@@ -271,20 +337,19 @@ async def _openai_validation_handler(request: Request, exc: Exception) -> JSONRe
     """
     if not isinstance(exc, RequestValidationError):
         raise exc
-    logger.info("request_validation_failed path=%s", request.url.path)
-    return JSONResponse(
-        status_code=422,
-        content={
-            "error": {
-                "type": "invalid_request_error",
-                "code": "invalid_request",
-                # Pydantic's own summary, which names the field and the rule.
-                # It describes the caller's own request, so unlike a
-                # `DomainError.detail` there is nothing here to withhold.
-                "message": _validation_message(exc),
-            }
-        },
-    )
+    request_id = current_request_id()
+    logger.info("request_validation_failed path=%s request_id=%s", request.url.path, request_id)
+    error: dict[str, object] = {
+        "type": "invalid_request_error",
+        "code": "invalid_request",
+        # Pydantic's own summary, which names the field and the rule.
+        # It describes the caller's own request, so unlike a
+        # `DomainError.detail` there is nothing here to withhold.
+        "message": _validation_message(exc),
+    }
+    if request_id is not None:
+        error["request_id"] = request_id
+    return JSONResponse(status_code=422, content={"error": error})
 
 
 def _validation_message(exc: RequestValidationError) -> str:

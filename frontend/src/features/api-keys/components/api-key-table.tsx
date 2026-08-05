@@ -12,6 +12,7 @@ import { useSession } from '@/lib/session';
 import {
   useApiKeys,
   useRevokeApiKey,
+  useSetDebugWindow,
 } from '@/features/api-keys/hooks/use-api-keys';
 import { CreateApiKeyDialog } from '@/features/api-keys/components/create-api-key-dialog';
 import { EditApiKeyDialog } from '@/features/api-keys/components/edit-api-key-dialog';
@@ -23,6 +24,13 @@ function formatDate(value: string | null): string {
   return new Date(value).toLocaleDateString();
 }
 
+/** Whole minutes left on the key's debug window, or 0 when it is not open. */
+function debugMinutesLeft(key: ApiKey): number {
+  if (!key.debug_logging_until) return 0;
+  const ms = new Date(key.debug_logging_until).getTime() - Date.now();
+  return ms > 0 ? Math.ceil(ms / 60_000) : 0;
+}
+
 export function ApiKeyTable() {
   const { me, can } = useSession();
   // No draft and nothing to apply: there is no form here. The surface alone is
@@ -32,6 +40,7 @@ export function ApiKeyTable() {
   useAssistantSurface({ surface: 'api_keys.list' });
   const { data, isLoading, error, refetch } = useApiKeys();
   const revoke = useRevokeApiKey();
+  const debug = useSetDebugWindow();
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<ApiKey | null>(null);
@@ -162,8 +171,23 @@ export function ApiKeyTable() {
           // on one, because the result would read as active in this table and
           // not be. Reissue instead.
           if (key.revoked_at || !canManageKey(key, viewer)) return null;
+          const debugLeft = debugMinutesLeft(key);
           return (
             <div className="flex justify-end gap-1">
+              {/* One click, one hour; clicking an open window closes it. The
+                  label carries the remaining time so an open window is visible
+                  from the table rather than only from its effect: while it is
+                  open, error responses to this key include operator detail. */}
+              <Button
+                variant="ghost"
+                size="xs"
+                className={debugLeft ? 'text-amber-600 dark:text-amber-500' : undefined}
+                onClick={() =>
+                  debug.mutate({ keyId: key.key_id, minutes: debugLeft ? 0 : 60 })
+                }
+              >
+                {debugLeft ? `Debug ${debugLeft}m` : 'Debug'}
+              </Button>
               <Button variant="ghost" size="xs" onClick={() => setEditing(key)}>
                 Edit
               </Button>
@@ -180,7 +204,7 @@ export function ApiKeyTable() {
         },
       },
     ],
-    [viewer],
+    [viewer, debug],
   );
 
   return (

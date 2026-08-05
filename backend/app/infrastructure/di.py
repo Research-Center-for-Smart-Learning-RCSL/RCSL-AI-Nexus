@@ -125,7 +125,10 @@ def build_runtimes(settings: Settings) -> dict[RuntimeKind, ModelRuntimePort]:
 
 
 def build_concurrency_limiter(settings: Settings) -> SemaphoreConcurrencyLimiter:
-    return SemaphoreConcurrencyLimiter(settings.max_concurrent_inference)
+    return SemaphoreConcurrencyLimiter(
+        settings.max_concurrent_inference,
+        queue_wait_seconds=settings.queue_wait_seconds,
+    )
 
 
 def build_api_key_service(settings: Settings) -> ApiKeyService:

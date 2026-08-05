@@ -24,6 +24,10 @@ export const apiKeySchema = z.object({
   revoked_at: z.string().nullable(),
   created_at: z.string(),
   last_used_at: z.string().nullable(),
+  debug_logging_until: z.string().nullable(),
+  /** While this is in the future, error responses to this key carry the
+   * operator-facing detail that is otherwise log-only. Set from the table's
+   * debug action; the backend caps the window at 24 hours. */
 });
 export type ApiKey = z.infer<typeof apiKeySchema>;
 
