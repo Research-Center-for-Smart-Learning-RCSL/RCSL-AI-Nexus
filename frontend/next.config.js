@@ -1,4 +1,4 @@
-/** @type {import('next').NextConfig} */
+﻿/** @type {import('next').NextConfig} */
 
 // The /admin proxy lives in src/middleware.ts, not here. A rewrites() entry is
 // resolved at build time and serialised into the standalone bundle, so the
@@ -25,16 +25,24 @@ const nextConfig = {
     // exactly 30s, and the browser saw a 500 with no trace in the backend log
     // — the reset happened between the two containers. See PROGRESS 2026-07-27.
     //
-    // Sized above the backend's own GENERATION_DEADLINE_SECONDS, so the
+    // Sized above the longest a backend request can legitimately take, so the
     // guardrail that fires is the one that can report a reason: this timeout
     // resets the socket and says nothing, while the backend's deadline ends
-    // the stream with finish_reason=length. **Raise this whenever that one
-    // rises.** It went 600s→900s, so this went 660s→960s; if it had not, the
-    // silent cut would simply have moved from 30 seconds to 11 minutes.
+    // the stream with finish_reason=length.
+    //
+    // **That is REQUEST_TIMEOUT_SECONDS + GENERATION_DEADLINE_SECONDS, not the
+    // deadline alone.** Since 2026-08-05 the deadline is counted from the first
+    // chunk rather than from the request, so a long prompt may spend up to the
+    // read timeout being evaluated *before* the deadline's clock even starts.
+    // The two compose: 600 + 900 = 1500s. Comparing against 900 alone left the
+    // proxy cutting at 960s, which is the original silent reset moved from 30
+    // seconds to 16 minutes. `test_config_failfast.py` reads both files and
+    // fails if this drops below the sum, because a comment cannot enforce an
+    // invariant that spans two languages.
     //
     // A static value, unlike ADMIN_API_URL, so baking it in at build time is
     // safe — that distinction is why the proxy itself lives in middleware.ts.
-    proxyTimeout: 960_000,
+    proxyTimeout: 1_560_000,
   },
 };
 

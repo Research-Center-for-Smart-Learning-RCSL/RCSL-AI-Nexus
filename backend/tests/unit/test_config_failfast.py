@@ -169,6 +169,15 @@ def test_the_proxy_timeout_stays_above_the_generation_deadline() -> None:
     deadline without raising it would move that silent cut rather than remove
     it. Asserted here because a comment in each file cannot enforce an
     invariant that spans both.
+
+    **The backend's figure is the read timeout plus the deadline, not the
+    deadline alone.** Since 2026-08-05 the deadline is counted from the first
+    chunk, so a long prompt can spend up to the read timeout being evaluated
+    before its clock starts; the two compose rather than overlap. This test
+    compared against the deadline alone and so kept passing while the proxy sat
+    at 960s against a legitimate 1500s request — the original silent reset,
+    moved from 30 seconds to 16 minutes, and invisible for exactly the reason
+    the test exists.
     """
     root = Path(__file__).resolve().parents[3]
 
@@ -188,10 +197,19 @@ def test_the_proxy_timeout_stays_above_the_generation_deadline() -> None:
     assert deadline_match is not None, "the deadline must stay discoverable in .env.example"
     deadline = int(deadline_match.group(1))
 
-    assert proxy_seconds > deadline, (
-        f"proxyTimeout ({proxy_seconds}s) must exceed the generation deadline "
-        f"({deadline}s), or a cut arrives with no reason attached"
+    read_match = re.search(r"^REQUEST_TIMEOUT_SECONDS=(\d+)", env, re.MULTILINE)
+    assert read_match is not None, "the read timeout must stay discoverable in .env.example"
+    read_timeout = int(read_match.group(1))
+
+    longest_request = read_timeout + deadline
+    assert proxy_seconds > longest_request, (
+        f"proxyTimeout ({proxy_seconds}s) must exceed the longest legitimate request: "
+        f"{read_timeout}s of prompt evaluation plus {deadline}s of generation = "
+        f"{longest_request}s, or a cut arrives with no reason attached"
     )
     assert deadline >= Settings().generation_deadline_seconds, (
+        "the documented value must not be below the code default"
+    )
+    assert read_timeout >= Settings().request_timeout_seconds, (
         "the documented value must not be below the code default"
     )

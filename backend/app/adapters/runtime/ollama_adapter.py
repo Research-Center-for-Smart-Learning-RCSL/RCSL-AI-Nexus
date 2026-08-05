@@ -309,8 +309,21 @@ class OllamaAdapter:
         counted = 0
         saw_done = False
         called_tools = False
-        async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
-            async with client.stream("POST", "/api/chat", json=payload) as response:
+        # A timeout here is a `DomainError` or it is a 500. Nothing above this
+        # layer handles an httpx exception: it escapes the router's handler,
+        # which only knows `DomainError`, so before this the honest and
+        # reachable case of "the prompt took longer to evaluate than the read
+        # timeout allows" surfaced as an unhandled error with no envelope, or
+        # mid-stream as a connection that simply stopped without `[DONE]`.
+        #
+        # 503 rather than a distinct code: the caller's remedy is to retry, and
+        # a retry usually works, because the prompt is now in the runtime's
+        # prefix cache and evaluation is nearly free the second time.
+        try:
+            async with (
+                httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client,
+                client.stream("POST", "/api/chat", json=payload) as response,
+            ):
                 await self._raise_for_status(response, ref)
 
                 async for line in response.aiter_lines():
@@ -392,6 +405,12 @@ class OllamaAdapter:
                     raise NoAvailableModelError(
                         detail=f"ollama stream for {ref} ended without a done event"
                     )
+        except httpx.TimeoutException as exc:
+            raise NoAvailableModelError(
+                detail=f"ollama timed out for {ref} after {self._timeout.read}s "
+                f"without sending a byte; the prompt may be too long to evaluate "
+                f"within the read timeout"
+            ) from exc
 
     async def embed(self, ref: str, texts: Sequence[str]) -> list[list[float]]:
         """Vectors for a batch, through Ollama's `/api/embed`.

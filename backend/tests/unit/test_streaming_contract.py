@@ -366,12 +366,74 @@ async def test_wall_clock_deadline_cuts_a_slow_stream_below_the_token_ceiling() 
             chunks.append(chunk)
 
     content = [c for c in chunks if c.delta]
-    assert len(content) == 3, "two tokens under the deadline, the third crosses it"
+    # Four, not three: the clock is at 10s when the first chunk arrives, and
+    # since 2026-08-05 the deadline runs from there rather than from the
+    # request, so that first interval is prompt evaluation rather than
+    # generation. Tokens then land at 0s, 10s and 20s into the budget, and the
+    # fourth crosses 25s.
+    assert len(content) == 4, "three tokens under the deadline, the fourth crosses it"
     assert chunks[-1].finish_reason == "length", "a deadline cut is not a clean stop"
     assert limiter.available == limiter.limit, "slot must be released on a deadline cut"
     assert runtime.cleaned_up is True, "adapter must close its upstream on a deadline cut"
     assert usage.records[0].completed is False, "a deadline cut is not completion"
-    assert usage.records[0].tokens == 3
+    assert usage.records[0].tokens == 4
+
+
+class SlowToStartRuntime:
+    """Spends a long time before its first chunk, then answers at full speed.
+
+    A runtime evaluating a long prompt, which is the case the deadline must not
+    charge for: it sends nothing at all while it reads, so from the outside it
+    is indistinguishable from a fast model that has not been asked yet.
+    """
+
+    def __init__(self, monotonic: FakeMonotonic, prompt_seconds: float, chunks: int) -> None:
+        self._monotonic = monotonic
+        self._prompt_seconds = prompt_seconds
+        self._chunks = chunks
+
+    async def generate(
+        self,
+        ref: str,
+        messages: Sequence[Message],
+        max_tokens: int | None = None,
+        thinking: bool = True,
+        tools: Sequence[ToolDefinition] = (),
+        tool_choice: ToolChoice | None = None,
+        sampling: SamplingOptions | None = None,
+    ) -> AsyncIterator[CompletionChunk]:
+        self._monotonic.advance(self._prompt_seconds)
+        for i in range(self._chunks):
+            yield CompletionChunk(delta=f"tok{i} ", token_count=1)
+        yield CompletionChunk(delta="", finish_reason="stop", token_count=0)
+
+
+async def test_reading_a_long_prompt_does_not_spend_the_generation_deadline() -> None:
+    """The deadline bounds a stream that produces too slowly to finish, and
+    prompt evaluation produces nothing at all.
+
+    Measured from the request it was most of the budget at a large context:
+    over 550 seconds of evaluation against a 900 second deadline on this
+    hardware, so the stream was cut on its first token and reported
+    `finish_reason: "length"` — telling the client the model had talked too much
+    when it had not yet started. What bounds prompt evaluation is the per-read
+    HTTP timeout, which is the limit designed for "no bytes for the interval".
+    """
+    clock = FakeMonotonic()
+    runtime = SlowToStartRuntime(clock, prompt_seconds=550.0, chunks=3)
+    use_case, usage, _ = build(runtime, limit=1, ceiling=1000, deadline=25, monotonic=clock)
+
+    chunks = []
+    async with aclosing(use_case.execute(ACTOR, "chat", MESSAGES)) as stream:
+        async for chunk in stream:
+            chunks.append(chunk)
+
+    assert chunks[-1].finish_reason == "stop", "a long prompt is not a truncated answer"
+    assert len([c for c in chunks if c.delta]) == 3, "every token the model produced"
+    assert usage.records[0].completed is True
+    # The whole wait is still what the caller experienced, so latency keeps
+    # measuring from the request even though the deadline does not.
+    assert usage.records[0].latency_ms >= 550_000
 
 
 async def test_deadline_disabled_by_non_positive_value() -> None:
