@@ -24,3 +24,11 @@ overrides:
   # from here until 0.35.0 shipped. This is not a dead dependency: two screens
   # render `next/image`, and the standalone server uses sharp to optimise them.
   sharp: '>=0.35.0'
+  # `shadcn` -> `@modelcontextprotocol/sdk` -> `ajv` pulls in fast-uri 3.1.4.
+  # GHSA-7p8r-x3mc-p8w7 (CVE-2026-18446): fast-uri < 3.1.5 treats `\\`, `/\`,
+  # or `\/` as having no URI authority, folding the rest into the path, while
+  # Node's WHATWG URL (fetch/undici/http) treats `\` like `/` for special
+  # schemes and extracts a different host from the same string. Dev-only
+  # (shadcn CLI), never reaches the build output, but the fix is a one-line
+  # floor and there is no reason to carry a host-confusion bug even there.
+  fast-uri: '^3.1.5'
