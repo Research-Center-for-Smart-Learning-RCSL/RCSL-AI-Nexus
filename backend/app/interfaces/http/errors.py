@@ -280,8 +280,10 @@ def install_error_handlers(
     handler: Callable[[Request, Exception], Awaitable[JSONResponse]] = handle
     app.add_exception_handler(DomainError, handler)
 
-    if envelope == "openai":
-        app.add_exception_handler(RequestValidationError, _openai_validation_handler)
+    validation_handler = (
+        _openai_validation_handler if envelope == "openai" else _admin_validation_handler
+    )
+    app.add_exception_handler(RequestValidationError, validation_handler)
 
     async def handle_unanticipated(request: Request, exc: Exception) -> JSONResponse:
         """The 500, with an envelope and the request id.
@@ -350,6 +352,37 @@ async def _openai_validation_handler(request: Request, exc: Exception) -> JSONRe
     if request_id is not None:
         error["request_id"] = request_id
     return JSONResponse(status_code=422, content={"error": error})
+
+
+async def _admin_validation_handler(request: Request, exc: Exception) -> JSONResponse:
+    """The same repair on the admin entrances, whose shape is the flat one.
+
+    FastAPI's `{"detail": [...]}` was the last admin response that did not look
+    like an admin error: no `code` to branch on and — since the request id
+    landed on 2026-08-05 — no `request_id` to quote, which made a validation
+    failure the one admin error a caller could not correlate to its log line.
+
+    It cost the operator something concrete rather than only consistency. The
+    frontend's `messageFor` reads `body.message`, then `body.detail` *if it is a
+    string*; pydantic's is a list, so both fell through and the UI showed
+    "Request failed with status 422." — a status number in place of a message
+    that had already named the exact field and rule.
+
+    That message is passed through, as on the gateway, and for the same reason:
+    it describes the caller's own request, so unlike a `DomainError.detail`
+    there is nothing in it to withhold.
+    """
+    if not isinstance(exc, RequestValidationError):
+        raise exc
+    request_id = current_request_id()
+    logger.info("request_validation_failed path=%s request_id=%s", request.url.path, request_id)
+    body: dict[str, object] = {
+        "code": "invalid_request",
+        "message": _validation_message(exc),
+    }
+    if request_id is not None:
+        body["request_id"] = request_id
+    return JSONResponse(status_code=422, content=body)
 
 
 def _validation_message(exc: RequestValidationError) -> str:
