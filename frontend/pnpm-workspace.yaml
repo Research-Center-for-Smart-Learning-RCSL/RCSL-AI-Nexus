@@ -46,3 +46,13 @@ overrides:
   # that accepts the patch, so this stays on the 7.x line rather than letting
   # an unbounded range jump to 8.x, which jsdom 29's own range doesn't cover.
   undici: '^7.29.0'
+  # `shadcn` -> `@modelcontextprotocol/sdk` pulls in `@hono/node-server`
+  # 1.19.15. GHSA-frvp-7c67-39w9: serve-static middleware on Windows decodes
+  # `%5C` before the prefix check, so a request path that looks like it stays
+  # under the mounted prefix can escape it and read files outside the static
+  # root. `@modelcontextprotocol/sdk@1.29.0` declares `^1.19.9`, which does
+  # not reach the fix, so this floor forces the resolution past what the
+  # dependent's own range would pick; upstream's release notes describe v2 as
+  # a public-API-compatible performance rewrite, not a breaking change. Dev
+  # dependency only (shadcn CLI), never reaches the build output.
+  '@hono/node-server': '>=2.0.5'
