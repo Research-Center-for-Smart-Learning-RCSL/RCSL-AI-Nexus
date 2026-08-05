@@ -95,6 +95,19 @@ class Settings(BaseSettings):
     triggers land under HF_HOME, which the Compose file bind-mounts onto the host
     HuggingFace cache the native server reads; see adapters/runtime/mlx_adapter.py."""
 
+    mlx_tool_calling_verified: bool = False
+    """Whether a real tool call has been observed against *this* server build.
+
+    False refuses tool-carrying requests on the MLX path rather than serving
+    them, because a build without tool support accepts the `tools` field and
+    answers with prose — a 200 no client can tell from a model that chose not
+    to call anything. That indistinguishability is also why this cannot be
+    probed and has to be asserted by a person; the reasoning is in
+    `MlxAdapter._assert_tools_are_verified`.
+
+    Defaults to False because "nobody has checked" is the true state of every
+    deployment until somebody has."""
+
     host_metrics_url: str = "http://host.docker.internal:9101/host"
     """Where the launchd host-metrics agent answers.
 

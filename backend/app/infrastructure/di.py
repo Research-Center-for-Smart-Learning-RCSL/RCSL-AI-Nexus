@@ -120,6 +120,7 @@ def build_runtimes(settings: Settings) -> dict[RuntimeKind, ModelRuntimePort]:
         RuntimeKind.MLX: MlxAdapter(
             base_url=settings.mlx_base_url,
             request_timeout_seconds=settings.request_timeout_seconds,
+            tool_calling_verified=settings.mlx_tool_calling_verified,
         ),
     }
 

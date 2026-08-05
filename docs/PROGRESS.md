@@ -17,6 +17,53 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-05
 
+### The unverified MLX tool path is now refused, not merely warned about
+
+Asked whether MLX needs installing, the honest answer turned out to be no, and
+the question was better than the answer. Nothing here uses MLX: three models
+registered, all Ollama, nothing listening on 8080, every capability served by
+one runtime. The job MLX was given — *prove the hexagonal layering by adding a
+second runtime without touching a use case* — was passed by the adapter
+**existing**, not by it running. That verdict does not change whether a server
+is up.
+
+What remained was a trap rather than a task. The tool path is written and has
+never run, and the failure it can produce is the one this whole feature exists
+to remove: **a build without tool support accepts the `tools` field and answers
+with prose.** The agent gets a 200 and waits for a call nobody requested. The
+mitigation was a paragraph in the adapter's docstring — better than nothing, and
+still a reachable path, so the platform would have served that failure once, to
+whoever pointed a policy at MLX first. A documented absence and a working
+feature look identical to a client library; that sentence has now been written
+in this file three times about three different fields.
+
+`MLX_TOOL_CALLING_VERIFIED`, default false, makes the adapter raise
+`RuntimeCapabilityError` on a tool-carrying request — the same judgement `embed`
+and `unload` already make there, and `should_send_tools` makes on an
+unenforceable `tool_choice`. Refusing beats answering plausibly and wrongly.
+
+**The guard sits on the branch that puts tools on the wire, not on the presence
+of the argument**, which is the distinction worth having. `tool_choice: none`
+sends no tools, so no client is waiting for a call and nothing silent can
+happen; refusing it would have taken away a legitimate request. Plain
+completion — MLX's only current use — is untouched, because a guard that took
+the runtime out of service to protect a path nobody is on would be a worse
+trade than the one it replaced.
+
+**It cannot be a probe, and that is the whole difficulty.** There is no
+capability endpoint, and a trial request settles nothing: a model that is
+offered tools and legitimately declines to call one produces exactly what a
+server that discarded the field produces. Not-calling is a valid answer, so the
+absence of a call is evidence of nothing — which is precisely why this failure
+is silent in the first place. That leaves a person who has read a real call off
+the wire as the only thing that can assert it, and the setting records that
+assertion rather than pretending to derive it.
+
+Five tests, including one that the refusal happens **before** the network: a
+guard that still sent the request would have served the failure it exists to
+prevent and been indistinguishable in a test that only checks the exception.
+Confirmed by removing the guard and watching two of them fail.
+
 ### The debug switch had a reader and no writer on the user half
 
 The error-precision work earlier today closed `debug_logging_until` as "twelve
