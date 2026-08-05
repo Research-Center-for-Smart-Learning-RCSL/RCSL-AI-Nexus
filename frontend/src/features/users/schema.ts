@@ -47,7 +47,16 @@ export const userSchema = z.object({
   has_totp: z.boolean(),
   role: roleSchema,
   debug_logging_until: z.string().nullable(),
-  created_at: z.string(),
+  /**
+   * Nullable because the API says so, and the API is right: the column is
+   * `NOT NULL`, but an entity that has been constructed and not yet read back
+   * carries no timestamp. That is not hypothetical — `IssueInvitation` returns
+   * the account it just created, and returning the unsaved entity once made
+   * this very field throw *after* the account existed, taking the invitation
+   * link with it, which is the only copy there is. The read-back that fixed it
+   * lives in the use case; this stops the same shape being fatal again.
+   */
+  created_at: z.string().nullable(),
 });
 export type User = z.infer<typeof userSchema>;
 
@@ -78,8 +87,17 @@ export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 export const invitationSchema = z.object({
   id: z.string(),
   user_id: z.string(),
-  /** Full single-use URL. Present only in the creation response. */
-  url: z.string().optional(),
+  /**
+   * Full single-use URL. Present only in the response that issued it.
+   *
+   * `nullish`, not `optional`: the backend field is `str | None`, and pydantic
+   * serialises that as an explicit `"url": null` rather than leaving the key
+   * out — so `optional()` alone accepts the shape nobody sends and rejects the
+   * one everybody does. Every consumer already guards with `?? null` or a
+   * truthiness check, so this was the only layer that would have thrown, on the
+   * one response whose contents cannot be fetched again.
+   */
+  url: z.string().nullish(),
   expires_at: z.string(),
   consumed_at: z.string().nullable(),
 });

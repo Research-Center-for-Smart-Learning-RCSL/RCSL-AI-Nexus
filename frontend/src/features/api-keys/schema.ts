@@ -22,7 +22,10 @@ export const apiKeySchema = z.object({
   owner_id: z.string(),
   owner_display: z.string().nullable(),
   revoked_at: z.string().nullable(),
-  created_at: z.string(),
+  /** Nullable for the reason `User.created_at` is: the column is `NOT NULL`,
+   *  but an entity built and not yet read back has no timestamp, and the issue
+   *  response is exactly such a path. */
+  created_at: z.string().nullable(),
   last_used_at: z.string().nullable(),
   debug_logging_until: z.string().nullable(),
   /** While this is in the future, error responses to this key carry the
