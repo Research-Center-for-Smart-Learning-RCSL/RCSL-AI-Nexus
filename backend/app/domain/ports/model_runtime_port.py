@@ -3,7 +3,13 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, Sequence
 from typing import Protocol
 
-from app.domain.entities.chat import CompletionChunk, Message
+from app.domain.entities.chat import (
+    CompletionChunk,
+    Message,
+    SamplingOptions,
+    ToolChoice,
+    ToolDefinition,
+)
 from app.domain.entities.model import PullProgress, RuntimeResidency
 
 
@@ -21,8 +27,26 @@ class ModelRuntimePort(Protocol):
         messages: Sequence[Message],
         max_tokens: int | None = None,
         thinking: bool = True,
+        tools: Sequence[ToolDefinition] = (),
+        tool_choice: ToolChoice | None = None,
+        sampling: SamplingOptions | None = None,
     ) -> AsyncGenerator[CompletionChunk, None]:
         """Stream completion chunks. Implementations are async generators.
+
+        `tools` are forwarded to the runtime uninterpreted; the platform never
+        executes one, and never validates a call against its schema. A runtime
+        that cannot call tools raises `RuntimeCapabilityError` when given a
+        non-empty list rather than generating without them: a caller whose
+        tools were silently dropped receives prose where their agent loop
+        expects a call, which fails somewhere far from the cause. That is the
+        same judgement `embed` and `unload` make on the MLX adapter.
+
+        `tool_choice` of NONE is honoured everywhere by not sending the tools
+        at all. REQUIRED and FUNCTION need the runtime to constrain decoding,
+        so an adapter that cannot refuses rather than downgrading to AUTO.
+
+        `sampling` carries only what the caller actually set, so a runtime's own
+        defaults stay in force for everything else.
 
         `thinking=False` asks a model that deliberates to answer directly. It
         is a per-call argument rather than adapter state because one resident

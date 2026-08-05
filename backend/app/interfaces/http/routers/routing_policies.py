@@ -58,7 +58,12 @@ async def save_policy(
 ) -> RoutingPolicyResponse:
     """PUT rather than POST: a capability has one policy, and writing it twice
     with the same body has to mean the same thing."""
-    policy = await policies.save(actor, capability, [_to_candidate(c) for c in payload.candidates])
+    policy = await policies.save(
+        actor,
+        capability,
+        [_to_candidate(c) for c in payload.candidates],
+        thinking=payload.thinking,
+    )
     return RoutingPolicyResponse.of(policy)
 
 

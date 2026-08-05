@@ -32,7 +32,13 @@ from app.adapters.persistence.repositories import (
 from app.adapters.persistence.sqlalchemy_models import UsageRecordRow
 from app.domain.entities.actor import Role
 from app.domain.entities.api_key import ApiKey
-from app.domain.entities.chat import CompletionChunk, Message
+from app.domain.entities.chat import (
+    CompletionChunk,
+    Message,
+    SamplingOptions,
+    ToolChoice,
+    ToolDefinition,
+)
 from app.domain.entities.model import Model, ModelState, ResourceProfile, RuntimeKind
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import Requirement, RoutingCandidate, RoutingPolicy
@@ -72,6 +78,9 @@ class StubRuntime:
         messages: Sequence[Message],
         max_tokens: int | None = None,
         thinking: bool = True,
+        tools: Sequence[ToolDefinition] = (),
+        tool_choice: ToolChoice | None = None,
+        sampling: SamplingOptions | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         self.seen_ref = ref
         self.seen_max_tokens = max_tokens

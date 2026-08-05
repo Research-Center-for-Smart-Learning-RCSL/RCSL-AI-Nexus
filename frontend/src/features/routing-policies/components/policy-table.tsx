@@ -28,6 +28,12 @@ function summariseCandidates(policy: RoutingPolicy): string {
     .join(', ');
 }
 
+/** Null is a real third state, so it is named rather than shown as a blank. */
+function describeThinking(thinking: boolean | null): string {
+  if (thinking === null) return 'Deployment default';
+  return thinking ? 'Let the model think' : 'Answer directly';
+}
+
 export function PolicyTable() {
   const { can } = useSession();
   const mayWrite = can('routing:write');
@@ -75,6 +81,16 @@ export function PolicyTable() {
         cell: ({ row }) => (
           <span className="text-xs text-muted-foreground">
             {summariseCandidates(row.original)}
+          </span>
+        ),
+      },
+      {
+        id: 'thinking',
+        accessorFn: (row) => describeThinking(row.thinking),
+        header: 'Deliberation',
+        cell: ({ row }) => (
+          <span className="text-xs text-muted-foreground">
+            {describeThinking(row.original.thinking)}
           </span>
         ),
       },

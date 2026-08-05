@@ -48,7 +48,11 @@ class ManageRoutingPolicies:
         return policy
 
     async def save(
-        self, actor: Actor, capability: str, candidates: list[RoutingCandidate]
+        self,
+        actor: Actor,
+        capability: str,
+        candidates: list[RoutingCandidate],
+        thinking: bool | None = None,
     ) -> RoutingPolicy:
         """Upsert. Every candidate alias must already be registered.
 
@@ -56,6 +60,12 @@ class ManageRoutingPolicies:
         model that does not exist fails at inference time as "no available
         model", which is indistinguishable from every node being busy. The
         operator writing the policy is the one who can fix a typo.
+
+        `thinking=None` leaves the capability on the deployment default, which
+        is what every policy written before the field existed does. It is not
+        validated against the candidates: whether a model deliberates at all is
+        the runtime's business, and Ollama refuses `think: true` for a model
+        that cannot rather than this layer having to know which can.
         """
         self._authz.require(actor, Scope.ROUTING_WRITE)
 
@@ -83,14 +93,20 @@ class ManageRoutingPolicies:
         # Sorted here so the stored order is the evaluation order, and nobody
         # has to know whether routing sorts before it reads.
         ordered = tuple(sorted(candidates, key=lambda c: c.priority))
-        policy = RoutingPolicy(capability=capability, candidates=ordered)
+        policy = RoutingPolicy(capability=capability, candidates=ordered, thinking=thinking)
 
         await self._policies.save(policy)
         await self._audit.record(
             actor,
             "routing_policy.saved",
             target=capability,
-            detail={"candidates": ",".join(c.model_alias for c in ordered)},
+            detail={
+                "candidates": ",".join(c.model_alias for c in ordered),
+                # Recorded because it changes what every caller of this
+                # capability gets, and the change is invisible in the candidate
+                # list an audit reader would otherwise be looking at.
+                "thinking": "default" if thinking is None else str(thinking).lower(),
+            },
         )
         return policy
 

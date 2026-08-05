@@ -20,6 +20,7 @@ without closing it leaks a concurrency slot until garbage collection.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 import uuid
@@ -27,8 +28,15 @@ from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
 
 from app.domain.entities.actor import Actor, Scope
-from app.domain.entities.chat import CompletionChunk, Message
+from app.domain.entities.chat import (
+    CompletionChunk,
+    Message,
+    SamplingOptions,
+    ToolChoice,
+    ToolDefinition,
+)
 from app.domain.entities.model import Model, RuntimeKind
+from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.usage import UsageRecord
 from app.domain.exceptions import ContextTooLongError, NoAvailableModelError, NotAuthorizedError
 from app.domain.ports.infrastructure_ports import ConcurrencyLimiterPort
@@ -53,6 +61,24 @@ its terminal event — the only place the prompt token count appears — is the
 very next one. This is the backstop for a runtime that does not honour that,
 so the request cannot be held open by one that keeps streaming. Small on
 purpose: it is a guard, not a budget."""
+
+
+def _context_chars(messages: Sequence[Message], tools: Sequence[ToolDefinition]) -> int:
+    """Everything the model will read, in characters.
+
+    A tool definition's `parameters` is arbitrary JSON, so it is measured by
+    serialising it rather than by walking it: the length of the text the adapter
+    will send is the figure that matters, and a nested schema has no other
+    honest measure. The cost is one serialisation of a payload the adapter
+    serialises again a few lines later, against a guardrail that runs before any
+    hardware is committed.
+    """
+    total = sum(len(m.content) for m in messages)
+    for message in messages:
+        total += sum(len(c.name) + len(c.arguments) for c in message.tool_calls)
+    for tool in tools:
+        total += len(tool.name) + len(tool.description) + len(json.dumps(tool.parameters))
+    return total
 
 
 class RouteChatRequest:
@@ -107,6 +133,9 @@ class RouteChatRequest:
         messages: Sequence[Message],
         max_tokens: int | None = None,
         thinking: bool | None = None,
+        tools: Sequence[ToolDefinition] = (),
+        tool_choice: ToolChoice | None = None,
+        sampling: SamplingOptions | None = None,
     ) -> AsyncGenerator[CompletionChunk, None]:
         """`thinking=None` takes the configured default; True and False are the
         caller's explicit choice.
@@ -134,7 +163,13 @@ class RouteChatRequest:
         # linearly on unified memory, so a single enormous prompt is a
         # hardware problem in the same way an unbounded generation is, and it
         # arrives before any token has been produced.
-        total_chars = sum(len(m.content) for m in messages)
+        #
+        # Tool definitions and prior tool calls count towards it. They are
+        # prompt the model reads like any other, and they are the part an agent
+        # client grows without bound: leaving them out would have let a caller
+        # carry an arbitrary payload past the guardrail in `tools`, which is
+        # the one field of an agent request that no person ever types.
+        total_chars = _context_chars(messages, tools)
         if total_chars > self._max_context_chars:
             raise ContextTooLongError(
                 detail=f"{total_chars} characters exceeds the configured limit"
@@ -171,11 +206,28 @@ class RouteChatRequest:
                     runtime,
                     messages,
                     max_tokens,
-                    self._thinking_default if thinking is None else thinking,
+                    # Request, then policy, then deployment. The middle level
+                    # exists because the answer is per capability rather than
+                    # per deployment: an agent loop on `code` pays the
+                    # deliberation cost on every tool round trip, where `chat`
+                    # wants it and `assist` cannot afford it at all. Only the
+                    # request may be `False` meaningfully, so `is None` is the
+                    # test at both levels rather than a truthiness check.
+                    self._resolve_thinking(thinking, policy),
+                    tools,
+                    tool_choice,
+                    sampling,
                 )
             ) as generation:
                 async for chunk in generation:
                     yield chunk
+
+    def _resolve_thinking(self, requested: bool | None, policy: RoutingPolicy) -> bool:
+        if requested is not None:
+            return requested
+        if policy.thinking is not None:
+            return policy.thinking
+        return self._thinking_default
 
     async def _generate(
         self,
@@ -186,6 +238,9 @@ class RouteChatRequest:
         messages: Sequence[Message],
         max_tokens: int | None,
         thinking: bool,
+        tools: Sequence[ToolDefinition] = (),
+        tool_choice: ToolChoice | None = None,
+        sampling: SamplingOptions | None = None,
     ) -> AsyncGenerator[CompletionChunk, None]:
         # The caller's request is honoured only where it is stricter than ours.
         # An unbounded generation is a hardware problem, not a client choice.
@@ -217,7 +272,9 @@ class RouteChatRequest:
             # a client that already left. This is the same obligation placed
             # on consumers of this use case.
             async with aclosing(
-                runtime.generate(target.ref, messages, ceiling, thinking)
+                runtime.generate(
+                    target.ref, messages, ceiling, thinking, tools, tool_choice, sampling
+                )
             ) as upstream:
                 async for chunk in upstream:
                     # Assigned, not accumulated: the runtime reports it once

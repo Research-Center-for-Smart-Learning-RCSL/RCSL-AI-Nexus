@@ -90,6 +90,12 @@ class RoutingPolicyRow(Base):
     """Structured requirement documents, never expression strings. See
     docs/ARCHITECTURE.md section 2.4 for why this distinction matters."""
 
+    thinking: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
+    """Nullable on purpose: three states, not two. NULL is "this policy has no
+    opinion, use the deployment default", which is what every policy written
+    before this column existed means and what a boolean with a default could
+    not express."""
+
 
 class UserRow(Base):
     __tablename__ = "users"

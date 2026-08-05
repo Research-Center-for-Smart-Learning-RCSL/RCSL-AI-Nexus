@@ -34,3 +34,19 @@ class RoutingCandidate:
 class RoutingPolicy:
     capability: str
     candidates: tuple[RoutingCandidate, ...]
+    thinking: bool | None = None
+    """Whether a request that expresses no preference gets deliberation.
+
+    Per capability rather than per deployment, because that is the level the
+    answer actually varies at. `chat` wants a model to think; `assist` sits
+    beside a settings form where a model that spends its whole budget
+    deliberating produces no answer at all; and an agent client on `code` pays
+    that cost again on every tool round trip, which is the case this field was
+    added for. It is not per *model*, because one resident copy serves every
+    capability that routes to it (`ix_models_node_ref` is unique on node,
+    runtime and ref) and the memory budget could not afford a second.
+
+    `None` means the policy expresses no preference and the deployment default
+    applies, which is what every existing policy has. Only the request may
+    override it. See `RouteChatRequest._resolve_thinking`.
+    """

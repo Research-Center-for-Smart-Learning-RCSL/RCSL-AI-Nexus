@@ -15,6 +15,144 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-05
+
+### The gateway can call tools, which is what "OpenAI-compatible" was missing
+
+The API has been OpenAI-*shaped* since Phase 1: the right paths, the right
+envelope, the right error format, `/v1/models`, bearer auth. What it was not is
+OpenAI-*capable*, and the gap was one feature wide. Asked to serve a coding
+agent, the platform accepted the request, returned 200, and did nothing useful,
+because `tools` was dropped by pydantic's default `extra="ignore"` and the model
+was never told there was anything to call.
+
+**That is the worst shape a compatibility gap can take.** Nothing errors. The
+agent sends its tool definitions, gets prose back, and stalls waiting for a call
+that was never requested — and every layer in between reports success. The
+ROADMAP had recorded the drop since 2026-07-30 as a documented absence, which
+made it visible but not fixed; a documented absence and a working feature look
+identical to a client library.
+
+Tool calling now runs the whole way through: `ToolCall`, `ToolDefinition`,
+`ToolChoice` and `SamplingOptions` in the domain, three new arguments on
+`ModelRuntimePort.generate`, both adapters, the request schema, the SSE framing
+and the non-streaming assembly. What is worth recording is not the plumbing but
+the four places where getting it wrong would have been silent.
+
+**Ollama ends a tool-calling turn with `done_reason: stop`.** True of the model,
+wrong for the client. An agent loop branches on `finish_reason` alone to decide
+whether to execute a call or show a person an answer, so "stop" means the calls
+are never run and the conversation stalls with the model waiting on results
+nobody will produce. The adapter rewrites it to `tool_calls` whenever calls were
+emitted. Nothing upstream can detect this; the request succeeds either way.
+
+**Ollama gives a call no id, and OpenAI requires one.** It is the handle a
+client pairs its result back to, so the adapter mints it. It has to be unique
+within a *conversation* rather than within a chunk — an index would restart on
+the next turn and pair a result with the wrong call, which produces a coherent
+conversation about the wrong thing.
+
+**`arguments` stays JSON text through the domain.** It is model output, so it
+can be malformed. The caller recovering from that needs the bytes the model
+produced, not our re-encoding of a parse that may have succeeded by accident.
+Ollama takes an object, so the adapter decodes on the way out — and when it
+cannot, sends the raw string rather than a substitute, so a conversation whose
+model once emitted invalid JSON stays replayable instead of becoming a
+permanent 400.
+
+**A `tool_choice` the runtime cannot enforce is refused rather than
+downgraded.** `none` is exact everywhere and `auto` is the default, but
+`required` and naming a function ask the runtime to constrain decoding, which
+neither runtime here exposes. Serving `auto` instead would answer a caller who
+demanded a call with prose, discovered inside their parser. Same judgement the
+MLX adapter already makes on `embed` and `unload`.
+
+### Frame order is the same lesson for the third time
+
+`delta.tool_calls` has to be framed **before** the terminal frame, because a
+runtime reports the call and the end of the turn in one event and a client that
+has seen `finish_reason` has stopped reading deltas. This is the rule
+backend.md §6 already states twice, from the two previous times it was got
+wrong (`RouteChatRequest` on 2026-07-27, `ProposalCollector` on 2026-07-29).
+Arrived at from a third direction and pinned by a third test asserting on order
+rather than on content, which is the only kind of test that catches it.
+
+The related one: the tool call index runs across the whole stream, not per
+chunk. A client buffers calls keyed on `index`, so restarting the counter merges
+two separate calls into one whose name and arguments are both concatenations of
+the pair.
+
+### Four documented absences became behaviours, and the page said the opposite
+
+`/api-docs` is the whole of the consideration security.md §4.4 receives for
+disabling `/openapi.json`, and it had been carefully written to say that
+`tools`, `temperature`, `top_p`, `n` and `stop` parse and do nothing, that a
+`tool` role is a 422, and that streaming carries no `usage` at all. All four are
+now false. **A page documenting what a feature does not do is the kind that goes
+stale silently**, so each is now stated with the date it changed rather than
+quietly rewritten — an integrator reading it against an older deployment needs
+to know which side of the change they are on.
+
+The 422 gained an envelope while we were there. FastAPI answers a validation
+failure with `{"detail": [...]}`, its own shape, and every OpenAI client library
+reads `error.message` — so on the gateway a malformed request produced a body no
+caller's code could surface, at exactly the moment they are still getting the
+request right.
+
+### Deliberation is per capability now, because an agent pays for it every turn
+
+`OLLAMA_THINKING` was one setting for the whole deployment, and the three
+capabilities want different answers: `chat` wants a model to think, `assist`
+cannot afford it beside a settings form, and an agent on `code` deliberates
+again on *every tool round trip* — a ten-step task reasons ten times over. It is
+a nullable column on `routing_policies`, where null means "no opinion, take the
+deployment default", which is what every policy written before it means.
+
+The frontend half of that produced the one real bug of the day, caught by a test
+written for the round trip rather than for either direction: the `<select>`
+holds three strings and zod preprocesses `'default'` to null, so
+`thinkingToApi` was written against the *parsed* type and read `'default'` as
+"not on", which is `false`. Every policy edited through the dialog would have
+silently come off the deployment default. Fixed by making the function total
+over both the pre- and post-parse value instead of narrowing it, since nothing
+in the types enforced which side it was called on — `z.preprocess` makes the
+input type `unknown`, so TypeScript had nothing to object to.
+
+### The context ceiling moved, and why that is not free
+
+32768 → 131072 tokens. An agent replays the whole conversation every turn and
+grows it with file contents and tool output, so it crossed the old ceiling
+within a few rounds and the 413 arrived in the middle of a task rather than at
+the start of one.
+
+This is one of the six resource guardrails security.md §4.3 counts on, and
+raising it costs something real: context is superlinear on unified memory and
+measured throughput here already decays from 60.8 to 23.5 tok/s across a single
+generation. What still bounds the damage is that the other five are unchanged,
+and the wall-clock deadline is now the limit that binds a genuinely large
+request. **The hole this would have opened is `tools`**: tool definitions are
+arbitrary JSON that no person types, so a ceiling counting only `messages` would
+have let a caller carry an unbounded payload straight past it. They are counted.
+
+### What is not proven
+
+The MLX half. `mlx_lm.server` speaks the OpenAI chat schema, so tools are
+forwarded as the field it already defines and calls are reassembled from the
+fragmented `delta.tool_calls` an OpenAI client would parse — but none of it has
+run against a live server, the same boundary MLX inference as a whole has always
+sat behind. A build without tool support would accept the field and answer with
+prose, which is precisely the silent failure this whole change exists to remove.
+Point an agent capability at Ollama until that is checked; it is written into
+the adapter's docstring rather than left to be discovered.
+
+And the question the code cannot answer: whether a local model is actually good
+enough to drive an agent loop. Codex's prompts are tuned for a model this
+deployment does not have. The platform can now carry the conversation; whether
+`qwen2.5-coder` or `glm-4.7-flash` can hold up their end of it is a measurement,
+not a merge.
+
+---
+
 ## 2026-08-04
 
 ### Records now have an expiry date, and an administrator can bring it forward

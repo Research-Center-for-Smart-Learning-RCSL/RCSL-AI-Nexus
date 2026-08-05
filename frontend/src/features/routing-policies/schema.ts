@@ -30,9 +30,18 @@ export const routingCandidateSchema = z.object({
 });
 export type RoutingCandidate = z.infer<typeof routingCandidateSchema>;
 
+/**
+ * Three states, not two. `null` is "this policy expresses no preference, take
+ * the deployment default", which is what every policy written before the
+ * column existed means, so the form has to be able to say it as well as `true`
+ * and `false`.
+ */
+export const thinkingSchema = z.boolean().nullable();
+
 export const routingPolicySchema = z.object({
   capability: capabilitySchema,
   candidates: z.array(routingCandidateSchema),
+  thinking: thinkingSchema.default(null),
 });
 export type RoutingPolicy = z.infer<typeof routingPolicySchema>;
 
@@ -61,9 +70,20 @@ const candidateFormSchema = z.object({
   }),
 });
 
+/**
+ * A three-valued control backed by a `<select>`, which can only hold strings.
+ * `'default'` is the absence of a preference and becomes null on the wire;
+ * the backend treats null and an omitted field identically.
+ */
+const thinkingFormSchema = z.preprocess(
+  (value) => (value === 'default' || value === '' || value === undefined ? null : value),
+  z.union([z.literal('on'), z.literal('off')]).nullable(),
+);
+
 export const savePolicyFormSchema = z.object({
   capability: capabilitySchema,
   candidates: z.array(candidateFormSchema).min(1, 'Add at least one candidate.'),
+  thinking: thinkingFormSchema,
 });
 // `z.coerce`/`z.preprocess` above mean the form holds strings that only become
 // numbers after parsing, so input and output types genuinely differ. Collapsing
@@ -75,7 +95,31 @@ export type SavePolicyValues = z.output<typeof savePolicyFormSchema>;
 /** The request body: the capability travels in the URL, not the payload. */
 export type SavePolicyRequest = {
   candidates: SavePolicyValues['candidates'];
+  thinking: boolean | null;
 };
+
+/** What the `<select>` holds. `'default'` survives only until zod parses it. */
+export type ThinkingChoice = 'default' | 'on' | 'off';
+
+/**
+ * The form's three-valued string, as the boolean-or-null the API takes.
+ *
+ * Total over the pre-parse value as well as the post-parse one, so it cannot
+ * depend on having been called on the right side of the resolver. Narrowed to
+ * the parsed type it read `'default'` as "not on", which is `false` — silently
+ * taking a policy off the deployment default the first time it was edited.
+ */
+export function thinkingToApi(value: ThinkingChoice | null): boolean | null {
+  if (value === 'on') return true;
+  if (value === 'off') return false;
+  return null;
+}
+
+/** The inverse, for loading an existing policy into the form. */
+export function thinkingToForm(value: boolean | null): ThinkingChoice {
+  if (value === null) return 'default';
+  return value ? 'on' : 'off';
+}
 
 export const MODEL_STATES = modelStateSchema.options;
 export const NODE_STATUSES = nodeStatusSchema.options;

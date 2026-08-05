@@ -16,7 +16,14 @@ import pytest
 from app.adapters.authz.role_authorization import RoleAuthorization
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.domain.entities.actor import Actor, Role, Scope
-from app.domain.entities.chat import CompletionChunk, Message, MessageRole
+from app.domain.entities.chat import (
+    CompletionChunk,
+    Message,
+    MessageRole,
+    SamplingOptions,
+    ToolChoice,
+    ToolDefinition,
+)
 from app.domain.entities.model import Model, ModelState, ResourceProfile, RuntimeKind
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import RoutingCandidate, RoutingPolicy
@@ -49,6 +56,9 @@ class FakeRuntime:
         messages: Sequence[Message],
         max_tokens: int | None = None,
         thinking: bool = True,
+        tools: Sequence[ToolDefinition] = (),
+        tool_choice: ToolChoice | None = None,
+        sampling: SamplingOptions | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         try:
             for i in range(self._chunks):
@@ -117,6 +127,9 @@ class SlowRuntime:
         messages: Sequence[Message],
         max_tokens: int | None = None,
         thinking: bool = True,
+        tools: Sequence[ToolDefinition] = (),
+        tool_choice: ToolChoice | None = None,
+        sampling: SamplingOptions | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         try:
             i = 0
@@ -262,6 +275,9 @@ class OllamaShapedRuntime:
         messages: Sequence[Message],
         max_tokens: int | None = None,
         thinking: bool = True,
+        tools: Sequence[ToolDefinition] = (),
+        tool_choice: ToolChoice | None = None,
+        sampling: SamplingOptions | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         # Honours `max_tokens`, because Ollama does: it is passed as
         # `num_predict`, so the runtime stops on the same token the ceiling
@@ -388,6 +404,9 @@ class ThinkingRecordingRuntime:
         messages: Sequence[Message],
         max_tokens: int | None = None,
         thinking: bool = True,
+        tools: Sequence[ToolDefinition] = (),
+        tool_choice: ToolChoice | None = None,
+        sampling: SamplingOptions | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         self.seen.append(thinking)
         yield CompletionChunk(delta="hi", token_count=1, finish_reason="stop")

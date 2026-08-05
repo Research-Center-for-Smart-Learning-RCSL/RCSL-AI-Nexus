@@ -162,7 +162,7 @@ def routing_policy_to_domain(row: RoutingPolicyRow) -> RoutingPolicy:
         )
         for entry in row.candidates or []
     )
-    return RoutingPolicy(capability=row.capability, candidates=candidates)
+    return RoutingPolicy(capability=row.capability, candidates=candidates, thinking=row.thinking)
 
 
 def routing_policy_to_row(policy: RoutingPolicy) -> RoutingPolicyRow:
@@ -176,6 +176,7 @@ def routing_policy_to_row(policy: RoutingPolicy) -> RoutingPolicyRow:
             }
             for c in policy.candidates
         ],
+        thinking=policy.thinking,
     )
 
 

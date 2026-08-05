@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from collections.abc import AsyncGenerator, Sequence
 from pathlib import Path
 from typing import Any
@@ -42,7 +43,16 @@ from typing import Any
 import httpx
 
 from app.adapters.runtime.hf_validation import assert_valid_hf_repo_id
-from app.domain.entities.chat import CompletionChunk, Message
+from app.adapters.runtime.tool_support import should_send_tools
+from app.domain.entities.chat import (
+    CompletionChunk,
+    Message,
+    MessageRole,
+    SamplingOptions,
+    ToolCall,
+    ToolChoice,
+    ToolDefinition,
+)
 from app.domain.entities.model import PullProgress
 from app.domain.exceptions import (
     DomainError,
@@ -55,14 +65,110 @@ from app.domain.exceptions import (
 logger = logging.getLogger(__name__)
 
 # OpenAI clients branch on finish_reason, so a value they do not recognise reads
-# as a protocol error. Only the two the domain acts on are passed through; MLX
-# emits no others today, but an unexpected one is reported as "stop" rather than
-# forwarded.
-_FINISH_REASONS = {"stop": "stop", "length": "length"}
+# as a protocol error. Only the three the domain acts on are passed through; an
+# unexpected one is reported as "stop" rather than forwarded.
+_FINISH_REASONS = {"stop": "stop", "length": "length", "tool_calls": "tool_calls"}
 
 
-def _finish_reason(reason: str | None) -> str:
+def _finish_reason(reason: str | None, *, called_tools: bool) -> str:
+    """`tool_calls` wins, for the reason spelled out in the Ollama adapter: an
+    agent loop decides whether to execute a call on this field alone, so a
+    generation that produced calls and reports "stop" stalls the conversation.
+    A server that already said `tool_calls` agrees, and this changes nothing."""
+    if called_tools:
+        return "tool_calls"
     return _FINISH_REASONS.get(reason or "stop", "stop")
+
+
+def _message_payload(message: Message) -> dict[str, Any]:
+    """The OpenAI message shape, which is what `mlx_lm.server` speaks."""
+    payload: dict[str, Any] = {"role": message.role.value, "content": message.content}
+    if message.tool_calls:
+        payload["tool_calls"] = [
+            {
+                "id": c.id,
+                "type": "function",
+                # Arguments stay text here, unlike the Ollama adapter: this is
+                # the OpenAI schema, where the field is defined as a string.
+                "function": {"name": c.name, "arguments": c.arguments},
+            }
+            for c in message.tool_calls
+        ]
+    if message.role is MessageRole.TOOL and message.tool_call_id:
+        payload["tool_call_id"] = message.tool_call_id
+    return payload
+
+
+class _ToolCallAccumulator:
+    """Reassembles OpenAI's fragmented tool call deltas into whole calls.
+
+    The OpenAI streaming format splits one call across many frames: the first
+    carries `index`, `id` and the function name, and the rest carry successive
+    slices of `arguments` under the same index. `CompletionChunk` holds whole
+    calls, so the fragments are joined here rather than pushed at the domain —
+    which is the same division `sse.py` makes in the other direction.
+
+    Keyed on `index` because that is the only field present on every fragment;
+    `id` and `name` appear once, on the first.
+    """
+
+    def __init__(self) -> None:
+        self._calls: dict[int, dict[str, str]] = {}
+
+    def add(self, raw: Any) -> None:
+        if not isinstance(raw, list):
+            return
+        for entry in raw:
+            entry = entry or {}
+            index = int(entry.get("index") or 0)
+            slot = self._calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+            if entry.get("id"):
+                slot["id"] = entry["id"]
+            function = entry.get("function") or {}
+            if function.get("name"):
+                slot["name"] = function["name"]
+            # Concatenated, never replaced: every fragment after the first is a
+            # further slice of the same JSON text, and assigning would keep only
+            # the last few characters of the arguments.
+            slot["arguments"] += function.get("arguments") or ""
+
+    def drain(self) -> tuple[ToolCall, ...]:
+        calls = []
+        for index in sorted(self._calls):
+            slot = self._calls[index]
+            if not slot["name"]:
+                # No name means nothing a client could execute.
+                logger.warning("mlx emitted a tool call with no function name, ignoring")
+                continue
+            calls.append(
+                ToolCall(
+                    # A server that sent no id leaves the client without a
+                    # handle to pair its result to, so one is minted, as the
+                    # Ollama adapter does for every call.
+                    id=slot["id"] or f"call_{uuid.uuid4().hex[:24]}",
+                    name=slot["name"],
+                    arguments=slot["arguments"] or "{}",
+                )
+            )
+        self._calls.clear()
+        return tuple(calls)
+
+
+def _sampling_payload(sampling: SamplingOptions | None) -> dict[str, Any]:
+    """Top-level OpenAI fields, unlike Ollama's nested `options`. Only what the
+    caller actually set, so the server's own defaults stay in force."""
+    if sampling is None:
+        return {}
+    payload: dict[str, Any] = {}
+    if sampling.temperature is not None:
+        payload["temperature"] = sampling.temperature
+    if sampling.top_p is not None:
+        payload["top_p"] = sampling.top_p
+    if sampling.seed is not None:
+        payload["seed"] = sampling.seed
+    if sampling.stop:
+        payload["stop"] = list(sampling.stop)
+    return payload
 
 
 class MlxAdapter:
@@ -96,6 +202,9 @@ class MlxAdapter:
         messages: Sequence[Message],
         max_tokens: int | None = None,
         thinking: bool = True,
+        tools: Sequence[ToolDefinition] = (),
+        tool_choice: ToolChoice | None = None,
+        sampling: SamplingOptions | None = None,
     ) -> AsyncGenerator[CompletionChunk, None]:
         """Stream a completion over the OpenAI-compatible endpoint.
 
@@ -110,11 +219,21 @@ class MlxAdapter:
         separate it. Silently accepting the argument is deliberate: the caller
         asks the port, not the runtime, and a runtime that cannot honour the
         request is not a reason to refuse the generation.
+
+        `tools` are forwarded as the OpenAI `tools` field, which is the schema
+        this server already speaks, and calls are read back out of the same
+        `delta.tool_calls` fragments an OpenAI client would parse. **This half
+        has not been exercised against a live `mlx_lm.server`**, the same
+        boundary MLX inference as a whole still sits behind (ROADMAP Phase 2):
+        a server build without tool support would accept the field and answer
+        with prose, which is the silent failure this platform otherwise refuses.
+        Ollama is the runtime to point an agent capability at until that is
+        checked.
         """
         assert_valid_hf_repo_id(ref)
         payload: dict[str, Any] = {
             "model": ref,
-            "messages": [{"role": m.role.value, "content": m.content} for m in messages],
+            "messages": [_message_payload(m) for m in messages],
             "stream": True,
             # Ask for a usage total in the terminal frame. If the server does not
             # honour it, the per-chunk counts below still stand.
@@ -124,11 +243,26 @@ class MlxAdapter:
             # Stopping at the source beats cutting the stream: the model stops
             # generating rather than producing tokens nobody reads.
             payload["max_tokens"] = max_tokens
+        payload.update(_sampling_payload(sampling))
+        if tools and should_send_tools(tool_choice, "mlx_lm.server"):
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    },
+                }
+                for t in tools
+            ]
 
         counted = 0
         finish_reason: str | None = None
         usage_tokens: int | None = None
         saw_terminal = False
+        pending_calls = _ToolCallAccumulator()
+        called_tools = False
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
             async with client.stream("POST", "/v1/chat/completions", json=payload) as response:
@@ -154,13 +288,23 @@ class MlxAdapter:
                     choices = event.get("choices") or []
                     if choices:
                         choice = choices[0]
-                        delta = (choice.get("delta") or {}).get("content") or ""
+                        delta_body = choice.get("delta") or {}
+                        delta = delta_body.get("content") or ""
                         if delta:
                             # Counted one apiece as they arrive, so a disconnect
                             # still bills what was produced. Reconciled against
                             # the server's own total, if it sends one, below.
                             counted += 1
                             yield CompletionChunk(delta=delta, token_count=1)
+                        if delta_body.get("tool_calls"):
+                            # Accumulated, not yielded. A fragment is a slice of
+                            # one call's arguments and is not executable on its
+                            # own, so the whole calls go out on the terminal
+                            # chunk below. Counted here so a disconnect part way
+                            # through a call still bills the tokens it took.
+                            pending_calls.add(delta_body["tool_calls"])
+                            called_tools = True
+                            counted += 1
                         if choice.get("finish_reason"):
                             finish_reason = choice["finish_reason"]
                             saw_terminal = True
@@ -193,7 +337,10 @@ class MlxAdapter:
                 )
                 correction = 0
         yield CompletionChunk(
-            delta="", finish_reason=_finish_reason(finish_reason), token_count=correction
+            delta="",
+            tool_calls=pending_calls.drain(),
+            finish_reason=_finish_reason(finish_reason, called_tools=called_tools),
+            token_count=correction,
         )
 
     # --- model lifecycle -------------------------------------------------
