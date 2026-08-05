@@ -36,6 +36,7 @@ from app.infrastructure.di import (
     get_user_repository,
 )
 from app.interfaces.http.request_actor import remember_actor
+from app.interfaces.http.request_context import grant_debug_detail
 from app.shared.clock import SystemClock
 
 # `current_actor` and `current_session` are defined in di.py (so the tenant-
@@ -144,6 +145,10 @@ def _presented_identity(request: Request, settings: Settings) -> tuple[str, str]
 
 
 def _actor_for(user: User, *, source: str, authz: AuthorizationPort) -> Actor:
+    # The user-level debug window, live from 2026-08-05: while it is open,
+    # error envelopes for this operator carry `detail`. Set here because both
+    # resolvers pass through and both hold the full user row.
+    grant_debug_detail(user.debug_logging_until)
     if user.disabled_at is not None:
         raise NotAuthenticatedError(detail=f"disabled user {user.id}")
 

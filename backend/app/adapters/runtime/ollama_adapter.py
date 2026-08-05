@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 
 from app.adapters.runtime.tool_support import should_send_tools
-from app.adapters.runtime.transport import timeout_detail
+from app.adapters.runtime.transport import timeout_error
 from app.adapters.runtime.validation import assert_valid_model_ref
 from app.domain.entities.chat import (
     CompletionChunk,
@@ -36,6 +36,7 @@ from app.domain.exceptions import (
     ModelNotFoundError,
     NoAvailableModelError,
     RuntimeCapabilityError,
+    StreamInterruptedError,
 )
 
 logger = logging.getLogger(__name__)
@@ -466,13 +467,11 @@ class OllamaAdapter:
                     # evicted, Ollama restarted, or the read timeout fired.
                     # Returning quietly would let the caller record a complete
                     # generation and report "stop" to the client.
-                    raise NoAvailableModelError(
+                    raise StreamInterruptedError(
                         detail=f"ollama stream for {ref} ended without a done event"
                     )
         except httpx.TimeoutException as exc:
-            raise NoAvailableModelError(
-                detail=timeout_detail("ollama", ref, exc, self._timeout, mid_stream=received_any)
-            ) from exc
+            raise timeout_error("ollama", ref, exc, self._timeout, mid_stream=received_any) from exc
 
     async def embed(self, ref: str, texts: Sequence[str]) -> list[list[float]]:
         """Vectors for a batch, through Ollama's `/api/embed`.

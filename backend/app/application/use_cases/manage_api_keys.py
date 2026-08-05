@@ -251,6 +251,42 @@ class ManageApiKeys:
         await self._keys.revoke(key_id, self._clock.now())
         await self._audit.record(actor, "api_key.revoked", target=key_id)
 
+    MAX_DEBUG_WINDOW_MINUTES = 24 * 60
+    """A day. The window loosens an information control (error responses carry
+    operator-facing detail while it is open), so it must not be settable into
+    something indefinite — a ceiling is what keeps "time-boxed" a property of
+    the mechanism rather than a hope about its use."""
+
+    async def set_debug_window(self, actor: Actor, key_id: str, *, minutes: int) -> ApiKey:
+        """Open, extend, or close (minutes=0) the key's debug window.
+
+        While the window is open, error responses to this key carry
+        `error.detail` — the operator-facing string that is otherwise
+        log-only. Audited for the same reason it is bounded: it changes what
+        the platform reveals, and the record of who opened it belongs next to
+        the record of what was revealed.
+        """
+        if not 0 <= minutes <= self.MAX_DEBUG_WINDOW_MINUTES:
+            raise ModelStateConflictError(
+                detail=f"debug window must be 0..{self.MAX_DEBUG_WINDOW_MINUTES} minutes"
+            )
+        key = await self._require(key_id)
+        self._require_owner_permission(actor, key.owner_id)
+        if key.revoked_at is not None:
+            raise ModelStateConflictError(detail=f"key {key_id} is revoked")
+
+        until = self._clock.now() + timedelta(minutes=minutes) if minutes else None
+        if not await self._keys.update_settings(key.key_id, {"debug_logging_until": until}):
+            raise ModelStateConflictError(detail=f"key {key_id} was revoked concurrently")
+
+        await self._audit.record(
+            actor,
+            "api_key.debug_window_set",
+            target=key.key_id,
+            detail={"until": until.isoformat() if until else "off"},
+        )
+        return replace(key, debug_logging_until=until)
+
     def _require_owner_permission(self, actor: Actor, owner_id: str) -> None:
         """Own keys need `api_key:write_own`; anyone else's needs
         `api_key:write_any`. Checked against the *key's* owner rather than the

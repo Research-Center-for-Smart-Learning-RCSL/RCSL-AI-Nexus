@@ -28,6 +28,7 @@ from app.infrastructure.logging_config import configure_logging
 from app.interfaces.http.errors import install_error_handlers
 from app.interfaces.http.middleware.geo_filter import build_geo_filter
 from app.interfaces.http.middleware.metrics import MetricsMiddleware
+from app.interfaces.http.request_context import RequestContextMiddleware
 from app.interfaces.http.routers import chat, health, metrics
 
 
@@ -76,6 +77,11 @@ def create_app() -> FastAPI:
     # filter inline in key auth), so /metrics rests on its bearer token alone;
     # see interfaces/http/routers/metrics.py.
     app.add_middleware(MetricsMiddleware)
+    # Added last, so it is outermost: every response, including one a rejected
+    # middleware builds, passes back through it and gets the X-Request-Id
+    # header. The 500 path is the one exception and sets its own; see
+    # errors.handle_unanticipated.
+    app.add_middleware(RequestContextMiddleware)
     app.include_router(health.router)
     app.include_router(chat.router)
     app.include_router(metrics.router)

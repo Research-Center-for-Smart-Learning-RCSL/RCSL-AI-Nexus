@@ -43,3 +43,18 @@ export async function updateApiKey(
 export async function revokeApiKey(keyId: string): Promise<void> {
   await api.post<void>(`${BASE}/${keyId}/revoke`);
 }
+
+/**
+ * Open (minutes > 0) or close (0) the key's debug window: while it is open,
+ * error responses to this key carry the operator-facing detail that is
+ * otherwise log-only. Time-boxed by the backend to at most 24 hours, and
+ * audited, because it loosens an information control.
+ */
+export async function setDebugWindow(
+  keyId: string,
+  minutes: number,
+): Promise<ApiKey> {
+  return apiKeySchema.parse(
+    await api.post<unknown>(`${BASE}/${keyId}/debug`, { minutes }),
+  );
+}

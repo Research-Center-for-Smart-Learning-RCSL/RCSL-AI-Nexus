@@ -42,6 +42,7 @@ from fastapi.responses import StreamingResponse
 
 from app.domain.entities.chat import CompletionChunk
 from app.domain.exceptions import DomainError
+from app.interfaces.http.request_context import current_request_id, debug_detail_active
 
 DONE_SENTINEL = "data: [DONE]\n\n"
 
@@ -219,7 +220,17 @@ async def _frames(
         # Past the first byte the status line is already committed, so this is
         # the only channel left. Inherent to SSE, documented for consumers
         # rather than worked around.
-        yield frame({"error": {"code": exc.code, "message": exc.public_message}})
+        #
+        # `request_id` matters most here of anywhere: a mid-stream death has no
+        # status line and no response headers left to carry it, so this frame
+        # is the caller's only handle on the log line that explains what died.
+        error: dict[str, object] = {"code": exc.code, "message": exc.public_message}
+        request_id = current_request_id()
+        if request_id is not None:
+            error["request_id"] = request_id
+        if debug_detail_active() and exc.detail:
+            error["detail"] = exc.detail
+        yield frame({"error": error})
 
     if not failed:
         if include_usage:

@@ -733,6 +733,8 @@ Prompt content is the most sensitive data here, because researchers type unpubli
 
 When full logging is genuinely needed for debugging, it is enabled by an **expiring** switch: `debug_logging_until` on the API key **and on the user record** (the management chat path has no API key attached). Full-text retention is configured separately and is markedly shorter than ordinary log retention. The expiry exists to prevent the common ending where full logging is enabled for an afternoon and left on for a year.
 
+**What the switch actually does, as of 2026-08-05.** While the window is open, error responses to that credential carry `error.detail` — the operator-facing string that is otherwise log-only, and the one deliberate exception to "no internal detail in responses" (§5 and `interfaces/http/errors.py`). It is set from the API keys page (one hour per press, capped at 24 by the backend), audited as `api_key.debug_window_set`, and closes by itself. Full prompt/completion logging, the use this section originally described, remains **unimplemented**: the switch existed from the first migration and was consumed by nothing until the error-detail use above. The two rows of the metadata table were likewise aspirational on one point — `request id` is logged *and returned* (header `X-Request-Id`, `error.request_id`) only since the same date.
+
 ### 9.3 Encryption at Rest and the FileVault Tension
 
 FileVault defends against the machine being physically removed, a real risk for equipment in a shared facility. It conflicts directly with unattended 24/7 operation, because unlocking the disk at boot requires someone to type a password.

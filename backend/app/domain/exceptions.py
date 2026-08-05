@@ -34,6 +34,54 @@ class NoAvailableModelError(DomainError):
     code = "no_available_model"
     public_message = "No model is currently available to serve this request."
     # Deliberately does not name the candidates that were considered.
+    #
+    # Until 2026-08-05 this was also the code for a runtime read timeout and a
+    # stream that died half way — six distinct causes spanning three different
+    # remedies, all telling the caller "retry with backoff" when for some of
+    # them retrying could never work. The two subclasses below split off the
+    # cases whose remedy differs; what remains here is "the routing layer found
+    # nothing to send the request to", whose remedy really is backoff-then-
+    # administrator.
+
+
+class RuntimeTimeoutError(NoAvailableModelError):
+    code = "runtime_timeout"
+    public_message = (
+        "The runtime did not respond within the time allowed. An immediate retry usually succeeds."
+    )
+    # A subclass, so anything catching NoAvailableModelError (routing tries the
+    # next candidate) keeps working. The public message states the measured
+    # property that makes this code worth its own name: after a prompt-
+    # evaluation timeout the prompt sits in the runtime's prefix cache, so the
+    # retry that was pointless for a missing routing policy is nearly free and
+    # nearly certain here.
+
+
+class StreamInterruptedError(NoAvailableModelError):
+    code = "stream_interrupted"
+    public_message = "The generation was interrupted before it finished."
+    # The mid-stream death: the runtime stalled after producing bytes, or its
+    # stream ended without a terminal event. Distinct from `runtime_timeout`
+    # because the caller's position differs — they may hold a partial answer,
+    # and whether to retry is a judgement about idempotence that only they can
+    # make. Usually seen in the SSE error frame rather than as a status.
+
+
+class ServerOverloadedError(DomainError):
+    code = "overloaded"
+    public_message = (
+        "Every inference slot is busy and the queue wait elapsed. "
+        "Retry after the interval in Retry-After."
+    )
+    # Before 2026-08-05 a request arriving with every slot held waited in an
+    # unbounded, invisible queue: zero bytes, no code, death by the caller's
+    # own client timeout — indistinguishable from a hung deployment. This is
+    # the queue refusing loudly instead, and it is the code that finally makes
+    # "busy" distinguishable from "broken".
+
+    def __init__(self, retry_after_seconds: int = 60, detail: str | None = None) -> None:
+        super().__init__(detail)
+        self.retry_after_seconds = retry_after_seconds
 
 
 class ModelStateConflictError(DomainError):

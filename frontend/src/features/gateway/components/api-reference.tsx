@@ -37,6 +37,15 @@ import { useAssistantSurface } from '@/features/assistant/context';
  * carries the OpenAI envelope. A page describing what a feature *does not* do
  * is the kind that goes stale silently, so each of those is now stated with
  * the date it changed rather than simply rewritten.
+ *
+ * Revised on 2026-08-05 for the error-precision work: every response now
+ * carries `X-Request-Id` (repeated as `error.request_id`), the 500 gained an
+ * envelope, `no_available_model` split into three codes whose remedies
+ * differ, the slot queue refuses with `overloaded` instead of hanging, and a
+ * per-key debug window can put `error.detail` in responses for a bounded
+ * time. The same revision added the sections integrators had to learn by
+ * surprise: client timeout sizing and the `extra_body` route to the
+ * platform's extension fields.
  */
 export function ApiReference() {
   const { data, isLoading, error, refetch } = useGatewayInfo();
@@ -126,6 +135,15 @@ export function ApiReference() {
           carry, so a key issued for <code>chat</code> cannot spend the
           hardware&apos;s time on anything else.
         </p>
+        <CodeBlock
+          code={`{
+  "object": "list",
+  "data": [
+    {"id": "${sample}", "object": "model", "created": 0, "owned_by": "rcsl"}
+  ]
+}`}
+          label="Copy the /v1/models shape"
+        />
       </section>
 
       <section className="space-y-3">
@@ -181,6 +199,23 @@ export function ApiReference() {
             scope is fixed by your key and no value here widens it.
           </dd>
         </dl>
+        <p className="text-sm text-muted-foreground">
+          <strong>
+            <code>think</code>, <code>use_knowledge</code> and{' '}
+            <code>knowledge_collection</code> are not OpenAI schema fields
+          </strong>
+          , and the official SDKs refuse unknown named arguments rather than
+          forwarding them. Send them through the SDK&apos;s escape hatch — in
+          Python, <code>extra_body</code>:
+        </p>
+        <CodeBlock
+          code={`client.chat.completions.create(
+    model="${sample}",
+    messages=[{"role": "user", "content": "..."}],
+    extra_body={"think": False, "use_knowledge": True},
+)`}
+          label="Copy the extra_body example"
+        />
         <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[10rem_1fr]">
           <dt className="font-mono text-muted-foreground">
             temperature, top_p, seed, stop
@@ -393,6 +428,63 @@ export function ApiReference() {
             would describe work that did not finish.
           </dd>
         </dl>
+        <p className="text-sm text-muted-foreground">
+          <strong>The full frame sequence of one streamed answer</strong>, with
+          every optional frame present. Each is an ordinary OpenAI chunk;
+          what varies is which key the delta carries. Order is contractual —
+          in particular <code>tool_calls</code> always precedes the terminal
+          frame, because a client that has seen <code>finish_reason</code> has
+          stopped reading deltas:
+        </p>
+        <CodeBlock
+          code={`data: {"choices":[{"delta":{"role":"assistant"}, ...}]}          <- always first
+data: {"choices":[{"delta":{"reasoning_content":"..."}, ...}]} <- thinking models only, repeats
+data: {"choices":[{"delta":{"content":"..."}, ...}]}           <- repeats per token
+data: {"choices":[{"delta":{"tool_calls":[...]}, ...}]}        <- only when the model calls
+data: {"choices":[{"delta":{}, "finish_reason":"stop"}]}       <- terminal frame
+data: {"choices":[], "usage":{...}}                            <- only with include_usage
+data: [DONE]`}
+          label="Copy the frame sequence"
+        />
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="font-heading text-base font-semibold">
+          Timeouts: size your client&apos;s before it sizes you
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          <strong>
+            The first token of a large request can legitimately take close to
+            ten minutes to arrive.
+          </strong>{' '}
+          Prompt evaluation on this hardware runs at a measured ~118 tokens per
+          second and produces no bytes while it works, so a conversation near
+          the context ceiling is minutes of silence before anything streams —
+          that silence is work, not failure. One request&apos;s worst case,
+          end to end, is <strong>25 minutes</strong>: up to 10 reading the
+          prompt, up to 15 writing the answer.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Most SDK defaults are shorter than that. The OpenAI Python
+          SDK&apos;s default overall timeout is 600 seconds, so on a long
+          agent conversation <em>your own client</em> gives up first, and the
+          resulting connection error is indistinguishable from a platform
+          failure. Set the read timeout to at least 1600 seconds for agent
+          workloads:
+        </p>
+        <CodeBlock
+          code={`client = OpenAI(base_url="${baseUrl}/v1", api_key=key, timeout=1600.0)`}
+          label="Copy the timeout example"
+        />
+        <p className="text-sm text-muted-foreground">
+          Two more waits are bounded and report themselves: a request that
+          arrives with every inference slot busy queues for at most two
+          minutes and is then refused as <code>503 overloaded</code> with{' '}
+          <code>Retry-After</code> (before 2026-08-05 it queued without limit,
+          in silence), and a runtime that takes longer than the platform&apos;s
+          own read timeout returns <code>503 runtime_timeout</code> — see the
+          table below for why that one is worth retrying immediately.
+        </p>
       </section>
 
       <section className="space-y-3">
@@ -405,9 +497,23 @@ export function ApiReference() {
           . <code>type</code> is OpenAI&apos;s coarse classification, derived
           from the status; <code>code</code> is this platform&apos;s and is the
           one to branch on. Branch on it rather than on the status: 429, 403 and
-          400 each cover two different conditions, and each pair needs different
-          handling. One response does not carry this envelope: a 500, which is
-          not JSON — see the last row of the table.
+          400 each cover two different conditions, and each needs different
+          handling.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          <strong>
+            Every response carries <code>X-Request-Id</code>
+          </strong>{' '}
+          (since 2026-08-05), and every error body repeats it as{' '}
+          <code>error.request_id</code>. The detail behind an error is
+          deliberately never in the response — it goes to the platform&apos;s
+          log, keyed by this id — so when you report a failure,{' '}
+          <strong>quote the id</strong>: it is the difference between an
+          administrator grepping timestamps and finding the exact line. If you
+          are actively debugging an integration, an administrator can open a
+          time-boxed <em>debug window</em> on your key (API keys page), during
+          which error responses carry that detail directly as{' '}
+          <code>error.detail</code>.
         </p>
         <h3 className="pt-2 font-heading text-sm font-semibold">
           A stream that fails after it has started
@@ -426,7 +532,7 @@ export function ApiReference() {
           <code>code</code> is the only field to branch on here.
         </p>
         <CodeBlock
-          code={`data: {"error":{"code":"no_available_model","message":"..."}}
+          code={`data: {"error":{"code":"stream_interrupted","message":"...","request_id":"req_..."}}
 
 (stream ends; no [DONE])`}
           label="Copy the failure shape"
@@ -470,14 +576,16 @@ export function ApiReference() {
                   runtime_capability_unsupported
                 </td>
                 <td>
-                  Two conditions. A <code>tool_choice</code> of{' '}
-                  <code>required</code> or a named function, which no runtime
-                  here can enforce — send <code>auto</code> instead. Or, with{' '}
-                  <code>use_knowledge</code>, an embedding model on a runtime
-                  that cannot embed, in which case the request succeeds without
-                  the flag and an administrator has to repoint the{' '}
-                  <code>embedding</code> policy. Retrying identically helps in
-                  neither case.
+                  Three conditions, none helped by an identical retry. A{' '}
+                  <code>tool_choice</code> of <code>required</code> or a named
+                  function, which no runtime here can enforce — send{' '}
+                  <code>auto</code>. A replayed assistant turn whose tool-call{' '}
+                  <code>arguments</code> do not parse as JSON, on a runtime
+                  that takes arguments as an object (Ollama does) — repair or
+                  drop that turn. Or, with <code>use_knowledge</code>, an
+                  embedding model on a runtime that cannot embed, in which case
+                  the request succeeds without the flag and an administrator
+                  has to repoint the <code>embedding</code> policy.
                 </td>
               </tr>
               <tr>
@@ -560,38 +668,78 @@ export function ApiReference() {
                 <td className="font-mono text-xs">context_too_long</td>
                 <td>
                   The prompt exceeds the configured input ceiling. Shorten it;
-                  the limit is about memory, not policy. Your tool definitions
-                  and replayed tool calls are counted too, so an agent
-                  conversation reaches this through accumulation rather than
-                  through one large message.
+                  the limit is about memory, not policy. To budget for it
+                  yourself: the platform counts <strong>4 characters as one
+                  token</strong>, over everything the model will read — your
+                  tool definitions and replayed tool calls included — so an
+                  agent conversation reaches this through accumulation rather
+                  than through one large message.
                 </td>
               </tr>
               <tr>
                 <td>503</td>
                 <td className="font-mono text-xs">no_available_model</td>
                 <td>
-                  Nothing can serve the capability right now: no routing policy
-                  names it, or every candidate is offline, unloaded or busy.
-                  The response deliberately does not say which. Retry with
-                  backoff; if it persists, the deployment needs an
-                  administrator. This is also the code a generation that dies
-                  mid-stream carries, in the error frame described above.
+                  The routing layer found nothing to send the request to: no
+                  policy names the capability, every candidate is offline or
+                  unloaded, or the runtime process refused the connection. The
+                  response deliberately does not say which. Retry with backoff;
+                  if it persists, the deployment needs an administrator. Until
+                  2026-08-05 this code also covered the two rows below, whose
+                  remedies are different — an older integration branching on it
+                  should learn the new codes.
+                </td>
+              </tr>
+              <tr>
+                <td>503</td>
+                <td className="font-mono text-xs">runtime_timeout</td>
+                <td>
+                  The runtime took longer than the platform&apos;s read timeout
+                  before producing its first byte — almost always prompt
+                  evaluation on a large context.{' '}
+                  <strong>Retry immediately, once:</strong> the prompt is now
+                  in the runtime&apos;s prefix cache, so the evaluation that
+                  just timed out is nearly free the second time. This is the
+                  one 503 where an instant retry is the measured, correct
+                  response.
+                </td>
+              </tr>
+              <tr>
+                <td>503</td>
+                <td className="font-mono text-xs">overloaded</td>
+                <td>
+                  Every inference slot was busy for the whole queue wait (two
+                  minutes). The deployment is healthy, just full —{' '}
+                  <code>Retry-After</code> is set, and backing off for it is
+                  the right response. Distinct from{' '}
+                  <code>no_available_model</code> on purpose: busy and broken
+                  used to be indistinguishable.
+                </td>
+              </tr>
+              <tr>
+                <td>—</td>
+                <td className="font-mono text-xs">stream_interrupted</td>
+                <td>
+                  Only ever seen in the mid-stream error frame above (or, rarely,
+                  as a 503 when the runtime&apos;s stream ended before producing
+                  anything): the generation stalled or its stream ended without
+                  a terminal event. You may hold a partial answer. Whether to
+                  retry is your idempotence judgement — nothing here knows what
+                  your tool calls already did.
                 </td>
               </tr>
               <tr>
                 <td>500</td>
-                <td className="font-mono text-xs">—</td>
+                <td className="font-mono text-xs">internal_error</td>
                 <td>
-                  <strong>The one response that is not JSON.</strong> Every
-                  condition the platform anticipates is in a row above; a 500
-                  means something it did not, so there is no code to give you
-                  and the body is the framework&apos;s plain{' '}
-                  <code>Internal Server Error</code>. Parse defensively — a
-                  client that assumes an envelope on every non-2xx throws here,
-                  on the one status where it most needs to degrade. Retry once;
-                  if it repeats, an administrator needs the timestamp of your
-                  request, because the detail went to the log rather than to
-                  you.
+                  Something the platform did not anticipate. Since 2026-08-05
+                  this carries the same envelope as every other error —
+                  before that it was the framework&apos;s bare{' '}
+                  <code>Internal Server Error</code> text, the one non-JSON
+                  body the API could produce. The traceback went to the log;
+                  what you get is <code>error.request_id</code>, and quoting it
+                  is exactly how an administrator finds that traceback. Retry
+                  once; if it repeats, report the id.
                 </td>
               </tr>
             </tbody>
@@ -615,6 +763,17 @@ export function ApiReference() {
           Every key expires, with no option not to. Expiry is what forces
           rotation; extend it from the same page before it lapses, which does
           not change the secret and needs no redeployment.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          <strong>
+            There are no <code>x-ratelimit-*</code> response headers.
+          </strong>{' '}
+          OpenAI sends remaining-quota headers on every response and some
+          client libraries read them; here the only signals are{' '}
+          <code>429 rate_limited</code> / <code>quota_exceeded</code> when a
+          limit is reached, each with <code>Retry-After</code>. A client that
+          paces itself from the headers will simply not pace itself — listed
+          rather than left to be discovered.
         </p>
       </section>
     </div>

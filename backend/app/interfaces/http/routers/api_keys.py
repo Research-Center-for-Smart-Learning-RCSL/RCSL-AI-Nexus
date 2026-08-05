@@ -24,6 +24,7 @@ from app.interfaces.http.schemas.admin_schemas import (
     ApiKeyResponse,
     CreateApiKeyRequest,
     IssuedApiKeyResponse,
+    SetDebugWindowRequest,
     UpdateApiKeyRequest,
 )
 
@@ -95,6 +96,21 @@ async def update_api_key(
         quota_tokens_per_day=payload.quota_tokens_per_day,
         allowed_cidrs=payload.allowed_cidrs,
     )
+    return ApiKeyResponse.of(key)
+
+
+@router.post("/{key_id}/debug")
+async def set_debug_window(
+    key_id: str,
+    payload: SetDebugWindowRequest,
+    actor: Annotated[Actor, Depends(current_actor)],
+    keys: Annotated[ManageApiKeys, Depends(build_manage_api_keys)],
+) -> ApiKeyResponse:
+    """Open (or close, with 0) the time-boxed window during which error
+    responses to this key carry operator-facing detail. Its own verb rather
+    than a PATCH field: it changes what the platform reveals, not what the key
+    may do, and the audit trail should show it as its own kind of act."""
+    key = await keys.set_debug_window(actor, key_id, minutes=payload.minutes)
     return ApiKeyResponse.of(key)
 
 

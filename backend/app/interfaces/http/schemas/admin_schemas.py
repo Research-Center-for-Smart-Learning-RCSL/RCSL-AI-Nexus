@@ -434,6 +434,11 @@ class ApiKeyResponse(BaseModel):
     column would put a write to `api_keys` on the gateway's hot path, which
     the account split exists to prevent."""
 
+    debug_logging_until: datetime | None
+    """While this is in the future, error responses to this key carry
+    operator-facing `detail`. Null or past means the normal rule applies:
+    detail stays in the log. Set via POST /{key_id}/debug."""
+
     @classmethod
     def of(
         cls,
@@ -458,6 +463,7 @@ class ApiKeyResponse(BaseModel):
             owner_display=owner_display,
             revoked_at=key.revoked_at,
             created_at=key.created_at,
+            debug_logging_until=key.debug_logging_until,
             last_used_at=last_used_at,
         )
 
@@ -490,6 +496,12 @@ class UpdateApiKeyRequest(BaseModel):
     quota_tokens_per_day: int | None = Field(default=None, ge=1)
     allowed_cidrs: list[str] | None = None
     expires_at: UtcDatetime | None = None
+
+
+class SetDebugWindowRequest(BaseModel):
+    minutes: int = Field(ge=0, le=24 * 60)
+    """0 closes the window. The ceiling is a day, restated from the use case
+    so the form's limit and the rule cannot drift apart silently."""
 
 
 class IssuedApiKeyResponse(BaseModel):

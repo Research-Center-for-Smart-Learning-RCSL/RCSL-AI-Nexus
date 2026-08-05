@@ -288,6 +288,79 @@ carrying rules written against an Ollama that no longer exists. A claim about a
 runtime's behaviour ages like a claim about a colleague's schedule, and the only
 test that catches it is the one that asks the runtime.
 
+### Error precision: the id that was promised, the codes that were one code
+
+An audit of the error system for debuggability found that the biggest hole was
+not in the code table but in *correlation*, and that two mechanisms the
+codebase already described did not exist.
+
+**`DomainError`'s docstring said detail is logged "with the request id". There
+was no request id.** Nothing minted one, nothing logged one, nothing returned
+one — the sentence described the design, not the system, and security.md §9.2's
+"logged by default: request id" was aspirational on the same point. A caller
+reporting a failure had a timestamp and a path; four concurrent slots and a
+queue make that ambiguous exactly when it matters. Now: middleware mints
+`req_<hex>` per request (contextvar, not `request.state`, because the two
+places that most need it — the SSE frame generator and the 500 handler — run
+where the request object is out of reach), every response carries
+`X-Request-Id`, every error envelope repeats it as `error.request_id`, the
+domain-error log line includes it, and the mid-stream SSE error frame carries
+it too, since a death after the first byte has no other channel left. The 500
+gained the standard envelope at the same time; it had been the one non-JSON
+body the API could produce, on the status where a client most needs to parse.
+Detail still never leaves by default — precision comes from the bridge, not
+from leaking.
+
+**`debug_logging_until` had existed since the first migration, on two tables,
+in the admin schema, and was consumed by nothing.** Twelve days of a switch
+wired to no lamp — settable state that promised behaviour nothing implemented,
+which is the same shape as a documented absence, in the database. It is now
+the one deliberate exception to "detail never leaves": while the window is
+open on a credential, error responses to it carry `error.detail`. Set from the
+API keys page (an hour per press, capped at a day in the use case, so
+"time-boxed" is a property of the mechanism rather than a hope), audited as
+`api_key.debug_window_set` because it loosens an information control, granted
+at the moment the credential resolves so that CIDR, rate-limit and quota
+refusals — the runbook's own troubleshooting cases — can explain themselves to
+the caller being debugged. §9.2's original intent for the field, full
+prompt/completion logging, remains unimplemented and is now recorded there as
+such.
+
+**`no_available_model` was six causes wearing one name, spanning three
+remedies.** A missing routing policy, a downed runtime process, a prompt that
+outran the read timeout, and a mid-generation stall all told the caller "retry
+with backoff" — for some of them retrying was pointless, and for one of them
+backoff is precisely wrong. Split by remedy, not by cause, which is the rule
+the code table already followed everywhere else: `runtime_timeout` (retry
+immediately, once — the prompt now sits in the prefix cache, a measured
+property), `stream_interrupted` (you may hold a partial answer; whether to
+retry is your idempotence judgement), and `no_available_model` keeps the
+routing-layer meaning whose remedy really is backoff-then-administrator. Both
+new errors subclass the old one, so routing's candidate loop and every
+existing `except` keep working, and the status stays 503 throughout — a split
+of codes, not of statuses.
+
+**The queue was unbounded and invisible.** `slot()` waited on the semaphore
+forever, and a slot can legitimately be held for 25 minutes, so a caller
+arriving fourth-plus-one waited in silence — zero bytes, no code — until their
+own client timeout fired, indistinguishable from a hung deployment.
+`QUEUE_WAIT_SECONDS=120` bounds the wait; elapsing it is `503 overloaded` with
+`Retry-After`, the code that finally makes "busy" distinguishable from
+"broken". Zero restores the old behaviour, documented rather than possible by
+accident.
+
+The `/api-docs` page gained the sections an integrator previously learned by
+surprise, of which the sharpest was **client timeout sizing**: the first token
+of a context-ceiling request can take ~10 minutes of legitimate silence, and
+the OpenAI SDK's default timeout is 600 seconds — so a correctly-configured
+agent on a long conversation was killed by its own client, in a way
+indistinguishable from platform failure, and no error table row could ever
+have said so. Also added: the `extra_body` route to `think`/`use_knowledge`
+(the SDKs refuse unknown named arguments; every example was curl), the full
+SSE frame sequence as one annotated listing, the `/v1/models` response shape,
+the 4-characters-per-token budgeting rule on the 413 row, the absence of
+`x-ratelimit-*` headers, and the new codes with their remedies.
+
 ---
 
 ## 2026-08-04

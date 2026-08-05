@@ -38,6 +38,7 @@ from app.interfaces.http.errors import install_error_handlers
 from app.interfaces.http.middleware.csrf import CsrfMiddleware
 from app.interfaces.http.middleware.identity import current_actor, resolve_tailnet_actor
 from app.interfaces.http.middleware.metrics import MetricsMiddleware
+from app.interfaces.http.request_context import RequestContextMiddleware
 
 TAILSCALE_IDENTITY_HEADERS = ("tailscale-user-login", "tailscale-user-name")
 
@@ -66,6 +67,9 @@ def create_app() -> FastAPI:
     # Outermost user middleware, so every request is counted; see the public
     # entrance for the same note.
     app.add_middleware(MetricsMiddleware)
+    # Outermost, so every response — including one built by a rejecting
+    # perimeter middleware — carries X-Request-Id. See request_context.py.
+    app.add_middleware(RequestContextMiddleware)
 
     install_error_handlers(app, envelope="admin", auth_mode=settings.auth_mode)
     mount_admin_routers(app)
