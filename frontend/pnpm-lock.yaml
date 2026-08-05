@@ -8,6 +8,8 @@ overrides:
   postcss: '>=8.5.23'
   sharp: '>=0.35.0'
   fast-uri: ^3.1.5
+  ip-address: '>=10.3.1'
+  undici: ^7.29.0
 
 importers:
 
@@ -2448,8 +2450,8 @@ packages:
     resolution: {integrity: sha512-4gd7VpWNQNB4UKKCFFVcp1AVv+FMOgs9NKzjHKusc8jTMhd5eL1NqQqOpE0KzMds804/yHlglp3uxgluOqAPLw==}
     engines: {node: '>= 0.4'}
 
-  ip-address@10.2.0:
-    resolution: {integrity: sha512-/+S6j4E9AHvW9SWMSEY9Xfy66O5PWvVEJ08O0y5JGyEKQpojb0K0GKpz/v5HJ/G0vi3D2sjGK78119oXZeE0qA==}
+  ip-address@10.4.0:
+    resolution: {integrity: sha512-oSK96Grm3aP6OrS263xVxbNDGVL7rzBtYdpGqlDG8iQdoenDoTs/nkki+DflYbAEE8Xl6o5YxhxlrKvI3nqKXQ==}
     engines: {node: '>= 12'}
 
   ipaddr.js@1.9.1:
@@ -3798,8 +3800,8 @@ packages:
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
-  undici@7.28.0:
-    resolution: {integrity: sha512-cRZYrTDwWznlnRiPjggAGxZXanty6M8RV1ff8Wm4LWXBp7/IG8v5DnOm74DtUBp9OONpK75YlPnIjQqX0dBDtA==}
+  undici@7.29.0:
+    resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
     engines: {node: '>=20.18.1'}
 
   unicorn-magic@0.3.0:
@@ -4336,7 +4338,7 @@ snapshots:
       open: 8.4.2
       picomatch: 4.0.5
       systeminformation: 5.33.1
-      undici: 7.28.0
+      undici: 7.29.0
       which: 4.0.0
       yocto-spinner: 1.2.2
 
@@ -6137,7 +6139,7 @@ snapshots:
     dependencies:
       debug: 4.4.3(supports-color@10.2.2)
       express: 5.2.1
-      ip-address: 10.2.0
+      ip-address: 10.4.0
     transitivePeerDependencies:
       - supports-color
 
@@ -6454,7 +6456,7 @@ snapshots:
       hasown: 2.0.4
       side-channel: 1.1.1
 
-  ip-address@10.2.0: {}
+  ip-address@10.4.0: {}
 
   ipaddr.js@1.9.1: {}
 
@@ -6673,7 +6675,7 @@ snapshots:
       saxes: 6.0.0
       symbol-tree: 3.2.4
       tough-cookie: 6.0.2
-      undici: 7.28.0
+      undici: 7.29.0
       w3c-xmlserializer: 5.0.0
       webidl-conversions: 8.0.1
       whatwg-mimetype: 5.0.0
@@ -7683,7 +7685,7 @@ snapshots:
       tailwind-merge: 3.6.0
       ts-morph: 26.0.0
       tsconfig-paths: 4.2.0
-      undici: 7.28.0
+      undici: 7.29.0
       validate-npm-package-name: 7.0.2
       zod: 3.25.76
       zod-to-json-schema: 3.25.2(zod@3.25.76)
@@ -8043,7 +8045,7 @@ snapshots:
 
   undici-types@6.21.0: {}
 
-  undici@7.28.0: {}
+  undici@7.29.0: {}
 
   unicorn-magic@0.3.0: {}
 

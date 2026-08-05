@@ -32,3 +32,17 @@ overrides:
   # (shadcn CLI), never reaches the build output, but the fix is a one-line
   # floor and there is no reason to carry a host-confusion bug even there.
   fast-uri: '^3.1.5'
+  # `shadcn` -> `@modelcontextprotocol/sdk` -> `express-rate-limit` pulls in
+  # ip-address 10.2.0. CVE-2026-69192 (GHSA-mwp4-54f8-5fhr): `Address4` decodes
+  # a leading-zero octet as decimal while URL/DNS resolvers decode it as octal,
+  # so `isPrivate()`-style SSRF guards can misclassify an internal address as
+  # public. Development-only dependency (shadcn CLI), never reaches the build
+  # output, but the fix is a one-line floor and there is no reason to carry it.
+  ip-address: '>=10.3.1'
+  # GHSA-4cwx-7wf7-3272 (CVE-2026-13697): undici's cache interceptor can leak
+  # a private response into the shared cache, or crash, on malformed
+  # `Cache-Control: private` directives. Dev-only (jsdom, shadcn, dotenvx pull
+  # it in transitively), and every dependent already declares a `^7.x` range
+  # that accepts the patch, so this stays on the 7.x line rather than letting
+  # an unbounded range jump to 8.x, which jsdom 29's own range doesn't cover.
+  undici: '^7.29.0'
