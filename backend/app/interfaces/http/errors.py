@@ -14,6 +14,7 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.domain.exceptions import (
@@ -248,3 +249,50 @@ def install_error_handlers(
 
     handler: Callable[[Request, Exception], Awaitable[JSONResponse]] = handle
     app.add_exception_handler(DomainError, handler)
+
+    if envelope == "openai":
+        app.add_exception_handler(RequestValidationError, _openai_validation_handler)
+
+
+async def _openai_validation_handler(request: Request, exc: Exception) -> JSONResponse:
+    """A malformed request, in the envelope the caller's library parses.
+
+    FastAPI answers a validation failure with `{"detail": [...]}`, which is its
+    own shape and not OpenAI's. Every OpenAI client library reads
+    `error.message`, so on the gateway that default arrived as a 422 whose body
+    told the caller nothing their code could surface — and it is the response a
+    caller gets while they are still getting the request right, which is
+    exactly when a legible message is worth most.
+
+    422 is kept rather than rewritten to OpenAI's 400. It is what FastAPI has
+    always returned here, the error type says `invalid_request_error` either
+    way, and a client branching on the status still treats 4xx as its own
+    problem.
+    """
+    if not isinstance(exc, RequestValidationError):
+        raise exc
+    logger.info("request_validation_failed path=%s", request.url.path)
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": {
+                "type": "invalid_request_error",
+                "code": "invalid_request",
+                # Pydantic's own summary, which names the field and the rule.
+                # It describes the caller's own request, so unlike a
+                # `DomainError.detail` there is nothing here to withhold.
+                "message": _validation_message(exc),
+            }
+        },
+    )
+
+
+def _validation_message(exc: RequestValidationError) -> str:
+    parts = []
+    for error in exc.errors():
+        # `body` heads every location on a request body; dropping it leaves the
+        # field path the caller actually wrote.
+        location = ".".join(str(p) for p in error.get("loc", ()) if p != "body")
+        message = error.get("msg", "invalid")
+        parts.append(f"{location}: {message}" if location else message)
+    return "; ".join(parts) or "request failed validation"

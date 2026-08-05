@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   routingPolicySchema,
   savePolicyFormSchema,
+  thinkingToApi,
+  thinkingToForm,
 } from '@/features/routing-policies/schema';
 
 const baseCandidate = {
@@ -14,9 +16,38 @@ const baseCandidate = {
 function parseForm(overrides: Record<string, unknown> = {}) {
   return savePolicyFormSchema.safeParse({
     capability: 'chat',
+    thinking: 'default',
     candidates: [{ ...baseCandidate, ...overrides }],
   });
 }
+
+describe('the deliberation preference', () => {
+  // Three states, not two. Collapsing "no preference" onto false would take
+  // every existing policy off the deployment default the moment it was edited.
+  it('round trips all three states through the form and back', () => {
+    for (const value of [null, true, false] as const) {
+      expect(thinkingToApi(thinkingToForm(value))).toBe(value);
+    }
+  });
+
+  it('sends null for the default, so the backend keeps deciding', () => {
+    const result = savePolicyFormSchema.safeParse({
+      capability: 'chat',
+      thinking: 'default',
+      candidates: [baseCandidate],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(thinkingToApi(result.data.thinking)).toBeNull();
+  });
+
+  it('reads a policy that predates the field as the default', () => {
+    const policy = routingPolicySchema.parse({
+      capability: 'chat',
+      candidates: [],
+    });
+    expect(policy.thinking).toBeNull();
+  });
+});
 
 describe('savePolicyFormSchema', () => {
   it('coerces the priority string to a number', () => {

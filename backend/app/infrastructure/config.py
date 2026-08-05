@@ -208,7 +208,28 @@ class Settings(BaseSettings):
     does not support it. Graded values are not offered — `think: "low"` is
     accepted by Ollama and measurably changes nothing.
     """
-    max_context_length: int = 32768
+    max_context_length: int = 131072
+    """Ceiling on a request's input, in tokens, applied as four characters per
+    token (`di.py`) before any hardware is committed.
+
+    32768 → 131072 on 2026-08-05, for agent clients. An agent replays the whole
+    conversation on every turn and grows it with file contents and tool output,
+    so it crosses the old ceiling within a few rounds and the 413 arrives in the
+    middle of a task rather than at the start of one.
+
+    This is one of the six resource guardrails security.md section 4.3 counts
+    on, so raising it costs something real: context is superlinear on unified
+    memory, and measured throughput on this hardware already decays from 60.8
+    to 23.5 tok/s across a single generation. What still bounds the damage is
+    that the other five are unchanged — the concurrency cap, the token ceiling,
+    the per-read timeout, the wall-clock deadline and cancel-on-disconnect —
+    and the wall-clock deadline in particular is now the limit that binds a
+    request whose prompt is genuinely this large.
+
+    A caller cannot smuggle past it through `tools`: tool definitions and prior
+    tool calls are counted too (`RouteChatRequest._context_chars`).
+    """
+
     request_timeout_seconds: int = 300
     generation_deadline_seconds: int = 900
     """Wall-clock ceiling on a single generation while it holds a concurrency slot.

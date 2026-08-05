@@ -533,11 +533,14 @@ class RoutingCandidateBody(BaseModel):
 class RoutingPolicyResponse(BaseModel):
     capability: str
     candidates: list[RoutingCandidateBody]
+    thinking: bool | None = None
+    """Null means the capability takes the deployment default."""
 
     @classmethod
     def of(cls, policy: RoutingPolicy) -> RoutingPolicyResponse:
         return cls(
             capability=policy.capability,
+            thinking=policy.thinking,
             candidates=[
                 RoutingCandidateBody(
                     model_alias=c.model_alias,
@@ -555,6 +558,16 @@ class RoutingPolicyResponse(BaseModel):
 
 class SaveRoutingPolicyRequest(BaseModel):
     candidates: list[RoutingCandidateBody] = Field(min_length=1)
+    thinking: bool | None = Field(
+        default=None,
+        description=(
+            "Whether a request naming this capability deliberates when it says "
+            "nothing about it. Null takes the deployment default. `false` is "
+            "what an agent client wants: it pays the deliberation cost again on "
+            "every tool round trip, and a thinking model can spend a whole "
+            "token budget without answering."
+        ),
+    )
 
 
 # --- dashboard -----------------------------------------------------------

@@ -925,7 +925,7 @@ looking for the risk. The state below is checked against the code.
 - First-administrator bootstrap, tailnet-only
 - Model reference validation; no shell string construction
 - Host-level runtime hardening (service account, loopback binding, directory ownership)
-- **Resource guardrails: concurrency cap, `max_tokens`, context bound, per-read timeout, wall-clock generation deadline, cancel on disconnect.** With no edge protection these are the only defence
+- **Resource guardrails: concurrency cap, `max_tokens`, context bound, per-read timeout, wall-clock generation deadline, cancel on disconnect.** With no edge protection these are the only defence. The context bound was raised from 32768 to 131072 tokens on 2026-08-05 for agent clients; the other five are unchanged, and the wall-clock deadline is what now binds a genuinely large request. **The bound counts tool definitions and replayed tool calls, not only `messages`** — `tools` is arbitrary JSON that no person types, so counting messages alone would have been an unbounded payload straight past the guardrail
 - `AuditPort` plus auditing for key issuance and revocation and model download and load. These features ship in Phase 1, so their audit trail cannot wait for Phase 2
 - `AUTH_MODE=dev` refuses to start under `ENV=production`
 - gitleaks pre-commit

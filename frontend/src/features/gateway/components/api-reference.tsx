@@ -29,6 +29,14 @@ import { useAssistantSurface } from '@/features/assistant/context';
  * keep: **anything an integrator would only discover by being surprised belongs
  * here**, including the behaviours that are absences. A field that parses and
  * does nothing is worse than one that is rejected, so it is written down.
+ *
+ * Revised on 2026-08-05 when tool calling shipped, which turned four of those
+ * documented absences into behaviours and left the page saying the opposite of
+ * the truth: `tools` and the sampling fields no longer parse and do nothing,
+ * a `tool` role is no longer a 422, streaming can carry `usage`, and 422 now
+ * carries the OpenAI envelope. A page describing what a feature *does not* do
+ * is the kind that goes stale silently, so each of those is now stated with
+ * the date it changed rather than simply rewritten.
  */
 export function ApiReference() {
   const { data, isLoading, error, refetch } = useGatewayInfo();
@@ -173,17 +181,118 @@ export function ApiReference() {
             scope is fixed by your key and no value here widens it.
           </dd>
         </dl>
+        <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[10rem_1fr]">
+          <dt className="font-mono text-muted-foreground">
+            temperature, top_p, seed, stop
+          </dt>
+          <dd>
+            Honoured, and forwarded only when you set them, so the model&apos;s
+            own defaults stay in force otherwise. <code>stop</code> takes a
+            string or up to four of them. All four parsed and did nothing before
+            2026-08-05.
+          </dd>
+          <dt className="font-mono text-muted-foreground">stream_options</dt>
+          <dd>
+            <code>{'{"include_usage": true}'}</code> adds a final frame carrying
+            token counts before <code>[DONE]</code>. Off unless asked for,
+            because that frame has an empty <code>choices</code> array and a
+            client not expecting it may read it as malformed.
+          </dd>
+        </dl>
         <p className="text-sm text-muted-foreground">
-          <strong>Those seven fields are the whole request.</strong> Anything
-          else is accepted and silently ignored, which matters most for the ones
-          you would reasonably expect to work:{' '}
-          <code>temperature</code>, <code>top_p</code>, <code>n</code>,{' '}
-          <code>stop</code>, <code>tools</code> and <code>response_format</code>{' '}
-          all parse, return 200, and have no effect. Sampling is the
-          deployment&apos;s, not the caller&apos;s. Message roles are{' '}
-          <code>system</code>, <code>user</code> and <code>assistant</code> only
-          — a <code>tool</code> role is rejected with 422, which is the one
-          place an unsupported feature does announce itself.
+          <strong>
+            Everything else is accepted and silently ignored.
+          </strong>{' '}
+          The ones you might reasonably expect to work and which do nothing:{' '}
+          <code>response_format</code>, <code>parallel_tool_calls</code>,{' '}
+          <code>frequency_penalty</code> and <code>presence_penalty</code>. Two
+          fields are refused rather than ignored, because serving them wrongly
+          would be worse than saying no: <code>n</code> other than{' '}
+          <code>1</code>, and a <code>tool_choice</code> of{' '}
+          <code>required</code> or a named function.
+        </p>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="font-heading text-base font-semibold">
+          Tool calling, and agent clients
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          Send <code>tools</code> and the model may answer with a call instead
+          of prose. <strong>The platform never runs a tool.</strong> You execute
+          it and send the result back as a message with role{' '}
+          <code>tool</code>, quoting the <code>tool_call_id</code> from the call
+          you are answering. That round trip is the whole mechanism, and it is
+          what a coding agent such as Codex is doing on every turn.
+        </p>
+        <CodeBlock
+          code={`{
+  "model": "${sample}",
+  "messages": [
+    {"role": "user", "content": "what is in this directory"},
+    {"role": "assistant", "content": null,
+     "tool_calls": [{"id": "call_1", "type": "function",
+                     "function": {"name": "sh", "arguments": "{\\"cmd\\":\\"ls\\"}"}}]},
+    {"role": "tool", "tool_call_id": "call_1", "content": "a.txt b.txt"}
+  ],
+  "tools": [{"type": "function", "function": {
+    "name": "sh", "description": "Run a shell command",
+    "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}}
+  }}]
+}`}
+          label="Copy the round trip"
+        />
+        <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[10rem_1fr]">
+          <dt className="font-mono text-muted-foreground">finish_reason</dt>
+          <dd>
+            <code>tool_calls</code> when the model asked for one. Branch on it:
+            it is how you tell &quot;run this and come back&quot; from an answer
+            you should show someone.
+          </dd>
+          <dt className="font-mono text-muted-foreground">tool_call_id</dt>
+          <dd>
+            Generated by this platform, because the runtimes underneath do not
+            all mint one. Send back exactly what you received; it is the only
+            thing pairing your result with the request that caused it.
+          </dd>
+          <dt className="font-mono text-muted-foreground">arguments</dt>
+          <dd>
+            A JSON <em>string</em>, as OpenAI defines it, and passed through
+            exactly as the model produced it.{' '}
+            <strong>It is model output, so it can be malformed</strong> — parse
+            defensively. A conversation containing one is still replayable: the
+            platform will not reject on the way back in.
+          </dd>
+          <dt className="font-mono text-muted-foreground">tool_choice</dt>
+          <dd>
+            <code>auto</code> (the default) and <code>none</code> work.{' '}
+            <code>required</code> and naming a function are refused with{' '}
+            <code>400 runtime_capability_unsupported</code>: neither runtime
+            here can force a call, and quietly giving you <code>auto</code>{' '}
+            would answer a demand for a call with prose.
+          </dd>
+        </dl>
+        <p className="text-sm text-muted-foreground">
+          <strong>Tool definitions count towards the context limit</strong>, as
+          does the call history you replay. A long agent conversation reaches
+          the 413 below through accumulated tool output rather than through any
+          single large message.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Streaming delivers each call as one{' '}
+          <code>delta.tool_calls</code> entry with a complete{' '}
+          <code>arguments</code> string, rather than as the many fragments
+          OpenAI sends. A client that concatenates fragments handles this
+          correctly without changes — concatenating one piece is that piece —
+          and the <code>index</code> field is present and runs across the whole
+          stream, so a client buffering on it behaves as it would elsewhere.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          <strong>Ask an administrator to turn deliberation off</strong> for the
+          capability you point an agent at. A thinking model reasons again on
+          every tool round trip, which multiplies the cost of a task by the
+          number of steps in it, and it is set per capability on the routing
+          policy rather than per request.
         </p>
       </section>
 
@@ -245,7 +354,8 @@ export function ApiReference() {
             platform&apos;s wall-clock deadline for a single generation — the
             two are not distinguishable from the response, and both mean the
             same thing to you: the reply is incomplete and continuing it is your
-            decision.
+            decision. <code>tool_calls</code> means the model wants a tool run
+            and is waiting for the result.
           </dd>
           <dt className="font-mono text-muted-foreground">usage</dt>
           <dd>
@@ -264,10 +374,14 @@ export function ApiReference() {
             usage, when streaming
           </dt>
           <dd>
-            Not sent at all. A streamed response carries no <code>usage</code>{' '}
-            object in any frame, including the terminal one. If you need a token
-            figure per call, use <code>stream: false</code>, or count the deltas
-            you received.
+            Sent only if you ask, with{' '}
+            <code>{'"stream_options": {"include_usage": true}'}</code>. The
+            figures arrive in a frame of their own after the terminal one and
+            before <code>[DONE]</code>, with an empty <code>choices</code>{' '}
+            array. Without that option a streamed response carries no{' '}
+            <code>usage</code> at all, which is how it behaved before
+            2026-08-05. A stream that failed carries none either way: the counts
+            would describe work that did not finish.
           </dd>
         </dl>
       </section>
@@ -283,10 +397,8 @@ export function ApiReference() {
           from the status; <code>code</code> is this platform&apos;s and is the
           one to branch on. Branch on it rather than on the status: 429, 403 and
           400 each cover two different conditions, and each pair needs different
-          handling. Two responses do not carry this envelope at all: a request
-          the schema rejects before any of this runs (422 below, which has the
-          framework&apos;s shape) and a 500, which is not JSON — see the last row
-          of the table.
+          handling. One response does not carry this envelope: a 500, which is
+          not JSON — see the last row of the table.
         </p>
         <h3 className="pt-2 font-heading text-sm font-semibold">
           A stream that fails after it has started
@@ -349,11 +461,14 @@ export function ApiReference() {
                   runtime_capability_unsupported
                 </td>
                 <td>
-                  Grounding only: this deployment&apos;s embedding model runs on
-                  a runtime that cannot produce embeddings, so retrieval could
-                  not be attempted. Retrying will not help and the request
-                  succeeds without <code>use_knowledge</code>; an administrator
-                  has to repoint the <code>embedding</code> policy.
+                  Two conditions. A <code>tool_choice</code> of{' '}
+                  <code>required</code> or a named function, which no runtime
+                  here can enforce — send <code>auto</code> instead. Or, with{' '}
+                  <code>use_knowledge</code>, an embedding model on a runtime
+                  that cannot embed, in which case the request succeeds without
+                  the flag and an administrator has to repoint the{' '}
+                  <code>embedding</code> policy. Retrying identically helps in
+                  neither case.
                 </td>
               </tr>
               <tr>
@@ -400,12 +515,16 @@ export function ApiReference() {
               </tr>
               <tr>
                 <td>422</td>
-                <td className="font-mono text-xs">—</td>
+                <td className="font-mono text-xs">invalid_request</td>
                 <td>
-                  The request body did not match the schema. Raised by the
-                  framework before the platform sees it, so this one carries{' '}
-                  <code>{'{"detail": [...]}'}</code> rather than the envelope
-                  above. A missing <code>messages</code> array looks like this.
+                  The request body did not match the schema, and{' '}
+                  <code>message</code> names the field and the rule. A missing{' '}
+                  <code>messages</code> array looks like this, as does a{' '}
+                  <code>tool</code> message with no <code>tool_call_id</code>{' '}
+                  and an image part in a <code>content</code> array. Before
+                  2026-08-05 this was the framework&apos;s{' '}
+                  <code>{'{"detail": [...]}'}</code>, which no OpenAI client
+                  library could surface.
                 </td>
               </tr>
               <tr>
@@ -432,7 +551,10 @@ export function ApiReference() {
                 <td className="font-mono text-xs">context_too_long</td>
                 <td>
                   The prompt exceeds the configured input ceiling. Shorten it;
-                  the limit is about memory, not policy.
+                  the limit is about memory, not policy. Your tool definitions
+                  and replayed tool calls are counted too, so an agent
+                  conversation reaches this through accumulation rather than
+                  through one large message.
                 </td>
               </tr>
               <tr>

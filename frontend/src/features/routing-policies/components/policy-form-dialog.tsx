@@ -30,6 +30,8 @@ import {
   MODEL_STATES,
   NODE_STATUSES,
   savePolicyFormSchema,
+  thinkingToApi,
+  thinkingToForm,
   type RoutingPolicy,
   type SavePolicyInput,
   type SavePolicyValues,
@@ -46,10 +48,11 @@ function emptyCandidate(): SavePolicyInput['candidates'][number] {
 
 function defaultsFor(policy: RoutingPolicy | undefined, capability: Capability): SavePolicyInput {
   if (!policy) {
-    return { capability, candidates: [emptyCandidate()] };
+    return { capability, candidates: [emptyCandidate()], thinking: 'default' };
   }
   return {
     capability: policy.capability,
+    thinking: thinkingToForm(policy.thinking),
     candidates: policy.candidates.map((candidate) => ({
       model_alias: candidate.model_alias,
       priority: candidate.priority,
@@ -98,7 +101,7 @@ export function PolicyFormDialog({
   async function onSubmit(values: SavePolicyValues) {
     await save.mutateAsync({
       capability: values.capability,
-      body: { candidates: values.candidates },
+      body: { candidates: values.candidates, thinking: thinkingToApi(values.thinking) },
     });
     onOpenChange(false);
   }
@@ -169,6 +172,30 @@ export function PolicyFormDialog({
                   </Select>
                 )
               }
+            />
+
+            <FormField
+              control={form.control}
+              name="thinking"
+              label="Deliberation"
+              description="What a request that says nothing about it gets. Turn it off for agent
+                clients: they pay the cost again on every tool round trip, and a thinking model can
+                spend a whole token budget without answering."
+              render={(field) => (
+                <Select
+                  value={(field.value as string) ?? 'default'}
+                  onValueChange={(value) => field.onChange(value)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">Deployment default</SelectItem>
+                    <SelectItem value="on">Let the model think</SelectItem>
+                    <SelectItem value="off">Answer directly</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
             />
 
             <div className="space-y-4">

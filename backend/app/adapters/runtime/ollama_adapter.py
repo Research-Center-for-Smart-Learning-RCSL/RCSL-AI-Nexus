@@ -12,13 +12,23 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from collections.abc import AsyncGenerator, Sequence
 from typing import Any
 
 import httpx
 
+from app.adapters.runtime.tool_support import should_send_tools
 from app.adapters.runtime.validation import assert_valid_model_ref
-from app.domain.entities.chat import CompletionChunk, Message
+from app.domain.entities.chat import (
+    CompletionChunk,
+    Message,
+    MessageRole,
+    SamplingOptions,
+    ToolCall,
+    ToolChoice,
+    ToolDefinition,
+)
 from app.domain.entities.model import PullProgress, RuntimeResidency
 from app.domain.exceptions import DomainError, ModelNotFoundError, NoAvailableModelError
 
@@ -54,11 +64,135 @@ def _keep_alive(raw: str) -> str | int:
 # Ollama's done_reason vocabulary is its own. OpenAI clients branch on
 # finish_reason, and an unrecognised value ("load", "unload") reads to them as
 # a protocol error, so anything outside the known set is reported as "stop".
-_FINISH_REASONS = {"stop": "stop", "length": "length", "load": "stop", "unload": "stop"}
+_FINISH_REASONS = {
+    "stop": "stop",
+    "length": "length",
+    "load": "stop",
+    "unload": "stop",
+    "tool_calls": "tool_calls",
+}
 
 
-def _finish_reason(done_reason: str | None) -> str:
+def _finish_reason(done_reason: str | None, *, called_tools: bool) -> str:
+    """`tool_calls` wins over whatever Ollama reported.
+
+    Ollama ends a generation that produced tool calls with `done_reason: stop`,
+    which is true of the model and wrong for the client: an OpenAI agent loop
+    branches on exactly this field to decide whether to execute a call or to
+    show the user an answer. Told "stop" it treats the turn as finished and the
+    calls are never run, so the conversation stalls with the model waiting on
+    results that nobody will produce.
+    """
+    if called_tools:
+        return "tool_calls"
     return _FINISH_REASONS.get(done_reason or "stop", "stop")
+
+
+def _sampling_options(sampling: SamplingOptions | None) -> dict[str, Any]:
+    """Ollama's `options` names for the parameters the caller set.
+
+    Only what was actually asked for. Sending a value for every field would
+    replace Ollama's own defaults with this module's opinion of them, and the
+    two are not the same list from one release to the next.
+    """
+    if sampling is None:
+        return {}
+    options: dict[str, Any] = {}
+    if sampling.temperature is not None:
+        options["temperature"] = sampling.temperature
+    if sampling.top_p is not None:
+        options["top_p"] = sampling.top_p
+    if sampling.seed is not None:
+        options["seed"] = sampling.seed
+    if sampling.stop:
+        options["stop"] = list(sampling.stop)
+    return options
+
+
+def _tool_payload(tools: Sequence[ToolDefinition]) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.parameters,
+            },
+        }
+        for t in tools
+    ]
+
+
+def _arguments_for_upstream(arguments: str) -> Any:
+    """Ollama takes a tool call's arguments as an object; the domain holds text.
+
+    Decoded where it can be. Where it cannot, the raw string is sent rather
+    than a substitute: these arguments are model output that this platform
+    passed through verbatim and the client replayed, so a conversation whose
+    model once emitted malformed JSON stays resumable, and Ollama gets to make
+    its own decision about a payload we did not invent.
+    """
+    try:
+        return json.loads(arguments)
+    except json.JSONDecodeError:
+        return arguments
+
+
+def _message_payload(message: Message) -> dict[str, Any]:
+    payload: dict[str, Any] = {"role": message.role.value, "content": message.content}
+    if message.tool_calls:
+        payload["tool_calls"] = [
+            {"function": {"name": c.name, "arguments": _arguments_for_upstream(c.arguments)}}
+            for c in message.tool_calls
+        ]
+    if message.role is MessageRole.TOOL:
+        # Both spellings. Ollama has paired a tool result to its call by name,
+        # and carries the id on newer builds; sending each under the key that
+        # build expects costs nothing, because a Go handler ignores a field it
+        # does not know. Sending only one would work on exactly one of them.
+        if message.name:
+            payload["tool_name"] = message.name
+        if message.tool_call_id:
+            payload["tool_call_id"] = message.tool_call_id
+    return payload
+
+
+def _parse_tool_calls(raw: Any) -> tuple[ToolCall, ...]:
+    """Ollama reports a whole call and gives it no id; OpenAI requires one.
+
+    So the id is minted here. It is the handle a client uses to pair its tool
+    result back to the call, and it has to survive the round trip, which means
+    it must be unique within a conversation rather than merely within a chunk —
+    an index would collide across turns and pair a result with the wrong call.
+    """
+    if not isinstance(raw, list):
+        return ()
+
+    calls: list[ToolCall] = []
+    for entry in raw:
+        function = (entry or {}).get("function") or {}
+        name = function.get("name")
+        if not name:
+            # A call with no name is one no client can execute. Dropped rather
+            # than forwarded as an empty call, which would look executable.
+            logger.warning("ollama emitted a tool call with no function name, ignoring")
+            continue
+        arguments = function.get("arguments")
+        calls.append(
+            ToolCall(
+                id=f"call_{uuid.uuid4().hex[:24]}",
+                name=name,
+                # Back to text, the form the domain holds and the wire carries.
+                # `separators` so the bytes match what `sse.py` would produce
+                # for the same object, since a client may compare them.
+                arguments=(
+                    arguments
+                    if isinstance(arguments, str)
+                    else json.dumps(arguments or {}, separators=(",", ":"))
+                ),
+            )
+        )
+    return tuple(calls)
 
 
 def _spellings(name: str) -> tuple[str, ...]:
@@ -102,6 +236,9 @@ class OllamaAdapter:
         messages: Sequence[Message],
         max_tokens: int | None = None,
         thinking: bool = True,
+        tools: Sequence[ToolDefinition] = (),
+        tool_choice: ToolChoice | None = None,
+        sampling: SamplingOptions | None = None,
     ) -> AsyncGenerator[CompletionChunk, None]:
         """Stream a completion.
 
@@ -111,16 +248,23 @@ class OllamaAdapter:
         it Ollama keeps generating for someone who has already gone.
         """
         assert_valid_model_ref(ref)
-        payload: dict[str, Any] = {
-            "model": ref,
-            "messages": [{"role": m.role.value, "content": m.content} for m in messages],
-            "stream": True,
-        }
+        options: dict[str, Any] = {}
         if max_tokens is not None:
             # Stopping at the source beats counting chunks and cutting the
             # stream: the model stops generating rather than producing tokens
             # nobody reads.
-            payload["options"] = {"num_predict": max_tokens}
+            options["num_predict"] = max_tokens
+        options.update(_sampling_options(sampling))
+
+        payload: dict[str, Any] = {
+            "model": ref,
+            "messages": [_message_payload(m) for m in messages],
+            "stream": True,
+        }
+        if options:
+            payload["options"] = options
+        if tools and should_send_tools(tool_choice, "ollama"):
+            payload["tools"] = _tool_payload(tools)
         # Sent on generation as well as on load. Ollama applies its own default
         # to any request that omits it, so a generate without this silently
         # overwrites whatever `load` asked for — which is how a 10-minute
@@ -150,6 +294,7 @@ class OllamaAdapter:
 
         counted = 0
         saw_done = False
+        called_tools = False
         async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
             async with client.stream("POST", "/api/chat", json=payload) as response:
                 await self._raise_for_status(response, ref)
@@ -174,6 +319,9 @@ class OllamaAdapter:
                     # made the adapter produce nothing at all for 93 seconds on
                     # a question that used its entire token budget thinking.
                     reasoning = message.get("thinking") or ""
+                    calls = _parse_tool_calls(message.get("tool_calls"))
+                    if calls:
+                        called_tools = True
 
                     if event.get("done"):
                         saw_done = True
@@ -198,7 +346,10 @@ class OllamaAdapter:
                         yield CompletionChunk(
                             delta=delta,
                             reasoning=reasoning,
-                            finish_reason=_finish_reason(event.get("done_reason")),
+                            tool_calls=calls,
+                            finish_reason=_finish_reason(
+                                event.get("done_reason"), called_tools=called_tools
+                            ),
                             token_count=correction,
                             # Reported once, here, for the whole request.
                             # Ollama has always sent it; nothing read it until
@@ -207,12 +358,17 @@ class OllamaAdapter:
                         )
                         return
 
-                    if delta or reasoning:
+                    if delta or reasoning or calls:
                         # Reasoning counts. Ollama's `eval_count` includes the
                         # thinking tokens, so excluding them here would make the
                         # end-of-stream correction re-bill every one of them.
+                        # Tool calls are decoded tokens too, and a generation
+                        # that is nothing but a call would otherwise be counted
+                        # as producing nothing until the terminal correction.
                         counted += 1
-                        yield CompletionChunk(delta=delta, reasoning=reasoning, token_count=1)
+                        yield CompletionChunk(
+                            delta=delta, reasoning=reasoning, tool_calls=calls, token_count=1
+                        )
 
                 if not saw_done:
                     # The stream ended without a terminal event: the model was

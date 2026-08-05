@@ -16,7 +16,15 @@ from fastapi.responses import StreamingResponse
 
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.domain.entities.actor import Actor
-from app.domain.entities.chat import Message, MessageRole
+from app.domain.entities.chat import (
+    Message,
+    MessageRole,
+    SamplingOptions,
+    ToolCall,
+    ToolChoice,
+    ToolChoiceMode,
+    ToolDefinition,
+)
 from app.infrastructure.di import (
     GroundChatFactoryDep,
     ListCapabilitiesDep,
@@ -27,10 +35,15 @@ from app.interfaces.http.middleware.api_key_auth import authenticate_api_key
 from app.interfaces.http.schemas.chat_schemas import (
     ChatCompletionRequest,
     ChatCompletionResponse,
+    ChatMessageIn,
     Choice,
     CompletionMessage,
     ModelCard,
     ModelListResponse,
+    TextContentPart,
+    ToolCallFunction,
+    ToolCallIn,
+    ToolChoiceObject,
     Usage,
 )
 
@@ -62,8 +75,67 @@ async def list_models(
     )
 
 
-def _to_domain(request: ChatCompletionRequest) -> list[Message]:
-    return [Message(role=MessageRole(m.role), content=m.content) for m in request.messages]
+def _flatten(content: str | list[TextContentPart] | None) -> str:
+    """Both content shapes down to the one the domain and the runtimes hold.
+
+    Parts are joined without a separator. Inserting one would put characters
+    into the prompt that the caller did not send, and a client that splits a
+    sentence across two parts would find a space in the middle of a word.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    return "".join(part.text for part in content)
+
+
+def _to_domain(messages: list[ChatMessageIn]) -> list[Message]:
+    return [
+        Message(
+            role=MessageRole(m.role),
+            content=_flatten(m.content),
+            tool_calls=tuple(
+                ToolCall(id=c.id, name=c.function.name, arguments=c.function.arguments)
+                for c in m.tool_calls
+            ),
+            tool_call_id=m.tool_call_id,
+            name=m.name,
+        )
+        for m in messages
+    ]
+
+
+def _tools(request: ChatCompletionRequest) -> list[ToolDefinition]:
+    return [
+        ToolDefinition(
+            name=t.function.name,
+            description=t.function.description,
+            parameters=t.function.parameters,
+        )
+        for t in request.tools
+    ]
+
+
+def _tool_choice(request: ChatCompletionRequest) -> ToolChoice | None:
+    if request.tool_choice is None:
+        return None
+    if isinstance(request.tool_choice, ToolChoiceObject):
+        return ToolChoice(
+            mode=ToolChoiceMode.FUNCTION, function_name=request.tool_choice.function.name
+        )
+    return ToolChoice(mode=ToolChoiceMode(request.tool_choice))
+
+
+def _sampling(request: ChatCompletionRequest) -> SamplingOptions | None:
+    """None when the caller set nothing, so the adapters send no options block
+    at all rather than an empty one."""
+    options = SamplingOptions(
+        temperature=request.temperature,
+        top_p=request.top_p,
+        stop=request.stop_sequences,
+        seed=request.seed,
+    )
+    return None if options.is_empty() else options
 
 
 # response_model=None: the return annotation is a union over a Pydantic body
@@ -79,7 +151,10 @@ async def chat_completions(
 ) -> ChatCompletionResponse | StreamingResponse:
     completion_id = sse.new_completion_id()
     created = sse.created_now()
-    messages = _to_domain(body)
+    messages = _to_domain(body.messages)
+    tools = _tools(body)
+    tool_choice = _tool_choice(body)
+    sampling = _sampling(body)
 
     # Opt-in, and the two fields are the only non-OpenAI ones this endpoint
     # accepts. Grounding every request would surprise an API caller who never
@@ -94,7 +169,16 @@ async def chat_completions(
         passages = [(p.document_id, p.index) for p in retrieved]
 
     if body.stream:
-        generation = use_case.execute(actor, body.model, messages, body.max_tokens, body.think)
+        generation = use_case.execute(
+            actor,
+            body.model,
+            messages,
+            body.max_tokens,
+            body.think,
+            tools,
+            tool_choice,
+            sampling,
+        )
         first = await sse.prime(generation)
         return sse.streaming_response(
             completion_id=completion_id,
@@ -105,6 +189,7 @@ async def chat_completions(
             # A header rather than a frame: the envelope is OpenAI's, and an
             # extra frame shape is a protocol error to a strict client.
             extra_headers=sse.citation_header(passages),
+            include_usage=bool(body.stream_options and body.stream_options.include_usage),
         )
 
     # The same citations on this path as on the streaming one. `use_knowledge`
@@ -115,7 +200,17 @@ async def chat_completions(
         response.headers[name] = value
 
     return await _collect(
-        completion_id, created, body.model, actor, use_case, messages, body.max_tokens, body.think
+        completion_id,
+        created,
+        body.model,
+        actor,
+        use_case,
+        messages,
+        body.max_tokens,
+        body.think,
+        tools,
+        tool_choice,
+        sampling,
     )
 
 
@@ -128,6 +223,9 @@ async def _collect(
     messages: list[Message],
     max_tokens: int | None,
     thinking: bool | None,
+    tools: list[ToolDefinition],
+    tool_choice: ToolChoice | None,
+    sampling: SamplingOptions | None,
 ) -> ChatCompletionResponse:
     """Non-streaming path.
 
@@ -136,16 +234,26 @@ async def _collect(
     """
     parts: list[str] = []
     reasoning: list[str] = []
+    calls: list[ToolCallIn] = []
     tokens = 0
     prompt_tokens = 0
     finish_reason: str | None = None
 
     async with aclosing(
-        use_case.execute(actor, capability, messages, max_tokens, thinking)
+        use_case.execute(
+            actor, capability, messages, max_tokens, thinking, tools, tool_choice, sampling
+        )
     ) as stream:
         async for chunk in stream:
             parts.append(chunk.delta)
             reasoning.append(chunk.reasoning)
+            calls.extend(
+                ToolCallIn(
+                    id=call.id,
+                    function=ToolCallFunction(name=call.name, arguments=call.arguments),
+                )
+                for call in chunk.tool_calls
+            )
             tokens += chunk.token_count
             # Assigned rather than summed: reported once, on the terminal
             # chunk, for the whole request.
@@ -153,6 +261,7 @@ async def _collect(
                 prompt_tokens = chunk.prompt_tokens
             finish_reason = chunk.finish_reason or finish_reason
 
+    text = "".join(parts)
     return ChatCompletionResponse(
         id=completion_id,
         created=created,
@@ -160,7 +269,12 @@ async def _collect(
         choices=[
             Choice(
                 message=CompletionMessage(
-                    content="".join(parts),
+                    # Null rather than "" when the turn was only tool calls.
+                    # An agent client replays this message back on the next
+                    # turn, and an empty string is a claim the model answered
+                    # and had nothing to say.
+                    content=text if text or not calls else None,
+                    tool_calls=calls or None,
                     reasoning_content="".join(reasoning) or None,
                 ),
                 finish_reason=finish_reason or "stop",
