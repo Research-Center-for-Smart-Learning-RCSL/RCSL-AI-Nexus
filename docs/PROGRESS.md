@@ -69,6 +69,51 @@ lockout. This only changes what the caller is told about their own failures,
 and debugging one's own admin session is the ordinary use rather than the
 dangerous one.
 
+**Verified on the deployment, not only by the suite.** Identical request twice
+against the live tailnet entrance, differing only in the stored column:
+`{"code":"user_not_found","message":"That account does not exist.",
+"request_id":"req_..."}` with the window closed, and the same body plus
+`"detail":"no user no-such-user"` with it open. Closing it took the detail away
+again, 1441 minutes was refused by the imported ceiling, and the `audit_log`
+holds both presses — `{"until": "2026-08-05T11:09:48+00:00"}` and
+`{"until": "off"}`. The account was left as it was found.
+
+### The deploy that reported success and shipped nothing
+
+Getting to that verification cost a detour that is worth more than the feature.
+`docker compose build gateway admin-tailnet admin-public frontend-tailnet`
+printed `Image rcsl-ai-nexus-frontend:latest Built` and exited 0. The backend
+image was untouched: **only `migrate` carries the backend `build:`**, by the
+deliberate convention at the top of `docker-compose.yml` — services sharing a
+tag would otherwise race to write it. Compose does not object to being asked to
+build services that carry no build definition. It builds the ones that do, says
+so, and succeeds.
+
+`docker compose up -d` then recreated the two frontend containers and left the
+backend alone, which also looked exactly like a successful deploy. Everything
+was `healthy`. The only reason it was caught is that the verification asked the
+running app a question it could fail: the new route was absent from
+`/openapi.json`, and every check short of that would have passed.
+
+This is the class the 2026-07-26 entry named — *checking in a way that can only
+return one answer* — arriving from a fourth direction, and the sibling of
+`docker compose up -d` being a no-op against a running container. **The command
+is `docker compose build` with no arguments, or `migrate` and
+`frontend-tailnet` by name.** Naming the service you actually changed is the
+wrong instinct here and reads as the right one.
+
+Smaller, from the same session: `csrf.py`'s module docstring states that "the
+tailnet entrance does not install this". It does — `main_admin_tailnet.py` adds
+`CsrfMiddleware` outermost, which is why a `curl` against 127.0.0.1:8001 needs
+the double-submit pair. Harmless in direction (more protection than described,
+not less), but it is a claim about the system that stopped being true.
+
+And a 422 on the admin entrances is still FastAPI's raw `{"detail":[...]}`,
+carrying neither `code` nor `request_id`. The gateway's 422 gained the OpenAI
+envelope this morning; the admin side kept its own shape, so validation
+failures are the one admin error a caller cannot correlate. Not fixed here,
+recorded so it is not rediscovered.
+
 The tests are the actual deliverable here, because the code was never the hard
 part. The two that existed handed `grant_debug_detail` a value directly, which
 tests the consumer and says nothing about who supplies it — precisely the gap
