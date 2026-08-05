@@ -22,7 +22,11 @@ from fastapi.responses import StreamingResponse
 
 from app.domain.entities.actor import Actor
 from app.domain.entities.chat import Message, MessageRole
-from app.infrastructure.di import GroundChatFactoryDep, RouteChatRequestDep
+from app.infrastructure.di import (
+    ApplyPromptTemplateFactoryDep,
+    GroundChatFactoryDep,
+    RouteChatRequestDep,
+)
 from app.interfaces.http import sse
 from app.interfaces.http.middleware.identity import current_actor
 from app.interfaces.http.schemas.chat_schemas import AdminChatRequest
@@ -36,10 +40,18 @@ async def admin_chat(
     actor: Annotated[Actor, Depends(current_actor)],
     use_case: RouteChatRequestDep,
     ground_chat: GroundChatFactoryDep,
+    apply_template: ApplyPromptTemplateFactoryDep,
 ) -> StreamingResponse:
     """Always streaming. The panel has no non-streaming mode, and offering one
     would be a second path through the same use case for no caller."""
     messages = [Message(role=MessageRole(m.role), content=m.content) for m in body.messages]
+
+    # Before grounding, so the operator's template frames everything and the
+    # retrieved passages still sit beside the question they answer.
+    if body.prompt_template:
+        messages = await apply_template(actor.tenant_id).execute(
+            actor, messages, body.prompt_template
+        )
 
     # Grounding happens before the streaming use case rather than inside it, so
     # the retrieval read and the embedding call are not in front of the

@@ -762,6 +762,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/prompt-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Templates */
+        get: operations["list_templates_admin_prompt_templates_get"];
+        put?: never;
+        /** Create Template */
+        post: operations["create_template_admin_prompt_templates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/prompt-templates/{template_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Template */
+        get: operations["read_template_admin_prompt_templates__template_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Template
+         * @description A conversation already sent is unaffected — the template was copied into
+         *     that request's messages. The next request naming it is refused with a 404
+         *     rather than served without it.
+         */
+        delete: operations["delete_template_admin_prompt_templates__template_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Template
+         * @description `PATCH`, so an edit to the description does not require resending the
+         *     body. Every field is optional and only the ones present are written.
+         */
+        patch: operations["update_template_admin_prompt_templates__template_id__patch"];
+        trace?: never;
+    };
     "/admin/retention": {
         parameters: {
             query?: never;
@@ -1192,6 +1238,8 @@ export interface components {
             max_tokens?: number | null;
             /** Messages */
             messages: components["schemas"]["AdminChatMessage"][];
+            /** Prompt Template */
+            prompt_template?: string | null;
             /** Think */
             think?: boolean | null;
             /**
@@ -1443,6 +1491,18 @@ export interface components {
             runtimes: components["schemas"]["RuntimeKind"][];
             /** Total Memory Gb */
             total_memory_gb: number;
+        };
+        /** CreatePromptTemplateRequest */
+        CreatePromptTemplateRequest: {
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Name */
+            name: string;
+            /** System Prompt */
+            system_prompt: string;
         };
         /** CreateTenantRequest */
         CreateTenantRequest: {
@@ -1750,6 +1810,21 @@ export interface components {
             /** Total Memory Gb */
             total_memory_gb: number;
         };
+        /** PromptTemplateResponse */
+        PromptTemplateResponse: {
+            /** Created At */
+            created_at: string | null;
+            /** Description */
+            description: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** System Prompt */
+            system_prompt: string;
+            /** Updated At */
+            updated_at: string | null;
+        };
         /** PurgeOutcomeResponse */
         PurgeOutcomeResponse: {
             /**
@@ -1967,6 +2042,15 @@ export interface components {
             runtimes?: components["schemas"]["RuntimeKind"][] | null;
             /** Total Memory Gb */
             total_memory_gb?: number | null;
+        };
+        /** UpdatePromptTemplateRequest */
+        UpdatePromptTemplateRequest: {
+            /** Description */
+            description?: string | null;
+            /** Name */
+            name?: string | null;
+            /** System Prompt */
+            system_prompt?: string | null;
         };
         /** UpdateUserRequest */
         UpdateUserRequest: {
@@ -3498,6 +3582,163 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    list_templates_admin_prompt_templates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptTemplateResponse"][];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    create_template_admin_prompt_templates_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePromptTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptTemplateResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    read_template_admin_prompt_templates__template_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptTemplateResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_template_admin_prompt_templates__template_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    update_template_admin_prompt_templates__template_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePromptTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptTemplateResponse"];
+                };
             };
             /** @description Unprocessable Entity */
             422: {

@@ -137,6 +137,17 @@ class AssistantUnavailableError(DomainError):
     # busy node rather than for a policy that was never created.
 
 
+# --- Prompt templates ----------------------------------------------------
+
+
+class PromptTemplateNotFoundError(DomainError):
+    code = "prompt_template_not_found"
+    public_message = "That prompt template does not exist."
+    # Same for another tenant's as for one that never existed, and the name a
+    # caller sends is resolved by a tenant-scoped read, so a guessed name
+    # cannot distinguish "not yours" from "not there".
+
+
 # --- Knowledge base ------------------------------------------------------
 
 

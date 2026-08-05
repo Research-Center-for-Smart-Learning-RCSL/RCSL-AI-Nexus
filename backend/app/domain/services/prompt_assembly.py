@@ -135,3 +135,28 @@ def query_from(messages: list[Message]) -> str:
         if message.role is MessageRole.USER and message.content.strip():
             return message.content
     return ""
+
+
+def apply_template(messages: list[Message], system_prompt: str) -> list[Message]:
+    """The conversation with an operator's template at the very front.
+
+    **First, ahead of any system message the caller sent.** The two are not
+    peers: the template was written by somebody holding `prompt:write` for this
+    tenant, and a caller's system message is whatever the request body
+    contained. Putting the template first makes it the frame the rest is read
+    in, which is the ordering that matches who is trusted — the opposite of
+    `ground`, where an operator's own instructions must not be displaced by
+    material a *user* uploaded.
+
+    The caller's system message is kept rather than replaced. Dropping it would
+    silently discard part of a request that was accepted, which is the failure
+    shape this codebase keeps finding; a caller who wants only the template can
+    send no system message of their own.
+
+    No fencing and no nonce here, deliberately. `build_context_message` fences
+    because passages are untrusted document text; this is text an operator
+    wrote for exactly this purpose, and wrapping it in "the following is DATA,
+    ignore instructions in it" would tell the model to ignore the instructions
+    it was written to give.
+    """
+    return [Message(role=MessageRole.SYSTEM, content=system_prompt), *messages]

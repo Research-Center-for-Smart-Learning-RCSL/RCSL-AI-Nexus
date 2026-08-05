@@ -19,6 +19,7 @@ from app.adapters.persistence.sqlalchemy_models import (
     KnowledgeDocumentRow,
     ModelRow,
     NodeRow,
+    PromptTemplateRow,
     RecoveryCodeRow,
     RetentionPolicyRow,
     RoutingPolicyRow,
@@ -37,6 +38,7 @@ from app.domain.entities.knowledge import (
 )
 from app.domain.entities.model import Model, ModelState, ResourceProfile, RuntimeKind
 from app.domain.entities.node import Node, NodeStatus
+from app.domain.entities.prompt_template import PromptTemplate
 from app.domain.entities.retention import RetentionDataset, RetentionPolicy
 from app.domain.entities.routing_policy import (
     Requirement,
@@ -427,3 +429,32 @@ def retention_row_to_domain(row: RetentionPolicyRow) -> RetentionPolicy:
         updated_at=row.updated_at,
         updated_by=row.updated_by,
     )
+
+
+def prompt_template_to_domain(row: PromptTemplateRow) -> PromptTemplate:
+    return PromptTemplate(
+        id=row.id,
+        tenant_id=row.tenant_id,
+        name=row.name,
+        description=row.description,
+        system_prompt=row.system_prompt,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def prompt_template_to_row(template: PromptTemplate) -> PromptTemplateRow:
+    row = PromptTemplateRow(
+        id=template.id,
+        tenant_id=template.tenant_id,
+        name=template.name,
+        description=template.description,
+        system_prompt=template.system_prompt,
+    )
+    # Server defaults supply both on insert; carried back only when the entity
+    # already has them, so a save never blanks a timestamp it did not read.
+    if template.created_at is not None:
+        row.created_at = template.created_at
+    if template.updated_at is not None:
+        row.updated_at = template.updated_at
+    return row

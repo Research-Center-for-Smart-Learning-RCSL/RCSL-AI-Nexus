@@ -20,6 +20,7 @@ from app.domain.entities.knowledge import (
 )
 from app.domain.entities.model import Model, ModelState
 from app.domain.entities.node import Node, NodeStatus
+from app.domain.entities.prompt_template import PromptTemplate
 from app.domain.entities.retention import RetentionDataset, RetentionPolicy
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.tenant import Tenant
@@ -427,3 +428,25 @@ class RetentionPolicyRepositoryPort(Protocol):
         """Upsert. The row appears the first time somebody disagrees with the
         default, which is also the first time there is an author to record."""
         ...
+
+
+class PromptTemplateRepositoryPort(Protocol):
+    """Tenant-scoped, like the knowledge repository: the filter is the adapter's
+    and comes from the tenant it was constructed with, never from a caller."""
+
+    async def get(self, template_id: str) -> PromptTemplate | None: ...
+
+    async def get_by_name(self, name: str) -> PromptTemplate | None:
+        """How a chat request resolves `"prompt_template": "code-review"`.
+
+        Scoped, so the name a caller writes can only ever name their own
+        tenant's template — which is what makes selection a choice among
+        trusted values rather than a way to reach somebody else's text.
+        """
+        ...
+
+    async def list_all(self) -> list[PromptTemplate]: ...
+
+    async def save(self, template: PromptTemplate) -> None: ...
+
+    async def delete(self, template_id: str) -> None: ...

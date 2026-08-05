@@ -52,7 +52,23 @@ def test_the_csrf_comparison_does_not_raise_on_a_non_ascii_header() -> None:
 def test_a_user_holds_only_the_scopes_5_2_grants() -> None:
     """Use the chat UI, manage their own keys, view their own usage. The read
     scopes for models, routing and nodes were an over-grant that let a user
-    enumerate the registry and read the node's tailnet address."""
+    enumerate the registry and read the node's tailnet address.
+
+    **`prompt:read` was added on 2026-08-05 and is the only widening this
+    assertion has admitted.** It is here rather than passed over in silence
+    because the set is pinned exactly on purpose: anything added has to be
+    argued for in this docstring, and a future one that is not still fails.
+
+    Two reasons it does not reopen what the withheld reads opened. It names no
+    infrastructure — a template is text this tenant authored, so listing them
+    reveals nothing about models, nodes or addresses, and the repository is
+    tenant-scoped so it cannot reach another tenant's. And selecting a template
+    is *part of* using the chat: a member who cannot see which exist cannot
+    choose one, and the alternative is being told a name out of band and
+    guessing. The transparency runs the same way — a template shapes every
+    answer the member receives, so being able to read the one applied on their
+    behalf is a property worth having rather than a leak.
+    """
     scopes = RoleAuthorization().scopes_for("user")
 
     assert scopes == frozenset(
@@ -61,10 +77,14 @@ def test_a_user_holds_only_the_scopes_5_2_grants() -> None:
             Scope.API_KEY_READ_OWN,
             Scope.API_KEY_WRITE_OWN,
             Scope.USAGE_READ_OWN,
+            Scope.PROMPT_READ,
         }
     )
     for absent in (Scope.MODEL_READ, Scope.ROUTING_READ, Scope.NODE_READ):
         assert absent not in scopes
+    # Reading a template is not authoring one; that stays with the roles that
+    # hold the knowledge base.
+    assert Scope.PROMPT_WRITE not in scopes
 
 
 def test_a_service_key_reaches_no_control_plane_scope() -> None:

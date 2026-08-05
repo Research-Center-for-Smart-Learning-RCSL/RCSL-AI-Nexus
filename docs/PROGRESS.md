@@ -17,6 +17,68 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-05
 
+### Prompt templates, and the feature defined by what it does not do
+
+The last untouched Phase 2 item, and the design took longer than the code. A
+full vertical slice — entity, migration, tenant-scoped repository, two use
+cases, router, schemas, a screen, and application on both chat paths — but the
+decision that shaped all of it was made before any of it was written.
+
+**"Prompt template" almost always means a body with `{{slots}}` filled in per
+request. That is exactly what this platform's own rules forbid.** security.md
+§7.4 had been sitting there since the design phase saying so — *values fill
+data slots only; structured parameter substitution, never string formatting
+against the template body* — and `prompt_assembly.py` exists because retrieved
+passages can contain "ignore previous instructions".
+
+Applying that rule here is harder than it looks, and the difference is the
+destination. A passage lands in a block the prompt explicitly labels as data. A
+template body **is** the message the model treats as authoritative. A slot in it
+filled from a request would let a caller write into that message — an escalation
+from "asks questions" to "gives instructions" — and escaping does not fix it,
+because escaping is about parsers and this is about meaning.
+
+So there is no substitution. A template is text an operator wrote, chosen by
+name, inserted whole; the caller's words stay in the user message where they
+have always been. What a caller controls is *which* template, out of the set
+their tenant authored — a choice among trusted values rather than a value of
+their own. §7.4 is rewritten to say what was built rather than what was
+planned, because a section describing a mechanism that does not exist is the
+defect this file keeps recording.
+
+The rest follows the grain already in the tree. Application runs **before**
+`RouteChatRequest` as a message transformation, the discipline `GroundChat`
+established so a database read never gets in front of the concurrency slot; and
+before grounding, so the operator's instructions frame the retrieved passages
+rather than arriving after them. A name that does not resolve is a **404, not a
+completion served without it** — the alternative is 200, a plausible answer, and
+nobody told the instructions were never applied. `prompt:read` went into the
+base scopes and `prompt:write` to the roles that hold the knowledge base:
+choosing is part of asking a question, authoring is authority over what the
+model is told before it reads one.
+
+**Two things pushed back, and both were right.** `test_review_hardening.py`
+pins the `user` role's scope set *exactly*, because read scopes for models,
+routing and nodes were once an over-grant. Adding `prompt:read` failed it, which
+is the test working — the widening is now argued for in its docstring, so a
+future one that is not still fails.
+
+And the create response came back with `created_at: null`. The columns are
+`NOT NULL`; the entity returned was the one constructed in memory. **That is the
+defect fixed on the frontend this morning, reproduced in new code hours later**
+— `IssueInvitation.create_account` carries a comment about the same mistake,
+where it took an invitation link down with it. Found by reading a live response
+rather than by a test, which is the argument for looking at one. Fixed with a
+read-back and pinned.
+
+Verified end to end after deploy. The same question, twice: *"Say hello and tell
+me the colour of the sky in one short sentence."* Without a template — "Hello
+there! The sky is blue." With `"prompt_template": "welsh"` — *"Croeso! Mae'r
+awyr yn felyn heddiw."* A name that does not exist: `404
+prompt_template_not_found`. The gateway's database account has `SELECT` on the
+new table and nothing else, which the least-privilege provisioning gave it
+without being asked, because writes are an allowlist and reads are the default.
+
 ### Review of the day's work: seven findings, all real
 
 The most useful was the smallest to fix and would have wasted the most time.

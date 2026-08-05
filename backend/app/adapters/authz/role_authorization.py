@@ -23,6 +23,10 @@ _BASE_SCOPES = frozenset(
         Scope.API_KEY_READ_OWN,
         Scope.API_KEY_WRITE_OWN,
         Scope.USAGE_READ_OWN,
+        # Selecting a prompt template is part of asking a question, so seeing
+        # which exist has to come with using the chat rather than with
+        # administering it. Read only: authoring one is `prompt:write`.
+        Scope.PROMPT_READ,
     }
 )
 """What having an account at all is worth: use the chat UI, manage your own
@@ -44,6 +48,7 @@ _TENANT_ADMIN_SCOPES = _BASE_SCOPES | {
     Scope.LOGS_READ,
     Scope.KNOWLEDGE_READ,
     Scope.KNOWLEDGE_WRITE,
+    Scope.PROMPT_WRITE,
     Scope.TENANT_READ,
     Scope.MODEL_READ,
     Scope.ROUTING_READ,
@@ -79,11 +84,21 @@ whose load it is, and both are read-only. `USER_WRITE`, `API_KEY_WRITE_ANY` and
 key or promote an account can hand themselves every other scope in this file,
 so withholding them is what makes this role a role rather than a delay."""
 
-_CURATOR_SCOPES = _BASE_SCOPES | {Scope.KNOWLEDGE_READ, Scope.KNOWLEDGE_WRITE}
-"""The knowledge base and nothing else. Separate from the roles above because
-§7.3 treats knowledge documents as a prompt-injection surface: whoever writes
-them shapes what the models answer, which is authority worth granting on
-purpose rather than as a side effect of being an administrator."""
+_CURATOR_SCOPES = _BASE_SCOPES | {
+    Scope.KNOWLEDGE_READ,
+    Scope.KNOWLEDGE_WRITE,
+    Scope.PROMPT_WRITE,
+}
+"""What the models are told, and nothing else. Separate from the roles above
+because §7.3 treats knowledge documents as a prompt-injection surface: whoever
+writes them shapes what the models answer, which is authority worth granting on
+purpose rather than as a side effect of being an administrator.
+
+`prompt:write` belongs here for the same reason and is the more direct form of
+it — a knowledge document shapes an answer by being retrieved, a system prompt
+shapes every answer that selects it, without competing with anything. Both are
+content authorship, which is why neither is with the role that runs the
+nodes."""
 
 _AUDITOR_SCOPES = frozenset(
     {
@@ -98,6 +113,7 @@ _AUDITOR_SCOPES = frozenset(
         Scope.USER_READ,
         Scope.TENANT_READ,
         Scope.KNOWLEDGE_READ,
+        Scope.PROMPT_READ,
     }
 )
 """Reads everything, writes nothing.

@@ -232,6 +232,20 @@ class ChatCompletionRequest(BaseModel):
         "use_knowledge is set. Never widens the tenant scope, which is fixed "
         "by the caller's key.",
     )
+    prompt_template: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "Name of one of this tenant's prompt templates. Its system prompt "
+            "is placed at the front of the conversation, ahead of any system "
+            "message you send, which is kept. Not an OpenAI field, and opt-in: "
+            "applying one to every request would make the platform's behaviour "
+            "depend on a row you cannot see. A name that does not resolve is a "
+            "404 rather than a completion served without it. **There is no "
+            "substitution** — a template is fixed text an operator wrote, and "
+            "what you choose is which one, not what it says."
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_single_choice(self) -> ChatCompletionRequest:
@@ -305,6 +319,11 @@ class AdminChatRequest(BaseModel):
     """Omitted takes the deployment default. See `ChatCompletionRequest.think`."""
     use_knowledge: bool = False
     knowledge_collection: str | None = None
+    prompt_template: str | None = Field(default=None, max_length=128)
+    """Same meaning as on the gateway. Present here too because the chat panel
+    is where an operator tries a template out before telling anybody to use
+    it — a template that could only be exercised by an API caller would be
+    written blind."""
 
 
 class ToolCallDelta(BaseModel):

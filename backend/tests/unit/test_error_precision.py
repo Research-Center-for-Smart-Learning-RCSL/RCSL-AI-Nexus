@@ -314,7 +314,9 @@ def test_the_admin_document_advertises_the_422_it_actually_sends(
 
     declared = set(spec["components"]["schemas"]["AdminErrorResponse"]["properties"])
     sent = TestClient(_app("admin")).post("/validates", json={"minutes": "soon"}).json()
-    assert set(sent) <= declared, f"the handler sends keys the document omits: {set(sent) - declared}"
+    assert set(sent) <= declared, (
+        f"the handler sends keys the document omits: {set(sent) - declared}"
+    )
 
     get_settings.cache_clear()
 

@@ -42,6 +42,7 @@ from app.domain.exceptions import (
     NoLocalCredentialsError,
     NotAuthenticatedError,
     NotAuthorizedError,
+    PromptTemplateNotFoundError,
     QuotaExceededError,
     RateLimitedError,
     RetentionWindowTooShortError,
@@ -93,6 +94,7 @@ STATUS_MAP: dict[type[DomainError], int] = {
     LastAdministratorError: 409,
     NoLocalCredentialsError: 409,
     CollectionNotFoundError: 404,
+    PromptTemplateNotFoundError: 404,
     DocumentNotFoundError: 404,
     DocumentStateConflictError: 409,
     # 413, not 400: the common rejection is size, and a caller that sees 413
