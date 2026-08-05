@@ -224,6 +224,70 @@ deployment does not have. The platform can now carry the conversation; whether
 `qwen2.5-coder` or `glm-4.7-flash` can hold up their end of it is a measurement,
 not a merge.
 
+### A second review, this time against the running runtime
+
+Same day, after deployment. The method differed from the morning's review in one
+way that turned out to be the whole of its value: every suspicion that *could*
+be tested against the live Ollama 0.32.4 was, instead of being settled by
+reading. Two of the four real findings were claims the code made about Ollama's
+behaviour, and both were false in ways reading could not have shown.
+
+**The "stays replayable" fallback had no input on which it could succeed.** The
+adapter sent undecodable `arguments` upstream as the raw string, on the theory
+that Ollama should judge a payload we did not invent. Measured: Ollama types the
+field as an object and answers 400 for *any* string — malformed, or valid JSON
+in string form, identically. So the fallback was not a permissive path but a
+guaranteed failure, and a worse one than refusing: that 400 came back through
+`_raise_for_status` as `no_available_model`, whose documented remedy is retry,
+for a failure that is permanent. A client following our own documentation would
+replay the same doomed conversation forever. It is now refused before the
+request is sent, as `RuntimeCapabilityError` — a 400 that says the request
+itself is the problem, which is the same honesty judgement as `tool_choice:
+required`, reached from the opposite direction: there refusing beat serving
+something else, here refusing beats promising a retry that cannot work. MLX
+keeps carrying the raw string, because its server takes a string; the capability
+genuinely differs per runtime, which is what the error class is for.
+
+**The id was minted, cited, and then dropped.** The adapter minted `call_x`
+because "Ollama gives a call no id" — true when written, false on 0.32.4, which
+mints its own. Minting stays (nothing Ollama publishes promises the field or its
+uniqueness), but the replay path sent the assistant's calls *without* their ids
+while sending the tool result's `tool_call_id` faithfully — one half of a pair
+whose other half we were deleting. A build that pairs on ids would attach the
+result to nothing. Measured: 0.32.4 accepts `id` on a replayed call; it is sent
+now, on the argument the two `tool_name`/`tool_call_id` spellings already rest
+on — a Go handler ignores a field it does not know, so sending it costs nothing
+and depends on nothing.
+
+**MLX read half of the usage object.** `completion_tokens` and not
+`prompt_tokens`, so every figure downstream — the `include_usage` frame, the
+non-streaming `Usage`, the quota that counts prompt tokens since 2026-08-04 —
+reported 0 prompt tokens on that path. An agent's consumption is mostly prompt;
+on the MLX path the quota would have measured approximately nothing.
+
+**`functions` was the same disease, resurfacing under its old name.** The
+deprecated spellings `functions`/`function_call` still fell to `extra="ignore"`
+— 200, prose, a stalled agent loop, from an older client library instead of a
+current one. The identical failure shape the whole 2026-08-05 change exists to
+remove, one field over. Refused now, with the message naming the fields to send
+instead.
+
+Smaller, from the same pass: `tool_calls` on a non-assistant role is refused
+(the adapters forwarded it on whatever role carried it); the timeout detail no
+longer diagnoses every `httpx.TimeoutException` as a long prompt (a connect
+timeout is a down runtime, a mid-stream stall is neither); the terminal Ollama
+event is filtered against calls already forwarded, so a build that restates the
+turn's calls in its done event cannot make an agent execute side effects twice;
+an MLX event carrying both content and a call fragment bills one token, not
+two; `stream_options` without `stream: true` is refused as OpenAI refuses it;
+`top_p: 0` is legal.
+
+The lesson is the morning's own, applied to the morning: the review that found
+"a rule written when the last message was always the user turn" was itself
+carrying rules written against an Ollama that no longer exists. A claim about a
+runtime's behaviour ages like a claim about a colleague's schedule, and the only
+test that catches it is the one that asks the runtime.
+
 ---
 
 ## 2026-08-04

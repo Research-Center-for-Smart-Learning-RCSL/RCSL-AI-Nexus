@@ -208,8 +208,14 @@ export function ApiReference() {
           <code>frequency_penalty</code> and <code>presence_penalty</code>. Two
           fields are refused rather than ignored, because serving them wrongly
           would be worse than saying no: <code>n</code> other than{' '}
-          <code>1</code>, and a <code>tool_choice</code> of{' '}
-          <code>required</code> or a named function.
+          <code>1</code>, a <code>tool_choice</code> of <code>required</code>{' '}
+          or a named function, the deprecated <code>functions</code> /{' '}
+          <code>function_call</code> spellings (send <code>tools</code> and{' '}
+          <code>tool_choice</code>; before 2026-08-05 these were silently
+          ignored, which stalled older client libraries exactly the way a
+          dropped <code>tools</code> once did), and{' '}
+          <code>stream_options</code> on a request whose <code>stream</code> is
+          not <code>true</code>.
         </p>
       </section>
 
@@ -260,8 +266,11 @@ export function ApiReference() {
             A JSON <em>string</em>, as OpenAI defines it, and passed through
             exactly as the model produced it.{' '}
             <strong>It is model output, so it can be malformed</strong> — parse
-            defensively. A conversation containing one is still replayable: the
-            platform will not reject on the way back in.
+            defensively. Replaying a turn whose arguments do not parse is
+            refused with <code>400 runtime_capability_unsupported</code> when
+            the serving runtime takes arguments as an object, as Ollama does
+            (measured 2026-08-05; this page said the opposite before that
+            date). Repair or drop that turn — retrying replays the failure.
           </dd>
           <dt className="font-mono text-muted-foreground">tool_choice</dt>
           <dd>

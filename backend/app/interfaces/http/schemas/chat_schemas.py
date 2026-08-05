@@ -64,6 +64,12 @@ class ChatMessageIn(BaseModel):
         internals or, worse, accept and answer from a conversation missing the
         part that gave it meaning.
         """
+        if self.tool_calls and self.role != "assistant":
+            # Only the assistant asks for tools; the adapters forward this
+            # field on whatever role carries it, so a `user` message smuggling
+            # one would reach the runtime as a shape no chat template defines
+            # and be answered from whatever it makes of it.
+            raise ValueError("only an assistant message may carry tool_calls")
         if self.role == "tool":
             if not self.tool_call_id:
                 raise ValueError("a tool message must carry tool_call_id")
@@ -149,8 +155,17 @@ class ChatCompletionRequest(BaseModel):
         ),
     )
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-    top_p: float | None = Field(default=None, gt=0.0, le=1.0)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
     seed: int | None = None
+    functions: Any | None = Field(default=None, exclude=True)
+    function_call: Any | None = Field(default=None, exclude=True)
+    """OpenAI's deprecated spellings of `tools` and `tool_choice`, declared so
+    they can be *refused* — see `_refuse_legacy_functions`. Undeclared they
+    fell to pydantic's `extra="ignore"`, which is the identical silent failure
+    `tools` itself had until 2026-08-05: an older client library sends its
+    functions, gets 200 and prose, and stalls waiting for a call that was
+    never requested. The one shape of compatibility gap this schema exists to
+    not have."""
     stop: str | list[str] | None = Field(
         default=None,
         description="Up to four stop sequences, as OpenAI allows. A bare string "
@@ -222,6 +237,24 @@ class ChatCompletionRequest(BaseModel):
     def _check_single_choice(self) -> ChatCompletionRequest:
         if self.n is not None and self.n != 1:
             raise ValueError("n must be 1; this platform serves one choice per request")
+        return self
+
+    @model_validator(mode="after")
+    def _refuse_legacy_functions(self) -> ChatCompletionRequest:
+        if self.functions is not None or self.function_call is not None:
+            raise ValueError(
+                "'functions' and 'function_call' are the deprecated OpenAI "
+                "spellings and are not supported; send 'tools' and 'tool_choice'"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_stream_options_need_a_stream(self) -> ChatCompletionRequest:
+        """Refused rather than ignored, as OpenAI refuses it. A caller setting
+        `include_usage` on a non-streaming request has confused the two paths,
+        and silently honouring half their request hides that from them."""
+        if self.stream_options is not None and not self.stream:
+            raise ValueError("stream_options requires stream: true")
         return self
 
     @model_validator(mode="after")

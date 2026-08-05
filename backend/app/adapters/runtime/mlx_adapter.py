@@ -44,6 +44,7 @@ import httpx
 
 from app.adapters.runtime.hf_validation import assert_valid_hf_repo_id
 from app.adapters.runtime.tool_support import should_send_tools
+from app.adapters.runtime.transport import timeout_detail
 from app.domain.entities.chat import (
     CompletionChunk,
     Message,
@@ -277,7 +278,9 @@ class MlxAdapter:
         counted = 0
         finish_reason: str | None = None
         usage_tokens: int | None = None
+        usage_prompt_tokens = 0
         saw_terminal = False
+        received_any = False
         pending_calls = _ToolCallAccumulator()
 
         # Converted to a `DomainError` for the reason the Ollama adapter spells
@@ -296,6 +299,7 @@ class MlxAdapter:
                     line = line.strip()
                     if not line or not line.startswith("data:"):
                         continue
+                    received_any = True
                     data = line[len("data:") :].strip()
                     if data == "[DONE]":
                         saw_terminal = True
@@ -325,14 +329,18 @@ class MlxAdapter:
                             # one call's arguments and is not executable on its
                             # own, so the whole calls go out on the terminal
                             # chunk below. Counted here so a disconnect part way
-                            # through a call still bills the tokens it took.
+                            # through a call still bills the tokens it took —
+                            # unless this event carried content too and was
+                            # already counted above; one event is one decode
+                            # step however many fields it fills.
                             #
                             # Deliberately does not set a "saw tool calls" flag:
                             # what the finish reason turns on is whether a call
                             # survives accumulation, which is only knowable at
                             # the drain below.
                             pending_calls.add(delta_body["tool_calls"])
-                            counted += 1
+                            if not delta:
+                                counted += 1
                         if choice.get("finish_reason"):
                             finish_reason = choice["finish_reason"]
                             saw_terminal = True
@@ -340,11 +348,18 @@ class MlxAdapter:
                     usage = event.get("usage")
                     if usage and usage.get("completion_tokens") is not None:
                         usage_tokens = int(usage["completion_tokens"])
+                    if usage and usage.get("prompt_tokens") is not None:
+                        # Read as well as `completion_tokens`, which was the
+                        # only half the first version took. Leaving it meant
+                        # every figure downstream of `CompletionChunk` — the
+                        # usage frame, the non-streaming Usage, the quota that
+                        # has counted prompt tokens since 2026-08-04 — reported
+                        # 0 prompt tokens on this path, and an agent's
+                        # consumption is mostly prompt.
+                        usage_prompt_tokens = int(usage["prompt_tokens"])
         except httpx.TimeoutException as exc:
             raise NoAvailableModelError(
-                detail=f"mlx timed out for {ref} after {self._timeout.read}s "
-                f"without sending a byte; the prompt may be too long to evaluate "
-                f"within the read timeout"
+                detail=timeout_detail("mlx", ref, exc, self._timeout, mid_stream=received_any)
             ) from exc
 
         if not saw_terminal:
@@ -378,6 +393,10 @@ class MlxAdapter:
             # payload cannot disagree.
             finish_reason=_finish_reason(finish_reason, called_tools=bool(calls)),
             token_count=correction,
+            # Reported once, here, for the whole request, like the Ollama
+            # adapter's terminal chunk. Zero when the server sent no usage
+            # object, which is also what "unknown" has to bill as.
+            prompt_tokens=usage_prompt_tokens,
         )
 
     # --- model lifecycle -------------------------------------------------
