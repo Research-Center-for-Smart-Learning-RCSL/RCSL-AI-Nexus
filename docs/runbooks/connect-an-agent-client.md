@@ -54,8 +54,12 @@ five-tool-call debugging task three times each way:
 | deliberating | 9.4 / 11.5 / 12.7 s | 470 / 591 / 654 |
 | answering directly | 6.0 / 6.1 / 7.5 s | 275 / 283 / 366 |
 
-**42% of the clock on 46% of the output, solved 6 times out of 6 either way.**
-Reproduce with `scripts/measure-agent-loop.py`. Note that the saving is in
+**Answering directly takes 58% of the wall clock on 54% of the output —
+reductions of 42% and 46% — and solved the task 6 times out of 6 either way.**
+Stated both ways because the first version of this line said "42% of the
+clock", directly under this table, where it reads as the ratio between the rows
+rather than the saving: it promises a 2.4× speedup where the measurement shows
+1.7×. Reproduce with `scripts/measure-agent-loop.py`. Note that the saving is in
 *output* tokens: reasoning is never replayed into the next prompt, so it costs
 per turn rather than compounding through the conversation the way tool output
 does.

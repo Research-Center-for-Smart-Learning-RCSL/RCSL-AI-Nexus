@@ -283,6 +283,42 @@ def test_the_admin_entrances_render_one_in_theirs() -> None:
     assert body["request_id"] == response.headers["X-Request-Id"]
 
 
+def test_the_admin_document_advertises_the_422_it_actually_sends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The document and the handler are two places, and they drifted apart the
+    moment the handler changed.
+
+    FastAPI synthesises a 422 of its own `HTTPValidationError` for every route
+    with a body, so adding the admin envelope silently made the OpenAPI
+    document describe a shape the server no longer sends — and it was the
+    generated frontend types, committed in the same change as the drift check
+    itself, that carried the false description. Nothing could catch it: the
+    contract file compares schemas against the document, and here the document
+    was the wrong one.
+    """
+    monkeypatch.setenv("AUTH_MODE", "tailnet")
+    get_settings.cache_clear()
+
+    from app.infrastructure.main_admin_tailnet import create_app
+
+    spec = create_app().openapi()
+    bodies = {
+        path: operation["responses"]["422"]["content"]["application/json"]["schema"]["$ref"]
+        for path, methods in spec["paths"].items()
+        for operation in methods.values()
+        if "422" in operation.get("responses", {})
+    }
+    assert bodies, "no route advertises a 422; this test would pass vacuously"
+    assert set(bodies.values()) == {"#/components/schemas/AdminErrorResponse"}
+
+    declared = set(spec["components"]["schemas"]["AdminErrorResponse"]["properties"])
+    sent = TestClient(_app("admin")).post("/validates", json={"minutes": "soon"}).json()
+    assert set(sent) <= declared, f"the handler sends keys the document omits: {set(sent) - declared}"
+
+    get_settings.cache_clear()
+
+
 def test_neither_entrance_still_answers_with_fastapis_own_shape() -> None:
     """The defect stated directly: a bare `detail` list is what both used to
     return, and it is what a regression would look like."""

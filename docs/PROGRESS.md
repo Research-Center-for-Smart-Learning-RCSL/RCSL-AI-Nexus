@@ -17,6 +17,72 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-05
 
+### Review of the day's work: seven findings, all real
+
+The most useful was the smallest to fix and would have wasted the most time.
+
+**The CI step added to check for drift would have failed every run, on every
+platform, and told nobody why.** `scripts/generate-api-types.sh` opened with
+`SPEC="$(mktemp -t nexus-openapi).json"`, which is BSD-only: GNU coreutils
+refuses a template carrying no `X`s. Under `set -euo pipefail` that is the
+first working line, so on `ubuntu-latest` the script died immediately — red
+frontend job, no signal about the types, and the failure indistinguishable from
+the drift it was added to detect. It worked here because macOS accepts it,
+which is the whole shape of the defect: *tested only where it passes*.
+
+The same line leaked. Appending `.json` names a **different path** from the one
+`mktemp` created, so the trap removed the suffixed file and left the real one
+behind — five empty files had accumulated in `$TMPDIR` before anyone looked,
+which is the identical mechanism as the sixteen orphaned Postgres directories
+from 2026-08-04, at a smaller scale. It is a temporary directory now, removed
+whole.
+
+**The headline number was overstated by 1.4×, in the flattering direction.**
+"42% of the wall clock and 46% of the output tokens" are the *reductions*
+written as though they were the ratios: 6.53 s against 11.2 s is 58%. Read as a
+ratio it promises a 2.4× speedup where the measurement shows 1.7×, and it had
+propagated into the ROADMAP and — worst placed — into the runbook, directly
+under the two-row table where it can only be read as the ratio between the
+rows. An operator sizing a `code` policy from it would have been wrong. Both
+figures are stated now so neither reading is available. The measurement itself
+was never wrong; only every restatement of it.
+
+**A rung could pass by finding the answer in its own input.** Rungs 5 and 8
+asserted against `messages[-1]`, which is the assistant's turn when the loop
+ends normally and a **tool result** when it exhausts its turn budget with a
+call still pending — and the injected results contain the very substrings the
+assertions look for. So the rung that exists to prove the model *used* the
+result would have reported PASS for a model that never stopped calling. It
+reads the turn that ended the loop now.
+
+Fixing it exposed a second, honest weakness: one run then failed while
+answering correctly, because it wrote the figure another way. Asserting on free
+text is phrase-sensitive, so the check accepts `2,600,000`, `2600000` and
+`2.6 million` — and nothing looser, since the digits still have to appear or
+the rung stops testing anything. Three runs each of 5 and 8 pass since.
+
+**The one shape that provably drifted was the one the drift check could not
+see.** `_admin_validation_handler` changed the admin 422 body, but FastAPI
+still synthesised `HTTPValidationError` into the OpenAPI document for all 53
+routes that carry one — so `admin-api.ts`, committed in the same change as the
+contract file, documented a body the server does not send, and
+`api-contract.ts` could not notice because it compares schemas *against that
+document*. Both admin apps declare `AdminErrorResponse` for 422 now, and a test
+reads the generated document and the handler's actual body and requires them to
+agree, since they live in two places and have already drifted once.
+
+Two smaller ones. `api-contract.ts` omitted three response schemas that exist on
+both sides and are reachable from the UI — usage analytics, tenant creation, and
+the knowledge search *envelope*, whose member type was checked while a rename of
+`passages` would still have reached a browser; all three are bound now, and the
+docstring states what the file structurally cannot cover, since the document
+comes from the tailnet entrance and the public entrance's login screens have no
+types here at all. And `set_debug_window` diagnosed every empty UPDATE as "user
+is disabled", when a concurrent `delete` matches nothing either: it now reports
+what it observed and offers the cause instead of asserting it, because an
+operator told the wrong thing about a missing account goes looking in the wrong
+place.
+
 ### The frontend and the backend can no longer drift quietly
 
 The last unchecked Phase 1 box, and the one worth doing because so many entries
@@ -132,8 +198,21 @@ of those turns deliberated. Three runs each way, same task:
 | `think: true` | 6–7 | 9.4 / 11.5 / 12.7 s | 470 / 591 / 654 |
 | `think: false` | 6 | 6.0 / 6.1 / 7.5 s | 275 / 283 / 366 |
 
-**42% of the wall clock and 46% of the output tokens, with the task solved
-6 out of 6 either way.** The ROADMAP predicted the shape of this on
+**Answering directly takes 58% of the wall clock on 54% of the output tokens —
+reductions of 42% and 46% — with the task solved 6 out of 6 either way.**
+
+*Corrected 2026-08-05, after a review caught it.* This paragraph, the ROADMAP
+item and the runbook all first said "42% of the wall clock and 46% of the
+output tokens", which are the **reductions** written as though they were the
+ratios: 6.53 s against 11.2 s is 58%, not 42%. Read as a ratio it promises a
+2.4× speedup where the measurement shows 1.7×, so an operator sizing capacity
+from it would have been wrong by 1.4× — in the flattering direction, which is
+the direction a number about one's own change tends to slip. The heading above
+survives as written because "deliberation *costs* 42% of the wall clock" is the
+saving and is true; it was the restatements that inverted. The commit messages
+carrying the original wording are in the history and stay there.
+
+The ROADMAP predicted the shape of this on
 2026-08-05 — "an agent on `code` deliberates again on *every tool round trip*;
 a ten-step task reasons ten times over" — and this is the number under it. A
 `code` capability should carry `thinking: false`, which is exactly what the

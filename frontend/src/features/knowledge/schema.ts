@@ -108,6 +108,10 @@ export const searchResponseSchema = z.object({
   passages: z.array(passageSchema),
 });
 export type Passage = z.infer<typeof passageSchema>;
+/** Exported so `lib/api-contract.ts` can check the envelope, not only the
+ *  passages inside it: a rename of `passages` would otherwise reach a browser
+ *  while the checked member type stayed perfectly correct. */
+export type SearchResponse = z.infer<typeof searchResponseSchema>;
 
 export const createCollectionSchema = z.object({
   name: z.string().min(1, 'Required').max(128),

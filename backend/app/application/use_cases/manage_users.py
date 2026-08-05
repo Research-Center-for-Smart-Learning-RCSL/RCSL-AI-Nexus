@@ -155,10 +155,21 @@ class ManageUsers:
         user = await self._require(user_id)
 
         if not await self._users.set_debug_logging_until(user.id, until):
-            # The conditional UPDATE matched nothing, so the account is
-            # disabled — either already, or by a request that landed while
-            # this one was in flight. Both mean the window was not set.
-            raise ModelStateConflictError(detail=f"user {user_id} is disabled")
+            # The UPDATE matched no row. Disabled is the expected cause and the
+            # likely one, but it is not the only one: `delete` is reachable
+            # concurrently, and a row removed between the read above and this
+            # write matches nothing either. So the detail says what was
+            # *observed* — no row was updated — and offers the cause rather than
+            # asserting it. An operator told "user X is disabled" about an
+            # account that no longer exists goes looking for the wrong thing,
+            # and this string is written to explain a failure, which is the one
+            # job it must not do badly.
+            raise ModelStateConflictError(
+                detail=(
+                    f"debug window not set for user {user_id}: no enabled row matched. "
+                    "The account was disabled or removed, possibly concurrently"
+                )
+            )
 
         await self._audit.record(
             actor,
