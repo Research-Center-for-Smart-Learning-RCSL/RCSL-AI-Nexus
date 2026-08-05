@@ -680,8 +680,6 @@ The remaining controls are ordinary. The name resolves through a tenant-scoped r
 
 ### 7.5 The Management Assistant
 
-### 7.5 The Management Assistant
-
 A drawer in the admin UI that answers questions about this deployment's own settings and, on the two API key forms, offers a set of values the operator may apply. Served by `POST /admin/assistant` on the admin entrances only; it routes on the `assist` capability, which §7.5.1 explains is deliberately not issuable.
 
 **It advises. It does not act.** There is no tool call, no write path, and no new authorization edge. Every write still happens through the dialog that always performed it, with the scope check in `ManageApiKeys` and the audit record that comes with it. This is the whole of why embedding a language model in the control plane does not reopen the questions this document settles: the assistant is not a caller with permissions, it is a hint printed next to a form. It reads only what the operator is already looking at, so it can leak nothing they could not read themselves, and the worst outcome of a hostile or confused answer is a bad suggestion a person declines.
@@ -914,6 +912,13 @@ looking for the risk. The state below is checked against the code.
 | Node status observed by a heartbeat rather than assumed online; runs in the admin app because the gateway may not write `nodes`, writes only on change | `infrastructure/heartbeat.py`, `adapters/http/node_health.py`, `tests/unit/test_heartbeat.py` |
 | Multi-tenancy: `tenant_id` on users/keys/usage/audit, tenant-scoped repositories that filter reads and stamp writes from the actor's tenant, an explicit unscoped variant for identity/bootstrap; isolation pinned against real Postgres | `domain/entities/tenant.py`, `adapters/persistence/repositories.py` (`_TenantScoped`), `application/use_cases/manage_tenants.py`, `tests/integration/test_tenant_isolation.py` |
 | Observability emission: `/metrics` on all three apps behind a bearer token, HTTP and inference series, a scrape-time concurrency-slot gauge; Prometheus on internal-only networks, Grafana on those plus a dedicated `viz-ingress` because an internal network cannot carry a host port (§6), Grafana password from a file secret with anonymous access and self-registration off | `adapters/metrics/prometheus.py`, `middleware/metrics.py`, `routers/metrics.py`, `docker-compose.yml`, `prometheus/`, `grafana/`, `tests/unit/test_metrics.py` |
+| Time-boxed debug window on **both** credentials: while open, error responses to that key or account carry `error.detail`, capped at 24 hours by one shared rule, audited on every press including the closing one (§9.2) | `domain/services/debug_window.py`, `manage_api_keys.py`, `manage_users.py`, `middleware/identity.py`, `request_context.py` |
+| Request id minted per request, echoed on `X-Request-Id`, repeated in every error envelope and the mid-stream SSE error frame, so a caller's failure and its log line can be joined | `interfaces/http/request_context.py`, `interfaces/http/errors.py` |
+| Error codes split by *remedy* rather than by cause, so "retry with backoff" is never the advice for a permanent failure | `domain/exceptions.py` (`runtime_timeout`, `stream_interrupted`, `no_available_model`) |
+| One error envelope on the admin entrances including validation failures, and the OpenAPI document declaring the shape the handler actually sends — pinned by a test that reads both | `interfaces/http/errors.py`, `main_admin_*.py`, `tests/unit/test_error_precision.py` |
+| Unverified MLX tool calling refused rather than served: a build without tool support accepts `tools` and answers with prose, which no client can detect, so it is a `RuntimeCapabilityError` before the network until a person sets `MLX_TOOL_CALLING_VERIFIED` | `adapters/runtime/mlx_adapter.py`, `tests/unit/test_tool_calling.py` |
+| Prompt templates with **no variable substitution**: a named system prompt an operator authors and a caller selects by name, resolved through a tenant-scoped repository, refused with a 404 when the name does not resolve (§7.4) | `domain/entities/prompt_template.py`, `domain/services/prompt_assembly.py`, `apply_prompt_template.py`, `manage_prompt_templates.py` |
+| Frontend schemas checked against the backend's own OpenAPI document at compile time, with dropped nullability caught separately from deliberate narrowing | `frontend/src/lib/api-contract.ts`, `scripts/generate-api-types.sh`, CI |
 
 **Not implemented, and nothing in the repository arranges it**
 

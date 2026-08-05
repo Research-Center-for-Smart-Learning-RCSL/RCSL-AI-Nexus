@@ -15,6 +15,53 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## Current state — 2026-08-05
+
+**A summary, and therefore the least trustworthy thing here.** Two summaries in
+this file have already contradicted the dated entries below them, one of them
+contradicting a bullet three lines above itself. The rule that follows from
+that: **if this block's date is older than the newest entry below, distrust it
+and read the entry.** It is here because the file is six thousand lines long
+and nothing else answers "what is the state of this, right now".
+
+**Running.** Eleven containers on the Mac Studio: three ASGI apps (gateway, two
+admin entrances), two frontends, Postgres, Redis, Qdrant, the isolated parser,
+Prometheus and Grafana, with `migrate` exiting 0 ahead of them. Ollama runs
+natively and holds `glm-4.7-flash:q8_0`, `qwen2.5:7b` and `nomic-embed-text`.
+Four routing policies: `chat`, `assist`, `embedding`, and `code` with
+deliberation off.
+
+**Built.** Phase 1 is complete but for Playwright, which is filed under Phase 3.
+Phase 2 is complete but for **encrypted backups with a rehearsed restore** and
+**Storybook**; the *logging boundaries* half of §9.2 is also unwritten, though
+the expiring switch that would gate it now exists on both credentials.
+
+| | |
+|---|---|
+| Backend | 29 use cases, 23 routers, 16 entity modules, 11 migrations (head `c2f7b90e4a15`), 680 unit tests, 93 integration tests that skip without `TEST_DATABASE_URL` |
+| Frontend | 18 feature folders, 14 screens, 233 tests, types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
+| Gates | ruff, ruff-format, strict mypy, pytest; tsc, eslint, vitest, a real `next build`; Trivy, pip-audit and pnpm audit advisory-only. All green |
+
+**Verified on real hardware**, not only in tests: the full inference path with
+tool calling, an agent loop over ten graduated rungs including a multi-step
+debugging task, the knowledge base end to end, both admin entrances' login
+flows, the least-privilege database split, the unattended-recovery chain
+through two boots with injected faults, and the GeoLite2 refresh.
+
+**Not verified, and the list worth reading before trusting anything else.**
+The network path from the internet to the public entrance, which waits on the
+NTNU proxy administrator and was partly reopened by the 2026-08-04 hostname
+rename. MLX, which has an adapter, no model registered against it and no server
+installed — its tool path is now *refused* rather than silently reachable,
+which closes the trap without doing the verification. A real agent client
+against a real repository. And an external dead-man's switch, since a monitor
+on the host it watches cannot report that the host is off.
+
+The fuller version of that list, with what each would take, is under "What is
+still unverified" further down.
+
+---
+
 ## 2026-08-05
 
 ### Prompt templates, and the feature defined by what it does not do
@@ -6365,7 +6412,8 @@ goes end to end through key verification, quota, the proxy check, the country
 filter, the routing policy and back out to a usage record. The tailnet
 management entrance is reachable and every screen works against the real backend.
 The backend suite runs here too: 359 tests on Python 3.12 against a real
-Postgres 17.
+Postgres 17 — **773 as of 2026-08-05** (680 unit, 93 integration skipped without
+`TEST_DATABASE_URL`), beside 233 on the frontend.
 
 What is still unverified, and by what — **this paragraph is a summary and has
 drifted from the dated entries below more than once; where they disagree, they
@@ -6375,39 +6423,50 @@ win**:
   proxy administrator. The entrance's *application* is no longer part of this:
   its full login flow — password, TOTP, session, logout — was driven end to end
   on 2026-08-02 (PROGRESS 2026-08-02). What is untested is everything between a
-  browser on the internet and that socket.
-- **MLX**, which has an adapter and no model registered against it.
-- The **unattended-recovery chain** is no longer on this list, and the earlier
-  version of this paragraph said "the repair not yet through a boot" for a week
-  after that stopped being true. Both of the reconciler's repair paths were
-  exercised by real boots with injected faults on 2026-07-26 (21:05:31 and
-  21:52:14). What remains is the **external dead-man's switch**: a monitor on the
-  host it watches cannot report that the host is off.
+  browser on the internet and that socket. **Reopened in part on 2026-08-04 by
+  the rename** to `llm.rcsl.online` and `llmapi.rcsl.online`: the clean
+  `verify-public-entrance.sh` run of that morning attests to hostnames being
+  retired.
+- **MLX**, which has an adapter, no model registered against it, and no
+  `mlx_lm.server` installed on the host. Since 2026-08-05 its tool path is
+  **refused rather than silently reachable** (`MLX_TOOL_CALLING_VERIFIED`,
+  default false), so the one way this could have failed invisibly now fails
+  loudly instead. That closes the trap, not the verification.
+- **A real agent client.** The loop itself is measured — ten rungs, all passing
+  on `glm-4.7-flash`, including a multi-step debugging task — but that is a
+  harness with tools it wrote itself. What no test covers is Codex or a
+  comparable client, with prompts tuned for a model this deployment does not
+  have, against a real repository. The harness answers "can the loop run"; it
+  does not answer "is the work any good".
+- The **external dead-man's switch**: a monitor on the host it watches cannot
+  report that the host is off, so the heartbeat relies on a person noticing a
+  mail that did not arrive.
 
-**On the recovery chain specifically, because it is the item most likely to be
-misread.** Four boots on 2026-07-26 found two independent faults, and the second
-one is the reason the count above says "failed it" rather than "passed three
-times".
+**The unattended-recovery chain is no longer on that list.** Both of the
+reconciler's repair paths were exercised by real boots with injected faults on
+2026-07-26 — the binding half at 21:05:31, the container bring-up half at
+21:52:14 — and the dated entries above record both.
 
-The first: Docker Desktop drops the port forwards naming the tailnet address — it
-restores containers before `tailscaled` has the address up, the bind fails, and the
-daemon logs one warning and never retries. Nothing exits, so `restart:
-unless-stopped` never fires; nine containers run, `healthy`, publishing nothing.
+*Corrected 2026-08-05.* Until today the paragraph here said the opposite:
+"**Neither repair path has been exercised by an actual reboot** … the chain is
+repaired-but-unproven". It was written before those two boots and never
+updated, so this section contained a bullet and a paragraph asserting contrary
+things about the same property, three lines apart. That is a sharper version of
+the warning at the top of this section — a summary drifting from the dated
+entries — because here it drifted from *itself*. The rule stands and is worth
+restating: **where a summary and a dated entry disagree, the dated entry wins.**
 
-The second, on the 19:09 boot — which was round two, the macOS 26.5.2 update:
-Docker Desktop did not restore the containers at all, and **nothing on the host was
-responsible for the stack being up** — `docker compose up` appeared nowhere in
-launchd, because Docker had always happened to do it. Worse, the reconciler swept
-zero containers, found no dropped bindings, and exited 0 reporting an intact
-platform.
-
-`launchd/reconcile-port-bindings.sh` now covers both, and
-`check-platform-health.sh` mails on a state change and did correctly catch the
-second. **Neither repair path has been exercised by an actual reboot** — the
-binding path has never once been triggered by a boot, and the bring-up path was
-written after the boot that needed it. That is the whole point of the property, so
-until round one is re-run and passes, the chain is repaired-but-unproven, not
-proven.
+What the two boots do and do not establish is worth keeping. They establish the
+repair working at boot with everything else on the machine moving at once,
+which is the part a hand test cannot reproduce. They do **not** establish that
+either fault occurs unaided: the binding race is evidenced by the 16:45 boot,
+and Docker failing to restore by the 19:10 boot alone, whose cause is still
+unknown. Both faults are worth remembering in their own right — Docker Desktop
+restoring containers before `tailscaled` has the tailnet address, so nine
+containers run `healthy` and publish nothing while `restart: unless-stopped`
+never fires; and the 19:09 boot where Docker restored nothing at all and
+**nothing on the host was responsible for the stack being up**, because Docker
+had always happened to do it.
 
 ### If you are picking this up cold
 
@@ -6450,13 +6509,25 @@ One thing still exists as an API with no dedicated UI: the download progress
 endpoint, which the models table polls but no page surfaces on its own. The
 routing policy editor now exists, so a policy is no longer curl-only.
 
-Phase 2 is now largely complete: both runtime adapters, node management, the
-multi-tenancy boundary, the logs and usage screens, the observability emission
-stack, the knowledge base with retrieval, and — since 2026-08-02 — the audit and
-authorization completeness sweeps. What remains there is the live free-memory
-figure the budget would consume (which needs the hardware), prompt template
-management, the logging boundaries and expiring debug switch, encrypted backups,
-and the `/api-docs` gaps recorded on 2026-07-30.
+**Phase 2 is complete but for two items, as of 2026-08-05.** Built: both
+runtime adapters, node management, the multi-tenancy boundary, the logs and
+usage screens, the observability emission stack, the knowledge base with
+retrieval, the audit and authorization completeness sweeps (2026-08-02), the
+`/api-docs` gaps, `prompt_tokens`, tool calling, the expiring debug switch on
+both credentials, and prompt template management (2026-08-05).
+
+What is left in Phase 2 is **encrypted backups with a rehearsed restore**, and
+**Storybook stories for `components/composed`**. Two further items are recorded
+there as `[~]` rather than open, because the half that needed hardware is the
+half that is missing: `MetricsPort` ingestion wants a host free-memory figure
+nothing in a container can produce, and the *logging boundaries* half of §9.2 —
+full prompt/completion logging with its own shorter retention — remains
+unimplemented even though the switch that would gate it now exists on both
+credentials.
+
+Phase 1 has one unchecked box left, and it is listed under Phase 3: **Playwright
+over the sign-in and enrolment screens**. Every other Phase 1 item is done,
+including `lib/generated`, which closed on 2026-08-05.
 
 **Using the knowledge base needs one piece of configuration that nothing
 enforces at startup**: a routing policy on the `embedding` capability, naming a
@@ -6469,10 +6540,19 @@ knowledge base that looks like it is working and never answers anything.
 ## What comes next
 
 Written at the end of 2026-07-26 as four open items, in the order they should be
-picked up. **Item 2 was closed on 2026-08-02** and is marked so below rather than
-deleted, because the shape of the work is still the record. Items 1 and 3 remain
-open, and item 3 — the proxy administrator's four items — is now the only thing
-standing between this deployment and a public entrance.
+picked up, and kept below rather than rewritten because the shape of the work is
+still the record. **Where they stand as of 2026-08-05:**
+
+| | State |
+|---|---|
+| **1.** Re-run the reboot test, force the binding race | **Closed 2026-07-26 that evening.** Both repair paths were exercised by real boots with injected faults (21:05:31 and 21:52:14). The item below predates those boots and describes them as still needed |
+| **2.** First administrator's public-entrance credentials | **Closed 2026-08-02**, and marked so below |
+| **3.** Send the proxy administrator their four items | **Sent 2026-08-03 and largely done**, then **partly reopened 2026-08-04 by the rename** to `llm`/`llmapi`. Still the only thing standing between this deployment and a public entrance |
+| **4.** Then the roadmap | Superseded; the paragraph below is stale and corrected at the end of this section |
+
+**The single most useful thing to read instead is the ROADMAP**, which is
+maintained item by item, and the dated entries at the top of this file. This
+section is history with a status column now, not a plan.
 
 **1. Re-run the reboot test, and force a boot that loses the port-binding race.**
 [runbooks/first-deploy.md](./runbooks/first-deploy.md) §1.1. Where it stands: round
@@ -6545,6 +6625,30 @@ country database is still ageing with nothing to stop it, which is the same
 outcome the missing mechanism had. And the frontend test runner still covers
 logic units only; Playwright over the sign-in and enrolment screens remains the
 deferred increment, now with a live enrolled account to drive it against.
+
+---
+
+**Corrected 2026-08-05.** The four paragraphs above are the 2026-07-26 text and
+three of them have since become false; they are kept because the reasoning is
+still worth reading, and contradicted here rather than edited in place so the
+drift is visible instead of erased.
+
+- **Phase 2 is not "prompt templates, logging boundaries, backups, `/api-docs`
+  gaps and `prompt_tokens`".** All but backups are done: `/api-docs` on
+  2026-08-03, `prompt_tokens` on 2026-08-04, the expiring debug switch on both
+  credentials and prompt template management on 2026-08-05. What is left is
+  **encrypted backups with a rehearsed restore**, **Storybook**, and the
+  *logging boundaries* half of §9.2 — full prompt/completion logging, which the
+  switch could now gate and nothing yet writes.
+- **The GeoLite2 plist is installed.** It went in on 2026-08-03 with the licence
+  key, was proven by a hand run before the daemon was loaded, and fires
+  Wednesdays at 05:30. The database is no longer ageing unattended.
+- **Playwright is still the deferred increment**, and this is the one that
+  stayed true. It is now the last unchecked Phase 1 frontend item, listed under
+  Phase 3.
+
+The rest of the roadmap's state lives in [ROADMAP.md](./ROADMAP.md), which is
+maintained per item and is the file to trust for "what is left".
 
 ### Done: the first Mac Studio deploy
 

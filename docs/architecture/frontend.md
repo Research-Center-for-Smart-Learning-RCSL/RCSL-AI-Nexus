@@ -1,6 +1,6 @@
 # Frontend Architecture: Layered Components on shadcn/ui
 
-Extends [../ARCHITECTURE.md](../ARCHITECTURE.md). The management UI is mostly tables, forms, and a few charts across eleven modules, so this document fixes how components are layered and how data flows, letting all modules share one skeleton instead of each inventing its own.
+Extends [../ARCHITECTURE.md](../ARCHITECTURE.md). The management UI is mostly tables, forms, and a few charts across **eighteen feature folders and fourteen screens** as of 2026-08-05 — it said "eleven modules" from the design phase onward — so this document fixes how components are layered and how data flows, letting all modules share one skeleton instead of each inventing its own.
 
 ## 1. Where the Frontend Runs
 
@@ -82,9 +82,17 @@ frontend/
       dashboard/
       nodes/                  # Phase 2
       logs/                   # Phase 2
-      usage-analytics/        # Phase 2
-      knowledge-base/         # Phase 2
-      prompt-templates/       # Phase 2
+      usage/                  # Phase 2. Named `usage-analytics/` in this tree
+                              #   until 2026-08-05; the directory never was
+      knowledge/              # Phase 2, likewise not `knowledge-base/`
+      tenants/                # Phase 2
+      retention/              # Phase 2
+      host/                   # Phase 2
+      account/
+      auth/
+      prompt-templates/       # Phase 2, built 2026-08-05. A named system
+                              #   prompt selected by name; no variable
+                              #   substitution, deliberately (security.md §7.4)
 
     app/
       (dashboard)/
@@ -98,7 +106,11 @@ frontend/
     lib/
       api-client.ts
       session.tsx             # auth mode context
-      generated/              # openapi-typescript output, never hand-edited
+      generated/              # openapi-typescript output, committed, never
+                              #   hand-edited (§4)
+      api-contract.ts         # hand-written, and deliberately not inside
+                              #   generated/: it checks each zod schema against
+                              #   the generated types so drift is a tsc error
     styles/
       globals.css
 ```
@@ -148,20 +160,52 @@ Role gating in the UI is a usability affordance, not a security control. Every a
 
 ## 4. Type Safety: Types Generated From the Backend
 
-**Not wired.** `src/lib/generated/` holds only a `.gitkeep`, there is no
-`sync-types` script in `package.json`, and nothing imports from it. Runtime
-zod parsing is the only type safety today, and it cannot catch drift the way
-generated types would. The section below is the intent; it also cannot be
-completed until the admin API exists to generate from.
-
-Eleven modules mean eleven sets of request and response shapes. Hand-maintained types drift, so they are generated:
+**Wired 2026-08-05.** This section read "**Not wired** … `src/lib/generated/`
+holds only a `.gitkeep`, there is no `sync-types` script" and described a
+`pnpm sync-types` that never existed — a name that also appeared in
+`.gitignore`, justifying an ignore rule for output nothing produced. Both are
+now real and neither is called that.
 
 ```bash
-# Admin API. Note the admin port: the gateway deliberately serves no schema.
-npx openapi-typescript http://localhost:8001/openapi.json -o src/lib/generated/admin-api.ts
+scripts/generate-api-types.sh      # or, from frontend/, pnpm gen:api
 ```
 
-The gateway disables `/openapi.json` and `/docs` in production ([security.md](./security.md) §4.4), and the chat UI talks to `/admin/chat` rather than the public gateway anyway, so one generated file is enough. Package this as `pnpm sync-types` and run it whenever backend schemas change; a mismatch then surfaces at compile time instead of at runtime.
+The script builds the admin ASGI app **in-process** and dumps its OpenAPI
+document, rather than scraping a running container: FastAPI can produce the
+document offline, so this needs no deployment, no database and no credentials
+— which is what lets CI regenerate and fail on a difference. The gateway
+deliberately serves no schema ([security.md](./security.md) §4.4) and the chat
+UI talks to `/admin/chat` anyway, so one generated file covers everything.
+
+**The output is committed**, and that is forced rather than tidy: the frontend
+image builds from `./frontend` alone, with no Python and no backend source, so
+a type derived from the backend cannot be build output there and a fresh clone
+would fail `pnpm build`. Committing also makes the diff the place a contract
+change is reviewed.
+
+**The generated types do not replace the zod schemas.** Types are erased; every
+response is still `parse`d at runtime, which is what catches a deployment
+serving something its own schema does not describe and turns a wrong shape into
+one legible error rather than `undefined` spreading through a component tree.
+What the types add is `lib/api-contract.ts` — a file that ships nothing and
+exports nothing, where every hand-written schema is checked against the API
+type it claims to describe, so a renamed or retyped field fails `tsc`.
+
+Two refinements are deliberate and tolerated: narrowing `string` to a closed
+union (`role`, `state`, `runtime`), and reading a subset of a response's
+fields. **Dropping `null` is not**, and it is checked before assignability
+because assignability permits exactly that mistake — `z.string()` *is*
+assignable to `string | null`, and then throws on the first null the backend
+sends. That distinction is what found all three of the mismatches present when
+the file was first written.
+
+What it cannot cover, stated so the list is not mistaken for coverage: the
+document comes from the tailnet entrance, so screens served only by the public
+entrance — the login challenge, the invitation-acceptance result — have no
+types to check against and are guarded by their zod schema alone. Request
+bodies are unchecked too; a wrong request shape is answered with a 422 the
+operator sees, which is worse to use but not silent, and it is responses that
+fail invisibly.
 
 ## 5. Data Flow
 
@@ -240,6 +284,6 @@ being fixed was never executed (see [PROGRESS.md](../PROGRESS.md) 2026-07-29).
 
 What is still outstanding:
 
-- **Storybook** for `components/ui` and `components/composed`. The composed layer is reused across eleven modules, so a break there is expensive; stories cover loading, empty, error, and large-dataset states. Not started.
+- **Storybook** for `components/ui` and `components/composed`. The composed layer is reused across eighteen feature folders, so a break there is expensive; stories cover loading, empty, error, and large-dataset states. Not started, and one of the two items left in Phase 2.
 - **Vitest with Testing Library** across the remaining `features/*/hooks`. Started: `useChatStream` and `useAssistant` are driven through `renderHook` with the API module mocked, which is the pattern the rest should follow.
 - **Playwright** for a small set of critical paths (create an API key, edit a routing policy and confirm gateway behaviour changes, stream a chat response and cancel mid-stream). Not every module needs an end-to-end test. Not started.

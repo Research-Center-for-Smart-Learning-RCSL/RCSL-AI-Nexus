@@ -16,8 +16,17 @@ Goal: one capability (`chat`) can be configured through the admin UI and actuall
 
 ### Where Phase 1 actually stands
 
-The inference half is done; the management half is not. `security.md` §13.0
-carries the checked control-by-control state.
+The inference half is done, and as of 2026-08-05 so is the management half:
+every box below is checked except Playwright, which is listed under Phase 3.
+`security.md` §13.0 carries the checked control-by-control state.
+
+**What "done" does and does not mean here.** Every screen reaches a real
+backend, every control is implemented, and the platform has been driven end to
+end on the Mac Studio. What has *not* been walked is the network path from the
+internet to the public entrance, which waits on the NTNU proxy administrator,
+and this file's own history says to expect the same class of defect there as
+everywhere else that had not been walked: a control designed, written down,
+marked done, and not actually in force.
 
 | Area | State |
 |---|---|
@@ -29,32 +38,32 @@ carries the checked control-by-control state.
 | Both admin entrances: identity resolution, `/me` | Complete. Each installs its own resolver; neither can default to the other's |
 | Invitation and password reset flows, both ends | Complete |
 | Audit logging | Complete against [security.md](./architecture/security.md) §12 as of 2026-08-02, with two exceptions §12 states. Every administrative action recorded one from the start; **no authentication event did** until the sweep — sign-in, sign-out, failed attempts, recovery code use and authorization refusals were all absent, which is the half an audit log exists for |
-| Admin API: models, downloads, routing policies, API keys, users, dashboard, `/admin/chat` | Complete, exercised end to end against a real Postgres |
-| Node management | Read only. The single node is named in configuration; a write endpoint ships with the SSRF guard ([security.md](./architecture/security.md) §7.2) |
+| Admin API: models, downloads, routing policies, API keys, users, dashboard, `/admin/chat` | Complete, exercised end to end against a real Postgres. Now also nodes, tenants, knowledge, logs, usage, host, retention, roles, the advisory assistant and prompt templates — twenty-three routers |
+| Node management | **Complete since Phase 2**: register, edit, delete and health-check behind the SSRF guard ([security.md](./architecture/security.md) §7.2), with a heartbeat replacing the always-`online` assumption. This row said "read only" until 2026-08-05 |
 | Database account split, Docker secrets in Compose | Complete. Three least-privilege Postgres accounts provisioned by `migrate`; all credentials mounted as Docker file secrets. Proven against a live Postgres 17 (`tests/integration/test_db_role_grants.py`, which was silently asserting nothing between the multi-tenancy migration and 2026-07-26 — see [PROGRESS.md](./PROGRESS.md) 2026-07-26) and by a full `ENV=production` Compose smoke test on the dev machine: `migrate` provisions the roles, each service connects as its own account, and the gateway is refused an `api_keys` write. Only the Mac-specific bits (GeoLite2, GPU, `tailscale serve`, nginx) remain unexercised |
-| Frontend | Every screen now reaches a real backend. Vitest covers the security-critical logic units; no E2E runner yet |
+| Frontend | Every screen now reaches a real backend. Vitest covers the security-critical logic units (233 tests); no E2E runner yet. Since 2026-08-05 the hand-written zod schemas are **checked against the backend's own OpenAPI document at compile time** (`lib/api-contract.ts` against `lib/generated/admin-api.ts`), so a renamed or retyped field fails `tsc` rather than a browser — it found three real mismatches on its first run |
 | Adversarial review of the admin API | Five independent reviews run; 28 findings verified and fixed across four commits, residuals recorded in [security.md](./architecture/security.md) §13.0 and §15.5 |
 
 ### Backend: hexagonal skeleton
 
 - [x] Five layers: `domain` / `application` / `adapters` / `interfaces` / `infrastructure`
-- [x] `domain/entities`: `Model`, `Node`, `Capability`, `RoutingPolicy`, `ApiKey`, `User`, `Actor`, `UsageRecord`
-- [x] `domain/services`: `RoutingService` (structured requirement matching, **never expression evaluation**), `MemoryBudgetService`, `ApiKeyService`, `TokenService`, `LoginThrottle`
+- [x] `domain/entities`: `Model`, `Node`, `Capability`, `RoutingPolicy`, `ApiKey`, `User`, `Actor`, `UsageRecord`. Phase 2 added `Tenant`, `AuditEntry`, `KnowledgeCollection`/`KnowledgeDocument`/`RetrievedPassage`, `HostStatus`, `RetentionPolicy`, the chat entities (`Message`, `ToolCall`, `ToolDefinition`, `ToolChoice`, `SamplingOptions`) and `PromptTemplate` — sixteen modules as of 2026-08-05
+- [x] `domain/services`: `RoutingService` (structured requirement matching, **never expression evaluation**), `MemoryBudgetService`, `ApiKeyService`, `TokenService`, `LoginThrottle`. Later: `prompt_assembly` (the untrusted-input boundary of §7.3/§7.4), `grantable_roles`, `debug_window`, `chunking`
 - [x] `domain/ports`: runtime, repositories (model, node, policy, api key, user, usage), authorization, audit, cache, job progress
 - [x] `domain/exceptions.py`: `DomainError` hierarchy with `code` and `public_message`
 - [x] `adapters/runtime/ollama_adapter.py` plus `validation.py` for model reference parsing
 - [x] `adapters/persistence/`: Postgres implementations, ORM models kept separate from entities
 - [x] `adapters/authz`, `adapters/audit`, `adapters/cache`, `adapters/crypto`, `adapters/session`
-- [x] `application/use_cases`: `RouteChatRequest`, `AuthenticateLocal`, `AcceptInvitation`, `IssueInvitation`, `ManageOwnAccount`, `BootstrapFirstAdmin`, `ManageModels`, `DownloadModel`, `ManageApiKeys`, `ManageUsers`, `ManageRoutingPolicies`, `ListCapabilities`, `ReadDashboard`
+- [x] `application/use_cases`: `RouteChatRequest`, `AuthenticateLocal`, `AcceptInvitation`, `IssueInvitation`, `ManageOwnAccount`, `BootstrapFirstAdmin`, `ManageModels`, `DownloadModel`, `ManageApiKeys`, `ManageUsers`, `ManageRoutingPolicies`, `ListCapabilities`, `ReadDashboard`. **Twenty-nine as of 2026-08-05**, the rest from Phase 2: `ManageNodes`, `ManageTenants`, `ManageKnowledge`, `IngestDocument`, `SearchKnowledge`, `GroundChat`, `EmbedTexts`, `ReadAuditLog`, `ReadUsageAnalytics`, `ReadHostStatus`, `ManageRetention`, `AssistOperator`, `PendingEnrolment`, `RecoveryCodes`, `ManagePromptTemplates` and `ApplyPromptTemplate`
 - [x] `interfaces/http/errors.py`: single exception handler, OpenAI envelope on the gateway, plain shape on admin
-- [x] Routers: `chat` (`/v1/chat/completions` and `/v1/models`), `admin_chat`, `models` (download progress included, rather than a separate `jobs` router as sketched), `routing_policies`, `api_keys`, `gateway_info`, `users`, `auth`, `me`, `invitations`, `tenants`, `dashboard`, `usage`, `logs`, `health`, `metrics`
+- [x] Routers: `chat` (`/v1/chat/completions` and `/v1/models`), `admin_chat`, `models` (download progress included, rather than a separate `jobs` router as sketched), `routing_policies`, `api_keys`, `gateway_info`, `users`, `auth`, `me`, `invitations`, `tenants`, `dashboard`, `usage`, `logs`, `health`, `metrics`. Phase 2 added `nodes`, `knowledge`, `retention`, `host`, `roles`, `assistant` (admin entrances only) and `prompt_templates` — **twenty-three as of 2026-08-05**
 - [x] `interfaces/http/sse.py`: one framing implementation, so the gateway and the chat panel cannot drift into two envelope shapes
 - [x] **Three ASGI entry points**: `main_gateway`, `main_admin_tailnet`, `main_admin_public`, each installing its own identity resolver
 - [x] Streaming contract implemented as specified: concurrency slot spans the generator, `aclosing()` at every consumer, cancellation propagates to the adapter, usage recorded in `finally`
 - [x] `interfaces/http/middleware/identity.py`: per-entrance identity resolution, installed by dependency override so an entrance that chooses neither fails closed
-- [x] `infrastructure/di.py` composition root, Ollama only
+- [x] `infrastructure/di.py` composition root, Ollama only — **MLX since Phase 2**, which cost one entry here and one adapter file
 - [x] `infrastructure/config.py` with `secrets_dir`, and a startup assertion that `AUTH_MODE=dev` cannot run under `ENV=production`
-- [x] Alembic migrations: `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `invitations`, `recovery_codes`, `usage_records`, `audit_log`
+- [x] Alembic migrations: `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `invitations`, `recovery_codes`, `usage_records`, `audit_log`. **Eleven revisions as of 2026-08-05**, head `c2f7b90e4a15`; the later ones add `tenants`, the knowledge base, model observations, `api_keys.created_at`, `usage_records.prompt_tokens`, `routing_policies.thinking` and `prompt_templates`
 - [x] `tests/unit`: routing selection, streaming lifecycle (slot release on disconnect), dev-mode fail-fast, header stripping, login rules, session invalidation, TOTP replay, password policy, entrance wiring
 - [x] `tests/integration`: repository invariants, and a fresh deployment through bootstrap, invitation, enrolment and login
 
@@ -76,6 +85,7 @@ carries the checked control-by-control state.
 - [x] `features/api-keys`: issue, edit, revoke, with actions gated on the scopes the backend actually grants so a member manages their own keys. The edit dialog closed a gap where `PATCH /api-keys/{key_id}`, its client function and its hook all existed with no component reaching any of them ([PROGRESS.md](./PROGRESS.md) 2026-07-28)
 - [x] `features/gateway` and the `/api-docs` page: the base URL, the capability convention, paste-ready snippets shown at issue, and the error code table. This is the "public API documentation written separately" that [security.md](./architecture/security.md) §4.4 promises in exchange for disabling `/openapi.json` and `/docs` on the gateway — a trade that was only a trade once the documentation existed
 - [x] `features/dashboard`: registry counts plus 24-hour totals; the charts read the real `/admin/usage` series
+- [x] `features/nodes`, `features/tenants`, `features/knowledge`, `features/logs`, `features/usage`, `features/retention`, `features/host`, `features/assistant`, `features/account`, `features/prompt-templates` — sixteen feature folders as of 2026-08-05, one per screen
 - [x] Markdown rendering sanitised, raw HTML disabled
 - [x] Vitest unit coverage of the logic where a defect is a security defect: `safe-redirect` (open redirect), the chat SSE schema and reader (envelope parsing, error and truncation frames), `api-client` (CSRF header, 401 handling, no `Authorization`), and the password schema
 - [ ] Component and E2E coverage (Playwright, listed in Phase 3): the sign-in and enrolment screens are not yet driven through a browser
