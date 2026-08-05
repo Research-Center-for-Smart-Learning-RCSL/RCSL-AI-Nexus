@@ -24,6 +24,7 @@ import {
   BoxIcon,
   GaugeIcon,
   KeyIcon,
+  FileTextIcon,
   LibraryIcon,
   LogOutIcon,
   MenuIcon,
@@ -132,6 +133,15 @@ const NAV_GROUPS: NavGroup[] = [
         label: 'Nodes',
         icon: <ServerIcon className="size-4" />,
         requires: 'node:read',
+      },
+      {
+        href: '/prompt-templates',
+        label: 'Prompts',
+        icon: <FileTextIcon className="size-4" />,
+        // `prompt:read` is a base scope, unlike `knowledge:read`, so this is
+        // the one Knowledge-group entry a `user` sees: choosing a template is
+        // part of asking a question, and the chat picker reads the same list.
+        requires: 'prompt:read',
       },
       {
         href: '/knowledge',

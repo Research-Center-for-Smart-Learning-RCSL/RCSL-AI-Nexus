@@ -26,6 +26,7 @@ from app.domain.entities.chat import (
     ToolDefinition,
 )
 from app.infrastructure.di import (
+    ApplyPromptTemplateFactoryDep,
     GroundChatFactoryDep,
     ListCapabilitiesDep,
     RouteChatRequestDep,
@@ -147,6 +148,7 @@ async def chat_completions(
     actor: ActorDep,
     use_case: RouteChatRequestDep,
     ground_chat: GroundChatFactoryDep,
+    apply_template: ApplyPromptTemplateFactoryDep,
     response: Response,
 ) -> ChatCompletionResponse | StreamingResponse:
     completion_id = sse.new_completion_id()
@@ -161,6 +163,15 @@ async def chat_completions(
     # asked for it, and it costs an embedding call and a slice of the context
     # window. Grounding runs before the streaming use case, so retrieval is not
     # in front of the concurrency slot; see application/use_cases/ground_chat.py.
+    # Before grounding, so the operator's template is the outermost frame and
+    # retrieved passages sit next to the question rather than ahead of the
+    # instructions. Both run before the streaming use case; see
+    # application/use_cases/apply_prompt_template.py.
+    if body.prompt_template:
+        messages = await apply_template(actor.tenant_id).execute(
+            actor, messages, body.prompt_template
+        )
+
     passages: list[tuple[str, int]] = []
     if body.use_knowledge:
         messages, retrieved = await ground_chat(actor.tenant_id).execute(

@@ -44,6 +44,7 @@ from app.adapters.persistence.sqlalchemy_models import (
     KnowledgeDocumentRow,
     ModelRow,
     NodeRow,
+    PromptTemplateRow,
     RecoveryCodeRow,
     RetentionPolicyRow,
     RoutingPolicyRow,
@@ -63,6 +64,7 @@ from app.domain.entities.knowledge import (
 )
 from app.domain.entities.model import Model, ModelState
 from app.domain.entities.node import Node, NodeStatus
+from app.domain.entities.prompt_template import PromptTemplate
 from app.domain.entities.retention import RetentionDataset, RetentionPolicy
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.tenant import Tenant
@@ -1055,3 +1057,52 @@ class PostgresRetentionPolicyRepository:
                 },
             )
         )
+
+
+class PostgresPromptTemplateRepository(_TenantScoped):
+    """Prompt templates, filtered and stamped like every other tenant's content.
+
+    `get_by_name` is the one a chat request goes through, and the scope on it is
+    the whole of what keeps a caller-supplied name honest: the string arrives in
+    the request body, so unscoped it would be a way to read another tenant's
+    template by guessing what they called it.
+    """
+
+    async def get(self, template_id: str) -> PromptTemplate | None:
+        stmt = self._scope(
+            select(PromptTemplateRow).where(PromptTemplateRow.id == template_id),
+            PromptTemplateRow.tenant_id,
+        )
+        row = await self._session.scalar(stmt)
+        return m.prompt_template_to_domain(row) if row else None
+
+    async def get_by_name(self, name: str) -> PromptTemplate | None:
+        stmt = self._scope(
+            select(PromptTemplateRow).where(PromptTemplateRow.name == name),
+            PromptTemplateRow.tenant_id,
+        )
+        row = await self._session.scalar(stmt)
+        return m.prompt_template_to_domain(row) if row else None
+
+    async def list_all(self) -> list[PromptTemplate]:
+        stmt = self._scope(
+            select(PromptTemplateRow).order_by(PromptTemplateRow.name),
+            PromptTemplateRow.tenant_id,
+        )
+        rows = (await self._session.scalars(stmt)).all()
+        return [m.prompt_template_to_domain(r) for r in rows]
+
+    async def save(self, template: PromptTemplate) -> None:
+        row = m.prompt_template_to_row(template)
+        if self._tenant_id is not None:
+            # Stamped rather than trusted, as every scoped write here is.
+            row.tenant_id = self._tenant_id
+        await self._session.merge(row)
+        await self._session.flush()
+
+    async def delete(self, template_id: str) -> None:
+        stmt = self._scope(
+            delete(PromptTemplateRow).where(PromptTemplateRow.id == template_id),
+            PromptTemplateRow.tenant_id,
+        )
+        await self._session.execute(stmt)

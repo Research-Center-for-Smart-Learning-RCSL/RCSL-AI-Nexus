@@ -419,9 +419,9 @@ This is the same reasoning as §1: **isolation is guaranteed by socket binding, 
 | `admin` | Everything, across every tenant | — |
 | `tenant_admin` | Its own tenant's people, API keys and knowledge base; reads the fleet | Create a tenant, or change models, nodes or routing |
 | `operator` | Model lifecycle, nodes, routing policies, all usage and logs | Invite users, change roles, or issue a key for anyone else |
-| `curator` | Read and write the knowledge base | Anything outside it |
+| `curator` | Read and write the knowledge base and the prompt templates | Anything outside it |
 | `auditor` | Read everything — usage, logs, models, nodes, users, tenants | Write anything at all, including their own API keys |
-| `user` | Use the chat UI, manage their own API keys, view their own usage | Read the model registry or the node addresses |
+| `user` | Use the chat UI, manage their own API keys, view their own usage, read their tenant's prompt templates | Read the model registry or the node addresses; author a prompt template |
 
 `service` is the seventh entry in the enum and is not in this table: it belongs to an API key, never a person, and holds `chat:use` and `usage:read_own` whatever capability list the key was issued with.
 
@@ -664,9 +664,21 @@ This is mitigation, not a guarantee: no prompt construction makes an LLM immune 
 
 Retrieval is opt-in per request (`use_knowledge`), runs under `chat:use` rather than `knowledge:read` so a `user` who may never list documents can still have a question answered from them, and degrades to an ordinary completion when the index or the embedding policy is unavailable — an authorization failure is deliberately not degraded, because that is a decision about who may ask rather than an availability problem. Citations are returned in an `X-Knowledge-Sources` header carrying document ids and passage indexes only, never passage text, because a header reaches access logs.
 
-### 7.4 Prompt Templates (Phase 2)
+### 7.4 Prompt Templates (built 2026-08-05)
 
-User-supplied values fill data slots only and must not alter template structure or role markers. Use structured parameter substitution, never string formatting against the template body.
+The original text of this section read: *"User-supplied values fill data slots only and must not alter template structure or role markers. Use structured parameter substitution, never string formatting against the template body."* That was a rule for a substitution mechanism. **What was built has no substitution at all**, and the section is rewritten rather than left describing a feature that does not exist — a documented mechanism with nothing behind it is the defect this document has recorded more than once.
+
+A template is a named system prompt, tenant-scoped, authored behind `prompt:write` and selected by name with `"prompt_template"` on the gateway and the admin chat alike. It is inserted whole, at the front, ahead of any system message the caller sent — which is kept, because silently discarding part of an accepted request is its own failure. **What a caller chooses is *which* template, not what it says**: a choice among values their tenant's operator wrote, rather than a value of their own.
+
+**Why the stricter position.** The rule above is sound and still governs §7.3, where retrieved passages go into a fenced slot in their own message. Applying the same shape *here* is harder than it looks, because the destination is different: a passage lands in a block the prompt explicitly labels as data, while a template body is the one message the model treats as authoritative. A slot filled from a request body would let a caller write into that message — an escalation from "asks questions" to "gives instructions" — and no escaping fixes it, because escaping is about parsers and this is about meaning. Refusing the mechanism is a smaller thing to defend than a correct implementation of it.
+
+The door is not shut, and the shape it would take is already written: `build_context_message` puts untrusted text in *its own message*, fenced with a per-request nonce, with the instruction naming it as data placed after it. A per-request value belongs there, as a second message, not as a hole in this one.
+
+The remaining controls are ordinary. The name resolves through a tenant-scoped repository, so a guessed name reaches nothing outside the caller's tenant and cannot distinguish "not yours" from "not there". `MAX_SYSTEM_PROMPT_CHARS` (8000) is a resource bound rather than a security one — the author is trusted, but the context ceiling is shared with the conversation, the tool definitions and any retrieved passages. Authoring, editing and deletion are audited. A name that does not resolve is a **404**, never a completion served without the instructions it was supposed to carry.
+
+`prompt:read` is in the base scopes, unlike `knowledge:read`. Choosing a template is part of asking a question, so a member who may use the chat has to see what there is to choose from; and since a template shapes every answer that selects it, being able to read the one applied on your behalf is a property worth having. Authoring stays with the roles that hold the knowledge base, for the reason §7.3 gives about who shapes what the models answer.
+
+### 7.5 The Management Assistant
 
 ### 7.5 The Management Assistant
 
@@ -893,7 +905,7 @@ looking for the risk. The state below is checked against the code.
 | A key's stored capability list intersected with the issuable set, so a direct database write cannot widen a key's reach | `middleware/api_key_auth.py` |
 | Management assistant confined to advice: no `system` role in its request, no plaintext field in its context type, proposals validated against `UpdateApiKeyRequest`, screen contents nonce-delimited as data (§7.5) | `application/use_cases/assist_operator.py`, `interfaces/http/assistant_proposal.py`, `features/assistant/` |
 | Targeted key and user updates that cannot revert a concurrent revoke or disable | `adapters/persistence/repositories.py` |
-| `user` role limited to chat, own keys, own usage; no registry or node read | `adapters/authz/role_authorization.py` |
+| `user` role limited to chat, own keys, own usage and reading their tenant's prompt templates; no registry or node read | `adapters/authz/role_authorization.py`, pinned exactly by `test_review_hardening.py` |
 | Data plane and control plane on separate Docker networks; the gateway can reach no admin entrance | `docker-compose.yml` §3.2 |
 | Separate database accounts per service: gateway reads every table and writes only `usage_records`, admin has full DML and no DDL, owner has DDL and is used only by `migrate`; the denial is proven against a live Postgres | `infrastructure/db_roles.py`, `docker-compose.yml`, `tests/integration/test_db_role_grants.py` |
 | Secrets as Docker file mounts rather than environment variables | `docker-compose.yml` secrets, `config.py` `secrets_dir`, `secrets/README.md` |

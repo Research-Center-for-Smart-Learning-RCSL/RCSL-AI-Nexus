@@ -339,3 +339,30 @@ class RetentionPolicyRow(Base):
     """Display name rather than an id, and denormalised on purpose: the row has
     to stay readable after the account that set it is deleted, which is the
     same reason `audit_log` stores one."""
+
+
+class PromptTemplateRow(Base):
+    __tablename__ = "prompt_templates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), index=True)
+    """Tenant data, like a knowledge collection and unlike a model: a template
+    is text a team wrote, and it can encode how they work."""
+
+    name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str] = mapped_column(String(1024), default="")
+    system_prompt: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        # Per tenant, for the reason the collections index gives: the name is
+        # what a caller writes in `"prompt_template": "..."`, so it has to be
+        # unique where that request is resolved, and no wider — a global
+        # constraint would report that another tenant had taken a name.
+        Index("ix_prompt_templates_tenant_name", "tenant_id", "name", unique=True),
+    )

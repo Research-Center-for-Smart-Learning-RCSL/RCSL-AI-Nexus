@@ -38,6 +38,7 @@ from app.adapters.persistence.repositories import (
     PostgresKnowledgeRepository,
     PostgresModelRepository,
     PostgresNodeRepository,
+    PostgresPromptTemplateRepository,
     PostgresRecordPurge,
     PostgresRetentionPolicyRepository,
     PostgresRoutingPolicyRepository,
@@ -52,6 +53,7 @@ from app.adapters.session.session_store import SessionData, SessionStore
 from app.adapters.storage.filesystem_documents import FilesystemDocumentStorage
 from app.adapters.vector.qdrant_store import QdrantVectorStore
 from app.application.use_cases.accept_invitation import AcceptInvitation
+from app.application.use_cases.apply_prompt_template import ApplyPromptTemplate
 from app.application.use_cases.assist_operator import AssistOperator
 from app.application.use_cases.authenticate_local import AuthenticateLocal
 from app.application.use_cases.bootstrap_first_admin import BootstrapFirstAdmin
@@ -66,6 +68,7 @@ from app.application.use_cases.manage_knowledge import ManageKnowledge
 from app.application.use_cases.manage_models import ManageModels
 from app.application.use_cases.manage_nodes import ManageNodes
 from app.application.use_cases.manage_own_account import ManageOwnAccount
+from app.application.use_cases.manage_prompt_templates import ManagePromptTemplates
 from app.application.use_cases.manage_retention import ManageRetention
 from app.application.use_cases.manage_routing_policies import ManageRoutingPolicies
 from app.application.use_cases.manage_tenants import ManageTenants
@@ -712,6 +715,44 @@ def build_ground_chat_factory(
 
 
 GroundChatFactoryDep = Annotated[Callable[[str], GroundChat], Depends(build_ground_chat_factory)]
+
+
+def build_manage_prompt_templates(
+    request: Request, session: SessionDep, tenant: TenantIdDep
+) -> ManagePromptTemplates:
+    """Scoped, so a template is authored into, listed from and deleted within
+    the caller's own tenant, decided here rather than by anything the caller
+    sends."""
+    return ManagePromptTemplates(
+        templates=PostgresPromptTemplateRepository(session, tenant),
+        authz=request.app.state.authz,
+        audit=request.app.state.audit,
+        clock=SystemClock(),
+        tenant_id=tenant,
+    )
+
+
+def build_apply_prompt_template_factory(
+    request: Request, session: SessionDep
+) -> Callable[[str], ApplyPromptTemplate]:
+    """A factory, for the reason `build_ground_chat_factory` gives at length:
+    the gateway installs no `current_actor` resolver, so a builder depending on
+    `TenantIdDep` raises at request time there rather than failing at wiring
+    time. The chat routers pass the tenant of the actor they already resolved,
+    which is the same value either way."""
+
+    def make(tenant_id: str) -> ApplyPromptTemplate:
+        return ApplyPromptTemplate(
+            templates=PostgresPromptTemplateRepository(session, tenant_id),
+            authz=request.app.state.authz,
+        )
+
+    return make
+
+
+ApplyPromptTemplateFactoryDep = Annotated[
+    Callable[[str], ApplyPromptTemplate], Depends(build_apply_prompt_template_factory)
+]
 
 
 def build_search_knowledge(

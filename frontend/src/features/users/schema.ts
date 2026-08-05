@@ -163,4 +163,6 @@ export const SCOPE_LABELS: Record<string, string> = {
   'logs:read': 'Read the audit log',
   'knowledge:read': 'Read the knowledge base',
   'knowledge:write': 'Add and remove knowledge documents',
+  'prompt:read': 'See the tenant\'s prompt templates',
+  'prompt:write': 'Write and remove prompt templates',
 };

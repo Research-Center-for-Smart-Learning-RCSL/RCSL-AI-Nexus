@@ -229,7 +229,7 @@ worse than none. [ROADMAP.md](./ROADMAP.md) and
 | Logs | `/admin/logs` | 2 | yes, read-only audit view behind `logs:read` |
 | Usage analytics | `/admin/usage` | 2 | yes, aggregation and charts |
 | Knowledge base | `/admin/knowledge` | 2 | no |
-| Prompt templates | `/admin/prompt-templates` | 2 | no |
+| Prompt templates | `/admin/prompt-templates` | 2 | yes, end to end: authored in the UI, selected by name on both chat paths. **No variable substitution**, deliberately — §7.4's rule is that values go in their own slot rather than into a template body, and a slot filled from a request would let a caller write into the one message the model treats as authoritative ([security.md](./architecture/security.md) §7.4) |
 
 The inference path is complete and tested end to end. The gateway mounts
 `POST /v1/chat/completions` and `GET /v1/models`, and nothing else — the second

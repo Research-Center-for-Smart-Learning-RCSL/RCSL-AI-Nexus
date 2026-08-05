@@ -72,6 +72,7 @@ import type {
   RetentionPreview,
 } from '@/features/retention/schema';
 import type { RoutingPolicy } from '@/features/routing-policies/schema';
+import type { PromptTemplate } from '@/features/prompt-templates/schema';
 import type { CreateTenantResponse, Tenant } from '@/features/tenants/schema';
 import type { UsageAnalytics } from '@/features/usage/schema';
 import type { Invitation, RoleCatalogueEntry, User } from '@/features/users/schema';
@@ -132,6 +133,9 @@ const _model: Agrees<Model, Api['ModelResponse']> = true;
 const _node: Agrees<Node, Api['NodeResponse']> = true;
 const _download: Agrees<DownloadJob, Api['DownloadJobResponse']> = true;
 const _policy: Agrees<RoutingPolicy, Api['RoutingPolicyResponse']> = true;
+
+// --- what the models are told --------------------------------------------
+const _promptTemplate: Agrees<PromptTemplate, Api['PromptTemplateResponse']> = true;
 
 // --- what the screens read -----------------------------------------------
 const _dashboard: Agrees<DashboardSummary, Api['DashboardResponse']> = true;

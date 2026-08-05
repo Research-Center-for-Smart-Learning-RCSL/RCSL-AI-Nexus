@@ -97,6 +97,21 @@ class Scope(StrEnum):
     KNOWLEDGE_READ = "knowledge:read"
     KNOWLEDGE_WRITE = "knowledge:write"
 
+    PROMPT_READ = "prompt:read"
+    """List the tenant's prompt templates and see what each contains.
+
+    In the base scopes, unlike `knowledge:read`, because selecting a template
+    is an ordinary part of asking a question: a member who may use the chat has
+    to be able to see which templates exist in order to choose one. What they
+    see is text their own tenant's operator wrote.
+    """
+
+    PROMPT_WRITE = "prompt:write"
+    """Author a template, which is authority over what a model is told before
+    it reads anybody's question — so it is content authorship, not fleet
+    operation, and it goes to the roles that already hold the knowledge base
+    rather than to the one that runs the nodes."""
+
     RETENTION_WRITE = "retention:write"
     """Set how long records are kept, and delete them ahead of that.
 
