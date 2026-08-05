@@ -192,8 +192,13 @@ class MlxAdapter:
         base_url: str,
         request_timeout_seconds: int = 300,
         pull_poll_interval_seconds: float = 1.0,
+        tool_calling_verified: bool = False,
     ) -> None:
         self._base_url = base_url.rstrip("/")
+        # Whether somebody has watched this deployment's `mlx_lm.server` actually
+        # execute a tool call. Default False, so an unverified deployment refuses
+        # rather than answers. See `_assert_tools_are_verified`.
+        self._tool_calling_verified = tool_calling_verified
         # A long read timeout because generation takes minutes, but a short
         # connect timeout so a host that is simply not there fails fast rather
         # than holding a concurrency slot for the whole request timeout.
@@ -239,11 +244,11 @@ class MlxAdapter:
         this server already speaks, and calls are read back out of the same
         `delta.tool_calls` fragments an OpenAI client would parse. **This half
         has not been exercised against a live `mlx_lm.server`**, the same
-        boundary MLX inference as a whole still sits behind (ROADMAP Phase 2):
-        a server build without tool support would accept the field and answer
-        with prose, which is the silent failure this platform otherwise refuses.
-        Ollama is the runtime to point an agent capability at until that is
-        checked.
+        boundary MLX inference as a whole still sits behind (ROADMAP Phase 2),
+        so it is **refused** rather than merely warned about: see
+        `_assert_tools_are_verified` for why a warning was not enough and why a
+        probe cannot take its place. Ollama is the runtime to point an agent
+        capability at until `MLX_TOOL_CALLING_VERIFIED` is earned.
         """
         assert_valid_hf_repo_id(ref)
         payload: dict[str, Any] = {
@@ -264,6 +269,7 @@ class MlxAdapter:
         # unenforceable `tool_choice` unrefused when no tools accompany it.
         send_tools = should_send_tools(tool_choice, "mlx_lm.server")
         if tools and send_tools:
+            self._assert_tools_are_verified()
             payload["tools"] = [
                 {
                     "type": "function",
@@ -451,6 +457,45 @@ class MlxAdapter:
             "/v1/chat/completions",
             {"model": ref, "messages": [{"role": "user", "content": "ok"}], "max_tokens": 1},
             ref,
+        )
+
+    def _assert_tools_are_verified(self) -> None:
+        """Refuse tool calling until somebody has watched this server do it.
+
+        The code below is written and, as of 2026-08-05, has never run against a
+        live `mlx_lm.server`. That would ordinarily be a note in a docstring —
+        it was one — except that the failure it guards against is invisible: a
+        server build without tool support **accepts the `tools` field and
+        answers with prose**. The request succeeds, the agent waits for a call
+        nobody requested, and every layer in between reports 200. It is the
+        exact shape the whole 2026-08-05 tool-calling change exists to remove,
+        and leaving it reachable behind a comment meant the platform still
+        served it once — to whoever pointed a policy at MLX first.
+
+        **A probe cannot replace this, which is the whole difficulty.** There is
+        no capability endpoint to ask, and sending a trial request settles
+        nothing: a model that is offered tools and legitimately chooses not to
+        call one produces exactly the same response as a server that discarded
+        the field. Not-calling is a valid answer, so absence of a call is not
+        evidence of anything. That leaves a person, having read a real call off
+        the wire, as the only thing that can assert this — which is what the
+        setting records.
+
+        So it is a claim about *this deployment's server build*, not about MLX,
+        and the honest default is that nobody has checked. Refusing beats
+        answering plausibly and wrongly: the same judgement `embed`, `unload`
+        and `should_send_tools` already make.
+        """
+        if self._tool_calling_verified:
+            return
+        raise RuntimeCapabilityError(
+            detail=(
+                "tool calling through mlx_lm.server is unverified on this deployment: "
+                "a server build without tool support accepts `tools` and answers with "
+                "prose, which no client can detect. Route the capability at Ollama, or "
+                "set MLX_TOOL_CALLING_VERIFIED=true once a real tool call has been "
+                "observed against this server"
+            )
         )
 
     async def embed(self, ref: str, texts: Sequence[str]) -> list[list[float]]:

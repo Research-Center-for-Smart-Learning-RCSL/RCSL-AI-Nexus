@@ -309,6 +309,11 @@ def test_a_choice_the_runtime_cannot_constrain_is_refused(mode) -> None:
 
 
 # --- the MLX adapter -----------------------------------------------------
+#
+# Every test below drives the *read-back* half against a stubbed transport.
+# None of it has run against a live `mlx_lm.server`, which is why the write
+# half is refused by default; see the guard's own tests at the end of this
+# section.
 
 
 async def test_mlx_reassembles_fragmented_tool_call_deltas(patch_httpx) -> None:
@@ -359,6 +364,99 @@ async def test_mlx_reassembles_fragmented_tool_call_deltas(patch_httpx) -> None:
     assert call.id == "call_x"
     assert json.loads(call.arguments) == {"city": "Taipei"}
     assert chunks[-1].finish_reason == "tool_calls"
+
+
+# --- the unverified MLX tool path is refused, not served -----------------
+#
+# The failure being guarded is the one the whole feature exists to remove: a
+# server build without tool support accepts `tools` and answers with prose, so
+# the agent gets a 200 and waits for a call nobody requested. A docstring
+# warning left it reachable, and a probe cannot replace the guard, because a
+# model declining to call a tool is indistinguishable from a server that threw
+# the field away.
+
+
+async def test_mlx_refuses_tools_until_a_deployment_says_it_checked() -> None:
+    with pytest.raises(RuntimeCapabilityError):
+        await drain(
+            MlxAdapter("http://mlx.invalid").generate("org/model", MESSAGES, tools=[WEATHER])
+        )
+
+
+async def test_mlx_refuses_before_reaching_the_network(monkeypatch) -> None:
+    """A refusal that still sends the request would have served the failure it
+    exists to prevent, and been indistinguishable in a test that only checks
+    the exception."""
+    called = {"value": False}
+
+    def record(request: httpx.Request) -> httpx.Response:
+        called["value"] = True
+        return httpx.Response(200, content=sse_lines({"choices": []}))
+
+    transport = httpx.MockTransport(record)
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda *a, **kw: original(*a, **{**kw, "transport": transport})
+    )
+
+    with pytest.raises(RuntimeCapabilityError):
+        await drain(
+            MlxAdapter("http://mlx.invalid").generate("org/model", MESSAGES, tools=[WEATHER])
+        )
+
+    assert called["value"] is False
+
+
+async def test_mlx_forwards_tools_once_the_deployment_has_verified_it(patch_httpx) -> None:
+    """The flag has to actually open the path, or verifying it would leave the
+    caller with a refusal they cannot clear and the code permanently dead."""
+    sent = patch_httpx(lambda r: httpx.Response(200, content=sse_lines({"choices": []})))
+
+    await drain(
+        MlxAdapter("http://mlx.invalid", tool_calling_verified=True).generate(
+            "org/model", MESSAGES, tools=[WEATHER]
+        )
+    )
+
+    assert [t["function"]["name"] for t in sent[0]["tools"]] == ["get_weather"]
+
+
+async def test_an_ordinary_mlx_chat_is_untouched_by_the_guard(patch_httpx) -> None:
+    """MLX's only current use is plain completion. A guard that refused those
+    would take the runtime out of service to protect a path nobody is on."""
+    patch_httpx(
+        lambda r: httpx.Response(
+            200,
+            content=sse_lines({"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}]}),
+        )
+    )
+
+    chunks = await drain(MlxAdapter("http://mlx.invalid").generate("org/model", MESSAGES))
+
+    assert "".join(c.delta for c in chunks) == "hi"
+
+
+async def test_tool_choice_none_is_not_refused_by_the_guard(patch_httpx) -> None:
+    """Withholding the tools *is* "do not call one", so nothing silent can
+    happen: the client is not waiting for a call. The guard belongs on the
+    branch that puts tools on the wire, not on the presence of the argument."""
+    sent = patch_httpx(
+        lambda r: httpx.Response(
+            200,
+            content=sse_lines({"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}]}),
+        )
+    )
+
+    await drain(
+        MlxAdapter("http://mlx.invalid").generate(
+            "org/model",
+            MESSAGES,
+            tools=[WEATHER],
+            tool_choice=ToolChoice(mode=ToolChoiceMode.NONE),
+        )
+    )
+
+    assert "tools" not in sent[0]
 
 
 # --- SSE framing ---------------------------------------------------------
