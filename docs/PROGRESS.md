@@ -17,6 +17,69 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ## 2026-08-05
 
+### The debug switch had a reader and no writer on the user half
+
+The error-precision work earlier today closed `debug_logging_until` as "twelve
+days of a switch wired to no lamp". It closed one of the two. The user half
+kept the defect and hid it better.
+
+`identity.py` read `user.debug_logging_until` and called `grant_debug_detail`
+on it. `UserResponse` carried the field. The frontend schema declared it and
+the Users table had it in scope. Every layer that consumes the value was
+present and correct — and **nothing, anywhere, could set it**. No use case
+method, no endpoint, no button. A grep for the column found it in eight files
+and none of them was a writer.
+
+**That is worse than the missing lamp, not better.** An unconsumed column is at
+least visibly inert; a fully built read path reports a working feature from
+every direction you might check it from. The API-key window shipped with a
+button, so the control looked done, and the user column looked like the same
+control seen from another table.
+
+The reason the second half is not redundant is written into security.md §9.2
+and had been since long before either half existed: *the management chat path
+has no API key attached*. An administrator debugging the admin UI is
+authenticated by a session cookie. There is no key to open a window on, so
+until today the one operator most likely to need detail was the one who could
+not be granted it — and the document asserting otherwise was, on that
+sentence, simply false.
+
+Now: `POST /admin/users/{user_id}/debug`, `ManageUsers.set_debug_window`, and
+the same one-click toggle the API keys table carries, showing the minutes left
+so a window left open is visible from the table rather than only from the error
+bodies it widens. Audited as `user.debug_window_set`, which §12 gained a row
+for — that table's survey predates both halves and listed neither.
+
+Three decisions worth the ink:
+
+**The ceiling moved out of the use case.** It was a class attribute on
+`ManageApiKeys` and a restated literal in the request schema; a third copy in
+`ManageUsers` would have made a single control into three independently
+editable rules. It is one function in `domain/services/debug_window.py` now,
+and the schema imports the constant instead of repeating it.
+
+**`disabled_at IS NULL` is in the UPDATE, not in a check before it.** The same
+reasoning `advance_totp_counter` records: read, compare in Python, write, and a
+concurrent disable lands in the gap — leaving the window open on an account
+nobody can sign in as, and telling the caller it was set. The repository
+returns False and the use case turns that into a 409.
+
+**No self-guard, unlike role change and disable.** Those are escalation and
+lockout. This only changes what the caller is told about their own failures,
+and debugging one's own admin session is the ordinary use rather than the
+dangerous one.
+
+The tests are the actual deliverable here, because the code was never the hard
+part. The two that existed handed `grant_debug_detail` a value directly, which
+tests the consumer and says nothing about who supplies it — precisely the gap
+the missing writer lived in. There are now two that drive the tailnet resolver
+against a stored column and assert on the response body, joining the row to
+what the operator receives, plus a frontend test that an open window *closes*
+rather than re-opening. Each was confirmed by putting its defect back: the
+resolver test fails when `grant_debug_detail(user.debug_logging_until)` becomes
+`grant_debug_detail(None)`, the toggle test fails when the click always sends
+60.
+
 ### The gateway can call tools, which is what "OpenAI-compatible" was missing
 
 The API has been OpenAI-*shaped* since Phase 1: the right paths, the right

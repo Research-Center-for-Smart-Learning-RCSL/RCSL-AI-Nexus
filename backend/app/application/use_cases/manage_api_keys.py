@@ -42,6 +42,7 @@ from app.domain.ports.repositories import (
 )
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
 from app.domain.services.api_key_service import ApiKeyService
+from app.domain.services.debug_window import debug_window_until
 from app.shared.clock import Clock
 
 """Checked at issue so a typo becomes an error rather than a key that is
@@ -251,12 +252,6 @@ class ManageApiKeys:
         await self._keys.revoke(key_id, self._clock.now())
         await self._audit.record(actor, "api_key.revoked", target=key_id)
 
-    MAX_DEBUG_WINDOW_MINUTES = 24 * 60
-    """A day. The window loosens an information control (error responses carry
-    operator-facing detail while it is open), so it must not be settable into
-    something indefinite — a ceiling is what keeps "time-boxed" a property of
-    the mechanism rather than a hope about its use."""
-
     async def set_debug_window(self, actor: Actor, key_id: str, *, minutes: int) -> ApiKey:
         """Open, extend, or close (minutes=0) the key's debug window.
 
@@ -265,17 +260,16 @@ class ManageApiKeys:
         log-only. Audited for the same reason it is bounded: it changes what
         the platform reveals, and the record of who opened it belongs next to
         the record of what was revealed.
+
+        The ceiling is in `domain/services/debug_window.py`, shared with the
+        user-side window rather than restated here.
         """
-        if not 0 <= minutes <= self.MAX_DEBUG_WINDOW_MINUTES:
-            raise ModelStateConflictError(
-                detail=f"debug window must be 0..{self.MAX_DEBUG_WINDOW_MINUTES} minutes"
-            )
+        until = debug_window_until(self._clock.now(), minutes)
         key = await self._require(key_id)
         self._require_owner_permission(actor, key.owner_id)
         if key.revoked_at is not None:
             raise ModelStateConflictError(detail=f"key {key_id} is revoked")
 
-        until = self._clock.now() + timedelta(minutes=minutes) if minutes else None
         if not await self._keys.update_settings(key.key_id, {"debug_logging_until": until}):
             raise ModelStateConflictError(detail=f"key {key_id} was revoked concurrently")
 

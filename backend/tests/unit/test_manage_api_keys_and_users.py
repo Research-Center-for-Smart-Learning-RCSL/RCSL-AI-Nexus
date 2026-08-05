@@ -29,6 +29,7 @@ from app.domain.exceptions import (
     UserNotFoundError,
 )
 from app.domain.services.api_key_service import ApiKeyService
+from app.domain.services.debug_window import MAX_DEBUG_WINDOW_MINUTES
 from app.shared.clock import FixedClock
 from tests.unit.fakes import (
     FakeApiKeys,
@@ -325,6 +326,86 @@ async def test_deleting_an_unknown_user_is_a_404() -> None:
 
     with pytest.raises(UserNotFoundError):
         await harness.use_case.delete(ADMIN, "nobody")
+
+
+# --- the debug window, on both credentials -------------------------------
+#
+# One control on two credentials, so the ceiling is shared
+# (`domain/services/debug_window.py`) and tested on both. The user half exists
+# for the case the key half cannot reach: the management UI authenticates by
+# session and carries no API key, so an administrator debugging their own
+# admin session had no credential to open a window on until 2026-08-05 —
+# while `identity.py` had been reading the column and granting on it all
+# along.
+
+
+async def test_opening_a_users_debug_window_stores_its_expiry_and_audits_it() -> None:
+    harness = UserHarness([make_user("admin-1", Role.ADMIN), make_user("u2")])
+
+    user = await harness.use_case.set_debug_window(ADMIN, "u2", minutes=60)
+
+    assert user.debug_logging_until == NOW + timedelta(minutes=60)
+    assert harness.users.rows["u2"].debug_logging_until == NOW + timedelta(minutes=60)
+    assert "user.debug_window_set" in harness.audit.actions()
+
+
+async def test_zero_minutes_closes_a_users_debug_window() -> None:
+    """Opening and closing are the same verb, so the audit log carries both."""
+    harness = UserHarness([make_user("admin-1", Role.ADMIN), make_user("u2")])
+    await harness.use_case.set_debug_window(ADMIN, "u2", minutes=60)
+
+    user = await harness.use_case.set_debug_window(ADMIN, "u2", minutes=0)
+
+    assert user.debug_logging_until is None
+    assert harness.users.rows["u2"].debug_logging_until is None
+
+
+async def test_a_users_debug_window_cannot_exceed_the_shared_ceiling() -> None:
+    harness = UserHarness([make_user("admin-1", Role.ADMIN), make_user("u2")])
+
+    with pytest.raises(ModelStateConflictError):
+        await harness.use_case.set_debug_window(ADMIN, "u2", minutes=MAX_DEBUG_WINDOW_MINUTES + 1)
+
+    assert harness.users.rows["u2"].debug_logging_until is None
+
+
+async def test_a_keys_debug_window_cannot_exceed_the_shared_ceiling() -> None:
+    """The same bound from the other side. It moved out of this use case into
+    a shared rule, so it is asserted on both rather than trusted to stay."""
+    harness = KeyHarness()
+    issued = await harness.issue()
+
+    with pytest.raises(ModelStateConflictError):
+        await harness.use_case.set_debug_window(
+            ADMIN, issued.key.key_id, minutes=MAX_DEBUG_WINDOW_MINUTES + 1
+        )
+
+    assert harness.keys.rows[issued.key.key_id].debug_logging_until is None
+
+
+async def test_a_disabled_account_cannot_have_its_debug_window_opened() -> None:
+    """The guard is the conditional UPDATE, not a check before it: a disable
+    landing in between would otherwise leave the window open on an account
+    nobody can sign in as, and report success."""
+    harness = UserHarness([make_user("admin-1", Role.ADMIN), make_user("u2")])
+    await harness.use_case.set_disabled(ADMIN, "u2", disabled=True)
+
+    with pytest.raises(ModelStateConflictError):
+        await harness.use_case.set_debug_window(ADMIN, "u2", minutes=60)
+
+    assert harness.users.rows["u2"].debug_logging_until is None
+    assert "user.debug_window_set" not in harness.audit.actions()
+
+
+async def test_setting_a_debug_window_needs_user_write() -> None:
+    """It widens what the platform discloses about a *different* account, so
+    it sits behind the same scope as editing one — not behind self-service."""
+    harness = UserHarness([make_user("admin-1", Role.ADMIN), make_user("u2")])
+
+    with pytest.raises(NotAuthorizedError):
+        await harness.use_case.set_debug_window(MEMBER, "u2", minutes=60)
+
+    assert harness.users.rows["u2"].debug_logging_until is None
 
 
 # --- routing policies ----------------------------------------------------

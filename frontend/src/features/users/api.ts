@@ -61,6 +61,25 @@ export async function issueInvitation(userId: string): Promise<Invitation> {
   );
 }
 
+/**
+ * Open (minutes > 0) or close (0) the account's debug window: while it is
+ * open, error responses to this person carry the operator-facing detail that
+ * is otherwise log-only. Time-boxed by the backend to at most 24 hours, and
+ * audited, because it loosens an information control.
+ *
+ * The counterpart of the API-key window, and the half that covers this screen:
+ * the management UI authenticates by session and carries no API key, so an
+ * administrator debugging the admin UI itself has no key on which to open one.
+ */
+export async function setUserDebugWindow(
+  userId: string,
+  minutes: number,
+): Promise<User> {
+  return userSchema.parse(
+    await api.post<unknown>(`${BASE}/${userId}/debug`, { minutes }),
+  );
+}
+
 /** Administrator-issued password reset link. Same shape as an invitation. */
 export async function issuePasswordReset(userId: string): Promise<Invitation> {
   return invitationSchema.parse(

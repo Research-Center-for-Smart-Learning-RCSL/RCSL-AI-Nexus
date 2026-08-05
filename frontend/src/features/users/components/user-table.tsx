@@ -21,11 +21,19 @@ import {
   useDeleteUser,
   useIssueInvitation,
   useIssuePasswordReset,
+  useSetUserDebugWindow,
   useUsers,
 } from '@/features/users/hooks/use-users';
 import { InviteUserDialog } from '@/features/users/components/invite-user-dialog';
 import { EditUserDialog } from '@/features/users/components/edit-user-dialog';
 import { ROLE_LABELS, type User } from '@/features/users/schema';
+
+/** Whole minutes left on the account's debug window, or 0 when it is closed. */
+function debugMinutesLeft(user: User): number {
+  if (!user.debug_logging_until) return 0;
+  const ms = new Date(user.debug_logging_until).getTime() - Date.now();
+  return ms > 0 ? Math.ceil(ms / 60_000) : 0;
+}
 
 export function UserTable() {
   const { can, me } = useSession();
@@ -37,6 +45,7 @@ export function UserTable() {
   const remove = useDeleteUser();
   const reinvite = useIssueInvitation();
   const reset = useIssuePasswordReset();
+  const debug = useSetUserDebugWindow();
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [editing, setEditing] = useState<User | null>(null);
@@ -97,8 +106,26 @@ export function UserTable() {
         cell: ({ row }) => {
           const user = row.original;
           if (!mayWrite) return null;
+          const debugLeft = debugMinutesLeft(user);
           return (
             <div className="flex justify-end gap-1">
+              {/* Same control as on the API keys table, on the credential this
+                  screen is reached with. One click, one hour; clicking an open
+                  window closes it, and the label carries the remaining time so
+                  that a window left open is visible here rather than only in
+                  the error bodies it widens. */}
+              <Button
+                variant="ghost"
+                size="xs"
+                className={
+                  debugLeft ? 'text-amber-600 dark:text-amber-500' : undefined
+                }
+                onClick={() =>
+                  debug.mutate({ userId: user.id, minutes: debugLeft ? 0 : 60 })
+                }
+              >
+                {debugLeft ? `Debug ${debugLeft}m` : 'Debug'}
+              </Button>
               <Button
                 variant="ghost"
                 size="xs"
@@ -171,7 +198,7 @@ export function UserTable() {
         },
       },
     ],
-    [mayWrite, me, reinvite, reset],
+    [mayWrite, me, reinvite, reset, debug],
   );
 
   return (

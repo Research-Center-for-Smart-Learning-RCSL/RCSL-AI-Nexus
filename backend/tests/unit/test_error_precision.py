@@ -21,12 +21,15 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+from app.adapters.authz.role_authorization import RoleAuthorization
 from app.adapters.runtime.mlx_adapter import MlxAdapter
 from app.adapters.runtime.ollama_adapter import OllamaAdapter
+from app.domain.entities.actor import Role
 from app.domain.entities.chat import Message, MessageRole
+from app.domain.entities.user import User
 from app.domain.exceptions import (
     NoAvailableModelError,
     RuntimeTimeoutError,
@@ -34,9 +37,12 @@ from app.domain.exceptions import (
     StreamInterruptedError,
 )
 from app.infrastructure.concurrency import SemaphoreConcurrencyLimiter
+from app.infrastructure.config import get_settings
 from app.interfaces.http import request_context
 from app.interfaces.http.errors import install_error_handlers
+from app.interfaces.http.middleware.identity import resolve_tailnet_actor
 from app.interfaces.http.request_context import RequestContextMiddleware
+from tests.unit.fakes import FakeUsers
 
 MESSAGES = [Message(role=MessageRole.USER, content="hi")]
 
@@ -226,3 +232,85 @@ def test_an_expired_debug_window_reverts_to_the_normal_rule() -> None:
 
     body = TestClient(app).get("/fails-expired").json()
     assert "operator-facing context" not in str(body)
+
+
+# --- the window on the *user*, from the stored column outward -------------
+#
+# The two tests above hand `grant_debug_detail` a value directly, which tests
+# the consumer and nothing about who supplies it. That is the shape the user
+# half shipped in: `identity.py` read `user.debug_logging_until` and granted on
+# it, `UserResponse` exposed it, the frontend displayed it — and no code path
+# could set it, for twelve days, looking finished from every side. These drive
+# the resolver, so the column and the response body are joined by a test rather
+# than by inspection.
+
+
+def _resolver_app(user: User) -> FastAPI:
+    app = _app("admin")
+
+    @app.get("/fails-as-user")
+    async def fails_as_user(request: Request) -> None:
+        await resolve_tailnet_actor(
+            request,
+            users=FakeUsers([user]),  # type: ignore[arg-type]
+            bootstrap=_NoBootstrap(),  # type: ignore[arg-type]
+            authz=RoleAuthorization(),
+        )
+        raise NoAvailableModelError(detail="operator-facing context")
+
+    return app
+
+
+def _admin(**overrides: object) -> User:
+    fields: dict[str, object] = {
+        "id": "u9",
+        "login": "admin@example.org",
+        "display_name": "Admin",
+        "role": Role.ADMIN,
+        "tailscale_login": "admin@example.org",
+    }
+    fields.update(overrides)
+    return User(**fields)  # type: ignore[arg-type]
+
+
+HEADERS = {"Tailscale-User-Login": "admin@example.org"}
+
+
+def test_an_open_window_on_the_user_row_reaches_the_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The case the API-key window cannot cover: the management UI carries no
+    API key, so an administrator debugging their own admin session is
+    identified by this row and nothing else."""
+    monkeypatch.setenv("AUTH_MODE", "tailnet")
+    get_settings.cache_clear()
+
+    user = _admin(debug_logging_until=datetime.now(UTC) + timedelta(minutes=30))
+    body = TestClient(_resolver_app(user)).get("/fails-as-user", headers=HEADERS).json()
+
+    # The admin envelope is the flat shape, which is the one an administrator
+    # debugging the management UI actually receives.
+    assert body["detail"] == "operator-facing context"
+    get_settings.cache_clear()
+
+
+def test_a_user_with_no_window_gets_the_normal_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same request against the same resolver, differing only in the
+    column — so a resolver that granted unconditionally would fail here rather
+    than pass both."""
+    monkeypatch.setenv("AUTH_MODE", "tailnet")
+    get_settings.cache_clear()
+
+    body = TestClient(_resolver_app(_admin())).get("/fails-as-user", headers=HEADERS).json()
+
+    assert "operator-facing context" not in str(body)
+    get_settings.cache_clear()
+
+
+class _NoBootstrap:
+    """Bootstrap is inert once a user exists, which is the case under test."""
+
+    async def claim(self, tailscale_login: str, display_name: str) -> User | None:
+        return None
