@@ -30,6 +30,11 @@ node_modules/
 out/
 .pnpm-store/
 *.tsbuildinfo
+frontend/playwright-report/
+frontend/test-results/
+# The Playwright runner's production build, kept out of `.next` because it has
+# a test CSRF cookie name inlined into it. See frontend/scripts/run-e2e.mjs.
+frontend/.next-e2e/
 
 # The generated API types are committed, not ignored, and this rule used to say
 # the opposite while naming a `pnpm sync-types` script that did not exist. The
