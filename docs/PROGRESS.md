@@ -15,7 +15,7 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
-## Current state — 2026-08-05
+## Current state — 2026-08-06
 
 **A summary, and therefore the least trustworthy thing here.** Two summaries in
 this file have already contradicted the dated entries below them, one of them
@@ -31,7 +31,8 @@ natively and holds `glm-4.7-flash:q8_0`, `qwen2.5:7b` and `nomic-embed-text`.
 Four routing policies: `chat`, `assist`, `embedding`, and `code` with
 deliberation off.
 
-**Built.** Phase 1 is complete but for Playwright, which is filed under Phase 3.
+**Built.** Phase 1 is complete, including the five Playwright paths described
+below.
 Phase 2 is complete but for **encrypted backups with a rehearsed restore** and
 **Storybook**; the *logging boundaries* half of §9.2 is also unwritten, though
 the expiring switch that would gate it now exists on both credentials.
@@ -66,6 +67,117 @@ on the host it watches cannot report that the host is off.
 
 The fuller version of that list, with what each would take, is under "What is
 still unverified" further down.
+
+### The browser now drives the two authentication state machines
+
+Vitest had reached components, but the browser still drove nothing. That left
+the exact boundary where authentication had already failed once — React
+reconciling the password form's controller into the TOTP form and dropping every
+typed digit — covered only through jsdom. Playwright now drives two Chromium
+paths against the real Next.js pages: password then TOTP, including the identity
+refetch before the redirect; and invitation enrolment through password, TOTP QR,
+account creation and the recovery-code acknowledgement that gates leaving the
+only copy of those codes.
+
+The admin responses are intercepted at the browser's network boundary rather
+than provided by a shared database. That is deliberate and bounded: these tests
+assert accessible names, request bodies, state transitions and navigation, while
+the backend integration suite continues to prove the same authentication flows
+against real Postgres and Redis-shaped ports. A browser test does not become
+more end to end by making its account state depend on whichever CI run arrived
+first.
+
+CI installs Chromium, runs the paths, and retains the HTML report, trace and
+screenshots. The first local run also found an infrastructure defect in the
+test runner itself: both tests finished, but Playwright's `webServer` teardown
+left Next's worker alive on Windows, so the command never returned. A small Node
+coordinator now owns both children and terminates the whole server process tree
+(`taskkill /T` on Windows, a detached process-group signal on POSIX). The same
+two tests pass and the command exits in 18 seconds instead of timing out after
+reporting success.
+
+### API key management now has a complete browser path
+
+The next Playwright path drives the first day-to-day management workflow:
+issue a key, acknowledge the one-time plaintext before the dialog can close,
+edit its name and rate limit, revoke it, and reveal it again through the
+revoked-key filter. The intercepted admin API is stateful for this test, so the
+list after every mutation is derived from the request the page actually sent;
+the test asserts the POST and PATCH bodies rather than merely changing the DOM.
+
+This is still a browser-boundary test, not a full-stack claim. The backend
+integration suite already drives the same create, update, and revoke endpoints
+against real Postgres, while the Playwright path proves the Next.js pages,
+accessible controls, query invalidation, single-display secret guard, and
+permission-gated actions. A local Docker daemon was unavailable during this
+increment, so no CI-only database orchestration was added without a way to run
+it first. A unified browser-to-Postgres harness remains useful when that local
+precondition is available; routing-policy-to-gateway behaviour and stream
+cancellation were the next browser increments.
+
+### Routing edits and stream cancellation are browser-driven too
+
+The fourth path edits the existing chat routing policy through the real form:
+it changes deliberation, replaces one model, adds a second candidate with
+structured requirements, asserts the complete idempotent PUT body, and proves
+the table was populated by a GET made after that save. The fifth path uses a
+real local SSE socket rather than a finite intercepted response. It receives a
+partial answer, stops it while preserving what arrived, then starts another and
+leaves through a client-side Next.js link; both routes must close the upstream
+connection so neither generation keeps a model concurrency slot.
+
+Three independent adversarial reviews then attacked the tests and runner. They
+found two immediate failures (an ambiguous repeated-candidate checkbox and a
+Next dev overlay alert mistaken for an application error), plus four ways a
+green run could still lie: document-level navigation cancels fetches even if
+the hook's unmount cleanup is absent, the SSE fixture shared state across
+parallel workers, write mocks omitted the CSRF cookie/header contract, and the
+runner could mistake an old process on a fixed port for the Next child it had
+just started. The corrected runner chooses an unused loopback port, owns both
+Next and Playwright process trees through signals and spawn errors, and
+namespaces SSE state per test case. Five browser paths pass; the chat case also
+passes twice concurrently under two workers.
+
+### The browser meets a production build, which found a sixth way to lie
+
+Review of the pull request raised a seventh: everything above ran against
+`next dev`, which is an application nobody deploys. The evidence was already in
+the tests — one had to ignore a development-overlay alert, another to allow
+twenty seconds for a cold compile — and dev mode cannot exercise anything
+decided at build time, which is where `NEXT_PUBLIC_*` inlining and the *absence*
+of StrictMode's double-invoked effects live.
+
+The runner now builds before it tests. That build immediately failed the
+routing-policy path, and the reason is the interesting part. Base UI portals a
+select's popup to the document body and leaves it mounted, still sized, after it
+closes; the test asked the whole page for an option by accessible name. With two
+candidate rows offering the same aliases, the same name exists in two lists at
+once, so the click resolved into the row the test had already finished with.
+Under `next dev` this never fired: every preceding step was slow enough that the
+previous popup had always gone. A test whose correctness depended on the
+application being slow is precisely the kind of green that a dev-mode run
+cannot distinguish from a real one. Each choice is now scoped to the list its
+trigger names through `aria-controls`, after waiting for that trigger to report
+itself open — the click returns before the popup exists.
+
+Two smaller corrections came with it. `failOnFlakyTests` is on in CI, because a
+test that fails and then passes was leaving a green tick and saying so only in a
+report nobody opens, and intermittent is the *interesting* result for assertions
+about cancellation and CSRF. And the e2e build writes to `.next-e2e`: it has a
+test CSRF cookie name inlined into its client bundle, which must not be able to
+land in something a person could mistake for a deployable build. The runner's
+deadlines are now five minutes for the build and ten for the tests, with CI's
+step deadline one minute above their sum so that a hang is reported by the
+runner, which can say which half stalled.
+
+Five paths pass against the production build, in less time than the dev-mode
+run took, and `--dev` remains for local iteration.
+
+This still does not claim that editing the policy changed gateway selection.
+That needs the browser, admin API, Postgres, gateway and a controllable runtime
+in one harness. The current policy path proves the management UI contract; the
+existing backend integration tests prove persistence; their behavioural join
+remains the Phase 3 increment.
 
 ---
 

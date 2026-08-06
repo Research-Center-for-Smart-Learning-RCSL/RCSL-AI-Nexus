@@ -12,8 +12,21 @@
 // the image build (on macOS) still gets a self-contained bundle.
 const STANDALONE = process.env.NEXT_OUTPUT === 'standalone';
 
+// The Playwright runner builds with a test CSRF cookie name inlined into the
+// client bundle, which must not be mistaken for a deployable build. Pointing
+// that run at its own directory keeps it out of the `.next` that `pnpm build`
+// and `pnpm dev` produce. Unset everywhere else, including in the image build.
+const DIST_DIR = process.env.NEXT_DIST_DIR;
+
 const nextConfig = {
   ...(STANDALONE ? { output: 'standalone' } : {}),
+  // A build writes its own generated types back into the tsconfig it was given.
+  // Left pointing at tsconfig.json, the e2e build edits a tracked file on every
+  // run — a dirty working tree after running the tests, and a test-only path in
+  // the configuration that ships. It gets its own file to edit instead.
+  ...(DIST_DIR
+    ? { distDir: DIST_DIR, typescript: { tsconfigPath: 'tsconfig.e2e.json' } }
+    : {}),
   reactStrictMode: true,
   experimental: {
     // The middleware proxies /admin/* with NextResponse.rewrite, and Next
