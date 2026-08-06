@@ -1,5 +1,6 @@
 /**
- * Start Next.js, run Playwright, and always terminate the whole server tree.
+ * Start the deterministic admin fixture and Next.js, run Playwright, and
+ * always terminate the whole server tree.
  *
  * Playwright's built-in webServer is the ordinary choice, but Next dev leaves
  * its worker alive during teardown on Windows. The tests finish and the runner
@@ -12,10 +13,18 @@ import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { startAdminTestServer } from '../e2e/support/admin-server.mjs';
+
 const frontendDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:3100';
 const serverURL = new URL(baseURL);
 const isWindows = process.platform === 'win32';
+const adminServer = await startAdminTestServer();
+const childEnv = {
+  ...process.env,
+  ADMIN_API_URL: adminServer.url,
+  E2E_ADMIN_API_URL: adminServer.url,
+};
 
 const nextBin = join(frontendDir, 'node_modules', 'next', 'dist', 'bin', 'next');
 const playwrightBin = join(
@@ -38,15 +47,16 @@ const server = spawn(
   ],
   {
     cwd: frontendDir,
-    env: process.env,
+    env: childEnv,
     stdio: 'inherit',
     detached: !isWindows,
   },
 );
 
 let stopped = false;
+let fixturesStopped = false;
 
-async function stopServer() {
+async function stopNextServer() {
   if (stopped || !server.pid || server.exitCode !== null) return;
   stopped = true;
 
@@ -85,6 +95,13 @@ async function stopServer() {
   }
 }
 
+async function stopServers() {
+  if (fixturesStopped) return;
+  fixturesStopped = true;
+  await stopNextServer();
+  await adminServer.close();
+}
+
 async function waitUntilReady() {
   const deadline = Date.now() + 120_000;
   const loginURL = new URL('/login', baseURL);
@@ -108,7 +125,7 @@ async function waitUntilReady() {
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.once(signal, async () => {
-    await stopServer();
+    await stopServers();
     process.exit(1);
   });
 }
@@ -118,14 +135,14 @@ try {
   await waitUntilReady();
   const tests = spawn(process.execPath, [playwrightBin, 'test', ...process.argv.slice(2)], {
     cwd: frontendDir,
-    env: { ...process.env, PLAYWRIGHT_BASE_URL: baseURL },
+    env: { ...childEnv, PLAYWRIGHT_BASE_URL: baseURL },
     stdio: 'inherit',
   });
   exitCode = await new Promise((resolve) => {
     tests.once('exit', (code) => resolve(code ?? 1));
   });
 } finally {
-  await stopServer();
+  await stopServers();
 }
 
 process.exitCode = exitCode;
