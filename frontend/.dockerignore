@@ -5,6 +5,15 @@ node_modules
 .next
 out
 
+# The Playwright runner's build and output. `.next-e2e` is 300MB of build
+# context that the runner stage never copies from, and it is the one build in
+# the repository with a test CSRF cookie name inlined into its client bundle —
+# the reason it is a separate directory at all. Keep it out of the image build
+# entirely rather than relying on the final stage copying from `.next`.
+.next-e2e
+playwright-report
+test-results
+
 .git
 .gitignore
 Dockerfile
