@@ -95,6 +95,25 @@ coordinator now owns both children and terminates the whole server process tree
 two tests pass and the command exits in 18 seconds instead of timing out after
 reporting success.
 
+### API key management now has a complete browser path
+
+The next Playwright path drives the first day-to-day management workflow:
+issue a key, acknowledge the one-time plaintext before the dialog can close,
+edit its name and rate limit, revoke it, and reveal it again through the
+revoked-key filter. The intercepted admin API is stateful for this test, so the
+list after every mutation is derived from the request the page actually sent;
+the test asserts the POST and PATCH bodies rather than merely changing the DOM.
+
+This is still a browser-boundary test, not a full-stack claim. The backend
+integration suite already drives the same create, update, and revoke endpoints
+against real Postgres, while the Playwright path proves the Next.js pages,
+accessible controls, query invalidation, single-display secret guard, and
+permission-gated actions. A local Docker daemon was unavailable during this
+increment, so no CI-only database orchestration was added without a way to run
+it first. A unified browser-to-Postgres harness remains useful when that local
+precondition is available; routing-policy-to-gateway behaviour and stream
+cancellation remain the higher-value missing critical paths.
+
 ---
 
 ## 2026-08-05
