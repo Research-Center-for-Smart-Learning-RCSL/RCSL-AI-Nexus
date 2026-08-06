@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
 const CSRF_TOKEN = 'csrf-e2e-routing';
@@ -134,6 +134,33 @@ async function installAdminApi(page: Page) {
   };
 }
 
+/**
+ * Open one select and choose from the list that select owns.
+ *
+ * Two things make the obvious `page.getByRole('option')` wrong here. The popup
+ * is portalled to the document body, so it is not inside the dialog and cannot
+ * be scoped that way; and a popup that has been closed stays mounted and sized
+ * for some time afterwards. With two candidate rows offering the same aliases,
+ * that leaves the same accessible name in two lists at once, and the click can
+ * land in the list belonging to the row the test already finished with.
+ *
+ * Waiting for `aria-expanded` matters for the same reason: the click resolves
+ * before the popup exists, so an immediate query can only match a stale one.
+ * Under `next dev` this was hidden — everything before it ran slowly enough
+ * that the previous popup had always gone by the time the next one opened.
+ */
+async function chooseOption(page: Page, trigger: Locator, option: string) {
+  await trigger.click();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  const listId = await trigger.getAttribute('aria-controls');
+  expect(listId, 'An open select must name the list it controls.').toBeTruthy();
+  await page
+    .locator(`[id="${listId}"]`)
+    .getByRole('option', { name: option, exact: true })
+    .click();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+}
+
 test('edits a routing policy and refetches the saved state', async ({ page }) => {
   const api = await installAdminApi(page);
 
@@ -145,17 +172,14 @@ test('edits a routing policy and refetches the saved state', async ({ page }) =>
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByText('Edit routing policy')).toBeVisible();
 
-  await dialog.getByLabel('Deliberation').click();
-  await page.getByRole('option', { name: 'Answer directly' }).click();
+  await chooseOption(page, dialog.getByLabel('Deliberation'), 'Answer directly');
 
-  await dialog.getByLabel('Model alias').first().click();
-  await page.getByRole('option', { name: 'qwen-fast', exact: true }).click();
+  await chooseOption(page, dialog.getByLabel('Model alias').first(), 'qwen-fast');
   await dialog.getByLabel('Priority').first().fill('200');
   await dialog.getByLabel('Minimum free memory (GB)').first().fill('16');
 
   await dialog.getByRole('button', { name: 'Add candidate' }).click();
-  await dialog.getByLabel('Model alias').nth(1).click();
-  await page.getByRole('option', { name: 'qwen-chat', exact: true }).click();
+  await chooseOption(page, dialog.getByLabel('Model alias').nth(1), 'qwen-chat');
   await dialog.getByLabel('Priority').nth(1).fill('50');
   await dialog
     .getByRole('checkbox', { name: 'degraded', exact: true })

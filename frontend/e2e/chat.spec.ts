@@ -40,8 +40,9 @@ test('cancels streams through Stop and page navigation', async ({
 
   await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
   await expect(page.getByText('Partial reply')).toBeVisible();
-  // Next dev mounts its own off-screen role=alert for the development overlay.
-  // Only an alert in the application main region is a chat failure.
+  // Scoped to the application region rather than the page: under `--dev` Next
+  // mounts its own off-screen role=alert for the development overlay, and only
+  // an alert the person can actually see is a chat failure.
   await expect(page.getByRole('main').getByRole('alert')).toHaveCount(0);
 
   await expect

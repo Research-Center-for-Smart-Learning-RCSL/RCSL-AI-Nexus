@@ -97,9 +97,10 @@ test('signs in with password and TOTP, then refreshes identity before redirectin
   await page.getByLabel('Verification code').fill('123456');
   await page.getByRole('button', { name: 'Sign in' }).click();
 
-  // The first dashboard navigation may cold-compile /chat under next dev.
-  // Leave enough room for that compile when all Playwright workers start at
-  // once; the mocked identity refetch above still gates the redirect itself.
+  // The default production build serves /chat immediately; under `--dev` this
+  // navigation may cold-compile it while every worker starts at once. Left
+  // wide enough for that path, since the assertions below — not this deadline
+  // — are what prove the identity refetch gated the redirect.
   await expect(page).toHaveURL(/\/chat$/, { timeout: 20_000 });
   await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible();
   expect(authenticatedMeCalls).toBeGreaterThanOrEqual(1);

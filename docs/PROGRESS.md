@@ -134,10 +134,44 @@ the hook's unmount cleanup is absent, the SSE fixture shared state across
 parallel workers, write mocks omitted the CSRF cookie/header contract, and the
 runner could mistake an old process on a fixed port for the Next child it had
 just started. The corrected runner chooses an unused loopback port, owns both
-Next and Playwright process trees through signals and spawn errors, namespaces
-SSE state per test case, and has both a ten-minute internal deadline and a
-fifteen-minute CI step deadline. Five browser paths pass; the chat case also
+Next and Playwright process trees through signals and spawn errors, and
+namespaces SSE state per test case. Five browser paths pass; the chat case also
 passes twice concurrently under two workers.
+
+### The browser meets a production build, which found a sixth way to lie
+
+Review of the pull request raised a seventh: everything above ran against
+`next dev`, which is an application nobody deploys. The evidence was already in
+the tests — one had to ignore a development-overlay alert, another to allow
+twenty seconds for a cold compile — and dev mode cannot exercise anything
+decided at build time, which is where `NEXT_PUBLIC_*` inlining and the *absence*
+of StrictMode's double-invoked effects live.
+
+The runner now builds before it tests. That build immediately failed the
+routing-policy path, and the reason is the interesting part. Base UI portals a
+select's popup to the document body and leaves it mounted, still sized, after it
+closes; the test asked the whole page for an option by accessible name. With two
+candidate rows offering the same aliases, the same name exists in two lists at
+once, so the click resolved into the row the test had already finished with.
+Under `next dev` this never fired: every preceding step was slow enough that the
+previous popup had always gone. A test whose correctness depended on the
+application being slow is precisely the kind of green that a dev-mode run
+cannot distinguish from a real one. Each choice is now scoped to the list its
+trigger names through `aria-controls`, after waiting for that trigger to report
+itself open — the click returns before the popup exists.
+
+Two smaller corrections came with it. `failOnFlakyTests` is on in CI, because a
+test that fails and then passes was leaving a green tick and saying so only in a
+report nobody opens, and intermittent is the *interesting* result for assertions
+about cancellation and CSRF. And the e2e build writes to `.next-e2e`: it has a
+test CSRF cookie name inlined into its client bundle, which must not be able to
+land in something a person could mistake for a deployable build. The runner's
+deadlines are now five minutes for the build and ten for the tests, with CI's
+step deadline one minute above their sum so that a hang is reported by the
+runner, which can say which half stalled.
+
+Five paths pass against the production build, in less time than the dev-mode
+run took, and `--dev` remains for local iteration.
 
 This still does not claim that editing the policy changed gateway selection.
 That needs the browser, admin API, Postgres, gateway and a controllable runtime

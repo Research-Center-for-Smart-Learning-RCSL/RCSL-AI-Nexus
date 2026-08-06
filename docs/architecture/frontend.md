@@ -283,13 +283,27 @@ socket. These complement rather than replace the backend's real-database
 integration tests for authentication, API key persistence and routing policy
 persistence.
 
-`pnpm test:e2e` owns the loopback admin fixture, Next.js development server and
-Chromium run. A Node coordinator chooses an unused loopback port and terminates
-both Next and Playwright process trees because Playwright's ordinary `webServer`
+`pnpm test:e2e` owns the loopback admin fixture, a Next.js **production build**
+and the Chromium run. The build is the point: `next dev` serves an application
+that nobody deploys, and running against it made the tests assert around a
+development overlay and a cold-compile deadline while leaving everything
+decided at build time — `NEXT_PUBLIC_*` inlining, the absence of StrictMode's
+double-invoked effects — unexercised. `pnpm test:e2e --dev` keeps the
+hot-reloading loop for local iteration, and is what `test:e2e:ui` uses. Because
+that build inlines a test CSRF cookie name, it writes to `.next-e2e` rather
+than to the `.next` that `pnpm build` produces.
+
+A Node coordinator chooses an unused loopback port and terminates the build,
+Next and Playwright process trees, because Playwright's ordinary `webServer`
 teardown leaves Next's worker alive on Windows after the tests have finished.
-Spawn failures, signals and the ten-minute runner deadline all converge on the
-same cleanup; CI adds an outer fifteen-minute deadline. Failed CI runs retain
-trace, screenshot and the HTML report as a GitHub Actions artifact.
+Spawn failures, signals and the runner's own deadlines (five minutes for the
+build, ten for the tests) all converge on the same cleanup; CI adds an outer
+sixteen-minute deadline, one minute above their sum, so the runner is what
+reports a hang. `failOnFlakyTests` is on in CI: retries distinguish a flaky
+test from a broken one, and a test that only passes on retry fails the run
+rather than leaving a green tick and a note in a report nobody opens. Failed
+CI runs retain trace, screenshot and the HTML report as a GitHub Actions
+artifact.
 
 Two things about the setup are worth knowing before adding to it. Vitest's
 `globals` are **not** enabled, so every test imports what it uses — and

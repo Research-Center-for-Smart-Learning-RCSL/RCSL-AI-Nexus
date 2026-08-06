@@ -163,9 +163,18 @@ jobs:
         working-directory: frontend
         run: pnpm exec playwright install --with-deps chromium
 
+      # This produces its own production build first: the browser meets the
+      # application as it ships, not as `next dev` compiles it. That build
+      # writes to `.next-e2e` and inlines a test CSRF cookie name, so it is
+      # deliberately not the artefact the Build step below checks.
+      #
+      # Sized one minute above the runner's own deadlines (five for the build,
+      # ten for the tests) so that a hang is reported by the runner, which can
+      # say which half of the work stalled, rather than by a step that can only
+      # say it ran out of time.
       - name: Playwright
         working-directory: frontend
-        timeout-minutes: 15
+        timeout-minutes: 16
         run: pnpm test:e2e
 
       - name: Playwright report

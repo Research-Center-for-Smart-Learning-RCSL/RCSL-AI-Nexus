@@ -6,6 +6,21 @@
  * its worker alive during teardown on Windows. Owning every child here keeps
  * one command for CI and local development, including cancellation and spawn
  * failures rather than only the successful path.
+ *
+ * The browser drives a production build by default, not `next dev`. Dev mode
+ * was what the tests originally ran against, and it made them assert around
+ * artefacts that never ship: an off-screen development-overlay alert, and a
+ * redirect deadline sized for a cold compile rather than for the application.
+ * It also cannot exercise anything decided at build time — `NEXT_PUBLIC_*`
+ * inlining and the absence of React StrictMode's double-invoked effects are
+ * both properties of the build, and the deployed image is a build. `--dev`
+ * keeps the hot-reloading loop for local iteration, which is what `test:e2e:ui`
+ * uses.
+ *
+ * The e2e build writes to its own `NEXT_DIST_DIR` because it is not the
+ * artefact that ships: it has a test CSRF cookie name inlined into the client
+ * bundle. Sharing `.next` with `pnpm build` would let that value escape into
+ * something a person could mistake for a deployable build.
  */
 
 import { spawn } from 'node:child_process';
@@ -18,6 +33,11 @@ import { startAdminTestServer } from '../e2e/support/admin-server.mjs';
 const frontendDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const isWindows = process.platform === 'win32';
 const children = new WeakMap();
+
+const runnerArgs = process.argv.slice(2);
+if (runnerArgs[0] === '--') runnerArgs.shift();
+const devMode = runnerArgs.includes('--dev');
+const testArgs = runnerArgs.filter((argument) => argument !== '--dev');
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -146,7 +166,13 @@ const childEnv = {
   ...process.env,
   ADMIN_API_URL: adminServer.url,
   E2E_ADMIN_API_URL: adminServer.url,
+  // Inlined into the client bundle at build time. The shipped default is
+  // `__Host-nexus_csrf`, which requires Secure and is therefore dropped over
+  // the loopback http origin these tests use.
   NEXT_PUBLIC_CSRF_COOKIE: 'nexus_csrf',
+  // Dev mode keeps the ordinary `.next` so its compile cache survives between
+  // runs; a production e2e build must not land there. See the file header.
+  ...(devMode ? {} : { NEXT_DIST_DIR: '.next-e2e' }),
 };
 
 const nextBin = join(frontendDir, 'node_modules', 'next', 'dist', 'bin', 'next');
@@ -158,6 +184,7 @@ const playwrightBin = join(
   'cli.js',
 );
 
+let builder = null;
 let nextServer = null;
 let tests = null;
 let shutdownPromise = null;
@@ -167,10 +194,39 @@ function stopServers() {
     shutdownPromise = (async () => {
       await stopProcessTree(tests, 'Playwright');
       await stopProcessTree(nextServer, 'Next.js');
+      await stopProcessTree(builder, 'the Next.js build');
       await adminServer.close();
     })();
   }
   return shutdownPromise;
+}
+
+/**
+ * Build the application the way the browser will meet it, and fail loudly.
+ *
+ * A build is also a check: a server/client boundary violation cannot be
+ * observed from a dev-mode run, and the tests below would report green while
+ * the deployed image refused to build at all.
+ */
+async function buildApplication() {
+  builder = spawnTracked(
+    process.execPath,
+    [nextBin, 'build'],
+    { cwd: frontendDir, env: childEnv, stdio: 'inherit', detached: !isWindows },
+    'the Next.js build',
+  );
+
+  const outcome = await withTimeout(
+    resultOf(builder),
+    Number(process.env.E2E_BUILD_TIMEOUT_MS ?? 5 * 60_000),
+    'The Next.js build exceeded the 5-minute runner deadline.',
+  );
+  if (outcome.error) {
+    throw new Error('Could not start the Next.js build.', { cause: outcome.error });
+  }
+  if (outcome.code !== 0) {
+    throw new Error(`The Next.js build failed with exit code ${outcome.code}.`);
+  }
 }
 
 async function waitUntilReady() {
@@ -212,11 +268,13 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 
 let exitCode = 1;
 try {
+  if (!devMode) await buildApplication();
+
   nextServer = spawnTracked(
     process.execPath,
     [
       nextBin,
-      'dev',
+      devMode ? 'dev' : 'start',
       '--hostname',
       serverURL.hostname,
       '--port',
@@ -233,8 +291,6 @@ try {
 
   await waitUntilReady();
 
-  const testArgs = process.argv.slice(2);
-  if (testArgs[0] === '--') testArgs.shift();
   tests = spawnTracked(
     process.execPath,
     [playwrightBin, 'test', ...testArgs],
