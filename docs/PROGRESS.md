@@ -67,6 +67,34 @@ on the host it watches cannot report that the host is off.
 The fuller version of that list, with what each would take, is under "What is
 still unverified" further down.
 
+### The browser now drives the two authentication state machines
+
+Vitest had reached components, but the browser still drove nothing. That left
+the exact boundary where authentication had already failed once — React
+reconciling the password form's controller into the TOTP form and dropping every
+typed digit — covered only through jsdom. Playwright now drives two Chromium
+paths against the real Next.js pages: password then TOTP, including the identity
+refetch before the redirect; and invitation enrolment through password, TOTP QR,
+account creation and the recovery-code acknowledgement that gates leaving the
+only copy of those codes.
+
+The admin responses are intercepted at the browser's network boundary rather
+than provided by a shared database. That is deliberate and bounded: these tests
+assert accessible names, request bodies, state transitions and navigation, while
+the backend integration suite continues to prove the same authentication flows
+against real Postgres and Redis-shaped ports. A browser test does not become
+more end to end by making its account state depend on whichever CI run arrived
+first.
+
+CI installs Chromium, runs the paths, and retains the HTML report, trace and
+screenshots. The first local run also found an infrastructure defect in the
+test runner itself: both tests finished, but Playwright's `webServer` teardown
+left Next's worker alive on Windows, so the command never returned. A small Node
+coordinator now owns both children and terminates the whole server process tree
+(`taskkill /T` on Windows, a detached process-group signal on POSIX). The same
+two tests pass and the command exits in 18 seconds instead of timing out after
+reporting success.
+
 ---
 
 ## 2026-08-05

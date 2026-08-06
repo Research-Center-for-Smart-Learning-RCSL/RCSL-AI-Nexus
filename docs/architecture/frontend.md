@@ -258,17 +258,29 @@ Model output and, in Phase 2, knowledge base excerpts are untrusted input. Markd
 
 ## 9. Testing
 
-**Vitest is in place; Storybook and Playwright are not.** For a while there was
+**Vitest and the first Playwright paths are in place; Storybook is not.** For a while there was
 no runner at all and the frontend was checked by the TypeScript compiler and
 ESLint only, which is how an open redirect, an unreachable frame schema, and a
 comparison between a UUID and an email address all shipped at once. Coverage is
 now deliberately uneven rather than absent: the logic where a defect *is* a
-security defect is covered, and presentation is not.
+security defect is covered, the two authentication state machines are driven
+in Chromium, and presentation is not exhaustively covered.
 
-Currently 155 tests across 16 files — the SSE reader and frame schema, the API
+Currently 229 Vitest tests across 26 files — the SSE reader and frame schema, the API
 client's CSRF and 401 handling, `safe-redirect`, the password schema, the key
 form's own rules, and the assistant's proposal parsing, transcript handling and
-page-context registry.
+page-context registry — plus two Playwright paths. The browser tests intercept
+the admin API at the network boundary: they cover the real Next.js pages,
+accessible controls, form state, requests and navigation without needing a
+shared account or mutable Postgres fixture. They complement rather than replace
+the backend's real-database authentication integration tests.
+
+`pnpm test:e2e` owns the Next.js development server and Chromium run. A small
+Node coordinator terminates the whole server process tree because Playwright's
+ordinary `webServer` teardown leaves Next's worker alive on Windows after the
+tests have finished; CI and local runs therefore use the same command and both
+return cleanly. Failed CI runs retain trace, screenshot and the HTML report as a
+GitHub Actions artifact.
 
 Two things about the setup are worth knowing before adding to it. Vitest's
 `globals` are **not** enabled, so every test imports what it uses — and
@@ -286,4 +298,4 @@ What is still outstanding:
 
 - **Storybook** for `components/ui` and `components/composed`. The composed layer is reused across eighteen feature folders, so a break there is expensive; stories cover loading, empty, error, and large-dataset states. Not started, and one of the two items left in Phase 2.
 - **Vitest with Testing Library** across the remaining `features/*/hooks`. Started: `useChatStream` and `useAssistant` are driven through `renderHook` with the API module mocked, which is the pattern the rest should follow.
-- **Playwright** for a small set of critical paths (create an API key, edit a routing policy and confirm gateway behaviour changes, stream a chat response and cancel mid-stream). Not every module needs an end-to-end test. Not started.
+- **Playwright**, beyond the authentication increment, for a small set of full-stack critical paths: create an API key, edit a routing policy and confirm gateway behaviour changes, stream a chat response and cancel mid-stream. Not every module needs an end-to-end test.

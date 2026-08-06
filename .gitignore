@@ -30,6 +30,9 @@ node_modules/
 out/
 .pnpm-store/
 *.tsbuildinfo
+frontend/playwright-report/
+frontend/test-results/
+frontend/.playwright-browsers/
 
 # The generated API types are committed, not ignored, and this rule used to say
 # the opposite while naming a `pnpm sync-types` script that did not exist. The
