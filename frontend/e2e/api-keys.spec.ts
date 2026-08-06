@@ -2,6 +2,7 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
 const OWNER_ID = '11111111-1111-1111-1111-111111111111';
+const CSRF_TOKEN = 'csrf-e2e-api-keys';
 
 type ApiKey = {
   key_id: string;
@@ -28,10 +29,15 @@ type KeyWrite = Pick<
   | 'expires_at'
 >;
 
-function json(route: Route, status: number, body: unknown) {
+function json(
+  route: Route,
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+) {
   return route.fulfill({
     status,
-    headers: JSON_HEADERS,
+    headers: { ...JSON_HEADERS, ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -46,15 +52,22 @@ async function installAdminApi(page: Page) {
     const url = new URL(request.url());
 
     if (url.pathname === '/admin/me' && request.method() === 'GET') {
-      await json(route, 200, {
-        id: OWNER_ID,
-        auth_mode: 'local',
-        login: 'member@example.org',
-        display_name: 'Member',
-        role: 'user',
-        scopes: ['api_key:read', 'api_key:write_own'],
-        session_expires_at: '2099-01-01T00:00:00Z',
-      });
+      await json(
+        route,
+        200,
+        {
+          id: OWNER_ID,
+          auth_mode: 'local',
+          login: 'member@example.org',
+          display_name: 'Member',
+          role: 'user',
+          scopes: ['api_key:read_own', 'api_key:write_own'],
+          session_expires_at: '2099-01-01T00:00:00Z',
+        },
+        {
+          'set-cookie': `nexus_csrf=${CSRF_TOKEN}; Path=/; SameSite=Lax`,
+        },
+      );
       return;
     }
 
@@ -64,6 +77,7 @@ async function installAdminApi(page: Page) {
     }
 
     if (url.pathname === '/admin/api-keys' && request.method() === 'POST') {
+      expect(request.headers()['x-csrf-token']).toBe(CSRF_TOKEN);
       issuedBody = request.postDataJSON() as KeyWrite & { owner_id: string };
       const key: ApiKey = {
         key_id: 'key-e2e-1',
@@ -84,6 +98,7 @@ async function installAdminApi(page: Page) {
 
     const keyMatch = url.pathname.match(/^\/admin\/api-keys\/([^/]+)$/);
     if (keyMatch && request.method() === 'PATCH') {
+      expect(request.headers()['x-csrf-token']).toBe(CSRF_TOKEN);
       updatedBody = request.postDataJSON() as Partial<KeyWrite>;
       const key = keys.find((candidate) => candidate.key_id === keyMatch[1]);
       expect(key).toBeDefined();
@@ -96,6 +111,7 @@ async function installAdminApi(page: Page) {
       /^\/admin\/api-keys\/([^/]+)\/revoke$/,
     );
     if (revokeMatch && request.method() === 'POST') {
+      expect(request.headers()['x-csrf-token']).toBe(CSRF_TOKEN);
       const key = keys.find(
         (candidate) => candidate.key_id === revokeMatch[1],
       );
@@ -158,9 +174,12 @@ test('issues, edits, and revokes an API key', async ({ page }) => {
   await editDialog.getByLabel('Rate limit (rpm)').fill('30');
   await editDialog.getByRole('button', { name: 'Save changes' }).click();
 
-  expect(api.updatedBody()).toMatchObject({
+  expect(api.updatedBody()).toEqual({
     name: 'browser-agent-renamed',
+    scopes: ['chat'],
     rate_limit_rpm: 30,
+    quota_tokens_per_day: 1_000_000,
+    allowed_cidrs: [],
   });
   const renamedRow = page
     .getByRole('row')

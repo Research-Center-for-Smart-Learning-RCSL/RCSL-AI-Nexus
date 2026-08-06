@@ -270,21 +270,26 @@ exhaustively covered.
 Currently 229 Vitest tests across 26 files — the SSE reader and frame schema, the API
 client's CSRF and 401 handling, `safe-redirect`, the password schema, the key
 form's own rules, and the assistant's proposal parsing, transcript handling and
-page-context registry — plus three Playwright paths. The browser tests intercept
+page-context registry — plus five Playwright paths. The browser tests intercept
 the admin API at the network boundary: they cover the real Next.js pages,
 accessible controls, form state, requests and navigation without needing a
 shared account or mutable Postgres fixture. The API key path keeps a stateful
 in-memory API boundary across issue, edit and revoke, including the one-time
-secret acknowledgement and revoked-key filter. These complement rather than
-replace the backend's real-database integration tests for authentication and
-API key persistence.
+secret acknowledgement and revoked-key filter; routing policy editing asserts
+the complete PUT and a GET made after it. Stream cancellation is the exception
+to finite interception: a loopback HTTP fixture holds a real SSE response open
+so Stop and client-side navigation must propagate disconnect to the upstream
+socket. These complement rather than replace the backend's real-database
+integration tests for authentication, API key persistence and routing policy
+persistence.
 
-`pnpm test:e2e` owns the Next.js development server and Chromium run. A small
-Node coordinator terminates the whole server process tree because Playwright's
-ordinary `webServer` teardown leaves Next's worker alive on Windows after the
-tests have finished; CI and local runs therefore use the same command and both
-return cleanly. Failed CI runs retain trace, screenshot and the HTML report as a
-GitHub Actions artifact.
+`pnpm test:e2e` owns the loopback admin fixture, Next.js development server and
+Chromium run. A Node coordinator chooses an unused loopback port and terminates
+both Next and Playwright process trees because Playwright's ordinary `webServer`
+teardown leaves Next's worker alive on Windows after the tests have finished.
+Spawn failures, signals and the ten-minute runner deadline all converge on the
+same cleanup; CI adds an outer fifteen-minute deadline. Failed CI runs retain
+trace, screenshot and the HTML report as a GitHub Actions artifact.
 
 Two things about the setup are worth knowing before adding to it. Vitest's
 `globals` are **not** enabled, so every test imports what it uses — and
@@ -302,4 +307,4 @@ What is still outstanding:
 
 - **Storybook** for `components/ui` and `components/composed`. The composed layer is reused across eighteen feature folders, so a break there is expensive; stories cover loading, empty, error, and large-dataset states. Not started, and one of the two items left in Phase 2.
 - **Vitest with Testing Library** across the remaining `features/*/hooks`. Started: `useChatStream` and `useAssistant` are driven through `renderHook` with the API module mocked, which is the pattern the rest should follow.
-- **Playwright**, beyond the authentication and browser-boundary API key increments, for a small set of full-stack critical paths: edit a routing policy and confirm gateway behaviour changes, stream a chat response and cancel mid-stream, and eventually run the management browser against isolated Postgres state. Not every module needs an end-to-end test.
+- **Playwright**, beyond the five browser paths now present, for the full-stack join: edit a routing policy and confirm actual gateway selection changes, and eventually run the management browser against isolated Postgres state. Not every module needs an end-to-end test.

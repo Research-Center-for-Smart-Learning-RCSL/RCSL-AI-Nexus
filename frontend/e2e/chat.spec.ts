@@ -6,13 +6,30 @@ type AdminState = {
 };
 
 test('cancels streams through Stop and page navigation', async ({
+  baseURL,
   page,
   request,
-}) => {
+}, testInfo) => {
   const adminURL = process.env.E2E_ADMIN_API_URL;
   test.skip(!adminURL, 'Run through pnpm test:e2e to start the SSE fixture.');
+  if (!baseURL) throw new Error('Playwright baseURL is required for this test.');
 
-  await request.post(`${adminURL}/__e2e__/reset`);
+  const caseId = [
+    testInfo.project.name,
+    testInfo.workerIndex,
+    testInfo.repeatEachIndex,
+    testInfo.retry,
+  ]
+    .join('-')
+    .replace(/[^a-zA-Z0-9_-]/g, '_');
+  const fixtureURL = (path: 'reset' | 'state') =>
+    `${adminURL}/__e2e__/${path}?case=${encodeURIComponent(caseId)}`;
+
+  await page.context().addCookies([
+    { name: 'e2e_case', value: caseId, url: baseURL },
+  ]);
+
+  await request.post(fixtureURL('reset'));
   await page.goto('/chat');
 
   await page.getByLabel('Message').fill('Give me a deliberately long answer.');
@@ -23,11 +40,13 @@ test('cancels streams through Stop and page navigation', async ({
 
   await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
   await expect(page.getByText('Partial reply')).toBeVisible();
-  await expect(page.getByRole('alert')).toHaveCount(0);
+  // Next dev mounts its own off-screen role=alert for the development overlay.
+  // Only an alert in the application main region is a chat failure.
+  await expect(page.getByRole('main').getByRole('alert')).toHaveCount(0);
 
   await expect
     .poll(async () => {
-      const response = await request.get(`${adminURL}/__e2e__/state`);
+      const response = await request.get(fixtureURL('state'));
       const state = (await response.json()) as AdminState;
       return state.disconnectedStreams;
     })
@@ -41,17 +60,18 @@ test('cancels streams through Stop and page navigation', async ({
     .fill('Keep generating until I leave this page.');
   await page.getByRole('button', { name: 'Send' }).click();
   await expect(page.getByText('Partial reply')).toHaveCount(2);
-  await page.goto('/api-docs');
+  await page.getByRole('link', { name: 'API', exact: true }).click();
+  await expect(page).toHaveURL(/\/api-docs$/);
 
   await expect
     .poll(async () => {
-      const response = await request.get(`${adminURL}/__e2e__/state`);
+      const response = await request.get(fixtureURL('state'));
       const state = (await response.json()) as AdminState;
       return state.disconnectedStreams;
     })
     .toBe(2);
 
-  const response = await request.get(`${adminURL}/__e2e__/state`);
+  const response = await request.get(fixtureURL('state'));
   const state = (await response.json()) as AdminState;
   expect(state.chatRequests).toEqual([
     {

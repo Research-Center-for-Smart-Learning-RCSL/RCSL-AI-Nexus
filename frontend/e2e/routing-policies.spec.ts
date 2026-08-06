@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
+const CSRF_TOKEN = 'csrf-e2e-routing';
 
 type Requirement = {
   node_status: string[];
@@ -21,10 +22,15 @@ type SavePolicyBody = {
 
 type Policy = SavePolicyBody & { capability: string };
 
-function json(route: Route, status: number, body: unknown) {
+function json(
+  route: Route,
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+) {
   return route.fulfill({
     status,
-    headers: JSON_HEADERS,
+    headers: { ...JSON_HEADERS, ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -63,21 +69,29 @@ async function installAdminApi(page: Page) {
   };
   let savedBody: SavePolicyBody | null = null;
   let listReads = 0;
+  let listReadsAtSave: number | null = null;
 
   await page.route('**/admin/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
 
     if (url.pathname === '/admin/me' && request.method() === 'GET') {
-      await json(route, 200, {
-        id: '33333333-3333-3333-3333-333333333333',
-        auth_mode: 'local',
-        login: 'operator@example.org',
-        display_name: 'Operator',
-        role: 'operator',
-        scopes: ['model:read', 'routing:read', 'routing:write'],
-        session_expires_at: '2099-01-01T00:00:00Z',
-      });
+      await json(
+        route,
+        200,
+        {
+          id: '33333333-3333-3333-3333-333333333333',
+          auth_mode: 'local',
+          login: 'operator@example.org',
+          display_name: 'Operator',
+          role: 'operator',
+          scopes: ['model:read', 'routing:read', 'routing:write'],
+          session_expires_at: '2099-01-01T00:00:00Z',
+        },
+        {
+          'set-cookie': `nexus_csrf=${CSRF_TOKEN}; Path=/; SameSite=Lax`,
+        },
+      );
       return;
     }
 
@@ -102,6 +116,8 @@ async function installAdminApi(page: Page) {
       url.pathname === '/admin/routing-policies/chat' &&
       request.method() === 'PUT'
     ) {
+      expect(request.headers()['x-csrf-token']).toBe(CSRF_TOKEN);
+      listReadsAtSave = listReads;
       savedBody = request.postDataJSON() as SavePolicyBody;
       policy = { capability: 'chat', ...savedBody };
       await json(route, 200, policy);
@@ -113,6 +129,7 @@ async function installAdminApi(page: Page) {
 
   return {
     listReads: () => listReads,
+    listReadsAtSave: () => listReadsAtSave,
     savedBody: () => savedBody,
   };
 }
@@ -142,9 +159,11 @@ test('edits a routing policy and refetches the saved state', async ({ page }) =>
   await dialog.getByLabel('Priority').nth(1).fill('50');
   await dialog
     .getByRole('checkbox', { name: 'degraded', exact: true })
+    .nth(1)
     .check();
   await dialog
     .getByRole('checkbox', { name: 'downloaded', exact: true })
+    .nth(1)
     .check();
 
   await dialog.getByRole('button', { name: 'Save changes' }).click();
@@ -177,5 +196,6 @@ test('edits a routing policy and refetches the saved state', async ({ page }) =>
   await expect(savedRow.getByRole('cell').nth(1)).toHaveText('2');
   await expect(savedRow).toContainText('qwen-chat (p50)');
   await expect(savedRow).toContainText('Answer directly');
-  expect(api.listReads()).toBeGreaterThanOrEqual(2);
+  expect(api.listReadsAtSave()).not.toBeNull();
+  expect(api.listReads()).toBeGreaterThan(api.listReadsAtSave()!);
 });

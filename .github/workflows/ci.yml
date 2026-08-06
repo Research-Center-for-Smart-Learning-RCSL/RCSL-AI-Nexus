@@ -165,6 +165,7 @@ jobs:
 
       - name: Playwright
         working-directory: frontend
+        timeout-minutes: 15
         run: pnpm test:e2e
 
       - name: Playwright report

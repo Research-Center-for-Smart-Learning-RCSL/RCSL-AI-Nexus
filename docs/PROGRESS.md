@@ -112,7 +112,37 @@ permission-gated actions. A local Docker daemon was unavailable during this
 increment, so no CI-only database orchestration was added without a way to run
 it first. A unified browser-to-Postgres harness remains useful when that local
 precondition is available; routing-policy-to-gateway behaviour and stream
-cancellation remain the higher-value missing critical paths.
+cancellation were the next browser increments.
+
+### Routing edits and stream cancellation are browser-driven too
+
+The fourth path edits the existing chat routing policy through the real form:
+it changes deliberation, replaces one model, adds a second candidate with
+structured requirements, asserts the complete idempotent PUT body, and proves
+the table was populated by a GET made after that save. The fifth path uses a
+real local SSE socket rather than a finite intercepted response. It receives a
+partial answer, stops it while preserving what arrived, then starts another and
+leaves through a client-side Next.js link; both routes must close the upstream
+connection so neither generation keeps a model concurrency slot.
+
+Three independent adversarial reviews then attacked the tests and runner. They
+found two immediate failures (an ambiguous repeated-candidate checkbox and a
+Next dev overlay alert mistaken for an application error), plus four ways a
+green run could still lie: document-level navigation cancels fetches even if
+the hook's unmount cleanup is absent, the SSE fixture shared state across
+parallel workers, write mocks omitted the CSRF cookie/header contract, and the
+runner could mistake an old process on a fixed port for the Next child it had
+just started. The corrected runner chooses an unused loopback port, owns both
+Next and Playwright process trees through signals and spawn errors, namespaces
+SSE state per test case, and has both a ten-minute internal deadline and a
+fifteen-minute CI step deadline. Five browser paths pass; the chat case also
+passes twice concurrently under two workers.
+
+This still does not claim that editing the policy changed gateway selection.
+That needs the browser, admin API, Postgres, gateway and a controllable runtime
+in one harness. The current policy path proves the management UI contract; the
+existing backend integration tests prove persistence; their behavioural join
+remains the Phase 3 increment.
 
 ---
 

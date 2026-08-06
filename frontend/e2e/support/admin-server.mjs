@@ -23,13 +23,30 @@ async function readJson(request) {
  * route: no test-only endpoint is compiled into the shipped frontend.
  */
 export async function startAdminTestServer() {
-  const state = {
-    chatRequests: [],
-    disconnectedStreams: 0,
-  };
-  const openStreams = new Set();
+  const states = new Map();
+  const openStreams = new Map();
   const suppressedDisconnects = new WeakSet();
   let closing = false;
+
+  function stateFor(caseId) {
+    let state = states.get(caseId);
+    if (!state) {
+      state = { chatRequests: [], disconnectedStreams: 0 };
+      states.set(caseId, state);
+    }
+    return state;
+  }
+
+  function caseIdFor(request, url) {
+    const query = url.searchParams.get('case');
+    if (query) return query;
+    const cookies = request.headers.cookie?.split(';') ?? [];
+    for (const cookie of cookies) {
+      const [name, ...parts] = cookie.trim().split('=');
+      if (name === 'e2e_case') return decodeURIComponent(parts.join('='));
+    }
+    return 'default';
+  }
 
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
@@ -48,6 +65,8 @@ export async function startAdminTestServer() {
     }
 
     if (url.pathname === '/admin/chat' && request.method === 'POST') {
+      const caseId = caseIdFor(request, url);
+      const state = stateFor(caseId);
       try {
         state.chatRequests.push(await readJson(request));
       } catch {
@@ -65,7 +84,7 @@ export async function startAdminTestServer() {
         `data: ${JSON.stringify({ choices: [{ delta: { content: 'Partial reply' } }] })}\n\n`,
       );
 
-      openStreams.add(response);
+      openStreams.set(response, caseId);
       const heartbeat = setInterval(() => {
         if (!response.destroyed) response.write(': keepalive\n\n');
       }, 250);
@@ -82,18 +101,21 @@ export async function startAdminTestServer() {
     }
 
     if (url.pathname === '/__e2e__/state' && request.method === 'GET') {
-      sendJson(response, 200, state);
+      sendJson(response, 200, stateFor(caseIdFor(request, url)));
       return;
     }
 
     if (url.pathname === '/__e2e__/reset' && request.method === 'POST') {
+      const caseId = caseIdFor(request, url);
+      const state = stateFor(caseId);
       // A failed attempt may leave its stream open when Playwright retries the
       // test. Close it without counting it as the retry's user cancellation.
-      for (const stream of openStreams) {
+      for (const [stream, streamCaseId] of openStreams) {
+        if (streamCaseId !== caseId) continue;
         suppressedDisconnects.add(stream);
         stream.destroy();
+        openStreams.delete(stream);
       }
-      openStreams.clear();
       state.chatRequests.length = 0;
       state.disconnectedStreams = 0;
       sendJson(response, 200, state);
@@ -118,7 +140,7 @@ export async function startAdminTestServer() {
     url,
     async close() {
       closing = true;
-      for (const response of openStreams) response.destroy();
+      for (const response of openStreams.keys()) response.destroy();
       openStreams.clear();
       await new Promise((resolve) => {
         server.close(resolve);
