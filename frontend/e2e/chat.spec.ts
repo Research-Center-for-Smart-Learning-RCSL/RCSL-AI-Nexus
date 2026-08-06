@@ -5,7 +5,7 @@ type AdminState = {
   disconnectedStreams: number;
 };
 
-test('cancels a stream while preserving the partial reply', async ({
+test('cancels streams through Stop and page navigation', async ({
   page,
   request,
 }) => {
@@ -33,6 +33,24 @@ test('cancels a stream while preserving the partial reply', async ({
     })
     .toBe(1);
 
+  // Navigating away exercises the hook's unmount cleanup rather than the Stop
+  // button. Both must abort the same fetch or a background generation keeps a
+  // model concurrency slot after the person has left the conversation.
+  await page
+    .getByLabel('Message')
+    .fill('Keep generating until I leave this page.');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await expect(page.getByText('Partial reply')).toHaveCount(2);
+  await page.goto('/api-docs');
+
+  await expect
+    .poll(async () => {
+      const response = await request.get(`${adminURL}/__e2e__/state`);
+      const state = (await response.json()) as AdminState;
+      return state.disconnectedStreams;
+    })
+    .toBe(2);
+
   const response = await request.get(`${adminURL}/__e2e__/state`);
   const state = (await response.json()) as AdminState;
   expect(state.chatRequests).toEqual([
@@ -40,6 +58,15 @@ test('cancels a stream while preserving the partial reply', async ({
       capability: 'chat',
       messages: [
         { role: 'user', content: 'Give me a deliberately long answer.' },
+      ],
+      think: true,
+    },
+    {
+      capability: 'chat',
+      messages: [
+        { role: 'user', content: 'Give me a deliberately long answer.' },
+        { role: 'assistant', content: 'Partial reply' },
+        { role: 'user', content: 'Keep generating until I leave this page.' },
       ],
       think: true,
     },
