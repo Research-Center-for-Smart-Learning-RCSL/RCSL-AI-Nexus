@@ -1,21 +1,36 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
+const CSRF_TOKEN = 'csrf-e2e-auth';
 
-function json(route: Route, status: number, body: unknown) {
+function json(
+  route: Route,
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+) {
   return route.fulfill({
     status,
-    headers: JSON_HEADERS,
+    headers: { ...JSON_HEADERS, ...headers },
     body: JSON.stringify(body),
   });
 }
 
 function unauthenticated(route: Route) {
-  return json(route, 401, {
-    code: 'authentication_required',
-    message: 'Authentication required.',
-    auth_mode: 'local',
-  });
+  return json(
+    route,
+    401,
+    {
+      code: 'authentication_required',
+      message: 'Authentication required.',
+      auth_mode: 'local',
+    },
+    { 'set-cookie': `nexus_csrf=${CSRF_TOKEN}; Path=/; SameSite=Lax` },
+  );
+}
+
+function expectCsrf(route: Route) {
+  expect(route.request().headers()['x-csrf-token']).toBe(CSRF_TOKEN);
 }
 
 function authenticated(route: Route) {
@@ -26,7 +41,7 @@ function authenticated(route: Route) {
     display_name: 'Operator',
     role: 'operator',
     scopes: ['chat:use'],
-    session_expires_at: '2026-08-07T00:00:00Z',
+    session_expires_at: '2099-01-01T00:00:00Z',
   });
 }
 
@@ -41,21 +56,25 @@ test('signs in with password and TOTP, then refreshes identity before redirectin
   page,
 }) => {
   let signedIn = false;
+  let authenticatedMeCalls = 0;
   let passwordBody: unknown;
   let totpBody: unknown;
 
   await mockAdmin(page, async (route, url) => {
     const request = route.request();
     if (url.pathname === '/admin/me') {
+      if (signedIn) authenticatedMeCalls += 1;
       await (signedIn ? authenticated(route) : unauthenticated(route));
       return;
     }
     if (url.pathname === '/admin/auth/login' && request.method() === 'POST') {
+      expectCsrf(route);
       passwordBody = request.postDataJSON();
       await json(route, 200, { challenge: 'challenge-123', next: 'totp' });
       return;
     }
     if (url.pathname === '/admin/auth/login/totp' && request.method() === 'POST') {
+      expectCsrf(route);
       totpBody = request.postDataJSON();
       signedIn = true;
       await route.fulfill({ status: 204 });
@@ -78,7 +97,12 @@ test('signs in with password and TOTP, then refreshes identity before redirectin
   await page.getByLabel('Verification code').fill('123456');
   await page.getByRole('button', { name: 'Sign in' }).click();
 
-  await expect(page).toHaveURL(/\/chat$/);
+  // The first dashboard navigation may cold-compile /chat under next dev.
+  // Leave enough room for that compile when all Playwright workers start at
+  // once; the mocked identity refetch above still gates the redirect itself.
+  await expect(page).toHaveURL(/\/chat$/, { timeout: 20_000 });
+  await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible();
+  expect(authenticatedMeCalls).toBeGreaterThanOrEqual(1);
   expect(totpBody).toEqual({ challenge: 'challenge-123', code: '123456' });
 });
 
@@ -114,6 +138,7 @@ test('requires recovery codes to be acknowledged after invitation enrolment', as
       return;
     }
     if (url.pathname === '/admin/invitations/accept' && request.method() === 'POST') {
+      expectCsrf(route);
       acceptanceBody = request.postDataJSON();
       await json(route, 200, {
         recovery_codes: [

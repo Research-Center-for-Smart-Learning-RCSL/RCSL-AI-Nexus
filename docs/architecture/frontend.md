@@ -267,7 +267,7 @@ security defect is covered, the two authentication state machines and the API
 key management lifecycle are driven in Chromium, and presentation is not
 exhaustively covered.
 
-Currently 229 Vitest tests across 26 files — the SSE reader and frame schema, the API
+Currently 233 Vitest tests across 27 files — the SSE reader and frame schema, the API
 client's CSRF and 401 handling, `safe-redirect`, the password schema, the key
 form's own rules, and the assistant's proposal parsing, transcript handling and
 page-context registry — plus five Playwright paths. The browser tests intercept

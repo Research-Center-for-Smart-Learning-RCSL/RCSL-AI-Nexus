@@ -15,7 +15,7 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
-## Current state — 2026-08-05
+## Current state — 2026-08-06
 
 **A summary, and therefore the least trustworthy thing here.** Two summaries in
 this file have already contradicted the dated entries below them, one of them
@@ -31,7 +31,8 @@ natively and holds `glm-4.7-flash:q8_0`, `qwen2.5:7b` and `nomic-embed-text`.
 Four routing policies: `chat`, `assist`, `embedding`, and `code` with
 deliberation off.
 
-**Built.** Phase 1 is complete but for Playwright, which is filed under Phase 3.
+**Built.** Phase 1 is complete, including the five Playwright paths described
+below.
 Phase 2 is complete but for **encrypted backups with a rehearsed restore** and
 **Storybook**; the *logging boundaries* half of §9.2 is also unwritten, though
 the expiring switch that would gate it now exists on both credentials.

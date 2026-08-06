@@ -1,23 +1,11 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 
+import type { ApiKey } from '../src/features/api-keys/schema';
+
 const JSON_HEADERS = { 'content-type': 'application/json' };
 const OWNER_ID = '11111111-1111-1111-1111-111111111111';
 const CSRF_TOKEN = 'csrf-e2e-api-keys';
-
-type ApiKey = {
-  key_id: string;
-  name: string;
-  scopes: string[];
-  rate_limit_rpm: number;
-  quota_tokens_per_day: number;
-  allowed_cidrs: string[];
-  expires_at: string;
-  owner_id: string;
-  owner_display: string | null;
-  revoked_at: string | null;
-  created_at: string;
-  last_used_at: string | null;
-};
+const PLAINTEXT = 'nx_live_key-e2e-1.plaintext-shown-once';
 
 type KeyWrite = Pick<
   ApiKey,
@@ -87,11 +75,12 @@ async function installAdminApi(page: Page) {
         revoked_at: null,
         created_at: '2026-08-06T00:00:00Z',
         last_used_at: null,
+        debug_logging_until: null,
       };
       keys.push(key);
       await json(route, 201, {
         key,
-        plaintext: 'nxs_e2e_plaintext_shown_once',
+        plaintext: PLAINTEXT,
       });
       return;
     }
@@ -151,10 +140,8 @@ test('issues, edits, and revokes an API key', async ({ page }) => {
     allowed_cidrs: [],
   });
   expect(api.issuedBody()?.expires_at).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-  await expect(createDialog.getByText('The key, shown once')).toBeVisible();
-  await expect(
-    createDialog.getByText('nxs_e2e_plaintext_shown_once'),
-  ).toBeVisible();
+  await expect(createDialog.getByText(PLAINTEXT, { exact: true })).toBeVisible();
+  await expect(createDialog.getByRole('alert')).toHaveCount(0);
 
   const done = createDialog.getByRole('button', { name: 'Done' });
   await expect(done).toBeDisabled();

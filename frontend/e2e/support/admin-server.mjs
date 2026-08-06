@@ -1,9 +1,10 @@
 import { createServer } from 'node:http';
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
+const CSRF_TOKEN = 'csrf-e2e-chat';
 
-function sendJson(response, status, body) {
-  response.writeHead(status, JSON_HEADERS);
+function sendJson(response, status, body, headers = {}) {
+  response.writeHead(status, { ...JSON_HEADERS, ...headers });
   response.end(JSON.stringify(body));
 }
 
@@ -52,19 +53,28 @@ export async function startAdminTestServer() {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
 
     if (url.pathname === '/admin/me' && request.method === 'GET') {
-      sendJson(response, 200, {
-        id: '22222222-2222-2222-2222-222222222222',
-        auth_mode: 'local',
-        login: 'chat-user@example.org',
-        display_name: 'Chat User',
-        role: 'user',
-        scopes: ['chat:use', 'usage:read_own'],
-        session_expires_at: '2099-01-01T00:00:00Z',
-      });
+      sendJson(
+        response,
+        200,
+        {
+          id: '22222222-2222-2222-2222-222222222222',
+          auth_mode: 'local',
+          login: 'chat-user@example.org',
+          display_name: 'Chat User',
+          role: 'user',
+          scopes: ['chat:use', 'usage:read_own'],
+          session_expires_at: '2099-01-01T00:00:00Z',
+        },
+        { 'set-cookie': `nexus_csrf=${CSRF_TOKEN}; Path=/; SameSite=Lax` },
+      );
       return;
     }
 
     if (url.pathname === '/admin/chat' && request.method === 'POST') {
+      if (request.headers['x-csrf-token'] !== CSRF_TOKEN) {
+        sendJson(response, 403, { message: 'Missing or invalid CSRF token.' });
+        return;
+      }
       const caseId = caseIdFor(request, url);
       const state = stateFor(caseId);
       try {
