@@ -217,13 +217,29 @@ No open decisions block Phase 1.
   is not degrading; **q4 quantisation** is the one real alternative (≈18 GB
   back, trades quality not speed, probably faster since bandwidth is the
   bottleneck); **a keep-alive duration** is now the weakest, being the coarse
-  version of what the OS already does. Open measurements: the length of the
-  wiring tail (>20 s, <~20 min), whether eviction actually occurs under
-  pressure, and q4's quality here. **An earlier version of this item asserted
+  version of what the OS already does. **An earlier version of this item asserted
   the weights were permanently unreclaimable; it was labelled unproven, checked
   because of the label, and was wrong.** Evidence and the failed inference in
   [PROGRESS.md](./PROGRESS.md) 2026-08-05; guardrail context in
-  [security.md](./architecture/security.md) §4.3
+  [security.md](./architecture/security.md) §4.3.
+
+  **Measured 2026-08-07, and it strengthens "nothing".** The wiring tail is
+  **19 minutes** — two runs put the release inside (1139, 1151] seconds,
+  agreeing within three seconds. The trigger is a *single request of any size*:
+  a 0.9-second, two-token generation wired 38.5 GB. The release is a change of
+  page status rather than a reclaim, and the OS does it, not Ollama. Across
+  both runs the machine spent nineteen minutes at 0.1–0.7 GB free with **swap
+  at 0 bytes and nothing degrading**. And the shape is per session rather than
+  steady: 152 of 181 real request gaps are under nineteen minutes, so a working
+  session sits at ~12 GB throughout and the idle machine returns to ~37 GB.
+  **The number that actually constrains the deployment is neither** — the
+  static budget allows `64 GiB × 0.8 = 51.2` against 41.33 observed as loaded,
+  so 9.87 GiB is what decides whether a fourth model may be loaded, and no
+  finding here touches it. Remaining open measurements: whether eviction occurs
+  under real pressure (a decision, not a measurement — it needs a deliberate
+  allocation on a serving machine), q4's quality here, and whether headroom
+  survives a full-context request. The "unexplained 3 GB" is closed: it was
+  GiB against decimal GB, and the budget's units are consistent
 
 Settled:
 
