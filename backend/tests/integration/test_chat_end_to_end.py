@@ -81,6 +81,7 @@ class StubRuntime:
         tools: Sequence[ToolDefinition] = (),
         tool_choice: ToolChoice | None = None,
         sampling: SamplingOptions | None = None,
+        context_length: int | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         self.seen_ref = ref
         self.seen_max_tokens = max_tokens

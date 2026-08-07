@@ -531,6 +531,10 @@ class FakeRuntime:
     ) -> None:
         self.loaded: list[str] = []
         self.unloaded: list[str] = []
+        # Recorded rather than merely accepted: the whole point of the argument
+        # is the value that reaches the runtime, so a fake that swallowed it
+        # would let the wiring rot silently.
+        self.load_context_lengths: list[int | None] = []
         self.pull_closed = False
         self._updates = pull_updates
         self._fail_on = fail_on
@@ -541,10 +545,11 @@ class FakeRuntime:
         if ref in self._invalid:
             raise InvalidModelReferenceError(detail=f"rejected {ref}")
 
-    async def load(self, ref: str) -> None:
+    async def load(self, ref: str, *, context_length: int | None = None) -> None:
         if self._fail_on == "load":
             raise RuntimeError("runtime refused the load")
         self.loaded.append(ref)
+        self.load_context_lengths.append(context_length)
 
     async def unload(self, ref: str) -> None:
         if self._fail_on == "unload":

@@ -104,6 +104,30 @@ def _finish_reason(done_reason: str | None, *, called_tools: bool) -> str:
     return mapped
 
 
+def _set_num_ctx(options: dict[str, Any], context_length: int | None) -> None:
+    """Tell Ollama how much context to size the runner for.
+
+    Without it Ollama allocates for the model's *own* declared maximum, which
+    for `gemma4:31b-it-qat` is 262144 tokens and predicted 55.8 GiB — enough
+    that loading it evicted every other resident model, taking `assist` and
+    `embedding` down with it (PROGRESS.md 2026-08-07). The platform never sends
+    more than `MAX_CONTEXT_LENGTH`, and each model registers its own ceiling
+    below that, so the runtime was reserving for four times the largest request
+    it will ever see.
+
+    **This went unnoticed for three months because the resident model hid it.**
+    `glm-4.7-flash` uses multi-head latent attention with a single KV head, so
+    even 202752 tokens of context cost little; the first dense model with
+    ordinary attention made the same missing argument fatal.
+
+    Zero and negative are treated as absent rather than sent. The column
+    defaults to 0, so a row registered before the profile was required would
+    otherwise ask Ollama for a zero-length context.
+    """
+    if context_length is not None and context_length > 0:
+        options["num_ctx"] = context_length
+
+
 def _sampling_options(sampling: SamplingOptions | None) -> dict[str, Any]:
     """Ollama's `options` names for the parameters the caller set.
 
@@ -287,6 +311,7 @@ class OllamaAdapter:
         tools: Sequence[ToolDefinition] = (),
         tool_choice: ToolChoice | None = None,
         sampling: SamplingOptions | None = None,
+        context_length: int | None = None,
     ) -> AsyncGenerator[CompletionChunk, None]:
         """Stream a completion.
 
@@ -297,6 +322,7 @@ class OllamaAdapter:
         """
         assert_valid_model_ref(ref)
         options: dict[str, Any] = {}
+        _set_num_ctx(options, context_length)
         if max_tokens is not None:
             # Stopping at the source beats counting chunks and cutting the
             # stream: the model stops generating rather than producing tokens
@@ -532,7 +558,7 @@ class OllamaAdapter:
                         total_bytes=event.get("total"),
                     )
 
-    async def load(self, ref: str) -> None:
+    async def load(self, ref: str, *, context_length: int | None = None) -> None:
         """Warm a model into memory.
 
         An empty prompt with a keep_alive is Ollama's documented way to load
@@ -544,7 +570,7 @@ class OllamaAdapter:
         evict, behave identically to the generate path.
         """
         assert_valid_model_ref(ref)
-        await self._post_lifecycle(ref, keep_alive=self._keep_alive)
+        await self._post_lifecycle(ref, keep_alive=self._keep_alive, context_length=context_length)
 
     async def unload(self, ref: str) -> None:
         """Evict immediately. `keep_alive: 0` is the documented signal."""
@@ -607,17 +633,24 @@ class OllamaAdapter:
 
     # --- internals -------------------------------------------------------
 
-    async def _post_lifecycle(self, ref: str, keep_alive: str | int) -> None:
+    async def _post_lifecycle(
+        self, ref: str, keep_alive: str | int, context_length: int | None = None
+    ) -> None:
+        # The load is where Ollama sizes the runner, so this is the call that
+        # decides how much memory the weights bring with them. An unload does
+        # not size anything and passes nothing.
+        options: dict[str, Any] = {}
+        _set_num_ctx(options, context_length)
+        body: dict[str, Any] = {"model": ref, "keep_alive": keep_alive}
+        if options:
+            body["options"] = options
+
         async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
-            response = await client.post(
-                "/api/generate", json={"model": ref, "keep_alive": keep_alive}
-            )
+            response = await client.post("/api/generate", json=body)
             if response.status_code == 400:
                 # An embedding model. The refusal is specific to generate;
                 # embed with no input moves the same weights the same way.
-                response = await client.post(
-                    "/api/embed", json={"model": ref, "input": [], "keep_alive": keep_alive}
-                )
+                response = await client.post("/api/embed", json={**body, "input": []})
             if response.status_code == 404:
                 raise ModelNotFoundError(detail=f"{ref} is not present on this runtime")
             if response.status_code >= 400:

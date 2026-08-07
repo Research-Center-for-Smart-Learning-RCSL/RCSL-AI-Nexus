@@ -268,6 +268,61 @@ async def test_loading_twice_is_not_an_error() -> None:
     harness = Harness([make_model(state=ModelState.LOADED)])
 
     assert (await harness.use_case.load(ADMIN, "m1")).state is ModelState.LOADED
+    assert harness.runtime.loaded == [], "nothing to do, so the runtime is not called"
+
+
+async def test_a_model_the_runtime_has_evicted_can_still_be_loaded() -> None:
+    """The recovery action must work in the one case it exists for.
+
+    Deciding on `state` alone made this a no-op exactly when it mattered: a
+    runtime that evicts a model out of band leaves the registry recording
+    LOADED, so the early return above fired and the operator got 200 with the
+    runtime never called. Seen on 2026-08-07, when Ollama evicted two models to
+    fit a third — pressing Load produced no request in its log at all, and the
+    only way back was to unload first.
+
+    `RoutingService._satisfies` had already settled the rule this now follows:
+    where both exist, the observation outranks the intent.
+    """
+    harness = Harness([make_model(state=ModelState.LOADED, observed_state=ModelState.DOWNLOADED)])
+
+    result = await harness.use_case.load(ADMIN, "m1")
+
+    assert harness.runtime.loaded == ["library/qwen2.5:7b"], "the runtime was never asked"
+    assert result.state is ModelState.LOADED
+
+
+async def test_a_model_the_runtime_holds_can_still_be_unloaded() -> None:
+    """The mirror case, and the reason both were changed together.
+
+    Ollama loads on demand, so the runtime can hold weights the registry never
+    claimed. Judging by intent, `unload` refused with a 409 saying the model was
+    merely downloaded — leaving the operator no way to evict something that was
+    demonstrably resident and counted against nothing.
+    """
+    harness = Harness([make_model(state=ModelState.DOWNLOADED, observed_state=ModelState.LOADED)])
+
+    await harness.use_case.unload(ADMIN, "m1")
+
+    assert harness.runtime.unloaded == ["library/qwen2.5:7b"]
+
+
+async def test_the_load_tells_the_runtime_which_context_to_size_for() -> None:
+    """The registered profile has to reach the runtime, or it is decoration.
+
+    `resource_profile.context_length` was stored, mapped, validated and shown
+    on the models screen while nothing read it to any effect. What that cost:
+    Ollama sizes its KV cache for the model's *own* declared maximum when told
+    nothing, so loading `gemma4:31b-it-qat` predicted 55.8 GiB for a 262144
+    token context and evicted every other resident model — on a deployment
+    whose ceiling is 65536 and which had registered 32768 for that model
+    (PROGRESS.md 2026-08-07).
+    """
+    harness = Harness([make_model()])
+
+    await harness.use_case.load(ADMIN, "m1")
+
+    assert harness.runtime.load_context_lengths == [PROFILE.context_length]
 
 
 async def test_a_failed_load_leaves_the_model_in_error_not_loading() -> None:

@@ -225,8 +225,12 @@ class MlxAdapter:
         tools: Sequence[ToolDefinition] = (),
         tool_choice: ToolChoice | None = None,
         sampling: SamplingOptions | None = None,
+        context_length: int | None = None,
     ) -> AsyncGenerator[CompletionChunk, None]:
         """Stream a completion over the OpenAI-compatible endpoint.
+
+        `context_length` is accepted and unused here; see `load` for why MLX
+        needs no equivalent of Ollama's `num_ctx`.
 
         An async generator, declared without `async def` in the port and called
         without await. The `finally` the `async with` provides is what closes the
@@ -445,12 +449,19 @@ class MlxAdapter:
             raise self._map_hf_error(error[0], ref)
         yield PullProgress(status="success", completed_bytes=total, total_bytes=total)
 
-    async def load(self, ref: str) -> None:
+    async def load(self, ref: str, *, context_length: int | None = None) -> None:
         """Warm the model into memory.
 
         `mlx_lm.server` loads on first use and has no dedicated load endpoint, so
         a one-token non-streaming completion is the way to force it resident
         without producing anything worth reading.
+
+        `context_length` is accepted and not sent: the OpenAI-compatible surface
+        `mlx_lm.server` exposes has no field for it, and MLX allocates its KV
+        cache as the conversation grows rather than reserving it at load. The
+        over-allocation this argument exists to prevent on Ollama therefore has
+        no equivalent here — which is a property of this runtime rather than
+        something left to do, so it is stated rather than raised.
         """
         assert_valid_hf_repo_id(ref)
         await self._post(

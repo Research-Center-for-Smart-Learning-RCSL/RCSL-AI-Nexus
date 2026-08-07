@@ -30,6 +30,7 @@ class ModelRuntimePort(Protocol):
         tools: Sequence[ToolDefinition] = (),
         tool_choice: ToolChoice | None = None,
         sampling: SamplingOptions | None = None,
+        context_length: int | None = None,
     ) -> AsyncGenerator[CompletionChunk, None]:
         """Stream completion chunks. Implementations are async generators.
 
@@ -47,6 +48,12 @@ class ModelRuntimePort(Protocol):
 
         `sampling` carries only what the caller actually set, so a runtime's own
         defaults stay in force for everything else.
+
+        `context_length` must match what `load` was given for the same model.
+        Ollama keys a runner on the options that shape it, so a generate that
+        omits it after a load that supplied it starts a *second* runner at the
+        model's own maximum — which is the allocation this argument exists to
+        avoid, arriving one request later instead of at load.
 
         `thinking=False` asks a model that deliberates to answer directly. It
         is a per-call argument rather than adapter state because one resident
@@ -112,7 +119,18 @@ class ModelRuntimePort(Protocol):
         """
         ...
 
-    async def load(self, ref: str) -> None: ...
+    async def load(self, ref: str, *, context_length: int | None = None) -> None:
+        """Warm the weights, sized to the context the platform will actually use.
+
+        `context_length` is the model's registered `resource_profile`, and it
+        is here because a runtime that is told nothing sizes its KV cache for
+        the model's *own* declared maximum. Ollama predicted 55.8 GiB for a
+        262144-token context on a model this deployment never sends more than
+        65536 to, and evicted every other resident model to make room
+        (PROGRESS.md 2026-08-07). None means "do not say", which is what a
+        runtime with no such control gets.
+        """
+        ...
 
     async def unload(self, ref: str) -> None: ...
 
