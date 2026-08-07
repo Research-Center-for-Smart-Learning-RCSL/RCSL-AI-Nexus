@@ -30,7 +30,7 @@ from app.interfaces.http.middleware.body_limit import BodySizeLimitMiddleware
 from app.interfaces.http.middleware.geo_filter import build_geo_filter
 from app.interfaces.http.middleware.metrics import MetricsMiddleware
 from app.interfaces.http.request_context import RequestContextMiddleware
-from app.interfaces.http.routers import chat, health, metrics
+from app.interfaces.http.routers import chat, health, metrics, responses
 
 
 @asynccontextmanager
@@ -96,6 +96,11 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestContextMiddleware)
     app.include_router(health.router)
     app.include_router(chat.router)
+    # A second wire protocol over the same use case, for agent clients that
+    # dropped Chat Completions. Mounted beside it rather than replacing it:
+    # `/v1/chat/completions` is the documented interface and every existing
+    # integration speaks it. See routers/responses.py.
+    app.include_router(responses.router)
     app.include_router(metrics.router)
 
     return app

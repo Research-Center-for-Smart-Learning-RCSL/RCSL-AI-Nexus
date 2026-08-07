@@ -30,7 +30,7 @@ marked done, and not actually in force.
 
 | Area | State |
 |---|---|
-| `/v1/chat/completions`, streaming and not | Complete, tested end to end against a real Postgres. Carries two non-OpenAI additions for thinking models: a `reasoning_content` delta key and a `think` request field ([backend.md](./architecture/backend.md) §6). **Tool calling, array-shaped content and the sampling fields landed 2026-08-05**, which is what an agent client needs; the Ollama path is tested against a stubbed transport, the MLX path is written and unrun |
+| `/v1/chat/completions` **and `/v1/responses`**, streaming and not | Complete, tested end to end against a real Postgres. The Responses endpoint landed 2026-08-07 because Codex removed Chat Completions support in February 2026 and this runbook had been recommending `wire_api = "chat"` since August — it is a translation onto the same `RouteChatRequest`, not a second inference path, and was scoped from a recording of `codex-cli 0.147.0` rather than from the specification. Carries two non-OpenAI additions for thinking models: a `reasoning_content` delta key and a `think` request field ([backend.md](./architecture/backend.md) §6). **Tool calling, array-shaped content and the sampling fields landed 2026-08-05**, which is what an agent client needs; the Ollama path is tested against a stubbed transport, the MLX path is written and unrun |
 | Routing, registry, keys, usage: persistence | Complete, migrations tested |
 | Ollama adapter, reference validation | Complete |
 | Gateway security: scopes, quota, rate limit, CIDR, geo, guardrails | Complete |
