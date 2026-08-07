@@ -228,7 +228,7 @@ wire_api = "responses"`}
           <dt className="font-mono text-muted-foreground">OpenAI SDKs</dt>
           <dd>
             Any language. Set the base URL and the key; the capability goes in
-            the <code>model</code> argument. See the API page for the request
+            the <code>model</code> argument. See the API reference for the request
             shape.
           </dd>
           <dt className="font-mono text-muted-foreground">Claude Code</dt>

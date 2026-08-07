@@ -169,7 +169,7 @@ describe('the links a role can see', () => {
     expect(sidebarLinks()).toEqual([
       'Chat',
       'API keys',
-      'API',
+      'API reference',
       'Connect an agent',
       'Models',
       'Routing',
@@ -194,7 +194,7 @@ describe('the links a role can see', () => {
     expect(sidebarLinks()).toEqual([
       'Chat',
       'API keys',
-      'API',
+      'API reference',
       'Connect an agent',
       'Usage',
     ]);
@@ -221,7 +221,7 @@ describe('the links a role can see', () => {
     expect(sidebarLinks()).toEqual([
       'Chat',
       'API keys',
-      'API',
+      'API reference',
       'Connect an agent',
       'Knowledge',
       'Usage',
@@ -404,7 +404,7 @@ describe('the pinned entry', () => {
     expect(sidebarLinks()).toEqual([
       'Chat',
       'API keys',
-      'API',
+      'API reference',
       'Connect an agent',
     ]);
   });
