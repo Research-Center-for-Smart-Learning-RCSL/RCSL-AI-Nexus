@@ -597,10 +597,43 @@ Both fixes verified by putting each defect back: two tests fail, one per
 defect, and the other 696 pass either way. 698 unit and 93 integration tests
 green against real Postgres.
 
-**What is not measured is the thing the switch was for.** Speed and memory now
-have hard numbers; capability has third-party benchmarks and one tool-calling
-probe. `scripts/measure-agent-loop.py` and the ten rungs of 2026-08-05 are the
-comparison that would settle it, and they have not been re-run.
+#### The harness, re-run: gemma4 drives the loop too
+
+The measurement the switch was actually for, and the paragraph that stood here
+said it had not been done. `scripts/measure-agent-loop.py all` on the `chat`
+capability, the same capability the 2026-08-05 run used, through a key issued
+and revoked for the purpose:
+
+**Ten rungs, ten passes.** Including the last one, which is the only one that
+resembles the work: *the tests are failing, find out why, fix the source,
+re-run to confirm*, with nothing in the prompt saying where the bug is. Six
+turns, 21.4 s, and the trace is the one a person would produce —
+`run_tests → read_file → read_file → write_file → run_tests` — followed by a
+correct account of why it had been failing. glm solved the same rung in six
+turns and about 11 s, so the turn count is identical and the wall clock is
+roughly double, which is what a 61 → 21.9 tok/s generation rate predicts.
+
+**What deliberation costs here**, three runs each way on rung 10, the method
+2026-08-05 used:
+
+| | think=true | think=false | |
+|---|---|---|---|
+| wall clock | 21.1 s | **12.7 s** | 60% of it, a 40% reduction |
+| output tokens | 372 | **176** | 47% of it, a 53% reduction |
+| prompt tokens | 3040 | 3062 | within noise, as before |
+
+Six of six solved either way. Against glm's 58% and 54% on the same rung, the
+two models agree closely enough that this looks like a property of the task
+rather than of either model: **reasoning is paid in output tokens and never
+replayed into the next prompt**, which is why the prompt column does not move
+and why an agent pays the cost again on every round trip. The `code` policy's
+`thinking=false` is therefore still earning what it was set for — slightly
+more, in output tokens, than it did on glm.
+
+So the switch is measured on the axis it was made for, not only on speed and
+memory. What remains unmeasured is the same thing that remained unmeasured
+after 2026-08-05: this is a harness with a planted bug, not a real repository
+with a real one. It answers "can the loop run", never "is the work any good".
 
 ---
 
