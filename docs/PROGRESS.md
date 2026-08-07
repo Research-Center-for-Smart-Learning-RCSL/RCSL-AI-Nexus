@@ -27,11 +27,13 @@ and nothing else answers "what is the state of this, right now".
 **Running.** Eleven containers on the Mac Studio: three ASGI apps (gateway, two
 admin entrances), two frontends, Postgres, Redis, Qdrant, the isolated parser,
 Prometheus and Grafana, with `migrate` exiting 0 ahead of them. Ollama runs
-natively and holds `gemma4:31b-it-qat`, `qwen2.5:7b` and `nomic-embed-text` —
-23.29 GiB resident against a 51.2 GiB budget. Four routing policies: `chat` and
-`code` (deliberation off) on `gemma4-31b`, `assist` on `qwen7b`, `embedding` on
-`embedder`. `glm-4.7-flash:q8_0` was the main model until 2026-08-07 and stays
-registered at `downloaded`, which is what makes the switch reversible.
+natively and holds `gemma4:31b-it-q8_0`, `qwen2.5:7b` and `nomic-embed-text` —
+36.3 GiB resident against a 51.2 GiB budget. Four routing policies: `chat` and
+`code` (deliberation off) on `gemma4-31b-q8`, `assist` on `qwen7b`, `embedding`
+on `embedder`. Two former main models stay registered at `downloaded` and make
+the switch reversible in either direction: `glm-4.7-flash:q8_0`, which held the
+role until 2026-08-07, and `gemma4:31b-it-qat`, the q4 this ran on for part of
+the same day.
 
 **Built.** Phase 1 is complete, including the five Playwright paths described
 below.
@@ -880,6 +882,56 @@ fallback and stays resident regardless.
 Reverted to `qwen7b` with `thinking` unset, which is also the honest value —
 `qwen2.5:7b` has no thinking capability, so `false` would describe a property
 the model does not have.
+
+### The main model moved to q8, and the measurement that justified it found nothing
+
+Asked because the q4 switch left an unanswered question: every "is gemma4
+stronger than glm" comparison had been **q4 against q8**, so the stronger
+candidate was carrying a quantisation handicap the other was not. `q8_0` at
+31.4 GiB fits beside `qwen7b` and the embedder — 36.3 of 51.2 — where glm never
+did.
+
+| | q4 (QAT) | q8 | glm-4.7-flash |
+|---|---|---|---|
+| resident | 17.6 GiB | **31.4 GiB** | 35.7 GiB |
+| generation | 21.9 tok/s | **13.6 tok/s** | 61.0 tok/s |
+| prompt eval @ 9k | 189.9 | **189.4** | 476.2 |
+| prompt eval @ 32k | 152.0 | **150.5** | 171.8 |
+| ten rungs | 10/10 | 10/10 | 10/10 |
+| rung 10, deliberation off | 12.7 s | **19.8 s** | ~11 s |
+
+**Prompt evaluation is identical**, which is the result worth keeping: it is
+compute-bound rather than bandwidth-bound, so quantisation does not touch it.
+Everything q8 buys is in output quality and everything it costs is in output
+speed — reading a long context costs exactly the same either way, which for an
+agent replaying a conversation every turn is most of the work.
+
+**And no measurement here can tell them apart.** Ten rungs pass on both. Rung
+10 solves in six turns with the same trace and the same correct explanation on
+both. Deliberation costs 44%/53% against q4's 40%/53%. The quantisation
+variable was removed and the answer did not change, which is not the same as
+the answer being "no difference" — it is this harness having no resolution at
+the level where q4 and q8 differ.
+
+Kept at q8 on the operator's decision, with that stated plainly: 14 GiB and 38%
+of generation speed for a quality gain nothing here demonstrates. Real work is
+the only instrument left, and `gemma4-31b` at q4 stays registered at
+`downloaded` so reverting is one load and two policies.
+
+**The thinner headroom showed up immediately, and through this session's own
+measuring.** Running the 32k prompt-eval probe at `num_ctx=40960` made Ollama
+predict 37.7 GiB for q8 and evict `qwen7b` and the embedder to fit it — so
+`assist` and `embedding` were down, and the models screen showed the intent /
+observation divergence that reported it. Not something ordinary use provokes;
+q4 had 14 GiB more room to absorb exactly this. Both were reloaded through
+`ManageModels.load`, which is the fix made earlier today doing the job it was
+made for: before it, a model the runtime had evicted while the registry still
+recorded LOADED could not be reloaded from the UI at all.
+
+All four capabilities verified end to end afterwards — `chat` 4.4 s, `code`
+0.7 s, `assist` 2.2 s answering from the live capability list, `embedding`
+returning 768 dimensions — and the five model rows agree between intent and
+observation.
 
 ---
 
