@@ -74,9 +74,14 @@ export function AgentSetup() {
             </p>
             <ul className="list-disc space-y-1 pl-5">
               <li>
-                <strong>Requests per minute.</strong> An agent makes one request
-                per step and a task is tens of steps. A limit sized for a person
-                typing produces <code>429</code> half way through.
+                <strong>Requests per minute.</strong> An agent makes one
+                request per step and a task is tens of steps, though in practice
+                even a busy minute rarely passes twenty. <strong>
+                  A <code>429</code> mid-task is more often the client retrying
+                  after a failure than this limit being reached
+                </strong>{' '}
+                — check Usage before raising it, or you will change the wrong
+                thing and still be stuck.
               </li>
               <li>
                 <strong>Daily token quota.</strong> An agent replays the whole
@@ -96,7 +101,10 @@ export function AgentSetup() {
           <Step n={2} title="Install the client">
             <CodeBlock code={'npm install -g @openai/codex'} label="Copy" />
             <p>
-              Needs Node. On Windows PowerShell may refuse to run{' '}
+              <strong>This needs Node.js</strong>, which is the first thing
+              people ask about and the answer is yes. Install it from
+              nodejs.org, or <code>winget install OpenJS.NodeJS.LTS</code> on
+              Windows, then reopen the terminal. On Windows PowerShell may refuse to run{' '}
               <code>npm</code> until you allow local scripts once:{' '}
               <code>Set-ExecutionPolicy -Scope CurrentUser RemoteSigned</code>.
               That is per-user, needs no administrator, and is the value
@@ -136,6 +144,16 @@ wire_api = "responses"`}
               <code>{agentCapability}</code>, never the name of the model
               serving it. This is the platform&apos;s one real divergence from
               other providers.
+            </p>
+            <p>
+              <strong>
+                <code>env_key</code> is the <em>name</em> of an environment
+                variable, not the key.
+              </strong>{' '}
+              Leave it as <code>RCSL_API_KEY</code> and put the key in that
+              variable at step 4. Pasting <code>nx_live_...</code> here does not
+              work, and it writes a credential into a file that gets copied,
+              committed and shared.
             </p>
           </Step>
 

@@ -136,8 +136,26 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
       wire_api = "responses"
   `wire_api` MUST be `"responses"`. Codex removed Chat Completions support in
   February 2026 and refuses to start on `"chat"`. `model` takes a capability,
-  never a model name. Point them at the "Connect an agent" screen in this
-  application for the full walkthrough.
+  never a model name.
+
+  **`env_key` is the NAME of an environment variable, not the key itself.**
+  Leave it as `RCSL_API_KEY` and put the key in that variable
+  (`export RCSL_API_KEY=nx_live_...`, or `setx RCSL_API_KEY "nx_live_..."` on
+  Windows, which needs a new terminal before it takes effect). Never tell
+  anyone to paste a key into `config.toml`: it does not work, and it writes a
+  credential into a file that gets copied and shared.
+
+  **Codex needs Node.js.** `npm install -g @openai/codex`. Say so when asked
+  rather than guessing; on Windows PowerShell may refuse to run `npm` until
+  `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` is run once.
+
+  A `429` in the middle of a task is usually the client retrying after a
+  failure rather than the key's own limit. Check the Usage screen before
+  raising `rate_limit_rpm`: an agent makes roughly one request per step, and
+  even a long task rarely exceeds twenty in a minute.
+
+  Point them at the "Connect an agent" screen in this application, which has
+  the whole walkthrough in order.
 
 CLAUDE CODE (Anthropic) — **DOES NOT WORK. Not supported.**
   It speaks Anthropic's Messages API (`/v1/messages`), which this platform does
