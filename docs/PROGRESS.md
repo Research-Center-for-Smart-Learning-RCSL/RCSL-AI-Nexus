@@ -675,6 +675,28 @@ empty array aborted the probe, and the empty status that came back was not
 
 Two API keys were issued and revoked for these checks; no key is live.
 
+Writing the request to the proxy administrator then turned up **a value we gave
+them that is wrong, and became wrong without anyone touching it.** The
+2026-08-03 configuration says `proxy_read_timeout 300s`. That bounds the gap
+*between reads*, and prompt evaluation emits no bytes at all, so the longest
+legitimate silence on the connection is a full context being read —
+`65536 / 117.9 = 556` seconds, against the platform's own 600-second per-read
+ceiling. At `300s` nginx cuts a legitimate request halfway through prompt
+evaluation, and the cut arrives as a reset with nothing in any application log.
+
+**It was correct when it was sent.** `MAX_CONTEXT_LENGTH` was 32768 then, which
+is 278 seconds of silence and fits inside 300. Doubling the ceiling on
+2026-08-05 broke it. `config.py` already says that value, `REQUEST_TIMEOUT_SECONDS`
+and `GENERATION_DEADLINE_SECONDS` "are one decision and have to be changed
+together", and `test_config_failfast.py` pins two of the readers — but **nginx
+is a third reader living on someone else's machine**, where no test reaches and
+no grep finds it. Corrected in [deployment.md](./architecture/deployment.md) §5
+to `1560s`, matching the frontend's `proxyTimeout` and sized above the
+1500-second worst case so the limit that fires is always the platform's own.
+
+Nobody had hit it because nobody can get past the perimeter to send a long
+prompt — one blocked item hiding another.
+
 ---
 
 ## 2026-08-05

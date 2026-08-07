@@ -193,7 +193,7 @@ server {
 
         # The admin chat endpoint streams
         proxy_buffering    off;
-        proxy_read_timeout 300s;
+        proxy_read_timeout 1560s;
         proxy_http_version 1.1;
     }
 }
@@ -223,13 +223,17 @@ server {
         # Required for SSE. Without these, streamed output is buffered until
         # the response completes and appears to users as "the model is slow".
         proxy_buffering    off;
-        proxy_read_timeout 300s;
+        proxy_read_timeout 1560s;
         proxy_http_version 1.1;
     }
 }
 ```
 
 `proxy_buffering off` and `proxy_read_timeout` must be communicated explicitly. Without them, streaming output is withheld until generation finishes, which presents as a slow model and wastes considerable debugging time on the wrong layer.
+
+**`proxy_read_timeout` was `300s` here until 2026-08-07, and that number became wrong without anyone touching it.** It bounds the gap between reads, and **prompt evaluation produces no bytes at all** — so the longest legitimate silence is a full context being read, which `config.py` sizes at `65536 / 117.9 = 556` seconds against the platform's own 600-second per-read ceiling. `300s` cuts that in half, and the cut arrives as a reset with nothing in any application log, which is the failure mode this whole section exists to avoid.
+
+It was correct when written: `MAX_CONTEXT_LENGTH` was 32768, so the worst silence was 278 seconds and fit inside 300. **The ceiling doubled on 2026-08-05 and this file was not one of the places that got updated.** `config.py` already says those values "are one decision and have to be changed together" and names two readers; nginx is the third, and it is the one nobody can see from the repository. `1560s` matches the frontend's `experimental.proxyTimeout` and is above the 1500-second worst case for one request, so the limit that fires is always the platform's own — the same arrangement `upload_policy.py` documents for body size.
 
 ## 6. What Is Lost Without a CDN, and Who Covers It
 
