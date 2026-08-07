@@ -62,7 +62,7 @@ export function DocumentPreviewDialog({
           />
         ) : (
           <>
-            <pre className="max-h-[50vh] overflow-auto rounded-md border bg-muted/40 p-3 text-xs whitespace-pre-wrap break-words">
+            <pre className="max-h-[50vh] overflow-auto overscroll-contain rounded-md border bg-muted/40 p-3 text-xs whitespace-pre-wrap break-words">
               {data?.text || 'The parser found no text in this document.'}
             </pre>
             {data?.truncated ? (
