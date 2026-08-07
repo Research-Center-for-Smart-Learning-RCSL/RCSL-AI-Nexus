@@ -228,3 +228,38 @@ def test_the_prompt_gives_codex_the_setting_that_is_wrong_by_default() -> None:
 
     assert 'wire_api = "responses"' in text
     assert '"chat"' in text, "the wrong value must be named, or nobody knows what to change"
+
+
+def test_the_prompt_says_env_key_is_a_variable_name() -> None:
+    """The confusion that puts a credential in a config file.
+
+    A real operator asked "base_url 跟 env_key 是什麼" on 2026-08-07 and the
+    assistant answered that `env_key` is "your API key, copy it from the
+    management interface". It is the *name* of an environment variable. Acting
+    on that answer fails twice: the client does not start, and a live key ends
+    up written into a file that gets copied, committed and shared.
+
+    Pinned on the prompt rather than trusted to the model, because a fact the
+    prompt omits is a fact a small model invents — which is exactly how that
+    answer was produced.
+    """
+    text = prompt()
+
+    assert "NAME of an environment variable" in text, (
+        "the distinction has to be stated, not implied by the example"
+    )
+    assert "paste a key into" in text, "and the consequence of getting it wrong named"
+    assert "RCSL_API_KEY" in text
+
+
+def test_the_prompt_admits_codex_needs_node() -> None:
+    """Asked "還要裝Node.js？", the assistant said no. It does.
+
+    A wrong "no" here is worse than no answer: it sends somebody to debug a
+    missing runtime as though it were a configuration problem, which is where
+    that operator spent the next half hour.
+    """
+    text = prompt()
+
+    assert "Node.js" in text
+    assert "npm install -g @openai/codex" in text

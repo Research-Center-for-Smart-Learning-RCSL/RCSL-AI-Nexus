@@ -23,10 +23,10 @@ from datetime import UTC, datetime, timedelta
 from app.domain.entities.chat import CompletionChunk
 from app.interfaces.http.assistant_proposal import (
     NO_PROPOSAL_CONTRACT,
-    PROPOSAL_SURFACES,
     PROPOSAL_CLOSE,
     PROPOSAL_CONTRACT,
     PROPOSAL_OPEN,
+    PROPOSAL_SURFACES,
     ProposalCollector,
 )
 
