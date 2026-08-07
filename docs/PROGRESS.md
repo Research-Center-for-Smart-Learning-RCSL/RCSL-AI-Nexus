@@ -49,12 +49,16 @@ debugging task, the knowledge base end to end, both admin entrances' login
 flows, the least-privilege database split, the unattended-recovery chain
 through two boots with injected faults, and the GeoLite2 refresh.
 
-**One open question, raised today and deliberately not acted on.** Free memory
-on this node swings between roughly 12 GB and 37 GB of 64 depending on whether
-it is serving — the weights are wired during inference and revert to evictable
-file-backed pages when idle. Nothing is degrading (swap is 0 bytes) and the
-leading candidate is to do nothing. See the 2026-08-05 entry and "Open
-decisions".
+**One open question, raised 2026-08-05 and still deliberately not acted on.**
+Free memory on this node swings between roughly 12 GB and 37 GB of 64 depending
+on whether it is serving — the weights are wired during inference and revert to
+evictable file-backed pages when idle. **The tail between the two is 19
+minutes, measured twice on 2026-08-07**, the trigger is a single request of any
+size, and the machine spends those nineteen minutes under a gigabyte free with
+swap at 0 bytes and nothing degrading. The leading candidate is still to do
+nothing, now with more behind it. What actually limits the deployment is the
+static budget's 9.87 GiB of headroom, which none of this touches. See the
+2026-08-07 and 2026-08-05 entries and "Open decisions".
 
 **The public entrance is verified as of today**, under the renamed hosts:
 `verify-public-entrance.sh` passes 9 of 9. What remains there is three items
@@ -400,6 +404,106 @@ asserts the chunks arrive in order and unmerged.
 that the application half exists: the 200 MiB still reached the proxy host and
 was buffered there before our 413 came back. This keeps the bytes out of the
 process; only `client_max_body_size` on `llmapi` keeps them off a machine.
+
+### The wiring tail is 19 minutes, measured twice
+
+The first of the open measurements from 2026-08-05, and the one that file said
+would settle the others: the tail was bounded only at ">20 s and <~20 min", and
+which of 12 GB or 37 GB is the number to plan against depends on it. Method as
+that entry proposed — sample `vm_stat` after a generation until wired falls
+back to baseline. Ollama is driven directly on loopback, so no platform
+credential is involved.
+
+Two runs, forty minutes apart, and their release windows overlap:
+
+| | last sample still wired | first sample released |
+|---|---|---|
+| Run 1 | t+1136 s | t+1151 s |
+| Run 2 | t+1139 s | t+1154 s |
+
+Intersection **(1139, 1151] s = 18.99 to 19.18 minutes**. Two independent runs
+agreeing within three seconds on the lower bound is a timer, not a coincidence,
+which is what the second run was for — this file's own rule is that a single
+sample of this machine settles nothing.
+
+Three things the samples say that the bound alone did not.
+
+**The trigger is far cheaper than "inference".** What wired 38.5 GB was a
+**0.9-second, two-token** generation — `2.3 → 40.8 GB` in the first sample
+after it, with file-backed falling `45.3 → 13.2` at the same moment. A one-word
+reply and a full-context request are indistinguishable here. So "12 GB" is not
+what the machine looks like under load; it is what it looks like for nineteen
+minutes after anything at all.
+
+**The release is abrupt, and it is a change of status rather than a reclaim.**
+Wired fell 38.3 GB and file-backed rose 31.8 GB in the same fifteen-second
+interval, while *free* memory did not move (0.6 → 0.5 GB). Nothing was handed
+back, because nothing had been taken: the pages stopped being wired and went on
+being the same mmapped blob. If something had demanded memory and forced a
+reclaim, free would have moved. `ollama.log` also shows nothing at either
+release moment — only the heartbeat's `/api/tags` and `/api/ps` every thirty
+seconds — so this is the OS, not the runtime, and `expires_at` is still 2318.
+
+**Nineteen minutes at 0.1–0.7 GB free, with swap at 0.00 bytes, and nothing
+degraded.** That is 79 consecutive samples in run 1 and 76 in run 2. It is the
+strongest evidence yet for the leading candidate under "Open decisions" being
+*nothing*: the alarming figure is not a symptom, and the machine is not close
+to the state the guardrails exist to prevent.
+
+#### What that does to "12 or 37"
+
+Neither, as a steady state — **the shape is per session, and `usage_records`
+says so**. Of 181 gaps between consecutive requests, **152 are under nineteen
+minutes and 29 are over**, with a median gap of 0.0 minutes: this deployment is
+used in bursts. So within a working session the tail never expires and the
+machine sits at ~12 GB throughout, plus nineteen minutes; between sessions it
+returns to ~37 GB. There have been no requests since 2026-08-05, which is why
+it was found idle at 2.3 GB wired this morning.
+
+That also explains the original question better than "you looked at the wrong
+moment". The 12.4 GB reading was taken minutes after a run of chat requests —
+and **anyone who opens the host status screen is, by definition, using the
+platform**, so the low reading is not bad luck in sampling. Sampling time and
+usage time are correlated. The screen will usually show the low number to
+whoever is in a position to look at it, which is worth knowing before anyone
+reads it as a problem again.
+
+#### Two of the other open measurements, closed on paper
+
+**The "3 GB discrepancy nobody has explained" is not one; it is two units.**
+`ollama_adapter.py:596` divides by `1024**3`, so what the heartbeat stores is
+**GiB**. The same bytes are both numbers:
+
+```
+38,300,454,748 bytes  ÷ 1e9   = 38.30    <- the 2026-08-05 probe
+                      ÷ 1024³ = 35.67    <- what models.observed_memory_gb holds
+```
+
+Confirmed against the live row (`glm47-flash`, `observed_memory_gb` = 35.67).
+The genuine gap is the declared 32 against the observed 35.67, and that one was
+already explained by the KV cache on 2026-07-30. **And the units are consistent
+where it matters**: `hw.memsize` is 68,719,476,736 bytes, which is exactly
+64.00 GiB, so `nodes.total_memory_gb = 64` is a GiB figure too and the memory
+budget is not mixing units. `hw.pagesize` and `vm_stat`'s page size also agree
+at 16384, so `launchd/host-metrics.py` is not scaling by a wrong factor either.
+
+**The number that actually binds is neither 12 nor 37, and nothing here changes
+it.** The budget is static by design (§4.3) and never reads live free memory:
+`64 GiB × 0.8 = 51.2 GiB` against 41.33 GiB observed as loaded, so the headroom
+that decides whether a fourth model may be loaded is **9.87 GiB**. Every
+finding above is about page *status*, which that calculation does not consult.
+
+#### Still open
+
+**Whether the OS evicts those file-backed pages under real pressure.** Not
+attempted: it needs a deliberate allocation large enough to force the question,
+on a machine that is serving and that spends its sessions at well under a
+gigabyte free. That is a decision rather than a measurement, and it is the last
+thing standing between "the SSD-for-RAM trade is already happening" and a
+proof of it.
+
+The mechanism behind the nineteen minutes is also unidentified. It is not
+Ollama and not `OLLAMA_KEEP_ALIVE`; beyond that this only knows the number.
 
 ---
 
@@ -7207,9 +7311,24 @@ implementation:
   happening**, at page granularity, without a setting. **q4 quantisation** is
   the one real alternative (≈18 GB back, trading quality rather than speed);
   **a keep-alive duration** is the coarse version of what the OS already does.
-  Open measurements: the wiring tail's length, whether eviction occurs under
-  pressure, and q4's quality here. Evidence, and the confident wrong inference
-  that preceded it, are in the 2026-08-05 entry at the top of this file.
+  Evidence, and the confident wrong inference that preceded it, are in the
+  2026-08-05 entry at the top of this file.
+
+  **Measured further 2026-08-07, and every result points the same way.** The
+  wiring tail is **19 minutes**, two runs agreeing within three seconds. The
+  trigger is a single request of any size — a 0.9-second, two-token reply wires
+  the same 38.5 GB a real workload does. The release is a change of page status
+  rather than a reclaim, performed by the OS and not by Ollama. And the machine
+  spent those nineteen minutes at 0.1–0.7 GB free with **swap at 0 bytes and
+  nothing degrading**, twice. Usage is per session rather than steady (152 of
+  181 real request gaps are under nineteen minutes), so ~12 GB is the whole of
+  a working session and ~37 GB is between them. **The binding constraint is
+  neither figure**: the static budget allows 51.2 GiB against 41.33 loaded, so
+  9.87 GiB is what decides whether another model may be loaded. Remaining
+  measurements: eviction under real pressure (a decision, since it needs a
+  deliberate allocation on a serving machine), q4's quality here, and a
+  full-context request. The "unexplained 3 GB" is closed — GiB against decimal
+  GB, with the budget's units consistent.
   **Nothing has been changed on the deployment.**
 
 ### Standing risks to revisit
