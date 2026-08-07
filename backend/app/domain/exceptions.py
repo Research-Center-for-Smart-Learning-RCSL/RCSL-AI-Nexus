@@ -122,6 +122,16 @@ class ContextTooLongError(DomainError):
     public_message = "The conversation is longer than this platform accepts."
 
 
+class RequestTooLargeError(DomainError):
+    code = "request_too_large"
+    public_message = "The request body is larger than this platform accepts."
+    # Deliberately distinct from ContextTooLongError, which shares its 413.
+    # That one is counted in tokens after the body has been parsed and the
+    # caller authenticated; this one is counted in bytes before either, so it
+    # is the only 413 an anonymous caller can provoke. Telling them apart is
+    # what lets an operator read a spike of one and not the other.
+
+
 class AssistantUnavailableError(DomainError):
     code = "assistant_unavailable"
     public_message = (

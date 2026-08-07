@@ -421,6 +421,8 @@ async with aclosing(use_case.execute(actor, capability, messages)) as stream:
 | `main_admin_tailnet` | `tailnet_identity` | `Tailscale-User-Login` header |
 | `main_admin_public` | `session_auth` + `csrf` | Server-side session cookie, established by password plus TOTP |
 
+**"Middleware" is the directory, not the ASGI stack, and the difference cost something.** `api_key_auth` and the admin identity resolvers are FastAPI *dependencies* — `Depends(...)` on a router — while `csrf`, the geo filter and header stripping are true stack-level middleware. FastAPI reads and JSON-parses the request body **before** it resolves dependencies (`fastapi/routing.py::get_request_handler`), so everything in the first group runs after the whole body is in memory. That was invisible until an unauthenticated 200 MiB request was answered with a parse error rather than a 401 (see [PROGRESS.md](../PROGRESS.md) 2026-08-07). The consequence for anything added here: a check that must run *before* the body is read cannot be a dependency, whichever directory it lives in. `middleware/body_limit.py` is the one that has to be, and it is stack-level for that reason alone.
+
 `AuthenticateLocal` is a use case rather than middleware logic, because it carries real business rules: password verification, then TOTP verification against a stored counter, then session issue. Two constraints are structural rather than incidental and belong in the use case where they can be unit tested:
 
 - **An unknown login must cost the same as a wrong password.** The use case runs a dummy hash verification when no user matches, so neither the response nor the timing distinguishes the two cases.

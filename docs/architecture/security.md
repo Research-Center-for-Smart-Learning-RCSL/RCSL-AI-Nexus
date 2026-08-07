@@ -351,8 +351,11 @@ Critical on this hardware. Under unified memory, **unbounded concurrent inferenc
 | Wall-clock generation deadline | `900` s, from the **first chunk** | Bounds a slow-but-steady stream that stays under the per-read timeout yet never reaches the token cap; on unified memory near swap it would otherwise hold a slot for hours. Counted from the first chunk since 2026-08-05, so reading a long prompt does not spend the budget for writing the answer. The two therefore **compose**: one request's worst case is 1500 s, and the frontend's `experimental.proxyTimeout` must stay above that sum rather than above this row alone, or the cut arrives as a socket reset with no reason attached |
 | Cancel on client disconnect | Required | Otherwise generation continues for a departed client |
 | Model memory budget | Loaded total must stay under a fraction of node capacity | Checked before load, refuses with a message to unload first |
+| Request body ceiling | `4` MiB on the gateway, `40` MiB on the admin entrances | **The only row here that applies to a caller who has not authenticated**, and the reason it exists. Every other guardrail in this table is enforced inside `RouteChatRequest`, behind the key check — but that check is a FastAPI *dependency*, and FastAPI reads and JSON-parses the body before it resolves dependencies, so the allocation happened first. Measured, not inferred: 200 MiB with no credential, accepted in full ([PROGRESS.md](../PROGRESS.md) 2026-08-07). `middleware/body_limit.py` |
 
 The concurrency slot must be held for the entire generator lifetime, and disconnect cancellation must propagate all the way to the runtime adapter. Both are structural, not incidental; see [backend.md](./backend.md) §6.
+
+**The body ceiling is the one guardrail that is not about inference at all, and it is placed where it is for a reason worth stating.** The other six bound what a *permitted* caller may consume; this one bounds what an anonymous one can. Anything moved behind authentication inherits the ordering defect it was written for, so it is stack-level ASGI middleware rather than a dependency or a check inside a use case, and it sits innermost so a request refused by it is still counted and still carries `X-Request-Id`.
 
 **A guardrail that cannot be reached does not exist.** Two of the values above were
 raised on 2026-07-27, and both changes were nearly inert. `MAX_TOKENS_CEILING` is
@@ -379,7 +382,7 @@ Two further numbers are unverified and both bear on this row: whether the OS act
 
 - No version numbers in responses; `debug=False`; error bodies never carry stack traces, internal model names, or node addresses. Enforced centrally by the error mapping in [backend.md](./backend.md) §5.
 - Strict CORS allowlist, never `*`. In practice the frontend is same-origin via Next.js rewrites ([frontend.md](./frontend.md) §1), so CORS should not be needed at all; if a configuration seems to require it, that is a signal something is misrouted.
-- Request body size limits, at both nginx and the application.
+- Request body size limits, at both nginx and the application. **This line claimed a control that did not exist on either side, and said so in the present tense from the start.** On 2026-08-07 the application had no ceiling at all, and `client_max_body_size` was unset on the inference host — a 200 MiB body from an unauthenticated caller was accepted and passed through. The application half now exists (`middleware/body_limit.py`, §4.3); the nginx half is an open item in [ROADMAP.md](../ROADMAP.md). They are not redundant: nginx keeps the bytes off the machine, the middleware keeps them out of the process, and only the second is a control this deployment can verify or restore by itself.
 - **`/openapi.json` and `/docs` are disabled on the gateway** and served only by the admin applications. Public API documentation is written separately rather than exposing internal schemas. That documentation now exists, as the `/api-docs` page of the management UI: the endpoint, the bearer header, the capability-rather-than-model convention, the request fields and the error code table. Until 2026-07-28 it did not, which made this a trade with nothing on the other side of it — an integrator had no description of the wire contract from any source. The page renders the live base URL and capability list rather than prose, so it cannot describe a deployment other than the one serving it. `GET /v1/models` answers the same question on the wire, for client libraries that ask before a person does.
 
   **The trade is only as good as the page is complete, and on 2026-07-30 it was audited against the wire for the first time.** Everything the page says is accurate; five things it does not say are not. The one that matters here rather than in [ROADMAP.md](../ROADMAP.md) is that `use_knowledge` and `knowledge_collection` are part of the gateway's public request schema and the page never mentions them — so a capability of this deployment is reachable by anyone who guesses the field name and discoverable by nobody who reads the documentation, which is the opposite of what disabling the schema endpoints was meant to achieve. Also missing: that `temperature`, `top_p`, `n`, `stop`, `tools` and `response_format` are accepted and silently ignored; that a stream failing after the first byte is a 200 carrying an error frame with no `[DONE]`; that streaming reports no usage at all; and five reachable error codes (`vector_store_unavailable`, `runtime_capability_unsupported`, `model_not_found`, `untrusted_proxy`, and the 500 `internal_error` fallback). Recorded in [PROGRESS.md](../PROGRESS.md) 2026-07-30; **until they are closed, this bullet describes an intention more completely than it describes the deployment.**
@@ -927,12 +930,23 @@ looking for the risk. The state below is checked against the code.
 | Unverified MLX tool calling refused rather than served: a build without tool support accepts `tools` and answers with prose, which no client can detect, so it is a `RuntimeCapabilityError` before the network until a person sets `MLX_TOOL_CALLING_VERIFIED` | `adapters/runtime/mlx_adapter.py`, `tests/unit/test_tool_calling.py` |
 | Prompt templates with **no variable substitution**: a named system prompt an operator authors and a caller selects by name, resolved through a tenant-scoped repository, refused with a 404 when the name does not resolve (§7.4) | `domain/entities/prompt_template.py`, `domain/services/prompt_assembly.py`, `apply_prompt_template.py`, `manage_prompt_templates.py` |
 | Frontend schemas checked against the backend's own OpenAPI document at compile time, with dropped nullability caught separately from deliberate narrowing | `frontend/src/lib/api-contract.ts`, `scripts/generate-api-types.sh`, CI |
+| Request body ceiling ahead of authentication, on all three entrances: refused on a declared `Content-Length`, and counted over the stream for a body that is chunked or that declared a length it then exceeded (§4.3) | `interfaces/http/middleware/body_limit.py`, `tests/unit/test_body_limit.py` |
 
-**Not implemented, and nothing in the repository arranges it**
+**Once listed here as not implemented. Five of the six no longer are**
+
+This table's heading read "Not implemented, and nothing in the repository
+arranges it" until 2026-08-07, by which point five of its six rows opened with
+the word "Built". Each row had been kept current as its control landed and the
+heading was never revisited — so the one section written specifically to stop a
+reader trusting a claim had itself become a claim no reader could trust, which
+is the failure mode §13.0's own opening paragraph describes. The built rows
+stay here rather than moving up, because where a control started is part of
+what this section is for; what changed is the heading, which now says what the
+table is.
 
 | Control | Status |
 |---|---|
-| Logging boundaries and the expiring debug switch (§9.2) | The columns exist on both `users` and `api_keys` and are read by nothing |
+| Logging boundaries (§9.2) | **Still not implemented**, and the only row here that is. Full prompt and completion logging with its own shorter retention is unwritten; nothing produces those records. **The expiring debug switch this row used to name alongside it is built**, on API keys and on user accounts alike, since 2026-08-05 — so from that day until 2026-08-07 this row said a shipped control was read by nothing, in the table whose purpose is the opposite |
 | Knowledge base upload handling and parser isolation (§7.3) | Built. Size ceiling read in chunks, media-type allowlist checked against magic bytes, no path derived from a filename; parsing in a container with no settings, no volumes, no egress, a read-only root and a memory limit, pinned by an `ast` test that fails on any import from the application |
 | Knowledge base tenant isolation (§7.3) | Built, and enforced in three places: both tables filter on `tenant_id` directly, the document storage puts the tenant in the path, and the vector store puts it in the collection name as well as the payload filter. Pinned against real Postgres for the tables; the collection naming is pinned by unit tests over the adapter's request shapes |
 | Retrieved passages as untrusted data (§7.3) | Built. Own system message, per-request fence a document cannot close, data instruction placed after the block. Mitigation, not a guarantee |
@@ -1021,6 +1035,11 @@ looking for the risk. The state below is checked against the code.
 [ ] API key expiry is mandatory; revocation takes effect immediately
 [ ] Gateway serves no /docs or /openapi.json; debug=False
 [ ] Guardrails verified in practice: concurrency cap, max_tokens, context bound, per-read timeout, wall-clock generation deadline, disconnect cancels generation
+[ ] Send an oversized body with NO credential to /v1/chat/completions: 413 request_too_large,
+    not 401 and not 422. A 422 means the body was parsed before the key was checked, which
+    is the state found on 2026-08-07; a 401 means it was read in full and then refused.
+    Test it malformed as well as well-formed — parseability, not size, is what exposed the
+    ordering. Repeat against the admin entrances above their nginx limit (§4.3)
 [ ] nginx has proxy_buffering off; confirm streaming is not buffered
 [ ] Health endpoints reachable without authentication and leak no version or model information
 

@@ -26,6 +26,7 @@ from app.infrastructure.di import (
 )
 from app.infrastructure.logging_config import configure_logging
 from app.interfaces.http.errors import install_error_handlers
+from app.interfaces.http.middleware.body_limit import BodySizeLimitMiddleware
 from app.interfaces.http.middleware.geo_filter import build_geo_filter
 from app.interfaces.http.middleware.metrics import MetricsMiddleware
 from app.interfaces.http.request_context import RequestContextMiddleware
@@ -73,9 +74,20 @@ def create_app() -> FastAPI:
     )
 
     install_error_handlers(app, envelope="openai")
-    # No stack-level perimeter middleware runs here (the gateway applies the geo
-    # filter inline in key auth), so /metrics rests on its bearer token alone;
-    # see interfaces/http/routers/metrics.py.
+    # Innermost, and the only stack-level check the gateway has. Everything
+    # else here — key authentication, the capability check, the geo filter it
+    # applies inline — is a route dependency, and FastAPI reads and parses the
+    # body before it resolves dependencies. So this is what stands between an
+    # anonymous caller and an arbitrarily large allocation; see
+    # middleware/body_limit.py for the measurement that found it.
+    app.add_middleware(
+        BodySizeLimitMiddleware,
+        max_bytes=settings.gateway_max_body_bytes,
+        envelope="openai",
+    )
+    # No other stack-level perimeter middleware runs here (the gateway applies
+    # the geo filter inline in key auth), so /metrics rests on its bearer token
+    # alone; see interfaces/http/routers/metrics.py.
     app.add_middleware(MetricsMiddleware)
     # Added last, so it is outermost: every response, including one a rejected
     # middleware builds, passes back through it and gets the X-Request-Id

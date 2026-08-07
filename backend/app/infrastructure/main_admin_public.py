@@ -28,6 +28,7 @@ from app.infrastructure.admin_composition import (
 from app.infrastructure.config import get_settings
 from app.infrastructure.logging_config import configure_logging
 from app.interfaces.http.errors import install_error_handlers
+from app.interfaces.http.middleware.body_limit import BodySizeLimitMiddleware
 from app.interfaces.http.middleware.csrf import CsrfMiddleware
 from app.interfaces.http.middleware.geo_middleware import GeoFilterMiddleware
 from app.interfaces.http.middleware.identity import (
@@ -100,7 +101,18 @@ def create_app() -> FastAPI:
     #   GeoFilter — rejects a caller outside the allowed countries, and (via
     #     resolve_client_ip) one that did not arrive through the proxy, before
     #     a handler or the CSRF cookie logic runs.
-    #   Csrf (innermost) — needs the request to have survived the perimeter.
+    #   Csrf — needs the request to have survived the perimeter.
+    #   BodySizeLimit (innermost) — the last thing before the router, because
+    #     it is the only one of these the *router* can defeat by reading the
+    #     body first. Authentication here is a route dependency and FastAPI
+    #     parses the body ahead of dependencies, so without this an anonymous
+    #     caller reached an allocation bounded only by nginx. See
+    #     middleware/body_limit.py.
+    app.add_middleware(
+        BodySizeLimitMiddleware,
+        max_bytes=settings.admin_max_body_bytes,
+        envelope="admin",
+    )
     app.add_middleware(
         CsrfMiddleware,
         cookie_name=settings.effective_csrf_cookie,

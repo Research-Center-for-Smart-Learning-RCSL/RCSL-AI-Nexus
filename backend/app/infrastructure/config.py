@@ -198,6 +198,35 @@ class Settings(BaseSettings):
     wait stops being plausible. Zero or negative restores the unbounded queue.
     """
 
+    gateway_max_body_bytes: int = 4 * 1024 * 1024
+    """Ceiling on a gateway request body, in bytes, refused before it is read.
+
+    Derived from `max_context_length` rather than picked: 65536 tokens at the
+    four-characters-per-token rule is 256 KiB of *characters*, and a character
+    outside ASCII costs up to four bytes in UTF-8 — so a legitimate maximum
+    prompt is about 1 MiB before JSON escaping and tool definitions. Four
+    times that leaves room for both and still refuses everything else.
+
+    It is a distinct guardrail from the context ceiling, not a duplicate of it,
+    because it is the only one of the two that applies to a caller who has not
+    authenticated. See `middleware/body_limit.py` for why that gap existed.
+
+    Sits **below** the `client_max_body_size` the inference host is asked for,
+    so ours is the limit that fires and the caller gets a code naming the
+    reason instead of nginx's HTML — the arrangement `upload_policy.py`
+    documents for the management host.
+    """
+
+    admin_max_body_bytes: int = 40 * 1024 * 1024
+    """The same ceiling on the admin entrances, where uploads are legitimate.
+
+    Above `upload_policy.MAX_UPLOAD_BYTES` (32 MiB) plus multipart framing, so
+    a file between the two limits is still refused by `assert_upload_allowed`,
+    which names the reason; below the management host's 64m, so this fires
+    before nginx does. Both entrances get it: the public one faces the
+    internet, and the tailnet one would otherwise be the softer of the two.
+    """
+
     max_tokens_ceiling: int = 16384
     """Hard ceiling on tokens per generation, thinking included.
 
