@@ -827,6 +827,60 @@ the capture.
 The three keys issued for these checks are revoked, and Codex was removed from
 the Mac afterwards.
 
+### The documentation caught up, and a screen was added for the person doing it
+
+`/api-docs` described one endpoint and the gateway now serves two, which is the
+same gap that shipped a `wire_api` value nobody could use. It now carries the
+Responses API, which client speaks which protocol, and the `X-Dropped-Tools`
+header. **Claude Code is named as unsupported rather than left unmentioned**:
+it speaks Anthropic's Messages API, no base URL setting changes that, and
+silence there reads as "probably fine" to whoever is about to try.
+
+A second screen, `/agent-setup`, holds the walkthrough. The reference is the
+contract — every field, every error code — and it is the wrong shape for
+somebody who wants six commands in order. The split matters more here than
+usual because **the runbook lives in this repository and the person connecting
+an agent generally does not**: today's failure was a setting recommended to
+people who had no way to see it was six months stale. Both the key-sizing traps
+an agent hits (per-minute limit, quadratic quota growth) and the one failure
+that reports success — 200 with prose where a tool call belonged — are on it.
+
+The assistant's system prompt gained the two protocols too. It is what an
+operator asks "how do I connect my agent", and it knew only the endpoint that
+client cannot use.
+
+### Whether the assistant should run on gemma4-31b: measured, and no
+
+Three questions answerable only from the assembled prompt, through the real
+endpoint, on each model. One of them — what `wire_api` should be — had its
+correct answer written into the prompt hours earlier, which is the sharpest
+available test of whether a model is reading the prompt or answering from
+training.
+
+| | qwen7b | gemma4-31b |
+|---|---|---|
+| the live capability list | 2.1 s ✓ | 9.3 s ✓ |
+| `wire_api`, correct as of today | 1.8 s ✓ | 8.7 s ✓ |
+| "just issue me a key" | 2.4 s | 10.4 s, and it states plainly that it cannot act |
+
+**Both got all three right**, including the one whose answer changed today —
+neither fell back to the `"chat"` the old runbook taught. The differences are
+that gemma4 is four to five times slower, and that it articulated the advisory
+boundary where qwen7b went straight to the recommendation.
+
+Not worth it. **That boundary is architectural, not a matter of phrasing**:
+`AssistOperator` has no tool, no write path and no dependency capable of
+performing anything, so qwen7b could not act if it tried. Better wording about
+a limit that is structurally enforced buys nothing, and two seconds becoming
+ten does buy something — this is a drawer beside an operator's work, and its
+whole reason for existing (2026-07-29) was being fast enough to ask instead of
+looking something up. There is no memory saving either: `qwen7b` is the `chat`
+fallback and stays resident regardless.
+
+Reverted to `qwen7b` with `thinking` unset, which is also the honest value —
+`qwen2.5:7b` has no thinking capability, so `false` would describe a property
+the model does not have.
+
 ---
 
 ## 2026-08-05

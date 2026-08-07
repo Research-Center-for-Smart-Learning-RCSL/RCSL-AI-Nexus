@@ -342,6 +342,69 @@ export function ApiReference() {
 
       <section className="space-y-3">
         <h2 className="font-heading text-base font-semibold">
+          Two wire protocols, and which one your client speaks
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          Everything above describes{' '}
+          <code>POST /v1/chat/completions</code>, which is the documented
+          interface and unchanged. Since 2026-08-07 the gateway also serves{' '}
+          <code>POST /v1/responses</code>, OpenAI&apos;s newer Responses API,
+          because some clients no longer speak the older one.{' '}
+          <strong>
+            Both route through the same policy, the same key checks and the same
+            limits
+          </strong>{' '}
+          — only the shape on the wire differs, so the capability you ask for
+          and the model that serves it are identical either way.
+        </p>
+        <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[10rem_1fr]">
+          <dt className="font-mono text-muted-foreground">Codex</dt>
+          <dd>
+            Needs <code>/v1/responses</code>. It removed Chat Completions
+            support in February 2026, so <code>wire_api = &quot;responses&quot;</code>{' '}
+            is required in <code>~/.codex/config.toml</code> and{' '}
+            <code>wire_api = &quot;chat&quot;</code> refuses to start.
+          </dd>
+          <dt className="font-mono text-muted-foreground">
+            Most libraries
+          </dt>
+          <dd>
+            The OpenAI SDKs, LangChain, Cline, Continue and anything taking a
+            base URL use <code>/v1/chat/completions</code>. Nothing to change.
+          </dd>
+          <dt className="font-mono text-muted-foreground">Claude Code</dt>
+          <dd>
+            <strong>Cannot connect to this gateway.</strong> It speaks
+            Anthropic&apos;s Messages API (<code>/v1/messages</code>), which the
+            platform does not serve. A translating proxy in front is the only
+            route today.
+          </dd>
+        </dl>
+        <p className="text-sm text-muted-foreground">
+          The Responses API carries tools <em>flat</em> —{' '}
+          <code>
+            {'{"type": "function", "name": ..., "parameters": ...}'}
+          </code>{' '}
+          — where Chat Completions nests them under a{' '}
+          <code>function</code> key, and its system prompt arrives as a
+          top-level <code>instructions</code> string rather than as a message.
+          The platform translates both onto the same request, so this only
+          matters if you are writing the client yourself.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          <strong>Server-side tools are not served.</strong> A{' '}
+          <code>web_search</code> tool is refused with{' '}
+          <code>400 runtime_capability_unsupported</code> when the client
+          actually enables it — performing one would mean this gateway making
+          outbound web requests, which it deliberately cannot do. A disabled
+          one, and any tool type this platform does not recognise, is dropped
+          instead and named in the <code>X-Dropped-Tools</code> response header,
+          so a capability the model never saw is findable rather than a mystery.
+        </p>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="font-heading text-base font-semibold">
           Grounding on the knowledge base
         </h2>
         <p className="text-sm text-muted-foreground">

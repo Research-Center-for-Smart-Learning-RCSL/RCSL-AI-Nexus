@@ -35,6 +35,7 @@ import {
   Trash2Icon,
   ServerIcon,
   SparklesIcon,
+  TerminalIcon,
   UserCogIcon,
   UsersIcon,
   XIcon,
@@ -109,6 +110,14 @@ const NAV_GROUPS: NavGroup[] = [
         href: '/api-docs',
         label: 'API',
         icon: <BookOpenIcon className="size-4" />,
+      },
+      {
+        // Beside the reference rather than inside it: one is the contract and
+        // the other is the walkthrough, and somebody arriving to connect an
+        // agent should not have to read the first to find the second.
+        href: '/agent-setup',
+        label: 'Connect an agent',
+        icon: <TerminalIcon className="size-4" />,
       },
     ],
   },
