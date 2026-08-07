@@ -170,6 +170,7 @@ describe('the links a role can see', () => {
       'Chat',
       'API keys',
       'API',
+      'Connect an agent',
       'Models',
       'Routing',
       'Nodes',
@@ -190,7 +191,13 @@ describe('the links a role can see', () => {
     signedInWith(SCOPES.user);
     render(<AppShell>content</AppShell>);
 
-    expect(sidebarLinks()).toEqual(['Chat', 'API keys', 'API', 'Usage']);
+    expect(sidebarLinks()).toEqual([
+      'Chat',
+      'API keys',
+      'API',
+      'Connect an agent',
+      'Usage',
+    ]);
   });
 
   it('shows an operator the fleet and withholds the screens that grant things', () => {
@@ -215,6 +222,7 @@ describe('the links a role can see', () => {
       'Chat',
       'API keys',
       'API',
+      'Connect an agent',
       'Knowledge',
       'Usage',
     ]);
@@ -230,7 +238,7 @@ describe('the links a role can see', () => {
     signedInWith(SCOPES.auditor);
     render(<AppShell>content</AppShell>);
 
-    expect(sidebarLinks()).toHaveLength(12);
+    expect(sidebarLinks()).toHaveLength(13);
     expect(sidebarLinks()).not.toContain('Retention');
   });
 
@@ -393,6 +401,11 @@ describe('the pinned entry', () => {
     signedInWith([]);
     render(<AppShell>content</AppShell>);
 
-    expect(sidebarLinks()).toEqual(['Chat', 'API keys', 'API']);
+    expect(sidebarLinks()).toEqual([
+      'Chat',
+      'API keys',
+      'API',
+      'Connect an agent',
+    ]);
   });
 });

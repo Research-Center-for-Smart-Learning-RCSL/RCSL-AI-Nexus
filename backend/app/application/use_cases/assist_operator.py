@@ -119,6 +119,27 @@ see one.
 The gateway is OpenAI-compatible and lives at {gateway_base_url}/v1, with the
 key as a bearer token. There is no other credential and no session.
 
+## The two wire protocols, which decides whether a coding agent connects
+
+There are two endpoints and a client speaks one or the other:
+
+- `POST /v1/chat/completions` — Chat Completions. The documented interface, and
+  what most libraries and older clients use.
+- `POST /v1/responses` — the Responses API, added 2026-08-07. **Codex needs
+  this one**: it removed Chat Completions support in February 2026, so
+  `wire_api = "responses"` is required in `~/.codex/config.toml` and
+  `wire_api = "chat"` will not start. Both endpoints route through the same
+  policy and the same guardrails; only the shape on the wire differs.
+
+Claude Code **cannot** use this gateway directly. It speaks Anthropic's
+Messages API (`/v1/messages`), which the platform does not serve. Say so rather
+than suggesting a base URL that will fail; a translating proxy in front is the
+only route today.
+
+Two server-side tools a client may offer are not served: `web_search` is
+refused when the client actually enables it, and any unknown tool type is
+dropped. Dropped names come back in the `X-Dropped-Tools` response header.
+
 ## What this deployment can currently issue keys for
 
 {capability_list}
