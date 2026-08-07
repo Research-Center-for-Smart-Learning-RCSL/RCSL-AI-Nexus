@@ -697,6 +697,58 @@ to `1560s`, matching the frontend's `proxyTimeout` and sized above the
 Nobody had hit it because nobody can get past the perimeter to send a long
 prompt — one blocked item hiding another.
 
+#### The cause was a duplicate server block, and the entrance is now open
+
+Shell access to the proxy host settled in four commands what a week of external
+probing could not, and the answer was not the one every message about this had
+assumed. **Nothing was missing.** The directives were written in August and had
+never once taken effect.
+
+`llmapi.rcsl.online` had **two** server blocks: NPM's generated
+`data/nginx/proxy_host/34.conf`, and a hand-written one in
+`data/nginx/custom/http.conf` carrying all four headers. nginx takes the first
+of a duplicate `server_name` on the same listen address and discards the rest,
+and NPM's is included first — so the correct block was dead the whole time.
+
+nginx had been saying so on every reload since August:
+
+```
+nginx: [warn] conflicting server name "llmapi.rcsl.online" on 0.0.0.0:443, ignored
+```
+
+`llm.rcsl.online` works because it has **no** NPM proxy host at all — only the
+custom block, unopposed. One host with a duplicate and one without: that is the
+whole of why one entrance worked and the other did not, and it is invisible from
+outside, from the NPM interface, and from this repository.
+
+**This closes a question left open on 2026-08-04**, which recorded that "which
+route the directives finally took is *not* recorded" and asked for `nginx -T`.
+The answer: they never went through the NPM interface at all. Someone wrote a
+raw `custom/http.conf`, which is why nothing in NPM ever looked wrong.
+
+Fixed by disabling NPM's proxy host for that name — no directive added, nothing
+edited. **`verify-public-entrance.sh` now passes 11 of 11 with a key**, both
+`inference:` rows included, and the path an agent client actually uses works
+end to end with nothing but an `Authorization` header:
+
+| | |
+|---|---|
+| `GET /v1/models` | `{"data":[{"id":"code"}]}` — a `code`-scoped key sees `code` and nothing else |
+| tool call, non-streaming | `200` in 1.27 s, `finish_reason: "tool_calls"`, `list_files({"path":"src"})`, `reasoning_content: null` |
+| streaming | SSE frames flowing |
+
+Two corrections to the request that had been drafted for the administrator, both
+found by reading the running configuration rather than the spec. Its
+`proxy_read_timeout` is **86400s**, far above the 1560s that request was about to
+ask for — the timeout defect corrected in `deployment.md` was real against the
+spec and had never been real in the deployment. And `client_max_body_size` on
+that block is `512m` rather than absent; the 200 MiB that got through was
+NPM's block, which set none. `512m` is still well above the `10m` intended and
+remains worth lowering, in the custom file, whenever convenient.
+
+The coding-agent integration is unblocked. `runbooks/connect-an-agent-client.md`
+works as written.
+
 ---
 
 ## 2026-08-05

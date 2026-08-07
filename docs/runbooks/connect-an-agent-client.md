@@ -23,17 +23,12 @@ Related: [`architecture/backend.md`](../architecture/backend.md) section 6 for
 the streaming and tool-calling contract, and the `/api-docs` page in the
 management UI for the wire reference an integrator reads.
 
-> **Blocked as of 2026-08-07, on the proxy and not on anything here.** The
-> inference host's server block is missing the four `proxy_set_header`
-> directives the management host has, so a real client's first request answers
-> `400 untrusted_proxy`. Everything after that point works — the same request
-> with the two headers supplied by hand returns a correct tool call. There is no
-> way round it from the client side, and the tailnet address is not one: the
-> gateway refuses a direct connection for the same reason, deliberately
-> ([security.md](../architecture/security.md) §3.4). Check with
-> `NEXUS_API_KEY=nx_live_... scripts/verify-public-entrance.sh`; when its two
-> `inference:` rows pass, this runbook works end to end. Tracked in
-> [ROADMAP.md](../ROADMAP.md) under External coordination.
+> **Unblocked 2026-08-07.** The inference host was serving from a duplicate
+> NPM server block that discarded the correct one, so the directives written in
+> August had never taken effect. Nothing was added to fix it; NPM's proxy host
+> for that name was disabled and the hand-written block took over. Verified end
+> to end the same day: `/v1/models`, a tool call and a stream, with nothing but
+> an `Authorization` header. This runbook works as written.
 
 ---
 
@@ -61,17 +56,18 @@ numbers under step 3 rather than an argument. The `code` policy points at
 `gemma4-31b` with deliberation off (`glm47-flash` until 2026-08-07). Running the same
 five-tool-call debugging task three times each way:
 
-| | wall clock | output tokens |
+| on `gemma4-31b` (2026-08-07) | wall clock | output tokens |
 |---|---|---|
-| deliberating | 9.4 / 11.5 / 12.7 s | 470 / 591 / 654 |
-| answering directly | 6.0 / 6.1 / 7.5 s | 275 / 283 / 366 |
+| deliberating | 23.0 / 18.2 / 22.1 s | 404 / 314 / 399 |
+| answering directly | 13.6 / 11.5 / 13.0 s | 177 / 167 / 185 |
 
-**Answering directly takes 58% of the wall clock on 54% of the output —
-reductions of 42% and 46% — and solved the task 6 times out of 6 either way.**
-Stated both ways because the first version of this line said "42% of the
-clock", directly under this table, where it reads as the ratio between the rows
-rather than the saving: it promises a 2.4× speedup where the measurement shows
-1.7×. Reproduce with `scripts/measure-agent-loop.py`. Note that the saving is in
+**Answering directly takes 60% of the wall clock on 47% of the output —
+reductions of 40% and 53% — and solved the task 6 times out of 6 either way.**
+Stated both ways because an earlier version of this line said "40% of the
+clock", directly under the table, where it reads as the ratio between the rows
+rather than the saving. The same measurement on `glm-4.7-flash` gave 42% and
+46%; two different models agreeing that closely suggests this is a property of
+the task rather than of either model. Reproduce with `scripts/measure-agent-loop.py`. Note that the saving is in
 *output* tokens: reasoning is never replayed into the next prompt, so it costs
 per turn rather than compounding through the conversation the way tool output
 does.
