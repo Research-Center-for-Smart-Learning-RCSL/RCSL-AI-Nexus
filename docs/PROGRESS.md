@@ -635,6 +635,46 @@ memory. What remains unmeasured is the same thing that remained unmeasured
 after 2026-08-05: this is a harness with a planted bug, not a real repository
 with a real one. It answers "can the loop run", never "is the work any good".
 
+### The agent client cannot connect yet, and the check that should have said so passed
+
+Asked whether Codex could be pointed at the deployment now, and answering it by
+trying rather than by reading the runbook. It cannot:
+
+| path | result |
+|---|---|
+| `https://llmapi.rcsl.online/v1` with a valid key | **`400 untrusted_proxy`** |
+| the gateway's tailnet address directly | `400 untrusted_proxy`, and deliberately — §3.4 lists bypassing the proxy as a threat and the ACL blocks it |
+| the same public request with the two headers supplied by hand | `200`, `finish_reason: "tool_calls"`, `list_files({"path":"src"})`, `reasoning_content: null` |
+
+So everything this repository owns is correct, and the four
+`proxy_set_header` directives were never added to the *inference* host's server
+block. They were added to the management host on 2026-08-03 and verified there.
+
+**`verify-public-entrance.sh` reported 9 passed, 0 failed that morning**, and
+its section 4 comment said why: "Both remaining sections probe ADMIN_HOST
+only." A perimeter control verified on one of two separately-configured hosts
+is verified on neither — and the unchecked one is the only host an agent client
+ever talks to.
+
+**The first fix for that was worse than the gap.** Running the same paired
+probe against the inference host reported PASS, because a credential-free
+request there answers 401 whatever the proxy does: `api_key_auth.py` checks the
+token at lines 101–116 and only reaches `resolve_client_ip` at line 126, while
+the management host runs `resolve_client_ip` in `GeoFilterMiddleware` at the
+ASGI stack level and so refuses an anonymous request at the perimeter. The two
+entrances cannot be probed the same way, and a green tick that cannot fail is
+worse than a missing check. It stood for about ten minutes and was caught by
+the result contradicting a direct test made minutes earlier.
+
+The check now takes `NEXUS_API_KEY` and **skips loudly without one**, naming
+the reason. With a key it fails, correctly, on both inference rows. A second
+defect surfaced while fixing it and is worth recording because it is the same
+shape a third time: under `set -u` on the bash 3.2 macOS ships, expanding an
+empty array aborted the probe, and the empty status that came back was not
+`000`, so it was reported as a PASS. An empty result is now a failure.
+
+Two API keys were issued and revoked for these checks; no key is live.
+
 ---
 
 ## 2026-08-05
