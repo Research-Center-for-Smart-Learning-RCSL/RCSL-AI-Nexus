@@ -26,7 +26,12 @@ from app.domain.entities.chat import Message, MessageRole
 from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.di import AssistOperatorDep, ListCapabilitiesDep
 from app.interfaces.http import sse
-from app.interfaces.http.assistant_proposal import PROPOSAL_CONTRACT, ProposalCollector
+from app.interfaces.http.assistant_proposal import (
+    NO_PROPOSAL_CONTRACT,
+    PROPOSAL_CONTRACT,
+    PROPOSAL_SURFACES,
+    ProposalCollector,
+)
 from app.interfaces.http.middleware.identity import current_actor
 from app.interfaces.http.schemas.assistant_schemas import AssistRequest
 from app.shared.clock import SystemClock
@@ -66,7 +71,12 @@ async def assist(
             issuable_capabilities=issuable,
             context=_context_for(body),
             history=history,
-            output_contract=PROPOSAL_CONTRACT,
+            # Only where a proposal has a form to land in. Elsewhere the
+            # model is not shown the format at all, which is a stronger
+            # guarantee than an instruction not to use it.
+            output_contract=(
+                PROPOSAL_CONTRACT if body.surface in PROPOSAL_SURFACES else NO_PROPOSAL_CONTRACT
+            ),
         )
     )
 

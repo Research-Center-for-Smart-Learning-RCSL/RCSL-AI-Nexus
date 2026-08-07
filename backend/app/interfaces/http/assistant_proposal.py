@@ -40,6 +40,20 @@ logger = logging.getLogger(__name__)
 PROPOSAL_OPEN = "<proposal>"
 PROPOSAL_CLOSE = "</proposal>"
 
+PROPOSAL_SURFACES = frozenset({"api_keys.create", "api_keys.edit"})
+"""The screens where a proposal has somewhere to land.
+
+Every field a proposal may carry is an API key field, so on any other screen the
+card has no form to be applied to. It is a *set of surfaces* rather than a rule
+inside the prompt because the reliable way to stop a model using a format is not
+to teach it the format: `PROPOSAL_CONTRACT` ends by saying to write no block when
+answering a question, and on 2026-08-07 a 7B model answering "how do I connect
+Codex" emitted one anyway — with `name: "code"`, offered against no form at all.
+
+Worse, the reply that carried it had no prose, and the client dropped a turn
+with nothing to show. The operator's question appeared and nothing followed it.
+"""
+
 PROPOSAL_CONTRACT = f"""\
 ## How to offer concrete settings
 
@@ -71,6 +85,22 @@ explain your recommendation in the prose above it as well.
 
 If you are answering a question rather than recommending values, write only the
 answer and no block at all."""
+
+
+NO_PROPOSAL_CONTRACT = """\
+## How to answer on this screen
+
+There is no form here, so there is nothing to offer settings for. Write the
+answer as prose. Do not emit any machine-readable block, and do not describe
+one; if the operator wants values applied to a key, tell them to open the key
+form, where you can offer them."""
+"""What replaces the proposal contract off the key forms.
+
+Not an empty string. The prompt ends with whatever this is, and leaving nothing
+there let the model fall back on whatever a proposal block looked like earlier
+in the conversation — history is the other way the format arrives. Saying
+plainly that this screen takes prose gives the ending a job.
+"""
 
 
 def _visible_prefix(buffer: str) -> str:

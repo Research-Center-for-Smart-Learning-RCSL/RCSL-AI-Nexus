@@ -22,6 +22,8 @@ from datetime import UTC, datetime, timedelta
 
 from app.domain.entities.chat import CompletionChunk
 from app.interfaces.http.assistant_proposal import (
+    NO_PROPOSAL_CONTRACT,
+    PROPOSAL_SURFACES,
     PROPOSAL_CLOSE,
     PROPOSAL_CONTRACT,
     PROPOSAL_OPEN,
@@ -269,3 +271,26 @@ async def test_a_truncated_marker_at_the_end_is_not_shown_as_text() -> None:
 
     assert visible == "Use a narrow key."
     assert await c.trailer() is None
+
+
+def test_the_proposal_format_is_withheld_where_no_form_exists() -> None:
+    """A model cannot misuse a format it was never shown.
+
+    Every field a proposal carries is an API key field, so off the two key forms
+    the card has nowhere to land. `PROPOSAL_CONTRACT` already ends by saying to
+    write no block when answering a question, and on 2026-08-07 a 7B model
+    answering "how do I connect Codex" emitted one regardless — offering
+    `name: "code"` against no form at all.
+
+    Withholding beats instructing. Asserted as a property of the surface set
+    rather than of one screen, so a surface added later has to be classified
+    deliberately.
+    """
+    assert PROPOSAL_SURFACES == {"api_keys.create", "api_keys.edit"}
+    assert PROPOSAL_OPEN not in NO_PROPOSAL_CONTRACT, (
+        "the alternative must not spell the marker it exists to withhold"
+    )
+    assert NO_PROPOSAL_CONTRACT.strip(), (
+        "an empty ending let the model fall back on a block seen earlier in the "
+        "conversation; the replacement has to say what this screen wants instead"
+    )
