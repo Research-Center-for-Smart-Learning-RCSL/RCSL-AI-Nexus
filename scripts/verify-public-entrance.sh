@@ -210,17 +210,103 @@ fi
 # --- 4. The two header controls ---------------------------------------------
 head_ "4. Perimeter headers (the two that fail silently)"
 
-# Both remaining sections probe ADMIN_HOST only. Neither can distinguish a
-# stripped header from a request that never arrived, so if the entrance is down
-# they are not weaker evidence -- they are none, and reporting them as failures
-# competes with the one finding that is real.
-if [ "$ADMIN_STATE" != "ok" ]; then
+# **This section probed ADMIN_HOST alone until 2026-08-07, and the omission
+# cost exactly what it was written to prevent.** The script reported 9 passed,
+# 0 failed on that day, and an agent client pointed at the inference host got
+# `400 untrusted_proxy` on its first request: that host's server block never
+# had the four `proxy_set_header` directives, and nothing here had ever asked
+# it. A perimeter control verified on one of two hosts is verified on neither,
+# because the reason to check is that the two are configured separately.
+#
+# Section 5 stays on ADMIN_HOST: `Tailscale-User-Login` means nothing to the
+# gateway, which resolves identity from an API key and has no tailnet path.
+if [ "$ADMIN_STATE" != "ok" ] && [ "$API_STATE" != "ok" ]; then
   skip "nginx sets X-Nexus-Proxy" "$DOWN"
   skip "nginx overwrites X-Forwarded-For (forged address discarded)" "$DOWN"
   head_ "5. Forged tailnet identity (security.md section 14)"
   skip "forged Tailscale-User-Login is refused" "$DOWN"
   summary
 fi
+
+# The paired probe, run per host.
+#
+# **The two entrances cannot be probed the same way, and assuming they could
+# produced a false pass on the first attempt at this.** On the management host
+# `GeoFilterMiddleware` calls `resolve_client_ip` at the ASGI stack level, so an
+# unauthenticated `/admin/me` reaches the perimeter check and a missing header
+# is a 400. The gateway has no stack-level middleware at all — it applies the
+# geo filter *inline inside key authentication* — and `api_key_auth.py` orders
+# its checks so that a missing, malformed, unknown or inactive key answers 401
+# at lines 101-116, long before `resolve_client_ip` at line 126.
+#
+# So on the inference host every credential-free probe answers 401 whatever the
+# proxy does, and reading that as "not 400, therefore the header is set" is a
+# pass that means nothing. It reported one on 2026-08-07 while a real client was
+# being refused `untrusted_proxy` on its first request.
+#
+# Hence `auth`: the inference check needs a valid key and is skipped, loudly,
+# without one. A skip that names the reason is worth more than a green tick
+# that cannot fail.
+check_proxy_headers() {
+  local host="$1" probe_path="$2" state="$3" label="$4" auth="${5:-}"
+
+  if [ "$state" != "ok" ]; then
+    skip "$label: nginx sets X-Nexus-Proxy" "$DOWN"
+    skip "$label: nginx overwrites X-Forwarded-For" "$DOWN"
+    return
+  fi
+
+  local -a cred=()
+  if [ -n "$auth" ]; then
+    cred=(-H "Authorization: Bearer $auth")
+  elif [ "$probe_path" = "/v1/models" ]; then
+    skip "$label: nginx sets X-Nexus-Proxy" \
+      "needs a valid API key. The gateway answers 401 to anything unauthenticated before it ever looks at the proxy headers (api_key_auth.py, key checks at 101-116 against resolve_client_ip at 126), so a credential-free probe here cannot distinguish a configured host from an unconfigured one. Set NEXUS_API_KEY to a key scoped to any capability and re-run."
+    skip "$label: nginx overwrites X-Forwarded-For" "same reason"
+    return
+  fi
+
+  local wrong right
+  wrong="$(status ${cred[@]+"${cred[@]}"} -H 'X-Nexus-Proxy: deliberately-wrong-value' "https://$host$probe_path")"
+  if [ -n "$SECRET" ]; then
+    right="$(status ${cred[@]+"${cred[@]}"} -H "X-Nexus-Proxy: $SECRET" "https://$host$probe_path")"
+  else
+    right=""
+  fi
+
+  if [ -z "$wrong" ] || [ "$wrong" = "000" ]; then
+    fail "$label: nginx sets X-Nexus-Proxy" \
+      "no status from the probe (got '"'"'$wrong'"'"'). An empty result is a broken check, not a healthy host."
+  elif [ "$wrong" != "400" ]; then
+    pass "$label: nginx sets X-Nexus-Proxy and overwrites the caller's (got $wrong)"
+  elif [ -z "$right" ]; then
+    fail "$label: nginx sets X-Nexus-Proxy" \
+      "a wrong value survived to the application (400). Without $SECRET_FILE this cannot say whether nginx sets nothing or sets a different value."
+  elif [ "$right" = "400" ]; then
+    fail "$label: nginx sets the CORRECT X-Nexus-Proxy" \
+      "state C: nginx is setting this header, but not to the value this deployment expects — the real secret is refused too. Check the value in the proxy configuration against secrets/proxy_shared_secret; a placeholder left in place looks exactly like a correct configuration in a screenshot."
+  else
+    fail "$label: nginx sets X-Nexus-Proxy" \
+      "state A: nginx sets no value at all — the caller's own header reaches the application untouched, whatever it says. Every request through this entrance is refused (400), and a caller who learns the secret can supply it themselves. If the configuration looks correct, the usual cause is placement: a single proxy_set_header inside a location block DISCARDS every proxy_set_header inherited from the server block, so directives added at server level vanish. Confirm with 'nginx -T' (the effective config) rather than the file or the UI."
+  fi
+
+  # A forged foreign address must be discarded. The real secret goes with it so
+  # this reports on X-Forwarded-For rather than failing at the previous gate.
+  if [ -z "$SECRET" ]; then
+    skip "$label: nginx overwrites X-Forwarded-For" "no $SECRET_FILE on this host"
+    return
+  fi
+  local forged
+  forged="$(status ${cred[@]+"${cred[@]}"} -H "X-Nexus-Proxy: $SECRET" -H 'X-Forwarded-For: 8.8.8.8' "https://$host$probe_path")"
+  if [ "$forged" = "403" ]; then
+    fail "$label: nginx overwrites X-Forwarded-For (forged address discarded)" \
+      "a forged US address was believed (403 country_not_allowed). nginx is appending or not setting it. Use 'proxy_set_header X-Forwarded-For \$remote_addr', never \$proxy_add_x_forwarded_for: the application reads the first value, so an appended header lets the caller choose its own source address and bypass both the country filter and every per-key CIDR allowlist."
+  elif [ -z "$forged" ] || [ "$forged" = "000" ]; then
+    fail "$label: nginx overwrites X-Forwarded-For (forged address discarded)" "no response"
+  else
+    pass "$label: nginx overwrites X-Forwarded-For (forged address discarded, got $forged)"
+  fi
+}
 
 # Three states are possible and one test cannot separate them, which is worth
 # spelling out because the wrong diagnosis sends the administrator looking in
@@ -237,44 +323,12 @@ fi
 # So the pair separates all three, and neither probe does it alone. The first
 # version of this script reported A on the strength of the wrong-value probe by
 # itself, which would have been a confident and unfounded accusation in case C.
-S4_WRONG="$(status -H 'X-Nexus-Proxy: deliberately-wrong-value' "https://$ADMIN_HOST/admin/me")"
-if [ -n "$SECRET" ]; then
-  S4_RIGHT="$(status -H "X-Nexus-Proxy: $SECRET" "https://$ADMIN_HOST/admin/me")"
-else
-  S4_RIGHT=""
-fi
-
-if [ "$S4_WRONG" = "000" ]; then
-  fail "nginx sets X-Nexus-Proxy" "no response"
-elif [ "$S4_WRONG" != "400" ]; then
-  pass "nginx sets X-Nexus-Proxy and overwrites the caller's (got $S4_WRONG)"
-elif [ -z "$S4_RIGHT" ]; then
-  fail "nginx sets X-Nexus-Proxy" \
-    "a wrong value survived to the application (400). Without $SECRET_FILE this cannot say whether nginx sets nothing or sets a different value."
-elif [ "$S4_RIGHT" = "400" ]; then
-  fail "nginx sets the CORRECT X-Nexus-Proxy" \
-    "state C: nginx is setting this header, but not to the value this deployment expects — the real secret is refused too. Check the value in the proxy configuration against secrets/proxy_shared_secret; a placeholder left in place looks exactly like a correct configuration in a screenshot."
-else
-  fail "nginx sets X-Nexus-Proxy" \
-    "state A: nginx sets no value at all — the caller's own header reaches the application untouched, whatever it says. Every request through the entrance is refused (400), and a caller who learns the secret can supply it themselves. If the configuration looks correct, the usual cause is placement: a single proxy_set_header inside a location block DISCARDS every proxy_set_header inherited from the server block, so directives added at server level vanish. Confirm with 'nginx -T' (the effective config) rather than the file or the UI."
-fi
-
-# A forged foreign address must be discarded. Sending the real secret too, so
-# this check reports on X-Forwarded-For rather than failing at the previous
-# gate; once nginx sets the header, nginx's value wins and this is inert.
-if [ -n "$SECRET" ]; then
-  S5="$(status -H "X-Nexus-Proxy: $SECRET" -H 'X-Forwarded-For: 8.8.8.8' "https://$ADMIN_HOST/admin/me")"
-  if [ "$S5" = "403" ]; then
-    fail "nginx overwrites X-Forwarded-For (forged address discarded)" \
-      "a forged US address was believed (403 country_not_allowed). nginx is appending or not setting it. Use 'proxy_set_header X-Forwarded-For \$remote_addr', never \$proxy_add_x_forwarded_for: the application reads the first value, so an appended header lets the caller choose its own source address and bypass both the country filter and every per-key CIDR allowlist."
-  elif [ "$S5" = "000" ]; then
-    fail "nginx overwrites X-Forwarded-For (forged address discarded)" "no response"
-  else
-    pass "nginx overwrites X-Forwarded-For (forged address discarded, got $S5)"
-  fi
-else
-  skip "nginx overwrites X-Forwarded-For" "no $SECRET_FILE on this host"
-fi
+#
+# `/v1/models` is the gateway's probe rather than `/healthz`, which is exempt
+# from the perimeter so a prober can reach it — a check aimed at an exempt path
+# would pass on a host with no directives at all.
+check_proxy_headers "$ADMIN_HOST" "/admin/me" "$ADMIN_STATE" "management"
+check_proxy_headers "$API_HOST" "/v1/models" "$API_STATE" "inference" "${NEXUS_API_KEY:-}"
 
 # --- 5. security.md section 14: forged identity ------------------------------
 head_ "5. Forged tailnet identity (security.md section 14)"

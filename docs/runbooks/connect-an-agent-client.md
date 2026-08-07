@@ -23,6 +23,18 @@ Related: [`architecture/backend.md`](../architecture/backend.md) section 6 for
 the streaming and tool-calling contract, and the `/api-docs` page in the
 management UI for the wire reference an integrator reads.
 
+> **Blocked as of 2026-08-07, on the proxy and not on anything here.** The
+> inference host's server block is missing the four `proxy_set_header`
+> directives the management host has, so a real client's first request answers
+> `400 untrusted_proxy`. Everything after that point works — the same request
+> with the two headers supplied by hand returns a correct tool call. There is no
+> way round it from the client side, and the tailnet address is not one: the
+> gateway refuses a direct connection for the same reason, deliberately
+> ([security.md](../architecture/security.md) §3.4). Check with
+> `NEXUS_API_KEY=nx_live_... scripts/verify-public-entrance.sh`; when its two
+> `inference:` rows pass, this runbook works end to end. Tracked in
+> [ROADMAP.md](../ROADMAP.md) under External coordination.
+
 ---
 
 ## 1. Choose and prepare the capability
@@ -46,7 +58,7 @@ producing an answer at all. The setting is per capability precisely so that
 
 **On this deployment steps 1–3 are already done**, and there are measured
 numbers under step 3 rather than an argument. The `code` policy points at
-`glm47-flash` with deliberation off (2026-08-05). Running the same
+`gemma4-31b` with deliberation off (`glm47-flash` until 2026-08-07). Running the same
 five-tool-call debugging task three times each way:
 
 | | wall clock | output tokens |
@@ -65,7 +77,7 @@ per turn rather than compounding through the conversation the way tool output
 does.
 
 **The policy names one model and no fallback, deliberately.** `chat` falls back
-to `qwen7b` when `glm47-flash` is not loaded, which is right for a person — a
+to `qwen7b` when the main model is not loaded, which is right for a person — a
 smaller answer beats no answer. It is wrong for an agent: a weaker model does
 not fail, it writes worse code, and nothing in the transcript says which model
 wrote it. So `code` returns `503 no_available_model` instead, which is a thing
