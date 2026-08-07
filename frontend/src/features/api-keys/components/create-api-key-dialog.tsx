@@ -152,7 +152,7 @@ export function CreateApiKeyDialog({
 
         {plaintext ? (
           <>
-            <div className="max-h-[60vh] space-y-5 overflow-y-auto">
+            <div className="max-h-[60vh] space-y-5 overflow-y-auto overscroll-contain">
               <OneTimeSecret
                 title="The key, shown once"
                 description="Only a peppered hash is stored, so this cannot be retrieved later. If it is lost, revoke and issue a new one."

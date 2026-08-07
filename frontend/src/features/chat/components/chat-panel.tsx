@@ -106,7 +106,7 @@ export function ChatPanel() {
 
   return (
     <div className="flex h-full flex-col gap-4">
-      <div className="flex-1 space-y-3 overflow-y-auto">
+      <div className="flex-1 space-y-3 overflow-y-auto overscroll-contain">
         {turns.length === 0 && !isStreaming ? (
           <EmptyState
             title="No messages yet"

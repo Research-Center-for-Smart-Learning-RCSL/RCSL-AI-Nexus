@@ -55,6 +55,11 @@ import {
   useAssistantContext,
 } from '@/features/assistant/context';
 import { AssistantDrawer } from '@/features/assistant/components/assistant-drawer';
+import {
+  readWidePreference,
+  RESERVED_CLASS,
+  WIDTH_EVENT,
+} from '@/features/assistant/width';
 
 type NavItem = {
   href: string;
@@ -459,6 +464,19 @@ export function AppShell({ children }: { children: ReactNode }) {
   const assistant = useAssistantContext();
   const [navOpen, setNavOpen] = useState(false);
   const [collapsed, toggleGroup] = useCollapsedGroups();
+  // Declared before the early returns below. This component returns early
+  // while loading, on error and when redirecting, so a hook after them runs a
+  // different number of times per render.
+  const [assistantWide, setAssistantWide] = useState(false);
+
+  useEffect(() => {
+    setAssistantWide(readWidePreference());
+    const onWidth = (event: Event) =>
+      setAssistantWide((event as CustomEvent<boolean>).detail);
+    window.addEventListener(WIDTH_EVENT, onWidth);
+    return () => window.removeEventListener(WIDTH_EVENT, onWidth);
+  }, []);
+
   const navPanelRef = useRef<HTMLDivElement | null>(null);
   const navButtonRef = useRef<HTMLButtonElement | null>(null);
 
@@ -565,17 +583,30 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div
       className={cn(
         'flex flex-1 flex-col',
-        // The panel is 24rem and fixed to the right edge. Reserving the same
-        // width from `lg` up is what turns it from something that covers the
-        // rightmost table columns into something that sits beside them. Below
-        // `lg` there is no width to spare, so it overlays and the header button
-        // stays available to dismiss it.
-        assistant.isOpen && 'lg:pr-96',
+        // Reserving the panel's width from `lg` up is what turns it from
+        // something that covers the rightmost table columns into something that
+        // sits beside them. Below `lg` there is no width to spare, so it
+        // overlays and the header button stays available to dismiss it.
+        //
+        // The two values track the panel's own two widths through
+        // `features/assistant/width`. They have to agree: reserving too little
+        // puts the panel back over the content it was widened to be read
+        // beside, which is the whole point of widening it.
+        assistant.isOpen &&
+          (assistantWide ? RESERVED_CLASS.wide : RESERVED_CLASS.narrow),
       )}
     >
       <SessionExpiryWarning />
       <div className="flex flex-1">
-        <aside className="hidden w-56 shrink-0 border-r p-3 sm:block">
+        {/* Sticky, with its own scroll. Without this the nav scrolled away with
+            the content, so on the screens that are actually long — Users, Logs,
+            Models — reaching the bottom of a table meant losing every link and
+            scrolling back up to go anywhere. `h-[calc(100dvh)]` rather than
+            `h-screen`: on mobile browsers `100vh` includes the chrome that
+            hides as you scroll, so the last group sat under the toolbar.
+            `overscroll-contain` for the same reason as everywhere else — a nav
+            that has reached its end must not start moving the page behind it. */}
+        <aside className="sticky top-0 hidden h-[100dvh] w-56 shrink-0 overflow-y-auto overscroll-contain border-r p-3 sm:block">
           <div className="mb-4 px-2">
             {/* Stacked rather than set beside the title. The sidebar is 224px
                 wide, which leaves room for the mark at a size it survives;
@@ -616,7 +647,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               // inside the panel and Tab continues through the links rather
               // than leaving for the header.
               tabIndex={-1}
-              className="absolute inset-y-0 left-0 flex w-64 max-w-[85%] flex-col overflow-y-auto border-r bg-background p-3 outline-none"
+              className="absolute inset-y-0 left-0 flex w-64 max-w-[85%] flex-col overflow-y-auto overscroll-contain border-r bg-background p-3 outline-none"
             >
               <div className="mb-4 flex items-start justify-between gap-2 px-2">
                 <div>
