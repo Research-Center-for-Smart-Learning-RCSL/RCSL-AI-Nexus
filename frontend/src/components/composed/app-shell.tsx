@@ -667,9 +667,16 @@ export function AppShell({ children }: { children: ReactNode }) {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {/* Labelled, not just an icon. The sparkle alone said nothing
+                  about what it opens — an operator has to already know the
+                  feature exists to try it, which is the opposite of what an
+                  assistant is for. The text is what the `aria-label` has always
+                  said, so a screen reader user was the only one being told.
+                  Hidden below `sm` where the header is tight; the label is what
+                  drops, never the control. */}
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="sm"
                 aria-label={
                   assistant.isOpen
                     ? 'Close the assistant'
@@ -677,9 +684,13 @@ export function AppShell({ children }: { children: ReactNode }) {
                 }
                 aria-expanded={assistant.isOpen}
                 onClick={() => assistant.setOpen(!assistant.isOpen)}
-                className={cn(assistant.isOpen && 'bg-muted text-foreground')}
+                className={cn(
+                  'gap-1.5',
+                  assistant.isOpen && 'bg-muted text-foreground',
+                )}
               >
-                <SparklesIcon />
+                <SparklesIcon className="size-4" />
+                <span className="hidden sm:inline">Assistant</span>
               </Button>
               <ThemeToggle />
               {/* Account settings only apply where local credentials exist. */}
