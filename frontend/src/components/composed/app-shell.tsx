@@ -107,8 +107,14 @@ const NAV_GROUPS: NavGroup[] = [
         icon: <KeyIcon className="size-4" />,
       },
       {
+        // 'API' was too bare to be useful once 'Connect an agent' sat beside
+        // it: both are about the API and the label said nothing about which
+        // answers which question. This one is the wire contract — endpoints,
+        // fields, error codes — and it is also the whole of what the gateway
+        // offers in exchange for `/openapi.json` being disabled in production
+        // (security.md §4.4), which is a reason for it to say what it is.
         href: '/api-docs',
-        label: 'API',
+        label: 'API reference',
         icon: <BookOpenIcon className="size-4" />,
       },
       {
