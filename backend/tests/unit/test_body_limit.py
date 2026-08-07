@@ -14,10 +14,11 @@ from the JSON parser rather than a 413 from this middleware.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from fastapi import Depends, FastAPI
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
 from app.domain.exceptions import NotAuthenticatedError
@@ -176,7 +177,11 @@ def test_the_openai_envelope_is_used_on_the_gateway_shape() -> None:
         "/echo", json={"filler": "x" * (LIMIT * 4)}
     )
     body = response.json()
-    assert body["error"]["type"] == "api_error"
+    # Not `api_error`, which is what `handle_unanticipated` sends for a 500 and
+    # what an absent 413 used to fall through to. A client library reading this
+    # field must not be told a request it has to change is a server fault it
+    # should retry.
+    assert body["error"]["type"] == "invalid_request_error"
     assert body["error"]["code"] == "request_too_large"
     # Never the operator-facing detail, which names the platform's own ceiling.
     assert "detail" not in body["error"]
@@ -194,6 +199,38 @@ def test_the_counter_is_per_request_not_per_middleware() -> None:
     for _ in range(5):
         assert client.post("/echo", json={"filler": "x" * (LIMIT // 2)}).status_code == 200
     assert app.state.reached == [LIMIT // 2] * 5
+
+
+def test_a_streaming_response_passes_through_intact() -> None:
+    """The wrapper on the *send* side must not touch a response it is not refusing.
+
+    `guarded_send` exists only to drop what the application emits after a
+    rejection, and it sits on every response including the streamed ones this
+    gateway exists to serve. A wrapper that swallowed, reordered or coalesced
+    chunks would leave every rejection test above passing and break the one
+    thing the platform is for — the failure `metrics.py` chose pure ASGI to
+    avoid, reintroduced one middleware later.
+    """
+    app = FastAPI()
+
+    @app.get("/stream")
+    async def stream() -> StreamingResponse:
+        async def chunks() -> AsyncIterator[bytes]:
+            for i in range(5):
+                yield f"chunk-{i}\n".encode()
+
+        return StreamingResponse(chunks(), media_type="text/event-stream")
+
+    install_error_handlers(app, envelope="openai")
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=LIMIT, envelope="openai")
+
+    with TestClient(app).stream("GET", "/stream") as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        received = [line for line in response.iter_lines() if line]
+
+    # Every chunk, in order, none merged away.
+    assert received == [f"chunk-{i}" for i in range(5)]
 
 
 def test_a_non_positive_ceiling_is_a_wiring_error() -> None:

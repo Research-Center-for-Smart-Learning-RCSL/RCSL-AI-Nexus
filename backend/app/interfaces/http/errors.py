@@ -117,6 +117,14 @@ OPENAI_ERROR_TYPES: dict[int, str] = {
     403: "permission_error",
     404: "not_found_error",
     409: "conflict_error",
+    # 413 was absent until 2026-08-07 and fell through to `api_error`, the value
+    # `handle_unanticipated` uses for a 500. So both `context_too_long` and
+    # `request_too_large` — the caller's own request being too big, permanent
+    # until they send less — announced themselves to every OpenAI client library
+    # as a server-side fault, which is the one classification that invites a
+    # retry. That is the split-by-remedy rule in `domain/exceptions.py` losing
+    # in the last translation before the wire.
+    413: "invalid_request_error",
     429: "rate_limit_error",
     503: "service_unavailable",
 }

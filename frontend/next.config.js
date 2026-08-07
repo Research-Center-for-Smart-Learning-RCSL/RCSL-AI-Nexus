@@ -56,6 +56,34 @@ const nextConfig = {
     // A static value, unlike ADMIN_API_URL, so baking it in at build time is
     // safe — that distinction is why the proxy itself lives in middleware.ts.
     proxyTimeout: 1_560_000,
+
+    // The same class of defect as proxyTimeout above, found on 2026-08-07 and
+    // present since the middleware proxy was written: a limit inside Next's
+    // proxying that binds before anything this project chose, and reports
+    // nothing when it does.
+    //
+    // Middleware matches /admin/:path*, so every admin request has its body run
+    // through `getCloneableBody` (server/body-streams.js). Past the limit that
+    // function does NOT reject — it pushes EOF into both the clone the
+    // middleware reads *and* the stream forwarded upstream, while the original
+    // Content-Length header goes on unchanged. So the backend is handed a
+    // request that declares more bytes than it will ever receive and waits for
+    // the rest until proxyTimeout, twenty-six minutes above. A document upload
+    // between 10 MB and the 32 MiB the UI itself permits therefore did not
+    // fail: it hung, with no error anywhere the operator could see.
+    //
+    // The default is 10 MB. **This value must stay at or above the backend's
+    // ADMIN_MAX_BODY_BYTES**, because the hang lives in the gap between them:
+    // below that, Next truncates a body the backend would have accepted, and
+    // above it the backend refuses on Content-Length before reading a byte and
+    // the truncation never happens. Equal is the smallest value that closes it,
+    // which matters because Next buffers up to this much in the Node process
+    // for a caller who has not authenticated yet.
+    //
+    // `test_config_failfast.py` reads this file and .env.example and fails if
+    // the ordering breaks, for the same reason the timeout above is pinned:
+    // an invariant spanning two languages cannot be held by a comment in each.
+    middlewareClientMaxBodySize: 41_943_040,
   },
 };
 
