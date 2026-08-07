@@ -229,7 +229,14 @@ export function useAssistant() {
         // Nothing to show is nothing to record: cancelling before the first
         // token would otherwise leave an empty Assistant bubble in the
         // transcript, and in `sessionStorage`.
-        if (generation.current === mine && (answer || failure)) {
+        //
+        // **`proposal` counts as something to show.** A model that puts its
+        // whole answer into the proposal and writes no prose produced a turn
+        // with an empty `answer`, which this dropped silently — the operator's
+        // own question appeared and nothing ever followed it, with no error
+        // anywhere. Reproduced 2026-08-07 on a two-turn conversation where the
+        // second reply was a proposal and nothing else.
+        if (generation.current === mine && (answer || failure || proposal)) {
           setTurns((previous) => [
             ...previous,
             {
