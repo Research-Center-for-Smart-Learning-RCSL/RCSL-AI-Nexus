@@ -301,13 +301,105 @@ served, a small body still reaches the authentication dependency and is
 refused by it, the counter is still per-request rather than per-middleware, and
 a non-positive ceiling is still a wiring error.
 
-690 unit tests and 93 integration tests pass against a real Postgres; ruff and
+692 unit tests and 93 integration tests pass against a real Postgres; ruff and
 strict mypy are clean; `generate-api-types.sh` produces no diff, since no admin
 schema changed.
 
-**Not deployed.** The running gateway is the previous image, so the measurement
-above still describes the live entrance. And the nginx half is still worth
-asking for: this keeps the bytes out of the process, not off the machine.
+### Deployed, and the live re-run
+
+Built, brought up with `migrate` exiting 0, and measured against the same
+entrance the defect was found on:
+
+| Request to `llmapi`, no credential | Before | After |
+|---|---|---|
+| 200 MiB of NUL bytes | `422`, after reading all of it | **`413 request_too_large`** |
+| Valid JSON, 3.8 MB (under the ceiling) | `401` | `401` — unchanged, still reaches the key check |
+| Valid JSON, 4.4 MB (over it) | `401` | **`413`** |
+| `{"x":1}` | `401` | `401` |
+
+The bracket is exact, and the third row is the one worth keeping: the ceiling
+has to be a ceiling and not a blanket, or the second row would have moved too.
+
+**One deploy step went wrong first, and it is the trap this repository already
+has a commit about.** `docker compose build gateway admin-tailnet admin-public
+frontend-tailnet frontend-public` exited 0 having built only the frontend. The
+`x-backend` anchor carries `image:` and no `build:` — `migrate` is the one
+service that builds the backend image, deliberately, so that services sharing a
+tag do not race to write it (the comment at the top of `docker-compose.yml`
+says exactly this). Naming services therefore skipped every backend one in
+silence, `docker compose up -d` found nothing to recreate, and the stack came
+back healthy on the old image. Caught by checking the image timestamps against
+the running containers rather than by reading `up`'s output, which looked
+correct. **`docker compose build` with no arguments is the documented form and
+README already says so.**
+
+### The verification found a second, older defect: uploads above 10 MB have never worked
+
+Testing the admin entrance's new ceiling meant getting past CSRF first, and the
+request that followed did not come back at all — 180 seconds, no response. It
+is not this change: the same 12 MiB sent straight to `admin-public`, bypassing
+the frontend, answered `401` in **0.16 s**, and 50 MiB answered `413` in 1.8 ms.
+
+The frontend log named it. Next's middleware matches `/admin/:path*`, so every
+admin request has its body run through `getCloneableBody`
+(`next/dist/server/body-streams.js`), whose limit is 10 MB by default. Past it
+that function **does not reject** — it pushes EOF into the stream forwarded
+upstream as well as the clone the middleware reads, and the caller's original
+`Content-Length` goes on unchanged. The backend is then waiting for bytes
+nobody will send, until `proxyTimeout`: twenty-six minutes.
+
+So a document upload between 10 MB and the 32 MiB the UI itself permits did not
+fail. It hung, with nothing in any log an operator reads. `upload_policy.py`
+says 32 MiB, `schema.ts` mirrors it client-side, nginx allows 64m — and the
+binding limit was 10 MB in a layer none of them mention. The comment above
+`MAX_UPLOAD_BYTES` said the client-side check saves the operator "a long wait
+for a 413"; the 413 was the wrong half, and for anything over 10 MB that check
+was the only thing standing between them and a silent stall.
+
+This is the second instance of one defect class in `next.config.js`, which
+already carries a long comment about the first: `proxyTimeout`, where Next's
+own 30-second default cut a 93-second generation and left nothing in either
+container's log. Both are limits inside the proxying layer that bind before
+anything this project chose, and report nothing when they do.
+
+`middlewareClientMaxBodySize` is now 40 MiB. **The value is not a preference —
+the hang lives in the gap between this limit and the backend's.** Below the
+backend's ceiling Next truncates a body the backend would have accepted; at or
+above it the backend refuses on `Content-Length` before reading and the
+truncation cannot happen. Equal is the smallest value that closes the gap,
+which matters because Next buffers up to this much in the Node process for a
+caller who has not authenticated — so this raises one exposure from 10 MB to
+40 MiB while closing the hang, and the smallest number that works is the right
+one. `test_config_failfast.py` reads both files and fails if the ordering
+breaks, exactly as it does for `proxyTimeout`.
+
+Live, through the frontend proxy, with the deploy in place: 12 MiB → `401` in
+1.1 s, 30 MiB → `401` in 2.5 s, 50 MiB → `413 request_too_large` in 3.9 s. The
+30 MiB row is the one that never worked before.
+
+### Two smaller things the same afternoon turned up
+
+**A 413 announced itself as a server fault.** `OPENAI_ERROR_TYPES` had no entry
+for 413, so it fell through to `api_error` — the value `handle_unanticipated`
+uses for a 500. Both `context_too_long` (documented and reachable since the
+knowledge base) and the new `request_too_large` were therefore telling every
+OpenAI client library that the caller's own oversized request was a
+server-side problem, which is the one classification that invites a retry. That
+is the split-by-remedy rule in `domain/exceptions.py` losing in the last
+translation before the wire. Now `invalid_request_error`; confirmed live.
+
+**The middleware had no test that a streamed response survives it.** Every test
+written for it exercised a rejection, and `guarded_send` sits on *every*
+response including the SSE ones the gateway exists to serve. A wrapper that
+swallowed or coalesced chunks would have left all of them green. Added, and it
+asserts the chunks arrive in order and unmerged.
+
+`verify-public-entrance.sh` still passes 9 of 9 after the deploy.
+
+**The nginx half is still worth asking for**, and the reason is sharper now
+that the application half exists: the 200 MiB still reached the proxy host and
+was buffered there before our 413 came back. This keeps the bytes out of the
+process; only `client_max_body_size` on `llmapi` keeps them off a machine.
 
 ---
 

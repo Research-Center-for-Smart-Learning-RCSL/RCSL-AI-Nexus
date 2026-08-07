@@ -123,7 +123,16 @@ export type CreateCollectionInput = z.input<typeof createCollectionSchema>;
  * Mirrors `domain/services/upload_policy.py`. The server's copy is the one that
  * decides; this exists so a file it would refuse is refused before it is sent,
  * which for a 32 MiB upload is the difference between an instant message and a
- * long wait for a 413.
+ * long wait.
+ *
+ * That sentence used to end "a long wait for a 413", and the 413 was the wrong
+ * half. Until 2026-08-07 anything above 10 MB never reached the server's copy
+ * at all: Next's middleware truncated the proxied body and forwarded the
+ * original Content-Length, so the request hung rather than being refused —
+ * meaning this check was not a nicety for sizes between 10 and 32 MiB, it was
+ * the only thing standing between an operator and a silent stall. Both limits
+ * now agree (`middlewareClientMaxBodySize` in next.config.js), so the fallback
+ * really is a 413.
  */
 export const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
 
