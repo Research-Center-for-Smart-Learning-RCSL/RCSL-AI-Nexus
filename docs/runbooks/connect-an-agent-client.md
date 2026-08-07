@@ -23,12 +23,16 @@ Related: [`architecture/backend.md`](../architecture/backend.md) section 6 for
 the streaming and tool-calling contract, and the `/api-docs` page in the
 management UI for the wire reference an integrator reads.
 
-> **Unblocked 2026-08-07.** The inference host was serving from a duplicate
-> NPM server block that discarded the correct one, so the directives written in
-> August had never taken effect. Nothing was added to fix it; NPM's proxy host
-> for that name was disabled and the hand-written block took over. Verified end
-> to end the same day: `/v1/models`, a tool call and a stream, with nothing but
-> an `Authorization` header. This runbook works as written.
+> **Working as of 2026-08-07, and the configuration below changed that day.**
+> Two things were fixed. The inference host was serving from a duplicate NPM
+> server block that discarded the correct one, so the perimeter headers written
+> in August had never taken effect; NPM's proxy host for that name was disabled
+> and the hand-written block took over. And **`wire_api = "chat"`, which this
+> runbook told you to set, has been impossible since February 2026** — Codex
+> removed Chat Completions support six months before this file recommended it.
+> The gateway now serves `/v1/responses` as well, and section 3 says
+> `wire_api = "responses"`. Verified end to end the same day: real Codex, real
+> public entrance, a tool call executed and answered.
 
 ---
 
@@ -110,7 +114,7 @@ model_provider = "rcsl"
 name = "RCSL AI Nexus"
 base_url = "https://llmapi.rcsl.online/v1"
 env_key = "RCSL_API_KEY"
-wire_api = "chat"
+wire_api = "responses"
 ```
 
 Then export the key: `export RCSL_API_KEY=nx_live_...`
@@ -121,9 +125,11 @@ Three things are easy to get wrong:
   `qwen2.5-coder:32b`. This is the platform's one real divergence from other
   providers and it is deliberate; the routing policy decides what actually
   serves the request. `GET /v1/models` lists what your key may ask for.
-- **`wire_api = "chat"` is required.** Codex speaks the Responses API to OpenAI
-  itself; this gateway serves `/v1/chat/completions` and has no `/v1/responses`.
-  Without this line the client will call a path that does not exist.
+- **`wire_api = "responses"` is required**, and this line is the one that has
+  changed. Codex dropped Chat Completions in February 2026; the gateway grew
+  `/v1/responses` on 2026-08-07 to meet it. A client old enough to accept
+  `"chat"` can still use `/v1/chat/completions`, which is unchanged and remains
+  the documented interface for everything else.
 - **`base_url` ends in `/v1`.** The client appends `/chat/completions`.
 
 The CLI and the IDE extension read the same file. The ChatGPT-hosted web version

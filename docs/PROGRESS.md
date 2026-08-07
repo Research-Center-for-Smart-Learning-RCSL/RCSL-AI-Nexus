@@ -746,8 +746,86 @@ that block is `512m` rather than absent; the 200 MiB that got through was
 NPM's block, which set none. `512m` is still well above the `10m` intended and
 remains worth lowering, in the custom file, whenever convenient.
 
-The coding-agent integration is unblocked. `runbooks/connect-an-agent-client.md`
-works as written.
+The coding-agent integration is unblocked at the network layer. It then failed
+at the next one.
+
+### The runbook told integrators to set a field removed six months earlier
+
+With the entrance open, Codex answered its first run with:
+
+```
+Error loading config.toml: `wire_api = "chat"` is no longer supported.
+```
+
+**Chat Completions was deprecated in Codex in December 2025 and removed in
+February 2026**, six months before `runbooks/connect-an-agent-client.md` was
+written on 2026-08-05 saying `wire_api = "chat"` **is required**. There is no
+official compatibility shim and no supported downgrade.
+
+So the tool-calling work of 2026-08-05 — built, as its own entry says, because
+somebody wanted a local model inside Codex — produced an interface that client
+could not speak. ROADMAP honestly recorded that a real client had not been
+tried; what nobody knew was that it could not connect at all. Ten rungs of
+harness, a documented runbook, and a wire protocol the intended reader had
+dropped before any of it was written.
+
+### `/v1/responses`, scoped from a recording rather than a specification
+
+Codex was installed on the Mac and pointed at a local server that logged every
+request and replied with a guess, which is a better source than documentation
+for what *this client at this version* needs. Two runs settled the design.
+
+**The first proved the response surface is small.** A minimal reply —
+`response.created` then `response.completed` — was accepted. **The second
+proved the loop closes**: returning a `function_call` made Codex execute it and
+come back with a `function_call_output`, and it did so even when the call
+failed, feeding the error back as a result.
+
+What the recording established, none of which was assumed:
+
+| | |
+|---|---|
+| `store: false`, no `previous_response_id` | The client replays full history every turn, so **the gateway stays stateless** — the fear that drove the pessimistic estimate was unfounded |
+| `instructions` | A top-level string, not a message. 20,751 characters of system prompt that reading this wrong would silently drop |
+| `input[]` | Typed items: `message`, `function_call`, `function_call_output`, `reasoning` |
+| tools | **Flat** — `{"type":"function","name":...}` — where Chat Completions nests under `function` |
+| `type: "namespace"` | **Not a capability**: a container of five ordinary function tools the *client* executes. Flattened, not dropped |
+| `type: "web_search"` | Genuinely server-side, and `external_web_access: false` by default |
+| six SSE event types | `response.created`, `output_item.added`, `function_call_arguments.delta`/`.done`, `output_item.done`, `response.completed` |
+
+**An earlier reading of this had `namespace` and `web_search` in one bucket
+marked "cannot do".** Looking at the definitions rather than the type names
+showed they have nothing in common: one needed flattening, the other is the
+only thing here the platform genuinely cannot provide. `web_search` is refused
+only when `external_web_access` is `true` — dropping a tool the client has
+already declared off is equivalent to honouring it, while serving an enabled
+one would leave a model believing it can search and silently never doing so,
+which is the failure `MLX_TOOL_CALLING_VERIFIED` exists to prevent.
+
+`routers/responses.py`, `responses_sse.py` and `schemas/responses_schemas.py`:
+a **translation**, not a second inference path. Every request lands in the same
+`RouteChatRequest`, so routing, quota, rate limiting, the six guardrails,
+cancellation and usage recording are the ones already in force.
+`/v1/chat/completions` is untouched.
+
+Two decisions worth stating. **There is no `[DONE]` sentinel** — this protocol
+ends on `response.completed`, and a failure ends on `response.failed`, which is
+why the framing is a second module rather than a branch in `sse.py`, whose
+whole point is that `[DONE]` means "completed normally". And **reasoning is not
+emitted**, because the Responses API carries deliberation as items a client
+replays into the next prompt, which this platform does not do. The cost is
+silence while a thinking model deliberates — which is why `code` has
+`thinking=false`.
+
+**Verified with the real client against the real public entrance**, not a
+recorder: Codex ran `/bin/zsh -lc 'cat README.md'`, read the result and
+answered from it. `usage_records` confirms both turns served by `gemma4-31b` on
+the `code` capability; the gateway log shows two `POST /v1/responses` at 200.
+712 unit tests pass, 14 of them new and every request body in them taken from
+the capture.
+
+The three keys issued for these checks are revoked, and Codex was removed from
+the Mac afterwards.
 
 ---
 
