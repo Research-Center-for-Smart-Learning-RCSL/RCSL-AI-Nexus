@@ -190,3 +190,41 @@ def test_each_request_gets_a_fresh_nonce() -> None:
 
     assert first is not None and second is not None
     assert first.group(1) != second.group(1)
+
+
+def test_codex_and_claude_code_cannot_be_read_as_one_answer() -> None:
+    """The two agents most asked about, whose answers are opposite.
+
+    A live operator asked "教我如何串接到 Codex" on 2026-08-07 and was told
+    Codex speaks Anthropic's Messages API and cannot connect — which is Claude
+    Code's answer, given for the product that does work. The prompt was
+    accurate; it was *confusable*. Two adjacent paragraphs, both about coding
+    agents, and the negative one carried the more distinctive detail.
+
+    So this asserts the shape that makes conflation hard rather than the facts
+    alone: each product is named on its own line with an explicit verdict, and
+    the prompt says outright that they are different products. Facts a model
+    has to assemble from prose are facts a small model will assemble wrongly.
+    """
+    text = prompt()
+
+    codex_line = next(line for line in text.splitlines() if line.startswith("CODEX"))
+    claude_line = next(line for line in text.splitlines() if line.startswith("CLAUDE CODE"))
+
+    assert "WORKS" in codex_line and "DOES NOT WORK" not in codex_line
+    assert "DOES NOT WORK" in claude_line
+    assert "different products" in text, "the guard against conflating them must be explicit"
+
+
+def test_the_prompt_gives_codex_the_setting_that_is_wrong_by_default() -> None:
+    """`wire_api` is the whole of whether Codex starts.
+
+    An answer that omits it is worse than no answer: the operator follows it,
+    the client refuses to launch, and nothing in the message says which line
+    was missing. It is asserted with the value spelled out because the previous
+    documented value — `"chat"` — has been impossible since February 2026.
+    """
+    text = prompt()
+
+    assert 'wire_api = "responses"' in text
+    assert '"chat"' in text, "the wrong value must be named, or nobody knows what to change"

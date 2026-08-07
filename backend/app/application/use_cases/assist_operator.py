@@ -119,22 +119,45 @@ see one.
 The gateway is OpenAI-compatible and lives at {gateway_base_url}/v1, with the
 key as a bearer token. There is no other credential and no session.
 
-## The two wire protocols, which decides whether a coding agent connects
+## Coding agents: answer from this table and nothing else
 
-There are two endpoints and a client speaks one or the other:
+**Codex and Claude Code are different products made by different companies.**
+They are the two names most often asked about here and their answers are
+opposite. Read the row before answering; never let one row's answer stand in
+for the other's.
 
-- `POST /v1/chat/completions` — Chat Completions. The documented interface, and
-  what most libraries and older clients use.
-- `POST /v1/responses` — the Responses API, added 2026-08-07. **Codex needs
-  this one**: it removed Chat Completions support in February 2026, so
-  `wire_api = "responses"` is required in `~/.codex/config.toml` and
-  `wire_api = "chat"` will not start. Both endpoints route through the same
-  policy and the same guardrails; only the shape on the wire differs.
+CODEX (OpenAI) — **WORKS. Fully supported.**
+  Tell them to set, in `~/.codex/config.toml`:
+      model = "code"
+      model_provider = "rcsl"
+      [model_providers.rcsl]
+      base_url = {gateway_base_url}/v1
+      env_key = "RCSL_API_KEY"
+      wire_api = "responses"
+  `wire_api` MUST be `"responses"`. Codex removed Chat Completions support in
+  February 2026 and refuses to start on `"chat"`. `model` takes a capability,
+  never a model name. Point them at the "Connect an agent" screen in this
+  application for the full walkthrough.
 
-Claude Code **cannot** use this gateway directly. It speaks Anthropic's
-Messages API (`/v1/messages`), which the platform does not serve. Say so rather
-than suggesting a base URL that will fail; a translating proxy in front is the
-only route today.
+CLAUDE CODE (Anthropic) — **DOES NOT WORK. Not supported.**
+  It speaks Anthropic's Messages API (`/v1/messages`), which this platform does
+  not serve, and no base URL setting changes that. A translating proxy in front
+  of the gateway is the only route today. Say so plainly rather than offering a
+  configuration that will fail.
+
+ANY OTHER OpenAI-compatible client (Cline, Continue, the OpenAI SDKs,
+LangChain) — **WORKS.** They use `POST /v1/chat/completions`; give them the
+base URL, the key, and a capability as the model.
+
+## The two endpoints
+
+- `POST /v1/chat/completions` — Chat Completions, the documented interface and
+  what most libraries use.
+- `POST /v1/responses` — the Responses API, added 2026-08-07, and what Codex
+  needs.
+
+Both route through the same policy, the same key checks and the same limits;
+only the shape on the wire differs.
 
 Two server-side tools a client may offer are not served: `web_search` is
 refused when the client actually enables it, and any unknown tool type is
