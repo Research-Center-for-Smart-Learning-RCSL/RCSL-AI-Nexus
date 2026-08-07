@@ -677,6 +677,22 @@ data: [DONE]`}
                 </td>
               </tr>
               <tr>
+                <td>413</td>
+                <td className="font-mono text-xs">request_too_large</td>
+                <td>
+                  The request body itself is over the platform&apos;s byte
+                  ceiling, which is a separate limit from the row above and
+                  measured differently. That one counts tokens in what the model
+                  will read and is applied after your request is parsed and your
+                  key is checked; this one counts raw bytes and is applied
+                  before either, so it is the one error here you can receive
+                  without a valid key. In practice you reach it only by sending
+                  something far larger than the context ceiling would allow
+                  anyway &mdash; a whole file pasted into a message, or a body
+                  that is not what you meant to send.
+                </td>
+              </tr>
+              <tr>
                 <td>503</td>
                 <td className="font-mono text-xs">no_available_model</td>
                 <td>

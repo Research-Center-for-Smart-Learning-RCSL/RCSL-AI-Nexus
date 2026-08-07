@@ -35,6 +35,7 @@ from app.infrastructure.admin_composition import admin_lifespan, mount_admin_rou
 from app.infrastructure.config import get_settings
 from app.infrastructure.logging_config import configure_logging
 from app.interfaces.http.errors import install_error_handlers
+from app.interfaces.http.middleware.body_limit import BodySizeLimitMiddleware
 from app.interfaces.http.middleware.csrf import CsrfMiddleware
 from app.interfaces.http.middleware.identity import current_actor, resolve_tailnet_actor
 from app.interfaces.http.middleware.metrics import MetricsMiddleware
@@ -66,6 +67,14 @@ def create_app() -> FastAPI:
         lifespan=admin_lifespan,
     )
 
+    # Innermost, and on this entrance too: the ceiling belongs to the process,
+    # not to whichever proxy happens to sit in front of it, and `tailscale
+    # serve` sets no body limit at all. See middleware/body_limit.py.
+    app.add_middleware(
+        BodySizeLimitMiddleware,
+        max_bytes=settings.admin_max_body_bytes,
+        envelope="admin",
+    )
     app.add_middleware(
         CsrfMiddleware,
         cookie_name=settings.effective_csrf_cookie,

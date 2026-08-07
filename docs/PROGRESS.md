@@ -15,7 +15,7 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
-## Current state — 2026-08-06
+## Current state — 2026-08-07
 
 **A summary, and therefore the least trustworthy thing here.** Two summaries in
 this file have already contradicted the dated entries below them, one of them
@@ -39,7 +39,7 @@ the expiring switch that would gate it now exists on both credentials.
 
 | | |
 |---|---|
-| Backend | 29 use cases, 23 routers, 16 entity modules, 11 migrations (head `c2f7b90e4a15`), 680 unit tests, 93 integration tests that skip without `TEST_DATABASE_URL` |
+| Backend | 29 use cases, 23 routers, 16 entity modules, 11 migrations (head `c2f7b90e4a15`), 690 unit tests, 93 integration tests that skip without `TEST_DATABASE_URL` |
 | Frontend | 18 feature folders, 14 screens, 233 tests, types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
 | Gates | ruff, ruff-format, strict mypy, pytest; tsc, eslint, vitest, a real `next build`; Trivy, pip-audit and pnpm audit advisory-only. All green |
 
@@ -56,14 +56,20 @@ file-backed pages when idle. Nothing is degrading (swap is 0 bytes) and the
 leading candidate is to do nothing. See the 2026-08-05 entry and "Open
 decisions".
 
+**The public entrance is verified as of today**, under the renamed hosts:
+`verify-public-entrance.sh` passes 9 of 9. What remains there is three items
+the script does not cover — explicit A records (the names are still
+wildcard-synthesised), a `client_max_body_size` on the *inference* host, and
+the administrator's confirmation that nothing logs request bodies.
+
 **Not verified, and the list worth reading before trusting anything else.**
-The network path from the internet to the public entrance, which waits on the
-NTNU proxy administrator and was partly reopened by the 2026-08-04 hostname
-rename. MLX, which has an adapter, no model registered against it and no server
+MLX, which has an adapter, no model registered against it and no server
 installed — its tool path is now *refused* rather than silently reachable,
 which closes the trap without doing the verification. A real agent client
-against a real repository. And an external dead-man's switch, since a monitor
-on the host it watches cannot report that the host is off.
+against a real repository. An external dead-man's switch, since a monitor
+on the host it watches cannot report that the host is off. And **the running
+images predate today's body ceiling**, so the gateway on this machine is still
+the one the 200 MiB probe measured.
 
 The fuller version of that list, with what each would take, is under "What is
 still unverified" further down.
@@ -178,6 +184,130 @@ That needs the browser, admin API, Postgres, gateway and a controllable runtime
 in one harness. The current policy path proves the management UI contract; the
 existing backend integration tests prove persistence; their behavioural join
 remains the Phase 3 increment.
+
+---
+
+## 2026-08-07
+
+### The public entrance passes under its new names
+
+`scripts/verify-public-entrance.sh` was written against `ai.nexus` /
+`api.nexus`, pointed at `llm` / `llmapi` when those were renamed on 2026-08-04,
+and not run since. Run today: **9 passed, 0 failed, 0 skipped.** The proxy
+carries `tag:ntnu-proxy`, both names present a valid certificate, all three
+body checks return this deployment's own responses rather than the proxy's,
+the paired `X-Nexus-Proxy` probe refuses a wrong secret, a forged
+`X-Forwarded-For: 8.8.8.8` is discarded, and a forged `Tailscale-User-Login`
+gets a 401.
+
+So the two items ROADMAP reopened on 2026-08-04 — the server blocks and the
+certificate — are closed under the new names, and the guess recorded against
+the certificate was right: `llm` and `llmapi` are single-label, so the existing
+`*.rcsl.online` wildcard covers them and pointing the blocks at it was the
+whole job.
+
+Two more of that section's items were settled here rather than by the
+administrator, because both turned out to be testable from this end.
+
+**`client_max_body_size` on the management host is 64m, not the 10m it was
+suspected of.** Bracketed rather than asked about: a 63 MiB multipart POST to
+`/admin/knowledge/documents` reached the application and came back
+`csrf_failed`, which is our envelope; 70 MiB came back as openresty's HTML
+`413`. That is the arrangement `upload_policy.py` documents — ours is the limit
+that fires — and it has been in place the whole time the item was open.
+
+**The A records are still wildcard-synthesised**, which was previously
+unconfirmed and is now evidenced: `zz-nonexistent-probe-8f3a.rcsl.online`
+resolves to `140.122.250.55`, the same address as both real names. That item
+stays open. So do the two nobody here can test: no request body logging or Lua
+interception, and `limit_req`, which is deferred rather than forgotten.
+
+### The probe meant to settle a checkbox found an ordering defect
+
+The same test aimed at the inference host did not stop where it was supposed
+to. `llmapi` has no effective body ceiling at all — the design says `10m` — and
+a **200 MiB** body of NUL bytes with no credential was uploaded in full, in
+23.4 seconds, and answered.
+
+The 200 MiB is not the finding. **What it was answered with is.** The same
+endpoint, with no credential either way:
+
+| Request | Response |
+|---|---|
+| `{"x":1}` — small, valid JSON | `401 not_authenticated` |
+| 200 MiB of NUL bytes — large, invalid JSON | `422 invalid_request`, "JSON decode error" |
+
+The difference is not the size. It is whether the body **parses** — which means
+the parse ran before the check that refuses an anonymous caller, and the
+platform had already buffered every byte to find out.
+
+Confirmed against the installed FastAPI 0.139.2 rather than from memory:
+`fastapi/routing.py::get_request_handler` reads the body at lines 58/64/71
+(`await request.body()`, `await request.json()`) and calls `solve_dependencies`
+at line 106. Authentication here is a **dependency** — `chat.py:53`,
+`ActorDep = Annotated[Actor, Depends(authenticate_api_key)]` — and
+`main_gateway.py` says in its own comment that no stack-level perimeter
+middleware runs, because the geo filter is applied inline *inside* key auth.
+Every check this entrance has therefore sat behind the allocation.
+
+**§4.4 already claimed the control**: "Request body size limits, at both nginx
+and the application." The nginx half was unset on this host and the application
+half did not exist. That is the fourth time this repository has found a control
+described in the present tense by a document while nothing implemented it —
+`geo_middleware.py`'s docstring records the other three, and makes the same
+point about why it is worse than an absent control.
+
+### The ceiling, and what FastAPI did to the first version of it
+
+`interfaces/http/middleware/body_limit.py`: pure ASGI, for the reason
+`metrics.py` gives, and innermost on all three apps so the request is still
+counted and still carries `X-Request-Id`. Two paths, because there are two ways
+to be too large — a declared `Content-Length` over the ceiling, refused without
+reading a byte, and a counter over the stream for a body that arrives chunked
+or that declared a length it then exceeded.
+
+The ceilings are derived, not picked. **Gateway, 4 MiB**: `max_context_length`
+is 65536 tokens at four characters per token, so a legitimate maximum prompt is
+256 KiB of *characters*, and a character outside ASCII costs up to four bytes in
+UTF-8 — about 1 MiB before JSON escaping and tool definitions, and four times
+that leaves room for both. **Admin, 40 MiB**: above `upload_policy`'s 32 MiB
+plus multipart framing, so a file between the two is still refused by
+`assert_upload_allowed`, which names the reason; below the 64m the management
+host is now confirmed to have, so ours fires first.
+
+**The first version raised a `DomainError` out of `receive` and the tests said
+413 and got 400.** `errors.py` already documents that a middleware must return
+rather than raise because it sits outside `ExceptionMiddleware` — but here the
+middleware is *inside* it, so raising should have worked, and the docstring
+that was written first said so. FastAPI gets there first: `get_request_handler`
+wraps the entire body read in `except Exception: raise HTTPException(400,
+"There was an error parsing the body")`, so a 413 raised from `receive` reaches
+the caller as a 400 about parsing. Both paths now build the response through
+`error_response`; the streaming path then answers every further `receive` with
+`http.disconnect` so the application unwinds, and drops what it sends on the
+way out — that 400 among it, since two responses on one request would be a
+protocol error and the second is the less true of the two.
+
+`RequestTooLargeError` is a distinct code from `ContextTooLongError` despite
+sharing its 413. That one is counted in tokens after the body is parsed and the
+caller authenticated; this one in bytes before either, so it is the only 413 an
+anonymous caller can provoke, and an operator reading a spike of one and not
+the other is the point of telling them apart.
+
+Verified by putting the defect back, which this file keeps recommending: with
+the middleware removed, **6 of the 10 tests fail** including the regression
+test, and the 4 that pass either way are the controls — a small body is still
+served, a small body still reaches the authentication dependency and is
+refused by it, the counter is still per-request rather than per-middleware, and
+a non-positive ceiling is still a wiring error.
+
+690 unit tests and 93 integration tests pass against a real Postgres; ruff and
+strict mypy are clean; `generate-api-types.sh` produces no diff, since no admin
+schema changed.
+
+**Not deployed.** The running gateway is the previous image, so the measurement
+above still describes the live entrance. And the nginx half is still worth
+asking for: this keeps the bytes out of the process, not off the machine.
 
 ---
 
