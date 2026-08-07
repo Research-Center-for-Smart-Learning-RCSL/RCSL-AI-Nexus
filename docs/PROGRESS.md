@@ -27,9 +27,11 @@ and nothing else answers "what is the state of this, right now".
 **Running.** Eleven containers on the Mac Studio: three ASGI apps (gateway, two
 admin entrances), two frontends, Postgres, Redis, Qdrant, the isolated parser,
 Prometheus and Grafana, with `migrate` exiting 0 ahead of them. Ollama runs
-natively and holds `glm-4.7-flash:q8_0`, `qwen2.5:7b` and `nomic-embed-text`.
-Four routing policies: `chat`, `assist`, `embedding`, and `code` with
-deliberation off.
+natively and holds `gemma4:31b-it-qat`, `qwen2.5:7b` and `nomic-embed-text` —
+23.29 GiB resident against a 51.2 GiB budget. Four routing policies: `chat` and
+`code` (deliberation off) on `gemma4-31b`, `assist` on `qwen7b`, `embedding` on
+`embedder`. `glm-4.7-flash:q8_0` was the main model until 2026-08-07 and stays
+registered at `downloaded`, which is what makes the switch reversible.
 
 **Built.** Phase 1 is complete, including the five Playwright paths described
 below.
@@ -504,6 +506,101 @@ proof of it.
 
 The mechanism behind the nineteen minutes is also unidentified. It is not
 Ollama and not `OLLAMA_KEEP_ALIVE`; beyond that this only knows the number.
+
+### The main model is now gemma4:31b-it-qat, and switching it found two defects
+
+**Measured first.** `gemma4:31b-it-qat` is dense — 30.7B, no expert count, 60
+blocks, 32 attention heads — against `glm-4.7-flash`'s 29.9B total over 64
+experts with 4 used per token. Same prompts, same options, same machine:
+
+| | glm-4.7-flash q8 (MoE) | gemma4:31b-it-qat (dense) |
+|---|---|---|
+| blob / resident | 32 GB / 35.67 GiB | **19 GB / 17.79 GiB** |
+| resident at a 40960 context | — | **17.84 GiB** |
+| generation | 61.0 tok/s | 21.9 tok/s |
+| prompt eval @ 9k | 476.2 tok/s | 189.9 tok/s |
+| prompt eval @ 32k | 171.8 tok/s | **152.0 tok/s** |
+| tool calling | yes | yes, arguments correct, declines when no tool fits |
+
+Three of those overturned predictions made before the measurement, which is the
+reason to measure. **The timeout invariant survives**: the gap narrows with
+context (2.5× at 9k, 1.13× at 32k) because long-context cost is attention,
+which both pay alike — so a full 65536 at 152 tok/s is 431 s against a 600 s
+read timeout, and `MAX_CONTEXT_LENGTH` did not have to move. **The KV cache
+does not grow**: 17.79 → 17.84 GiB from a 16k to a 41k context, so the halved
+memory is really halved. And **the bandwidth model holds**: 372 GB/s measured
+from `qwen2.5:7b` predicted 19–20 tok/s against 21.9 actual, so any candidate's
+speed can now be estimated from its size before downloading it.
+
+Switched through the admin API on the tailnet entrance rather than the
+database, the precedent set for the `code` policy on 2026-08-05 — validated and
+audited, the rows naming the administrator who asked for it. `chat` →
+`gemma4-31b` with `qwen7b` still the fallback; `code` → `gemma4-31b`,
+`thinking=false`, no fallback, unchanged in shape. Confirmed from
+`usage_records` rather than from the policy table: both capabilities served by
+`gemma4-31b`. Resident total fell from 41.33 to 23.29 GiB, so the budget's
+headroom went from 9.87 to 27.9 GiB. `glm47-flash` stays registered at
+`downloaded`; reverting is one load and two policies.
+
+**The capability split this was going to use is not possible and the plan said
+it was.** `chat` on gemma4 with `code` left on glm needs both resident:
+35.39 + 17.84 + 5.32 + 0.34 = 58.9 GiB against a 51.2 budget, which
+`assert_can_load` refuses. The recommendation was written without doing that
+arithmetic.
+
+#### The runtime was never told what context to size for
+
+Loading gemma4 evicted `qwen7b` and `embedder`, taking `assist` and `embedding`
+down with them. Ollama's log says why:
+
+```
+"llama-server model predicted to exceed available memory, evicting"
+predicted="55.8 GiB"   predicted_num_ctx=262144
+```
+
+The adapter sends no `num_ctx` and there is no `OLLAMA_CONTEXT_LENGTH` in the
+plist, so Ollama sizes every runner for the model's **own** declared maximum.
+This deployment enforces 65536 in `RouteChatRequest` before any hardware is
+committed, and had registered 32768 for that model — so the runtime was
+reserving for four times the largest request it will ever see.
+
+**`resource_profile.context_length` was the value that should have prevented
+it, and nothing read it.** Stored, mapped, validated, rendered on the models
+screen, and acted on nowhere — the same shape as `debug_logging_until` and
+`API_KEY_MAX_LIFETIME_DAYS` before it. It now travels to `load` and to
+`generate` alike, because Ollama keys a runner on the options that shape it and
+a generation omitting it would start a second runner at the model's maximum —
+the same allocation, one request later.
+
+**Three months of not sending it were survivable only because of the resident
+model.** `glm-4.7-flash` uses multi-head latent attention with a single KV
+head, so even 202752 tokens of context cost little. The first dense model with
+ordinary attention made the missing argument fatal on the first load.
+
+#### `load` was a no-op in the one case it exists for
+
+Restoring the evicted models through the admin API returned `200` and
+`state=loaded` for both, and `/api/generate` was never called — Ollama's log
+shows no request at all. `ManageModels.load` returned early on
+`model.state is LOADED`, the registry's **intent**, while `observed_state` said
+`downloaded`. So a runtime that evicts a model out of band leaves the operator
+pressing Load, being told it worked, and nothing happening. The way back was
+to unload first.
+
+`RoutingService._satisfies` had settled this rule already, with a comment
+explaining it: where both exist, the observation outranks the intent. `load`
+and `unload` now follow it. `unload` was the mirror defect — a model the
+runtime holds but the registry records as merely downloaded could not be
+evicted at all, which is precisely when an operator most wants to.
+
+Both fixes verified by putting each defect back: two tests fail, one per
+defect, and the other 696 pass either way. 698 unit and 93 integration tests
+green against real Postgres.
+
+**What is not measured is the thing the switch was for.** Speed and memory now
+have hard numbers; capability has third-party benchmarks and one tool-calling
+probe. `scripts/measure-agent-loop.py` and the ten rungs of 2026-08-05 are the
+comparison that would settle it, and they have not been re-run.
 
 ---
 

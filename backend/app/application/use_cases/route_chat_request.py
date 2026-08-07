@@ -293,7 +293,17 @@ class RouteChatRequest:
             # on consumers of this use case.
             async with aclosing(
                 runtime.generate(
-                    target.ref, messages, ceiling, thinking, tools, tool_choice, sampling
+                    target.ref,
+                    messages,
+                    ceiling,
+                    thinking,
+                    tools,
+                    tool_choice,
+                    sampling,
+                    # The same figure `ManageModels.load` gave the runtime, so
+                    # this request reuses that runner rather than starting a
+                    # second one sized to the model's own maximum.
+                    target.resource_profile.context_length,
                 )
             ) as upstream:
                 async for chunk in upstream:

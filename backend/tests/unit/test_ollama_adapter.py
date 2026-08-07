@@ -386,6 +386,67 @@ async def test_keep_alive_is_sent_on_generation_not_only_on_load(patch_httpx) ->
     assert seen["keep_alive"] == "10m", "load and generate must agree on residency"
 
 
+async def test_num_ctx_is_sent_on_both_load_and_generation(patch_httpx) -> None:
+    """The same defect shape as `keep_alive` above, one field along.
+
+    Told nothing, Ollama sizes a runner's KV cache for the model's own declared
+    maximum. `gemma4:31b-it-qat` declares 262144, which it predicted at 55.8 GiB
+    and evicted every other resident model to fit — on a deployment that never
+    sends more than 65536 and had registered 32768 for that model. Three months
+    of not sending this were survivable only because `glm-4.7-flash` uses a
+    single KV head (PROGRESS.md 2026-08-07).
+
+    Both calls, and for the reason the keep_alive test gives: Ollama keys a
+    runner on the options that shape it, so a generation omitting `num_ctx`
+    after a load that supplied it starts a second runner at the model's
+    maximum — the same allocation, one request later.
+    """
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(
+            200, content=ndjson({"message": {"content": "hi"}, "done": True, "eval_count": 1})
+        )
+
+    patch_httpx(handler)
+    adapter = OllamaAdapter("http://ollama.invalid")
+
+    await adapter.load("gemma4", context_length=32768)
+    assert seen["options"]["num_ctx"] == 32768, "the load is what sizes the runner"
+
+    seen.clear()
+    async with aclosing(adapter.generate("gemma4", MESSAGES, context_length=32768)) as s:
+        async for _ in s:
+            pass
+    assert seen["options"]["num_ctx"] == 32768, "a generation must not reopen the question"
+
+
+async def test_an_absent_or_zero_context_length_is_not_sent(patch_httpx) -> None:
+    """`context_length` defaults to 0 in the column, and 0 is not a request.
+
+    A row registered before the profile was required carries 0, and sending it
+    verbatim would ask Ollama for a zero-length context rather than for its
+    default. Absent means "do not say", which is also what a runtime with no
+    such control is given.
+    """
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={})
+
+    patch_httpx(handler)
+    adapter = OllamaAdapter("http://ollama.invalid")
+
+    await adapter.load("glm")
+    assert "options" not in seen, "nothing was asked for, so nothing is sent"
+
+    seen.clear()
+    await adapter.load("glm", context_length=0)
+    assert "options" not in seen, "zero is the column default, not an instruction"
+
+
 async def test_unload_still_evicts_immediately(patch_httpx) -> None:
     """`unload` is the release path the registry depends on, so it keeps its
     own value whatever residency is configured."""

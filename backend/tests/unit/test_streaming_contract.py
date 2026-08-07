@@ -49,6 +49,7 @@ class FakeRuntime:
         self._chunks = chunks
         self._fail_at = fail_at
         self.cleaned_up = False
+        self.seen_context_length: int | None = None
 
     async def generate(
         self,
@@ -59,7 +60,9 @@ class FakeRuntime:
         tools: Sequence[ToolDefinition] = (),
         tool_choice: ToolChoice | None = None,
         sampling: SamplingOptions | None = None,
+        context_length: int | None = None,
     ) -> AsyncIterator[CompletionChunk]:
+        self.seen_context_length = context_length
         try:
             for i in range(self._chunks):
                 if self._fail_at is not None and i == self._fail_at:
@@ -130,6 +133,7 @@ class SlowRuntime:
         tools: Sequence[ToolDefinition] = (),
         tool_choice: ToolChoice | None = None,
         sampling: SamplingOptions | None = None,
+        context_length: int | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         try:
             i = 0
@@ -198,6 +202,24 @@ async def test_full_stream_records_usage_and_releases_slot() -> None:
     assert limiter.available == limiter.limit, "slot must be released"
     assert usage.records[0].tokens == 3
     assert usage.records[0].completed is True
+
+
+async def test_the_selected_model_s_context_length_reaches_the_runtime() -> None:
+    """Routing knows which model was chosen; the runtime has to be told its size.
+
+    `ManageModels.load` sizes the runner from the registered profile, and a
+    generation that omitted the same figure would start a second runner at the
+    model's own maximum — undoing the load's restraint on the first request
+    rather than at load. See `middleware`-free note in PROGRESS.md 2026-08-07.
+    """
+    runtime = FakeRuntime(chunks=1)
+    use_case, _, _ = build(runtime)
+
+    async with aclosing(use_case.execute(ACTOR, "chat", MESSAGES)) as stream:
+        async for _ in stream:
+            pass
+
+    assert runtime.seen_context_length == 8192, "the model's registered profile, not a default"
 
 
 async def test_client_disconnect_releases_slot_and_bills_partial_output() -> None:
@@ -278,6 +300,7 @@ class OllamaShapedRuntime:
         tools: Sequence[ToolDefinition] = (),
         tool_choice: ToolChoice | None = None,
         sampling: SamplingOptions | None = None,
+        context_length: int | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         # Honours `max_tokens`, because Ollama does: it is passed as
         # `num_predict`, so the runtime stops on the same token the ceiling
@@ -401,6 +424,7 @@ class SlowToStartRuntime:
         tools: Sequence[ToolDefinition] = (),
         tool_choice: ToolChoice | None = None,
         sampling: SamplingOptions | None = None,
+        context_length: int | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         self._monotonic.advance(self._prompt_seconds)
         for i in range(self._chunks):
@@ -469,6 +493,7 @@ class ThinkingRecordingRuntime:
         tools: Sequence[ToolDefinition] = (),
         tool_choice: ToolChoice | None = None,
         sampling: SamplingOptions | None = None,
+        context_length: int | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         self.seen.append(thinking)
         yield CompletionChunk(delta="hi", token_count=1, finish_reason="stop")

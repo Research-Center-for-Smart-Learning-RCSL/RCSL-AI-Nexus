@@ -253,11 +253,20 @@ class ManageModels:
         self._authz.require(actor, Scope.MODEL_WRITE)
         model = await self._require(model_id)
 
-        if model.state is ModelState.LOADED:
+        # The observation outranks the intent, the same rule and for the same
+        # reason as `RoutingService._satisfies`. Deciding on `state` alone made
+        # this method a no-op in exactly the case it exists for: a runtime that
+        # has evicted a model the registry still records as LOADED returns 200
+        # and `state=loaded` here without the runtime being called at all, so
+        # the operator's only recovery action silently does nothing. Observed
+        # on 2026-08-07, when Ollama evicted two models to fit a third and
+        # pressing Load produced no request in its log.
+        effective = model.observed_state or model.state
+        if effective is ModelState.LOADED:
             return model
-        if model.state is not ModelState.DOWNLOADED:
+        if effective is not ModelState.DOWNLOADED:
             raise ModelStateConflictError(
-                detail=f"model {model.id} is {model.state}; it must be downloaded first"
+                detail=f"model {model.id} is {effective}; it must be downloaded first"
             )
 
         node = await self._require_node(model.node_id)
@@ -274,7 +283,7 @@ class ManageModels:
         # end — which is after the runtime call — so the claim has to land now.
         await self._state.commit(model.id, ModelState.LOADING)
         try:
-            await runtime.load(model.ref)
+            await runtime.load(model.ref, context_length=model.resource_profile.context_length)
         except Exception:
             # Independently, because the raise that follows rolls the request
             # transaction back. Writing ERROR through the request session lost
@@ -296,8 +305,14 @@ class ManageModels:
         self._authz.require(actor, Scope.MODEL_WRITE)
         model = await self._require(model_id)
 
-        if model.state is not ModelState.LOADED:
-            raise ModelStateConflictError(detail=f"model {model.id} is {model.state}, not loaded")
+        # Observation over intent here too, and it is the mirror of the defect
+        # in `load`: a model the runtime holds but the registry has recorded as
+        # merely downloaded could not be evicted at all, which is the one case
+        # where an operator most wants to. Ollama loads on demand, so the
+        # registry can fall behind in this direction without anyone asking it to.
+        effective = model.observed_state or model.state
+        if effective is not ModelState.LOADED:
+            raise ModelStateConflictError(detail=f"model {model.id} is {effective}, not loaded")
 
         runtime = await self._require_runtime(model.runtime)
         await self._state.commit(model.id, ModelState.UNLOADING)
