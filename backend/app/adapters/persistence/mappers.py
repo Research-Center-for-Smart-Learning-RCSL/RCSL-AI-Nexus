@@ -19,6 +19,7 @@ from app.adapters.persistence.sqlalchemy_models import (
     KnowledgeDocumentRow,
     ModelRow,
     NodeRow,
+    PromptLogRow,
     PromptTemplateRow,
     RecoveryCodeRow,
     RetentionPolicyRow,
@@ -38,6 +39,7 @@ from app.domain.entities.knowledge import (
 )
 from app.domain.entities.model import Model, ModelState, ResourceProfile, RuntimeKind
 from app.domain.entities.node import Node, NodeStatus
+from app.domain.entities.prompt_log import PromptLogEntry
 from app.domain.entities.prompt_template import PromptTemplate
 from app.domain.entities.retention import RetentionDataset, RetentionPolicy
 from app.domain.entities.routing_policy import (
@@ -458,3 +460,52 @@ def prompt_template_to_row(template: PromptTemplate) -> PromptTemplateRow:
     if template.updated_at is not None:
         row.updated_at = template.updated_at
     return row
+
+
+# --- Prompt logs ---------------------------------------------------------
+
+
+def prompt_log_to_row(entry: PromptLogEntry) -> PromptLogRow:
+    return PromptLogRow(
+        id=entry.id,
+        tenant_id=entry.tenant_id,
+        at=entry.at,
+        actor_id=entry.actor_id,
+        api_key_id=entry.api_key_id,
+        capability=entry.capability,
+        model_alias=entry.model_alias,
+        request_id=entry.request_id,
+        messages=entry.messages,
+        completion=entry.completion,
+        reasoning=entry.reasoning,
+        finish_reason=entry.finish_reason,
+        completed=entry.completed,
+        tool_calls=entry.tool_calls,
+        # Sorted, so two rows recording the same pair of capped fields are
+        # byte-identical here. An unordered set serialised straight to JSON
+        # would differ run to run and make a stored transcript look edited.
+        truncated_fields=sorted(entry.truncated_fields),
+    )
+
+
+def prompt_log_row_to_domain(row: PromptLogRow) -> PromptLogEntry:
+    return PromptLogEntry(
+        id=row.id,
+        at=row.at,
+        actor_id=row.actor_id,
+        api_key_id=row.api_key_id,
+        capability=row.capability,
+        model_alias=row.model_alias,
+        request_id=row.request_id,
+        messages=row.messages,
+        completion=row.completion,
+        reasoning=row.reasoning,
+        finish_reason=row.finish_reason,
+        completed=row.completed,
+        tool_calls=row.tool_calls,
+        tenant_id=row.tenant_id,
+        # `str(v)` for the same reason `audit_row_to_domain` coerces its detail
+        # values: the column is JSON, so it hands back Any, and the entity
+        # promises a set of field names.
+        truncated_fields=frozenset(str(v) for v in (row.truncated_fields or [])),
+    )

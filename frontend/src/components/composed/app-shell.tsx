@@ -29,6 +29,7 @@ import {
   LogOutIcon,
   MenuIcon,
   MessageSquareIcon,
+  MessagesSquareIcon,
   Building2Icon,
   RouteIcon,
   ScrollTextIcon,
@@ -200,6 +201,19 @@ const NAV_GROUPS: NavGroup[] = [
         label: 'Logs',
         icon: <ScrollTextIcon className="size-4" />,
         requires: 'logs:read',
+      },
+      {
+        href: '/prompt-logs',
+        label: 'Transcripts',
+        icon: <MessagesSquareIcon className="size-4" />,
+        // Its own entry rather than a tab on Logs, because the scope is not the
+        // same one. `logs:read` reaches `tenant_admin`, `operator` and
+        // `auditor`; `prompt_log:read` is admin-only (ADMIN_ONLY_SCOPES), since
+        // that view shows what happened and this one shows what was typed. A
+        // tab inside a page gated on a different scope is the drift this table
+        // exists to prevent — the link would appear for three roles the server
+        // refuses.
+        requires: 'prompt_log:read',
       },
     ],
   },

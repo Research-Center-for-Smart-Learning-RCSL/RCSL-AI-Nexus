@@ -157,4 +157,11 @@ async def authenticate_api_key(
         # write would let a gateway key reach `assist`, which serves the
         # management assistant.
         allowed_capabilities=key.scopes & ISSUABLE_CAPABILITIES,
+        # The key-side debug window, carried onto the actor so the application
+        # layer can read it. `grant_debug_detail` above sets the same value
+        # into a contextvar for the error envelope; `RouteChatRequest` decides
+        # full prompt logging from this one, because it sits two layers away
+        # from the contextvar and reaching for it there would invert the
+        # dependency the hexagon exists to hold. See §9.2.
+        debug_logging_until=key.debug_logging_until,
     )

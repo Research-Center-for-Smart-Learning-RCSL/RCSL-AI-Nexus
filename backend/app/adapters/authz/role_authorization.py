@@ -146,7 +146,7 @@ _BY_ROLE: dict[Role, frozenset[Scope]] = {
     Role.SERVICE: _SERVICE_SCOPES,
 }
 
-ADMIN_ONLY_SCOPES = frozenset({Scope.TENANT_WRITE, Scope.RETENTION_WRITE})
+ADMIN_ONLY_SCOPES = frozenset({Scope.TENANT_WRITE, Scope.RETENTION_WRITE, Scope.PROMPT_LOG_READ})
 """Scopes no role but `admin` holds — listed, rather than left to be discovered.
 
 Creating a tenant is the one operation with no smaller holder, because a tenant
@@ -163,7 +163,24 @@ did inside the tenant they administer — the audit log's whole value is that it
 is written by a wider authority than the one being recorded. The platform
 administrator can still erase their own trail; that is the deliberate choice
 made when this was designed, and it is recorded in `security.md` §12.1 rather
-than mitigated here."""
+than mitigated here.
+
+`prompt_log:read` joined on 2026-08-08, and it is the mirror of the entry above
+it. Where `retention:write` would let a `tenant_admin` erase the record of what
+they did, this would let them read what their tenant's members typed — and the
+tenant boundary, which confines every other authority that role holds, offers
+those members no protection at all from the person who administers them. A lab
+head who may reset a password should not thereby be able to read a student's
+conversations.
+
+**It was granted to `auditor` first, and the escalation rule refused it.**
+`grantable_roles` stops a granter conferring a scope they lack, so an `auditor`
+holding this became a role a `tenant_admin` could no longer create — the rule
+working exactly as designed, on a placement that had not been thought through.
+The tightest answer turned out to also be the one that leaves every other role
+usable. The cost is that a transcript has one reader, which is acceptable here:
+the read is itself audited (`prompt_log.read`), so the reader is recorded even
+though they are the platform administrator."""
 
 ROLE_SCOPES: Mapping[Role, frozenset[Scope]] = MappingProxyType(_BY_ROLE)
 """Read-only view for callers that describe the model rather than enforce it —

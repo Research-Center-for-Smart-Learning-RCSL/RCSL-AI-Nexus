@@ -15,7 +15,7 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
-## Current state — 2026-08-07
+## Current state — 2026-08-08
 
 **A summary, and therefore the least trustworthy thing here.** Two summaries in
 this file have already contradicted the dated entries below them, one of them
@@ -38,13 +38,15 @@ the same day.
 **Built.** Phase 1 is complete, including the five Playwright paths described
 below.
 Phase 2 is complete but for **encrypted backups with a rehearsed restore** and
-**Storybook**; the *logging boundaries* half of §9.2 is also unwritten, though
-the expiring switch that would gate it now exists on both credentials.
+**Storybook**. The *logging boundaries* half of §9.2 closed on 2026-08-08 — full
+prompt and completion logging, gated by the expiring switch that had been sitting
+there unused, kept for days rather than months, and audited when read. It was the
+last row in security.md §13.0 that said "not implemented".
 
 | | |
 |---|---|
-| Backend | 29 use cases, 23 routers, 16 entity modules, 11 migrations (head `c2f7b90e4a15`), 690 unit tests, 93 integration tests that skip without `TEST_DATABASE_URL` |
-| Frontend | 18 feature folders, 14 screens, 233 tests, types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
+| Backend | 30 use cases, 25 routers, 17 entity modules, 12 migrations (head `a1d6e93c7f52`), 742 unit tests, 104 integration tests that skip without `TEST_DATABASE_URL` |
+| Frontend | 19 feature folders, 15 screens, 241 tests, types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
 | Gates | ruff, ruff-format, strict mypy, pytest; tsc, eslint, vitest, a real `next build`; Trivy, pip-audit and pnpm audit advisory-only. All green |
 
 **Verified on real hardware**, not only in tests: the full inference path with
@@ -75,9 +77,16 @@ MLX, which has an adapter, no model registered against it and no server
 installed — its tool path is now *refused* rather than silently reachable,
 which closes the trap without doing the verification. A real agent client
 against a real repository. An external dead-man's switch, since a monitor
-on the host it watches cannot report that the host is off. And **the running
-images predate today's body ceiling**, so the gateway on this machine is still
-the one the 200 MiB probe measured.
+on the host it watches cannot report that the host is off.
+
+**The body ceiling came off this list on 2026-08-08.** It had said the running
+images predated it, so the gateway was still the one the 200 MiB probe measured.
+The 2026-08-08 deploy rebuilt every application image, which put it in force as a
+side effect — and it was then measured rather than assumed: a 5 MiB body with no
+credential returns `413 request_too_large` with **zero bytes uploaded**, so the
+refusal lands before the body is sent, which is what "refused before anything asks
+who sent it" means. The envelope carries no `detail`, correctly: no credential
+was resolved, so no debug window could apply to it.
 
 The fuller version of that list, with what each would take, is under "What is
 still unverified" further down.
@@ -192,6 +201,247 @@ That needs the browser, admin API, Postgres, gateway and a controllable runtime
 in one harness. The current policy path proves the management UI contract; the
 existing backend integration tests prove persistence; their behavioural join
 remains the Phase 3 increment.
+
+---
+
+## 2026-08-08
+
+### The prompt log that section 9.2 described for four months
+
+`security.md` §9.2 has said the same thing since the first draft: metadata by
+default, and when full logging is genuinely needed it is enabled by an expiring
+switch, with its own markedly shorter retention. Half of that shipped on
+2026-08-05 — the switch, on both credentials, after the discovery that the user
+half had a reader and no writer. The other half, the thing the switch was
+designed to gate, had never been written. §13.0 said so in the plainest terms
+available to it: *"Still not implemented, and the only row here that is."*
+
+It is implemented now. `prompt_logs`, written by `RouteChatRequest` in the same
+`finally` that records usage, read only under a new admin-only scope, expired by
+the retention sweep on a window measured in days.
+
+**What is captured is the assembled prompt, not the caller's request**, and that
+is the decision the rest follows from. By the time `RouteChatRequest` is reached,
+`ApplyPromptTemplate` has prepended the template and `GroundChat` has merged in
+any retrieved passages, so the transcript shows what the model actually read.
+That is what makes §9.2's "retrieved knowledge base passages" a case this control
+covers rather than one it misses — and it means a single write point serves
+`/v1/chat/completions`, `/v1/responses` and `/admin/chat`, because all three are
+translations onto that one use case. Capturing at the router would have needed
+three call sites and would have recorded the wrong thing at each.
+
+**When the window is shut, nothing is accumulated.** Not accumulated and
+discarded: `should_capture` is asked once, before the first chunk, and returns no
+buffer at all when the answer is no. The distinction is the whole difference
+between a disclosure control being off and being on with its output binned, and
+only the first is worth claiming — on this deployment every window is shut, which
+means the ordinary path never puts prompt text in process memory on account of
+this feature. The decision is also made once rather than per chunk, so a window
+expiring mid-generation cannot produce half a transcript: a record that is
+neither the full text somebody asked for nor the absence §9.2 promises, and which
+would read as a truncated answer rather than as an expired window.
+
+**The window travels on `Actor`, not on the contextvar the error envelope uses.**
+`debug_detail_active()` lives in `interfaces/http/request_context`, and
+`RouteChatRequest` is application-layer; reaching for it from there would invert
+the dependency the hexagon exists to hold. Both identity resolvers and the
+API-key middleware already hold the row the value comes from, so carrying it cost
+one assignment in each and bought a rule a test can exercise with a constructed
+actor and a fixed clock.
+
+### The retention bound points the other way, and the code had one shape for it
+
+`audit_log` and `usage_records` carry a floor: 30 days minimum on a default of
+360. The danger there is forgetting too soon — a week of audit history is too
+little to investigate anything reported late.
+
+For transcripts the danger runs the other way, and it is the specific ending §9.2
+was written to prevent: full logging switched on for an afternoon and left on for
+a year. A 360-day default would have reproduced that exactly, with an
+administrator who believed they had configured something. So `prompt_logs` has a
+**ceiling** — 7 days by default, 30 at most — and `MINIMUM_RETENTION_DAYS` is no
+longer a single number the whole file shares. `RetentionBounds` is a record per
+dataset, and `bounds_for` raises rather than defaulting, because a dataset missing
+from that table would otherwise silently inherit a year.
+
+Two smaller decisions inside it. The floor still applies to a *purge* and the
+ceiling deliberately does not: a purge window longer than the maximum deletes
+fewer rows, and the ceiling exists to stop the platform keeping prompt text, not
+to stop somebody deleting it conservatively. And `_days_for` clamps on the way
+**out** as well as validating on the way in, because a stored policy can predate a
+tightening of the bounds — which is not hypothetical, it is what a row written
+today would be if the ceiling were ever lowered. Validating only at `set_policy`
+would leave that row governing, which is the shape of a control every surface
+reports as in force.
+
+### The gateway may write this table and may not read it
+
+This is the one place the work widened a boundary that was deliberately narrow,
+so it is worth stating what was traded.
+
+`GATEWAY_WRITABLE_TABLES` held exactly `("usage_records",)`. The API-key side of
+the debug window is useless unless the gateway can record a transcript, so
+`prompt_logs` had to join it. What did *not* have to follow is the read.
+
+The gateway's account has always held `SELECT ON ALL TABLES`, and that was
+defensible while every table held platform state: reading `api_keys` gets you
+digests you cannot reverse and an expiry you cannot change. `prompt_logs` is
+different in kind. It holds the plaintext of what researchers typed, and the
+process holding this account is the one exposed to the internet — being able to
+read it would mean being able to hand back every tenant's conversations. So
+`GATEWAY_DENIED_READ_TABLES` revokes `SELECT` on it, after the blanket grant.
+
+That asymmetry already exists in this system in the other direction: the
+knowledge base gives the gateway a **read-only** Qdrant key so that retrieving a
+passage cannot become writing one. This is the same trade inverted — the
+untrusted side gets exactly the one verb its job needs. Nothing is lost, because
+the read path is on the admin entrances, whose account holds full DML.
+
+The ordering is load-bearing and has a test to itself. `GRANT SELECT ON ALL
+TABLES` includes this table, so a revoke placed before it is undone in the same
+transaction — while leaving both statements present for a naive assertion to
+find. A test asserting only that the revoke exists would pass on a build where
+it does nothing.
+
+### Listing and reading are two different requests, and only one is audited
+
+The obvious shape was one endpoint returning transcripts. It is wrong three ways,
+and the third is the one that matters.
+
+A page of fifty transcripts is a few hundred megabytes of the most sensitive data
+in the schema, loaded into the process to render a table. `list_summaries` never
+names the text columns; `char_length` is computed by Postgres and only integers
+cross the wire. Second, it puts message content in front of an operator who asked
+which conversations exist, not what was in them.
+
+Third — and this is why it is a design rather than an optimisation — it would make
+the audit row meaningless. Opening a debug window has been audited since the
+switch shipped; **who then read what it captured had no answer at all**. Adding
+the disclosure without adding its record would have left exactly the half-covered
+shape the §12 sweep found on the identity plane on 2026-08-02. So
+`prompt_log.read` fires once per conversation actually opened and names its id,
+while listing writes nothing: an event that fired on every page refresh would be
+noise describing no disclosure.
+
+The frontend follows the same rule rather than merely permitting it. The
+transcript query is `enabled` only once a row is opened, `staleTime: Infinity`,
+and refetch-on-focus and refetch-on-mount are both off — so leaving the tab and
+coming back does not write a row nobody asked for. An audit trail whose entries
+were produced by window management describes nothing.
+
+The audit `detail` carries handles only, never a snippet. `audit_log` keeps 360
+days against this table's 7, so a fragment copied there would outlive by a year
+the very record the ceiling exists to expire. That is the one way this feature
+could quietly undo its own bound, and it is stated in the code at the point where
+the temptation is.
+
+### The scope was placed wrong first, and a test that predates it said so
+
+`prompt_log:read` went to `admin` and `auditor` on the first pass, on the
+reasoning that a control recording what somebody typed which nobody may review is
+a control with no verifier.
+
+`test_a_tenant_admin_can_still_run_its_own_tenant` failed. `grantable_roles`
+refuses to let a granter confer a scope they lack, so an `auditor` holding
+`prompt_log:read` became a role a `tenant_admin` — who does not hold it — could
+no longer create. The rule working exactly as designed, on a placement that had
+not been thought through.
+
+The fix was to make it admin-only, which is both tighter and consistent with
+`retention:write` next to it in `ADMIN_ONLY_SCOPES`. The argument reads the same
+way in mirror: `retention:write` is withheld from `tenant_admin` because it would
+let them erase the record of what they did; this is withheld because it would let
+them read what their tenant's members typed, and the tenant boundary — which
+confines every other authority that role has — offers those members no protection
+at all from the person who administers them. A lab head who may reset a password
+should not thereby be able to read a student's conversations.
+
+Worth recording that the tightest answer was also the one that left every other
+role usable, and that it was found by a test written for an unrelated escalation
+months earlier.
+
+### Two things found rather than added
+
+**`ManageRetention` would abort a whole sweep over one missing dataset.**
+`purge_due` walks every member of `RetentionDataset` and indexes the `purges`
+map, so a dataset registered in the enum and not in the map raises `KeyError`
+from inside the scheduled loop — taking the datasets that *were* wired with it,
+and logging one `retention_sweep_failed` that names none of this. The map is now
+checked at construction. The trigger was adding a dataset whose enum entry and
+whose purge live in different files; the cost of the old behaviour would have
+been silently retaining everything, discovered by a disk figure.
+
+**The audit-action filter had drifted by eight names.** The Logs screen's action
+filter is an exact match with a `datalist` of every action the backend writes —
+built precisely because a bare text box looked like a search and behaved like an
+equality check. Adding `prompt_log.read` to it meant checking the list against
+the code, and the list was missing both `debug_window_set` events, all three
+`prompt_template.*` and both `retention.*`. Every one is an action an operator
+could only filter for by already knowing its exact spelling, which is the failure
+that list exists to remove, reappearing because the list and the actions live in
+different languages with nothing joining them.
+
+Fixed by hand. The durable fix is the one `/admin/roles` already uses for the
+role catalogue — serve the set from the table that writes it, so the screen
+explaining a thing is generated from the thing — and it is **not** done. Recorded
+here rather than folded in, because it is a different change from the one the
+list was touched for.
+
+### State
+
+Twelve migrations, head `a1d6e93c7f52`. Thirty use cases, twenty-five routers
+(the router count in ROADMAP said twenty-three and had been wrong since
+`responses` landed on 2026-08-07). Seventeen entity modules, nineteen frontend
+feature folders. 742 unit tests and 104 integration tests on the backend, 241 on
+the frontend; ruff, mypy, tsc, eslint and a real `next build` all clean.
+
+### Deployed and verified the same day
+
+Both things this entry originally listed as unverified are now done on the
+machine, which is the difference between a control that is designed and one that
+is in force.
+
+**The revoke is real.** `migrate` applied `a1d6e93c7f52` and re-asserted the
+roles. Asked as `nexus_gateway`: `SELECT count(*) FROM prompt_logs` →
+`ERROR: permission denied for table prompt_logs`; `INSERT` → `INSERT 0 1`;
+`SELECT` on `usage_records` → 472 rows. `information_schema.role_table_grants`
+shows `INSERT` and no `SELECT` on this table and `SELECT` on every other. The
+integration suite could only prove the SQL was generated; this proves Postgres
+applied it, and that the revoke survived the blanket grant that precedes it.
+
+**A transcript was captured, found, and read.** A short-lived key was issued
+against a fresh account — deliberately not one of the two real users' keys, since
+opening a window on those would capture their conversations, which is the exact
+disclosure this control gates. Window opened for an hour, one request through the
+real gateway on the tailnet address, `X-Request-Id: req_17c6cda3636b4e3c`. That
+id resolved to one summary carrying `message_chars: 84` and `completion_chars: 8`
+and **no text**; reading it returned the assembled prompt and the completion; and
+the read wrote one `prompt_log.read` row naming the transcript id, whose `detail`
+carries capability, model, subject and timestamp and **no fragment of either**.
+
+**Then the window was closed and a second request made on the same key.** Both
+requests are in `usage_records`, so both were served. `prompt_logs` holds one
+row. The second request's answer appears nowhere. That is the whole of §9.2's
+default stated as an observation rather than a design.
+
+Two incidental confirmations. The first attempt got `400 untrusted_proxy` from
+the tailnet address, and **that response carried `error.detail`** — the other
+half of the same switch, working live, and the documented ordering holding: the
+window is granted as soon as the credential is known, before the proxy, CIDR,
+rate-limit and quota checks, so a refusal can explain itself to the caller being
+debugged. And `/admin/me` now lists `prompt_log:read` in the live scope set.
+
+Test key revoked, test transcript deleted, both real keys untouched with no
+window on either, `prompt_logs` back to zero rows. A database dump was taken
+before the migration; the schema change is additive, so the previous image would
+have run against it unchanged.
+
+**One thing this did cost.** `docker compose build` overwrote `rcsl-ai-nexus:latest`
+and the daemon dropped the previous image's layers, so neither a tag nor a
+`docker commit` of the running container could recover it — rollback is a rebuild
+from git rather than an image swap. The three older `rollback-*` tags exist and
+predate the 2026-08-07 work. Tagging the running image *before* building is the
+habit that was missing, and it is one line.
 
 ---
 

@@ -48,10 +48,32 @@ from app.infrastructure.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# The one table the gateway writes. Everything else it may only read. Kept here,
+# The tables the gateway writes. Everything else it may only read. Kept here,
 # in code, because it is a security decision that belongs under review, not in a
 # deployment file. See security.md section 6.
-GATEWAY_WRITABLE_TABLES: tuple[str, ...] = ("usage_records",)
+GATEWAY_WRITABLE_TABLES: tuple[str, ...] = ("usage_records", "prompt_logs")
+
+# The tables the gateway may **not** read, subtracted after the blanket SELECT
+# below. Empty until 2026-08-08, and `prompt_logs` is what it was added for.
+#
+# The blanket grant is the shape this account has always had: read everything,
+# write one thing. That was a defensible trade while every table held platform
+# state — a compromised gateway reading `api_keys` learns digests it cannot
+# reverse and an expiry it cannot change. `prompt_logs` is different in kind. It
+# holds the plaintext of what researchers typed, it is the most sensitive table
+# in the schema, and a gateway that could read it would be able to hand back
+# every other tenant's conversations from the one process that is exposed to the
+# internet.
+#
+# So the gateway appends its own transcripts and can read none of them, which is
+# the same split the knowledge base already makes in the other direction: Qdrant
+# gives the gateway a read-only key so that retrieving a passage cannot become
+# writing one (security.md section 6). Here the asymmetry is inverted, for the
+# same reason — the untrusted side gets exactly the one verb its job needs.
+#
+# The read path is on the admin entrances, whose account holds full DML, so
+# nothing is lost by this: it removes an ability the gateway never used.
+GATEWAY_DENIED_READ_TABLES: tuple[str, ...] = ("prompt_logs",)
 
 # Where the migrate service sees the other services' connection URLs. Each holds
 # the same content that service reads as `/run/secrets/database_url`; mounted
@@ -126,6 +148,18 @@ $do$;""",
         ]
         for table in GATEWAY_WRITABLE_TABLES:
             statements.append(f"GRANT INSERT ON {_quote_ident(table)} TO {ident};")
+        # After the grants, never before: the blanket `GRANT SELECT ON ALL
+        # TABLES` above would put the privilege straight back. Declarative like
+        # everything else here, so a table added to this tuple is revoked on the
+        # next deploy without anyone editing grants by hand.
+        #
+        # `ALTER DEFAULT PRIVILEGES` is deliberately not touched for these — it
+        # governs tables created *later*, and a future table is not covered by a
+        # name-specific revoke either way. What keeps a new table out of the
+        # gateway's reach is adding it here, which is a review, which is the
+        # point of this file.
+        for table in GATEWAY_DENIED_READ_TABLES:
+            statements.append(f"REVOKE SELECT ON {_quote_ident(table)} FROM {ident};")
     elif spec.profile == "admin":
         statements += [
             f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {ident};",

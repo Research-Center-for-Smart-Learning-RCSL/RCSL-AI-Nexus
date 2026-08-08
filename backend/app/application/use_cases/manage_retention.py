@@ -14,18 +14,18 @@ one.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.retention import (
-    DEFAULT_RETENTION_DAYS,
-    MINIMUM_RETENTION_DAYS,
     PurgeOutcome,
+    RetentionBounds,
     RetentionDataset,
     RetentionPolicy,
+    bounds_for,
 )
-from app.domain.exceptions import RetentionWindowTooShortError
+from app.domain.exceptions import RetentionWindowTooLongError, RetentionWindowTooShortError
 from app.domain.ports.repositories import RecordPurgePort, RetentionPolicyRepositoryPort
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
 from app.shared.clock import Clock
@@ -54,6 +54,20 @@ class ManageRetention:
         audit: AuditPort,
         clock: Clock,
     ) -> None:
+        missing = set(RetentionDataset) - purges.keys()
+        if missing:
+            # At construction, not at the `KeyError` a sweep would raise hours
+            # later. `purge_due` walks every dataset in the enum, so a dataset
+            # with no purge registered does not merely go unswept — it aborts
+            # the sweep, taking the datasets that *were* wired with it, and the
+            # loop's own handler logs one `retention_sweep_failed` that names
+            # none of this. `prompt_logs` made that concrete: adding a dataset
+            # means adding a purge, and the two live in different files.
+            raise ValueError(
+                "ManageRetention needs a purge for every dataset; missing "
+                + ", ".join(sorted(d.value for d in missing))
+            )
+
         self._policies = policies
         self._purges = purges
         self._authz = authz
@@ -67,26 +81,37 @@ class ManageRetention:
         never been configured still appears with the number that governs it. A
         screen listing only stored rows would show nothing at all on a fresh
         deployment and imply that nothing expires.
+
+        **Clamped through the same `_days_for` the sweep uses**, so "the number
+        that governs it" is literally true rather than nearly true. Returning
+        the stored row verbatim was the obvious implementation and reintroduced
+        the exact failure the out-clamp was added to prevent: lower a ceiling
+        after somebody stored a wider window, and this screen reports the old
+        number while the sweep deletes at the new one — a control every surface
+        says is in force and which is not the one in force.
         """
         self._authz.require(actor, Scope.RETENTION_WRITE)
         stored = {p.dataset: p for p in await self._policies.list_policies()}
-        return [
-            stored.get(dataset, RetentionPolicy(dataset=dataset, days=DEFAULT_RETENTION_DAYS))
-            for dataset in RetentionDataset
-        ]
+        policies = []
+        for dataset in RetentionDataset:
+            row = stored.get(dataset)
+            if row is None:
+                policies.append(
+                    RetentionPolicy(dataset=dataset, days=bounds_for(dataset).default_days)
+                )
+                continue
+            governing = _clamp(row.days, bounds_for(dataset))
+            # `replace` rather than a fresh policy: `updated_at` and
+            # `updated_by` still describe who set it, which stays true and is
+            # the context for a number that no longer matches what they typed.
+            policies.append(row if governing == row.days else replace(row, days=governing))
+        return policies
 
     async def set_policy(
         self, actor: Actor, dataset: RetentionDataset, days: int
     ) -> RetentionPolicy:
         self._authz.require(actor, Scope.RETENTION_WRITE)
-        if days < MINIMUM_RETENTION_DAYS:
-            # Refused rather than clamped. Clamping would store a number the
-            # administrator did not choose and report success, and the gap
-            # between what they typed and what governs is exactly the kind of
-            # thing nobody re-reads.
-            raise RetentionWindowTooShortError(
-                detail=f"retention must be at least {MINIMUM_RETENTION_DAYS} days, got {days}"
-            )
+        self._assert_within_bounds(dataset, days, what="retention")
 
         policy = RetentionPolicy(
             dataset=dataset,
@@ -135,11 +160,16 @@ class ManageRetention:
         """
         self._authz.require(actor, Scope.RETENTION_WRITE)
         effective = days if days is not None else await self._days_for(dataset)
-        if effective < MINIMUM_RETENTION_DAYS:
+        # The floor applies here and the ceiling deliberately does not. A purge
+        # window longer than the dataset's maximum deletes *fewer* rows, not
+        # more — the ceiling exists to stop the platform keeping prompt text,
+        # and a conservative purge keeps none it was not already keeping. What
+        # the floor stops is the same thing it stops on a policy: an operator
+        # reaching past the minimum window in a single deliberate act.
+        floor = bounds_for(dataset).minimum_days
+        if effective < floor:
             raise RetentionWindowTooShortError(
-                detail=(
-                    f"purge window must be at least {MINIMUM_RETENTION_DAYS} days, got {effective}"
-                )
+                detail=f"purge window must be at least {floor} days, got {effective}"
             )
 
         cutoff = self._cutoff(effective)
@@ -173,7 +203,40 @@ class ManageRetention:
 
     async def _days_for(self, dataset: RetentionDataset) -> int:
         policy = await self._policies.get_policy(dataset)
-        return policy.days if policy else DEFAULT_RETENTION_DAYS
+        if policy is None:
+            return bounds_for(dataset).default_days
+        # Clamped on the way *out*, not merely on the way in. A stored row can
+        # predate a tightening of the bounds — `prompt_logs` did not exist when
+        # this method was written, and a future dataset may have its ceiling
+        # lowered after somebody set a policy under the old one. Validating
+        # only at `set_policy` would leave that row governing, which is the
+        # familiar shape of a control that every surface reports as in force.
+        return _clamp(policy.days, bounds_for(dataset))
+
+    def _assert_within_bounds(self, dataset: RetentionDataset, days: int, *, what: str) -> None:
+        """Refused rather than clamped, in both directions.
+
+        Clamping would store a number the administrator did not choose and
+        report success, and the gap between what they typed and what governs is
+        exactly the kind of thing nobody re-reads.
+        """
+        bounds = bounds_for(dataset)
+        if days < bounds.minimum_days:
+            raise RetentionWindowTooShortError(
+                detail=f"{what} for {dataset.value} must be at least "
+                f"{bounds.minimum_days} days, got {days}"
+            )
+        if bounds.maximum_days is not None and days > bounds.maximum_days:
+            raise RetentionWindowTooLongError(
+                detail=f"{what} for {dataset.value} must be at most "
+                f"{bounds.maximum_days} days, got {days}"
+            )
 
     def _cutoff(self, days: int) -> datetime:
         return self._clock.now() - timedelta(days=days)
+
+
+def _clamp(days: int, bounds: RetentionBounds) -> int:
+    if bounds.maximum_days is not None:
+        days = min(days, bounds.maximum_days)
+    return max(days, bounds.minimum_days)

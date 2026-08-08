@@ -46,8 +46,23 @@ export type LogFilters = {
  * A `datalist` rather than a `select`, so a name added to the backend after
  * this list was written is still typeable rather than unreachable. Kept
  * alphabetical to match how it renders.
+ *
+ * **It had drifted by eight names before 2026-08-08**, found while adding
+ * `prompt_log.read`: both `debug_window_set` events, all three
+ * `prompt_template.*` and both `retention.*` had shipped without being added
+ * here. Every one of them is an action an operator could only filter for by
+ * already knowing its exact spelling — which is the failure this list was
+ * written to remove, reappearing because the list and the actions live in
+ * different languages with nothing joining them.
+ *
+ * The durable fix is the one `/admin/roles` already uses for the role
+ * catalogue: serve the set from the table that writes it, so the screen
+ * explaining a thing is generated from the thing. Recorded in PROGRESS
+ * 2026-08-08 rather than done here, because it is a different change from the
+ * one this list was touched for.
  */
 export const AUDIT_ACTIONS = [
+  'api_key.debug_window_set',
   'api_key.issued',
   'api_key.revoked',
   'api_key.updated',
@@ -66,9 +81,16 @@ export const AUDIT_ACTIONS = [
   'node.registered',
   'node.removed',
   'node.updated',
+  'prompt_log.read',
+  'prompt_template.created',
+  'prompt_template.deleted',
+  'prompt_template.updated',
+  'retention.policy_set',
+  'retention.purged',
   'routing_policy.deleted',
   'routing_policy.saved',
   'tenant.created',
+  'user.debug_window_set',
   'user.deleted',
   'user.disabled',
   'user.enabled',

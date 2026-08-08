@@ -38,6 +38,8 @@ from app.adapters.persistence.repositories import (
     PostgresKnowledgeRepository,
     PostgresModelRepository,
     PostgresNodeRepository,
+    PostgresPromptLogRepository,
+    PostgresPromptLogWriter,
     PostgresPromptTemplateRepository,
     PostgresRecordPurge,
     PostgresRetentionPolicyRepository,
@@ -46,7 +48,7 @@ from app.adapters.persistence.repositories import (
     PostgresUsageRepository,
     PostgresUserRepository,
 )
-from app.adapters.persistence.sqlalchemy_models import AuditLogRow, UsageRecordRow
+from app.adapters.persistence.sqlalchemy_models import AuditLogRow, PromptLogRow, UsageRecordRow
 from app.adapters.runtime.mlx_adapter import MlxAdapter
 from app.adapters.runtime.ollama_adapter import OllamaAdapter
 from app.adapters.session.session_store import SessionData, SessionStore
@@ -77,6 +79,7 @@ from app.application.use_cases.pending_enrolment import PendingEnrolment
 from app.application.use_cases.read_audit_log import ReadAuditLog
 from app.application.use_cases.read_dashboard import ReadDashboard
 from app.application.use_cases.read_host_status import ReadHostStatus
+from app.application.use_cases.read_prompt_logs import ReadPromptLogs
 from app.application.use_cases.read_usage_analytics import ReadUsageAnalytics
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.application.use_cases.search_knowledge import SearchKnowledge
@@ -95,6 +98,7 @@ from app.domain.services.token_service import TokenService
 from app.infrastructure.concurrency import SemaphoreConcurrencyLimiter
 from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.db import get_session_factory, session_scope
+from app.interfaces.http.request_context import current_request_id
 from app.shared.clock import SystemClock
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -338,6 +342,19 @@ def build_route_chat_request(
         authz=request.app.state.authz,
         clock=SystemClock(),
         max_tokens_ceiling=settings.max_tokens_ceiling,
+        # A session *factory*, not the request's session. The transcript is
+        # written in a `finally` that runs when the request has failed, and a
+        # failed request rolls its session back — which would discard exactly
+        # the transcript somebody opened a window to read. Same reason
+        # `build_audit` hands `PostgresAudit` a factory. The tenant rides on the
+        # entity, from the resolved actor, as it does for usage.
+        #
+        # Wired on all three entrances, not only the gateway. The user-side
+        # debug window exists precisely because the management chat carries no
+        # API key (§9.2), and giving the admin apps no writer here would have
+        # rebuilt that gap one layer down.
+        prompt_logs=PostgresPromptLogWriter(get_session_factory()),
+        request_id=current_request_id,
         max_context_chars=settings.max_context_length * 4,
         generation_deadline_seconds=settings.generation_deadline_seconds,
         thinking_default=settings.ollama_thinking,
@@ -800,6 +817,24 @@ def build_read_audit_log(
     )
 
 
+def build_read_prompt_logs(
+    request: Request, session: SessionDep, tenant: TenantIdDep
+) -> ReadPromptLogs:
+    """Scoped, unlike the writer above.
+
+    `build_route_chat_request` constructs this repository *unscoped*, because
+    the write stamps the tenant from the authenticated actor and the gateway
+    has no tenant of its own. The read must not: a transcript is the most
+    sensitive row in the schema, so it gets the boundary the audit log gets and
+    the scope comes from the wiring rather than from anything a caller sends.
+    """
+    return ReadPromptLogs(
+        transcripts=PostgresPromptLogRepository(session, tenant),
+        authz=request.app.state.authz,
+        audit=get_audit(request),
+    )
+
+
 def build_read_usage_analytics(
     request: Request, session: SessionDep, tenant: TenantIdDep
 ) -> ReadUsageAnalytics:
@@ -844,6 +879,7 @@ def build_manage_retention(request: Request, session: SessionDep) -> ManageReten
         purges={
             RetentionDataset.AUDIT_LOG: PostgresRecordPurge(session, AuditLogRow),
             RetentionDataset.USAGE_RECORDS: PostgresRecordPurge(session, UsageRecordRow),
+            RetentionDataset.PROMPT_LOGS: PostgresRecordPurge(session, PromptLogRow),
         },
         authz=request.app.state.authz,
         audit=get_audit(request),

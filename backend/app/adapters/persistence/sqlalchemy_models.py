@@ -366,3 +366,57 @@ class PromptTemplateRow(Base):
         # constraint would report that another tenant had taken a name.
         Index("ix_prompt_templates_tenant_name", "tenant_id", "name", unique=True),
     )
+
+
+class PromptLogRow(Base):
+    """Full prompt and completion text, written only while a debug window is
+    open (security.md section 9.2, `domain/entities/prompt_log.py`).
+
+    **Every text column here is `Text`, and that is a security property rather
+    than a sizing preference.** `audit_log` used `String(n)` and lost rows
+    whose values were wider — silently, so that padding a URL suppressed the
+    record of probing it (PROGRESS.md 2026-08-02). A transcript is the widest
+    value this schema ever stores, so the same mistake here would drop exactly
+    the rows an operator opened the window to read. The bound on this table is
+    time, applied by the retention sweep, plus a per-field cap applied in the
+    domain that *records that it applied* rather than trimming quietly.
+
+    **No foreign keys**, like `audit_log` and for the same reason: the row must
+    survive the deletion of the key or account it names. It is also the one
+    table the gateway may write and may not read (`db_roles.py`), and a foreign
+    key would give it a reason to need `SELECT` elsewhere.
+    """
+
+    __tablename__ = "prompt_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+    actor_id: Mapped[str] = mapped_column(String(36), index=True)
+    api_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    capability: Mapped[str] = mapped_column(String(64))
+    model_alias: Mapped[str] = mapped_column(String(128))
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    """Indexed because it is the way in. A caller reports a failure by quoting
+    the request id from their error envelope, and finding that conversation is
+    the reason the window was opened."""
+
+    messages: Mapped[str] = mapped_column(Text)
+    completion: Mapped[str] = mapped_column(Text, default="")
+    reasoning: Mapped[str] = mapped_column(Text, default="")
+
+    finish_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    completed: Mapped[bool] = mapped_column(Boolean, default=True)
+    tool_calls: Mapped[int] = mapped_column(Integer, default=0)
+    truncated_fields: Mapped[list[str]] = mapped_column(JSON, default=list)
+    """Which fields hit the per-field cap. JSON rather than a flag, so the row
+    says *which* half was cut — a capped prompt and a capped answer send a
+    reader to different places."""
+
+    __table_args__ = (
+        # The paged read is "this tenant's transcripts, newest first", so the
+        # index carries the filter and the sort together. Without the composite
+        # the planner sorts the whole tenant partition on every page.
+        Index("ix_prompt_logs_tenant_at", "tenant_id", "at"),
+    )

@@ -17,7 +17,7 @@ import {
 import {
   DATASET_DESCRIPTIONS,
   DATASET_LABELS,
-  MINIMUM_RETENTION_DAYS,
+  RETENTION_BOUNDS,
   type RetentionPolicy,
 } from '@/features/retention/schema';
 
@@ -40,8 +40,17 @@ function DatasetRow({ policy }: { policy: RetentionPolicy }) {
   const save = useSetRetentionPolicy();
   const purge = usePurgeDataset();
 
+  // Per dataset, because the two shapes are opposite: `audit_log` refuses a
+  // window that is too short, `prompt_logs` one that is too long. A single
+  // shared floor of 30 applied to a dataset whose ceiling is 30 would refuse
+  // every value the server accepts, in the form, so nothing would ever reach
+  // the error that explains which direction was wrong.
+  const bounds = RETENTION_BOUNDS[policy.dataset];
   const parsed = Number(days);
-  const valid = Number.isInteger(parsed) && parsed >= MINIMUM_RETENTION_DAYS;
+  const valid =
+    Number.isInteger(parsed) &&
+    parsed >= bounds.min &&
+    (bounds.max === null || parsed <= bounds.max);
   const changed = valid && parsed !== policy.days;
 
   // Asked for whatever is in the field once it is a usable number, including
@@ -77,14 +86,20 @@ function DatasetRow({ policy }: { policy: RetentionPolicy }) {
           Keep for
           <Input
             type="number"
-            min={MINIMUM_RETENTION_DAYS}
+            min={bounds.min}
+            {...(bounds.max === null ? {} : { max: bounds.max })}
             value={days}
             onChange={(event) => setDays(event.target.value)}
             aria-label={`Retention in days for ${DATASET_LABELS[policy.dataset]}`}
             className="mt-1 w-28"
           />
         </label>
-        <span className="pb-2 text-sm text-muted-foreground">days</span>
+        <span className="pb-2 text-sm text-muted-foreground">
+          days{' '}
+          <span className="text-xs">
+            {bounds.max === null ? `(${bounds.min} or more)` : `(${bounds.min}–${bounds.max})`}
+          </span>
+        </span>
 
         <Button
           size="sm"
@@ -105,8 +120,14 @@ function DatasetRow({ policy }: { policy: RetentionPolicy }) {
       </div>
 
       {!valid ? (
+        // The message has to name the direction that is wrong, not just the
+        // bound. "At least 30" on a dataset capped at 30 reads as a typo in the
+        // product rather than as a rule, and the two rules exist for opposite
+        // reasons: forgetting too soon, and keeping prompt text too long.
         <p className="text-xs text-destructive">
-          Enter a whole number of days, at least {MINIMUM_RETENTION_DAYS}.
+          {bounds.max === null
+            ? `Enter a whole number of days, at least ${bounds.min}.`
+            : `Enter a whole number of days between ${bounds.min} and ${bounds.max}. This record type may not be kept longer than that.`}
         </p>
       ) : (
         <p className="text-xs text-muted-foreground">

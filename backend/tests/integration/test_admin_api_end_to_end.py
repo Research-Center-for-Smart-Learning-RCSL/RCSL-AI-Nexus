@@ -356,8 +356,13 @@ def test_retention_is_configurable_and_purges_what_it_says(admin: TestClient) ->
     """
     defaults = admin.get("/admin/retention")
     assert defaults.status_code == 200, defaults.text
-    assert {p["dataset"] for p in defaults.json()} == {"audit_log", "usage_records"}
-    assert {p["days"] for p in defaults.json()} == {360}
+    by_dataset = {p["dataset"]: p for p in defaults.json()}
+    assert set(by_dataset) == {"audit_log", "usage_records", "prompt_logs"}
+    assert by_dataset["audit_log"]["days"] == 360
+    assert by_dataset["usage_records"]["days"] == 360
+    # Markedly shorter, and not by convention: section 9.2 requires it and the
+    # bounds table makes it the default nobody has to remember to set.
+    assert by_dataset["prompt_logs"]["days"] == 7
     assert all(p["updated_by"] is None for p in defaults.json())
 
     saved = admin.put("/admin/retention/usage_records", json={"days": 90})
@@ -386,6 +391,55 @@ def test_a_window_under_the_floor_is_refused_over_http(admin: TestClient) -> Non
     refused = admin.put("/admin/retention/audit_log", json={"days": 7})
     assert refused.status_code == 400, refused.text
     assert admin.get("/admin/retention").json()[0]["days"] == 360
+
+
+def test_a_prompt_log_window_over_the_ceiling_is_refused_over_http(
+    admin: TestClient,
+) -> None:
+    """The bound that runs the other way, end to end.
+
+    `audit_log` refuses a window that is too short; `prompt_logs` refuses one
+    that is too long. Both are 400s and they carry different codes, because a
+    client that collapsed them would give the same advice for two opposite
+    problems.
+    """
+    refused = admin.put("/admin/retention/prompt_logs", json={"days": 365})
+    assert refused.status_code == 400, refused.text
+    assert refused.json()["code"] == "retention_window_too_long"
+
+    stored = {p["dataset"]: p for p in admin.get("/admin/retention").json()}
+    assert stored["prompt_logs"]["days"] == 7, "the refused number did not land"
+
+    accepted = admin.put("/admin/retention/prompt_logs", json={"days": 14})
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["days"] == 14
+
+
+def test_the_transcript_routes_are_reachable_and_empty_by_default(
+    admin: TestClient,
+) -> None:
+    """The wiring, and the default state that matters most.
+
+    An empty list on a deployment nobody has opened a window on is the whole of
+    section 9.2's promise: metadata by default, full text only while a named
+    credential's window is open. This asserts it over HTTP, from the outside,
+    where a regression would otherwise be invisible until somebody read the
+    table by hand.
+    """
+    listed = admin.get("/admin/prompt-logs")
+
+    assert listed.status_code == 200, listed.text
+    assert listed.json() == {"entries": [], "total": 0, "limit": 50, "offset": 0}
+
+
+def test_reading_a_transcript_that_does_not_exist_is_a_404(admin: TestClient) -> None:
+    """And not a 403. The repository is tenant-scoped, so another tenant's id
+    and an expired one and an invented one all read alike — answering
+    "forbidden" would confirm the row exists."""
+    missing = admin.get("/admin/prompt-logs/nope")
+
+    assert missing.status_code == 404, missing.text
+    assert missing.json()["code"] == "prompt_log_not_found"
 
 
 def test_an_unknown_dataset_is_not_reachable(admin: TestClient) -> None:
