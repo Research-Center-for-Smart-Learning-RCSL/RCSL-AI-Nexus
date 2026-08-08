@@ -159,6 +159,12 @@ def _actor_for(user: User, *, source: str, authz: AuthorizationPort) -> Actor:
         source=source,  # type: ignore[arg-type]
         scopes=authz.scopes_for(user.role.value),
         tenant_id=user.tenant_id,
+        # The same window the line above grants error detail on, carried where
+        # the application layer can also read it. Two consumers of one field
+        # rather than two windows: `grant_debug_detail` serves the error
+        # envelope through a contextvar, which `RouteChatRequest` cannot reach
+        # from the application layer, so full prompt logging reads it here.
+        debug_logging_until=user.debug_logging_until,
     )
 
 

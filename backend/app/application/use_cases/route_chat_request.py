@@ -44,10 +44,12 @@ from app.domain.ports.model_runtime_port import ModelRuntimePort
 from app.domain.ports.repositories import (
     ModelRepositoryPort,
     NodeRepositoryPort,
+    PromptLogWriterPort,
     RoutingPolicyRepositoryPort,
     UsageRepositoryPort,
 )
 from app.domain.ports.security_ports import AuthorizationPort
+from app.domain.services.prompt_capture import TranscriptBuffer, should_capture
 from app.domain.services.routing_service import RoutingService
 from app.shared.clock import Clock
 
@@ -96,6 +98,8 @@ class RouteChatRequest:
         authz: AuthorizationPort,
         clock: Clock,
         max_tokens_ceiling: int,
+        prompt_logs: PromptLogWriterPort | None = None,
+        request_id: Callable[[], str | None] = lambda: None,
         max_context_chars: int = 4 * 32768,
         generation_deadline_seconds: int = 600,
         thinking_default: bool = True,
@@ -105,6 +109,34 @@ class RouteChatRequest:
         self._models = models
         self._nodes = nodes
         self._usage = usage
+        self._prompt_logs = prompt_logs
+        """Where a §9.2 transcript goes when a debug window is open, or None.
+
+        A writer with its own transaction, not the repository the read path
+        uses. The distinction is load-bearing: this write happens in a
+        `finally` that runs when the request has *failed*, which is the request
+        a debug window is opened for, and staging it on the request session
+        meant the failure rolled it back.
+
+        Optional, and the default is the safe direction rather than the
+        convenient one: a build that does not wire this records nothing, which
+        is what the platform does by default anyway. The opposite arrangement —
+        a required port with a no-op implementation — would put "nothing is
+        recorded" behind an adapter somebody could replace without touching
+        this file.
+        """
+
+        self._request_id = request_id
+        """How the transcript learns which request it belongs to.
+
+        A callable injected here rather than a parameter on `execute`, because
+        there are four call sites across three routers and a fifth would arrive
+        without it — leaving transcripts that cannot be found from the error
+        the caller quoted, which is the one lookup this table exists to serve.
+        The value lives in a contextvar in the interfaces layer; the
+        composition root, whose job is knowing about every layer, is what
+        connects the two.
+        """
         self._runtimes = runtimes
         self._routing = routing
         self._concurrency = concurrency
@@ -246,6 +278,22 @@ class RouteChatRequest:
         # An unbounded generation is a hardware problem, not a client choice.
         ceiling = min(max_tokens or self._max_tokens_ceiling, self._max_tokens_ceiling)
 
+        # Decided once, here, before the first chunk — never per chunk. A
+        # window that expires mid-generation must not produce half a
+        # transcript: that record is neither the full text somebody asked for
+        # nor the absence §9.2 promises by default, and it would read as a
+        # truncated answer rather than as an expired window.
+        #
+        # `None` when the window is shut, which is every ordinary request, and
+        # nothing is accumulated at all in that case — not accumulated and
+        # discarded. That is the difference between a disclosure control being
+        # off and being on with its output thrown away.
+        transcript: TranscriptBuffer | None = (
+            TranscriptBuffer()
+            if self._prompt_logs is not None and should_capture(actor, self._clock.now())
+            else None
+        )
+
         produced = 0
         prompt_tokens = 0
         drained = 0
@@ -259,6 +307,12 @@ class RouteChatRequest:
         completed = False
         truncated = False
         upstream_finished = False
+        finish_reason: str | None = None
+        """The reason that reached the client, for the transcript. Tracked
+        rather than derived at the end because the two terminal paths below
+        produce it differently: an upstream `stop` arrives on a chunk, while
+        truncation synthesises `length` here."""
+
         started = self._monotonic()
         """When the request reached the runtime. Recorded as `latency_ms`, which
         is what the caller waited, prompt evaluation included."""
@@ -357,6 +411,14 @@ class RouteChatRequest:
                     produced += chunk.token_count
                     if chunk.finish_reason:
                         forwarded_terminal = True
+                        finish_reason = chunk.finish_reason
+                    # Observed where it is forwarded, so the transcript holds
+                    # exactly what the caller was sent. The drained chunks
+                    # above are deliberately not observed: they were withheld
+                    # at the ceiling, and a record that included them would
+                    # disagree with the answer it exists to explain.
+                    if transcript is not None:
+                        transcript.observe(chunk)
                     yield chunk
                     if produced >= ceiling:
                         truncated = True
@@ -395,6 +457,7 @@ class RouteChatRequest:
                 # OpenAI client the model finished, and those clients decide
                 # whether to continue a reply on exactly this field.
                 yield CompletionChunk(delta="", finish_reason="length", token_count=0)
+                finish_reason = "length"
             completed = not truncated
         finally:
             # Runs on normal completion, on client disconnect, and on error.
@@ -435,3 +498,40 @@ class RouteChatRequest:
                 )
             except Exception:  # noqa: BLE001
                 logger.exception("failed to record usage for actor=%s", actor.display)
+
+            # The §9.2 transcript, in its own guard rather than sharing the one
+            # above. Sharing it would make a failure to write the transcript
+            # cost the usage record when the transcript is written second, and
+            # the reverse when the order changed — and usage is what the quota
+            # is enforced against, so it must never be the thing that a
+            # debugging feature can take out.
+            #
+            # Reached only when the window was open at the start of the
+            # generation, so an ordinary request does not enter this block at
+            # all. It runs on client disconnect too, which is deliberate: a
+            # conversation the caller abandoned mid-answer is one of the things
+            # somebody opens a window to look at.
+            if transcript is not None and self._prompt_logs is not None:
+                try:
+                    await self._prompt_logs.record(
+                        transcript.build(
+                            at=self._clock.now(),
+                            actor=actor,
+                            capability=capability,
+                            model_alias=target.alias,
+                            request_id=self._request_id(),
+                            messages=tuple(messages),
+                            finish_reason=finish_reason,
+                            completed=completed,
+                        )
+                    )
+                except Exception:  # noqa: BLE001
+                    # Logged without any part of the transcript. The whole
+                    # point of this table is that prompt text goes nowhere
+                    # else, and an exception handler is the classic place for
+                    # it to leak into a log with ordinary retention.
+                    logger.exception(
+                        "failed to record prompt transcript for actor=%s capability=%s",
+                        actor.display,
+                        capability,
+                    )

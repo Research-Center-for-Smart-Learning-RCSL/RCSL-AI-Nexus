@@ -8,6 +8,7 @@ case layer does not branch on how the caller arrived.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
@@ -94,6 +95,25 @@ class Scope(StrEnum):
 
     LOGS_READ = "logs:read"
 
+    PROMPT_LOG_READ = "prompt_log:read"
+    """Read the full prompt and completion text captured while a debug window
+    was open (§9.2).
+
+    Separate from `logs:read`, and held by strictly fewer roles, because the
+    two read different things about the same event. `logs:read` sees that a
+    request happened, from whom, against which model, and whether it was
+    refused — the metadata column of §9.2's table. This sees what was actually
+    typed, which on this deployment is unpublished research.
+
+    Admin-only, and named as such in `ADMIN_ONLY_SCOPES` with the argument.
+    Withheld from `tenant_admin` in particular: that role holds every other
+    authority inside its tenant, so the exclusion reads as an oversight until
+    the reason is stated — administering a tenant's people and keys does not
+    require reading their conversations, and the tenant boundary that confines
+    the role offers its members no protection from the person administering
+    them.
+    """
+
     KNOWLEDGE_READ = "knowledge:read"
     KNOWLEDGE_WRITE = "knowledge:write"
 
@@ -168,6 +188,29 @@ class Actor:
     prevent. So the list travels here and is checked where the capability is
     read. Empty means the key may reach nothing, which is what a key issued
     with no capabilities should be.
+    """
+
+    debug_logging_until: datetime | None = None
+    """When this credential's debug window closes, or None when it is shut.
+
+    The same `debug_logging_until` that sits on the API key and the user row,
+    carried here so the application layer can read it. It already had one
+    consumer — `interfaces/http/request_context`, which decides whether an
+    error envelope may carry `detail` — and that one reads it from an ambient
+    contextvar set by the resolvers. Full prompt logging cannot: it is decided
+    inside `RouteChatRequest`, in the application layer, and reaching from
+    there into `interfaces/http` would invert the dependency the hexagon
+    exists to hold.
+
+    So the window travels on the actor, which is the object that already
+    answers every other question about what this caller may do. Both the
+    identity resolvers and the API-key middleware hold the full row, so the
+    cost is one assignment in each and the benefit is a rule that a test can
+    exercise with a constructed actor and a fixed clock.
+
+    Defaulted to None so that every actor built before this existed — the many
+    in the test suite included — stays closed rather than open. A field whose
+    unset value granted disclosure would be the wrong way round.
     """
 
     def has(self, scope: Scope) -> bool:

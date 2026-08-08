@@ -20,6 +20,7 @@ from app.domain.entities.knowledge import (
 )
 from app.domain.entities.model import Model, ModelState
 from app.domain.entities.node import Node, NodeStatus
+from app.domain.entities.prompt_log import PromptLogEntry, PromptLogSummary
 from app.domain.entities.prompt_template import PromptTemplate
 from app.domain.entities.retention import RetentionDataset, RetentionPolicy
 from app.domain.entities.routing_policy import RoutingPolicy
@@ -241,6 +242,74 @@ class InvitationRepositoryPort(Protocol):
         ...
 
     async def consume_recovery_code(self, code_id: str, at: datetime) -> bool: ...
+
+
+class PromptLogWriterPort(Protocol):
+    """Append a §9.2 transcript.
+
+    **Separate from the read port, and the reason is the transaction rather
+    than the privilege split.** These were one Protocol for half a day, on the
+    argument that splitting them would only restate a boundary `db_roles.py`
+    already enforces — the gateway holds `INSERT` here and has its `SELECT`
+    revoked, so a gateway calling a read would be refused by Postgres rather
+    than by a type. That argument was fine and it was not the operative one.
+
+    The operative one is that the two need **different transaction lifetimes**.
+    A read belongs to the request that asked for it. A write must survive the
+    request *failing*, because a debug window is opened precisely when a caller
+    reports an error: staging the transcript on the request's own session meant
+    that the exception which produced that error rolled the session back and
+    took the transcript with it. Every successful request recorded fine and the
+    one conversation somebody was looking for was the one that was never
+    written. `PostgresAudit` already had its own session for exactly this
+    reason, and this port did not.
+
+    So the writer is handed a session factory, not a session — which is a
+    difference the type system can hold, and the reason this is two Protocols.
+    """
+
+    async def record(self, entry: PromptLogEntry) -> None: ...
+
+
+class PromptLogRepositoryPort(Protocol):
+    """Read the §9.2 transcripts. See `PromptLogWriterPort` for why the write
+    is not here."""
+
+    async def get(self, entry_id: str) -> PromptLogEntry | None:
+        """The full transcript, by id. The only method that returns content."""
+        ...
+
+    async def list_summaries(
+        self,
+        *,
+        actor_id: str | None,
+        api_key_id: str | None,
+        capability: str | None,
+        request_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> list[PromptLogSummary]:
+        """A page of the table, carrying no message content.
+
+        Deliberately not `list_entries` returning full rows that a caller then
+        strips. The point is that the text is never selected: a page of fifty
+        transcripts is a few hundred megabytes of the most sensitive data in the
+        schema, and the safest place for it is the column it is already in.
+        """
+        ...
+
+    async def count_entries(
+        self,
+        *,
+        actor_id: str | None,
+        api_key_id: str | None,
+        capability: str | None,
+        request_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> int: ...
 
 
 class UsageRepositoryPort(Protocol):

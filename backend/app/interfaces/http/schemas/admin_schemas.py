@@ -21,6 +21,7 @@ from pydantic import AfterValidator, BaseModel, EmailStr, Field
 from app.adapters.authz.role_authorization import ASSIGNABLE_ROLES
 from app.application.use_cases.manage_prompt_templates import MAX_NAME_CHARS
 from app.application.use_cases.read_audit_log import AuditLogPage
+from app.application.use_cases.read_prompt_logs import PromptLogPage
 from app.application.use_cases.read_usage_analytics import UsageAnalytics
 from app.domain.entities.actor import Role
 from app.domain.entities.api_key import ApiKey
@@ -34,6 +35,7 @@ from app.domain.entities.knowledge import (
 )
 from app.domain.entities.model import Model, RuntimeKind
 from app.domain.entities.node import Node
+from app.domain.entities.prompt_log import PromptLogEntry, PromptLogSummary
 from app.domain.entities.prompt_template import (
     MAX_SYSTEM_PROMPT_CHARS,
     PromptTemplate,
@@ -674,6 +676,110 @@ class AuditLogResponse(BaseModel):
             total=page.total,
             limit=page.limit,
             offset=page.offset,
+        )
+
+
+# --- prompt transcripts (security.md section 9.2) -------------------------
+
+
+class PromptLogSummaryResponse(BaseModel):
+    """A captured conversation, described but not disclosed.
+
+    Carries no `messages`, `completion` or `reasoning`. The list exists to let
+    an operator find the one conversation they need; reading it is a separate
+    request that writes an audit row. The character counts are what a row is
+    chosen by when the content is absent — an empty completion on a `stop`
+    finish, or a prompt an order of magnitude larger than its neighbours, is
+    visible from the table.
+    """
+
+    id: str
+    at: datetime
+    actor_id: str
+    api_key_id: str | None
+    capability: str
+    model_alias: str
+    request_id: str | None
+    finish_reason: str | None
+    completed: bool
+    tool_calls: int
+    message_chars: int
+    completion_chars: int
+    reasoning_chars: int
+    truncated_fields: list[str]
+
+    @classmethod
+    def of(cls, entry: PromptLogSummary) -> PromptLogSummaryResponse:
+        return cls(
+            id=entry.id,
+            at=entry.at,
+            actor_id=entry.actor_id,
+            api_key_id=entry.api_key_id,
+            capability=entry.capability,
+            model_alias=entry.model_alias,
+            request_id=entry.request_id,
+            finish_reason=entry.finish_reason,
+            completed=entry.completed,
+            tool_calls=entry.tool_calls,
+            message_chars=entry.message_chars,
+            completion_chars=entry.completion_chars,
+            reasoning_chars=entry.reasoning_chars,
+            truncated_fields=sorted(entry.truncated_fields),
+        )
+
+
+class PromptLogListResponse(BaseModel):
+    entries: list[PromptLogSummaryResponse]
+    total: int
+    limit: int
+    offset: int
+
+    @classmethod
+    def of(cls, page: PromptLogPage) -> PromptLogListResponse:
+        return cls(
+            entries=[PromptLogSummaryResponse.of(e) for e in page.entries],
+            total=page.total,
+            limit=page.limit,
+            offset=page.offset,
+        )
+
+
+class PromptLogTranscriptResponse(BaseModel):
+    """The full conversation. The only response in this file that carries
+    message content, and the only read that writes an audit row."""
+
+    id: str
+    at: datetime
+    actor_id: str
+    api_key_id: str | None
+    capability: str
+    model_alias: str
+    request_id: str | None
+    finish_reason: str | None
+    completed: bool
+    tool_calls: int
+    truncated_fields: list[str]
+    messages: str
+    completion: str
+    reasoning: str
+
+    @classmethod
+    def of(cls, entry: PromptLogEntry) -> PromptLogTranscriptResponse:
+        return cls(
+            id=entry.id,
+            at=entry.at,
+            actor_id=entry.actor_id,
+            api_key_id=entry.api_key_id,
+            capability=entry.capability,
+            model_alias=entry.model_alias,
+            request_id=entry.request_id,
+            finish_reason=entry.finish_reason,
+            completed=entry.completed,
+            tool_calls=entry.tool_calls,
+            truncated_fields=sorted(entry.truncated_fields),
+            messages=entry.messages,
+            completion=entry.completion,
+            reasoning=entry.reasoning,
         )
 
 

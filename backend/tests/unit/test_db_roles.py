@@ -1,9 +1,16 @@
 """The database role split (security.md section 6).
 
-The property under test is a security boundary: the gateway account may read
-every table but may write only `usage_records`. If a future change grants it
+The property under test is a security boundary: the gateway account may write
+only the tables named in `GATEWAY_WRITABLE_TABLES`. If a future change grants it
 INSERT/UPDATE/DELETE anywhere else, a compromised gateway could mint an admin
 key, so that is asserted directly rather than left to a reading of the SQL.
+
+Since 2026-08-08 there is a second, opposite property. `prompt_logs` is the one
+table the gateway may write and may **not** read: it holds the plaintext of what
+researchers typed, and the process holding that account is the one exposed to
+the internet. The blanket `GRANT SELECT ON ALL TABLES` puts the privilege there
+by default, so the revoke has to come after it — an ordering that is invisible
+in a diff and load-bearing in effect, which is why it is asserted here.
 """
 
 from __future__ import annotations
@@ -13,6 +20,7 @@ import re
 import pytest
 
 from app.infrastructure.db_roles import (
+    GATEWAY_DENIED_READ_TABLES,
     GATEWAY_WRITABLE_TABLES,
     RoleSpec,
     _quote_ident,
@@ -52,12 +60,53 @@ def test_gateway_can_read_all_tables():
     )
 
 
-def test_gateway_may_write_only_usage_records():
+def test_gateway_may_write_only_the_named_tables():
     statements = build_statements([GATEWAY], database="nexus")
+    permitted = {f'"{table}"' for table in GATEWAY_WRITABLE_TABLES}
     for privs, target in _grants_to(statements, "nexus_gateway"):
         if any(verb in privs for verb in WRITE_VERBS):
-            # The only writable target is the named usage table.
-            assert '"usage_records"' in target, (privs, target)
+            assert target in permitted, (privs, target)
+
+
+def test_gateway_cannot_read_prompt_logs():
+    """Appending its own transcripts must not become reading everyone's.
+
+    The same asymmetry the knowledge base already makes in the other direction:
+    Qdrant hands the gateway a read-only key so retrieving a passage cannot
+    become writing one. Here the untrusted side gets write and not read, for the
+    same reason — exactly the one verb its job needs.
+    """
+    statements = build_statements([GATEWAY], database="nexus")
+    revokes = [
+        s for s in statements if s.upper().startswith("REVOKE SELECT ON") and "nexus_gateway" in s
+    ]
+    for table in GATEWAY_DENIED_READ_TABLES:
+        assert any(f'"{table}"' in s for s in revokes), f"SELECT on {table} is not revoked"
+
+
+def test_the_deny_read_revoke_comes_after_the_blanket_select_grant():
+    """Ordering, which is the whole of whether the previous test means anything.
+
+    `GRANT SELECT ON ALL TABLES` includes `prompt_logs`. A revoke placed before
+    it is undone in the same transaction, and both statements are still present
+    for the assertion above to find — so the ordering has to be asserted
+    separately or a reordering would pass every other test in this file.
+    """
+    statements = build_statements([GATEWAY], database="nexus")
+    blanket = next(
+        i for i, s in enumerate(statements) if s.upper().startswith("GRANT SELECT ON ALL TABLES")
+    )
+    revoke = next(i for i, s in enumerate(statements) if s.upper().startswith("REVOKE SELECT ON"))
+    assert revoke > blanket
+
+
+def test_prompt_logs_is_both_writable_and_unreadable():
+    """The pair, stated together. Dropping either half is a silent change of
+    meaning: without the INSERT the gateway cannot record a transcript at all
+    and the API-key debug window becomes decorative; without the revoke the
+    internet-facing process can read every tenant's conversations."""
+    assert "prompt_logs" in GATEWAY_WRITABLE_TABLES
+    assert "prompt_logs" in GATEWAY_DENIED_READ_TABLES
 
 
 def test_gateway_privileges_are_revoked_before_regrant():
