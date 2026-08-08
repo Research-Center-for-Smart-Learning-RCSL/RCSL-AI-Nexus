@@ -762,6 +762,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/prompt-logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Prompt Logs */
+        get: operations["list_prompt_logs_admin_prompt_logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/prompt-logs/{entry_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Prompt Log
+         * @description The audited one. See `ReadPromptLogs.read_transcript`.
+         */
+        get: operations["read_prompt_log_admin_prompt_logs__entry_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/prompt-templates": {
         parameters: {
             query?: never;
@@ -1810,6 +1847,99 @@ export interface components {
             /** Total Memory Gb */
             total_memory_gb: number;
         };
+        /** PromptLogListResponse */
+        PromptLogListResponse: {
+            /** Entries */
+            entries: components["schemas"]["PromptLogSummaryResponse"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * PromptLogSummaryResponse
+         * @description A captured conversation, described but not disclosed.
+         *
+         *     Carries no `messages`, `completion` or `reasoning`. The list exists to let
+         *     an operator find the one conversation they need; reading it is a separate
+         *     request that writes an audit row. The character counts are what a row is
+         *     chosen by when the content is absent — an empty completion on a `stop`
+         *     finish, or a prompt an order of magnitude larger than its neighbours, is
+         *     visible from the table.
+         */
+        PromptLogSummaryResponse: {
+            /** Actor Id */
+            actor_id: string;
+            /** Api Key Id */
+            api_key_id: string | null;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Capability */
+            capability: string;
+            /** Completed */
+            completed: boolean;
+            /** Completion Chars */
+            completion_chars: number;
+            /** Finish Reason */
+            finish_reason: string | null;
+            /** Id */
+            id: string;
+            /** Message Chars */
+            message_chars: number;
+            /** Model Alias */
+            model_alias: string;
+            /** Reasoning Chars */
+            reasoning_chars: number;
+            /** Request Id */
+            request_id: string | null;
+            /** Tool Calls */
+            tool_calls: number;
+            /** Truncated Fields */
+            truncated_fields: string[];
+        };
+        /**
+         * PromptLogTranscriptResponse
+         * @description The full conversation. The only response in this file that carries
+         *     message content, and the only read that writes an audit row.
+         */
+        PromptLogTranscriptResponse: {
+            /** Actor Id */
+            actor_id: string;
+            /** Api Key Id */
+            api_key_id: string | null;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Capability */
+            capability: string;
+            /** Completed */
+            completed: boolean;
+            /** Completion */
+            completion: string;
+            /** Finish Reason */
+            finish_reason: string | null;
+            /** Id */
+            id: string;
+            /** Messages */
+            messages: string;
+            /** Model Alias */
+            model_alias: string;
+            /** Reasoning */
+            reasoning: string;
+            /** Request Id */
+            request_id: string | null;
+            /** Tool Calls */
+            tool_calls: number;
+            /** Truncated Fields */
+            truncated_fields: string[];
+        };
         /** PromptTemplateResponse */
         PromptTemplateResponse: {
             /** Created At */
@@ -1872,7 +2002,7 @@ export interface components {
          *     things it is safe to delete from is decided here rather than at the edge.
          * @enum {string}
          */
-        RetentionDataset: "audit_log" | "usage_records";
+        RetentionDataset: "audit_log" | "usage_records" | "prompt_logs";
         /** RetentionPolicyResponse */
         RetentionPolicyResponse: {
             /** Dataset */
@@ -3582,6 +3712,75 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    list_prompt_logs_admin_prompt_logs_get: {
+        parameters: {
+            query?: {
+                actor_id?: string | null;
+                api_key_id?: string | null;
+                capability?: string | null;
+                request_id?: string | null;
+                since?: string | null;
+                until?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptLogListResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    read_prompt_log_admin_prompt_logs__entry_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entry_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptLogTranscriptResponse"];
+                };
             };
             /** @description Unprocessable Entity */
             422: {

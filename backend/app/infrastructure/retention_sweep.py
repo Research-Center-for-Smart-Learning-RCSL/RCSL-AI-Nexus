@@ -35,7 +35,7 @@ from app.adapters.persistence.repositories import (
     PostgresRecordPurge,
     PostgresRetentionPolicyRepository,
 )
-from app.adapters.persistence.sqlalchemy_models import AuditLogRow, UsageRecordRow
+from app.adapters.persistence.sqlalchemy_models import AuditLogRow, PromptLogRow, UsageRecordRow
 from app.application.use_cases.manage_retention import ManageRetention
 from app.domain.entities.retention import RetentionDataset
 from app.infrastructure.db import session_scope
@@ -65,6 +65,12 @@ async def sweep_once(app: FastAPI) -> None:
             purges={
                 RetentionDataset.AUDIT_LOG: PostgresRecordPurge(session, AuditLogRow),
                 RetentionDataset.USAGE_RECORDS: PostgresRecordPurge(session, UsageRecordRow),
+                # The dataset this loop matters most for. The other two are
+                # bounded here for capacity; `prompt_logs` is bounded for
+                # disclosure, and its window is days rather than months — so a
+                # sweep that silently stopped running would show up as a disk
+                # figure for those two and as retained prompt text for this one.
+                RetentionDataset.PROMPT_LOGS: PostgresRecordPurge(session, PromptLogRow),
             },
             authz=app.state.authz,
             audit=app.state.audit,

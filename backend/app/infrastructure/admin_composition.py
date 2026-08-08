@@ -54,6 +54,7 @@ from app.interfaces.http.routers import (
     metrics,
     models,
     nodes,
+    prompt_logs,
     prompt_templates,
     retention,
     roles,
@@ -186,6 +187,12 @@ def mount_admin_routers(app: FastAPI) -> None:
         dashboard.router,
         usage.router,
         logs.router,
+        # Beside `logs` because they answer the same question at two
+        # depths: that view shows what happened, this one shows what was
+        # said. Admin entrances only — the gateway writes this table and
+        # has had its SELECT on it revoked, so the route would be refused
+        # by Postgres there anyway (db_roles.py).
+        prompt_logs.router,
         host.router,
         retention.router,
         knowledge.router,

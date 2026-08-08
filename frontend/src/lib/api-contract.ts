@@ -72,6 +72,11 @@ import type {
   RetentionPreview,
 } from '@/features/retention/schema';
 import type { RoutingPolicy } from '@/features/routing-policies/schema';
+import type {
+  PromptLogPage,
+  PromptLogSummary,
+  PromptLogTranscript,
+} from '@/features/prompt-logs/schema';
 import type { PromptTemplate } from '@/features/prompt-templates/schema';
 import type { CreateTenantResponse, Tenant } from '@/features/tenants/schema';
 import type { UsageAnalytics } from '@/features/usage/schema';
@@ -144,6 +149,17 @@ const _host: Agrees<HostStatus, Api['HostStatusResponse']> = true;
 const _auditEntry: Agrees<AuditEntry, Api['AuditEntryResponse']> = true;
 const _auditPage: Agrees<AuditLogPage, Api['AuditLogResponse']> = true;
 const _usage: Agrees<UsageAnalytics, Api['UsageAnalyticsResponse']> = true;
+const _promptLogSummary: Agrees<PromptLogSummary, Api['PromptLogSummaryResponse']> = true;
+const _promptLogPage: Agrees<PromptLogPage, Api['PromptLogListResponse']> = true;
+// The transcript is checked separately from the summary rather than being
+// derived from it, because the difference between the two is the disclosure
+// boundary: the summary must *not* carry `messages`, `completion` or
+// `reasoning`. A single shared type would make that omission a detail of one
+// declaration instead of a property two responses are checked against.
+const _promptLogTranscript: Agrees<
+  PromptLogTranscript,
+  Api['PromptLogTranscriptResponse']
+> = true;
 
 // --- knowledge base ------------------------------------------------------
 const _collection: Agrees<Collection, Api['KnowledgeCollectionResponse']> = true;
