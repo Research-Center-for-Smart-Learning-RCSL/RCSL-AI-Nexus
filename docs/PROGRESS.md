@@ -47,7 +47,7 @@ last row in security.md §13.0 that said "not implemented".
 |---|---|
 | Backend | 30 use cases, 25 routers, 17 entity modules, 12 migrations (head `a1d6e93c7f52`), 742 unit tests, 104 integration tests that skip without `TEST_DATABASE_URL` |
 | Frontend | 19 feature folders, 15 screens, 241 tests, types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
-| Gates | ruff, ruff-format, strict mypy, pytest; tsc, eslint, vitest, a real `next build`; Trivy, pip-audit and pnpm audit advisory-only. All green |
+| Gates | ruff, ruff-format, strict mypy, pytest; tsc, eslint, vitest, a real `next build`, five Playwright paths; Trivy, pip-audit and pnpm audit advisory-only. All green — **and this row was false from 2026-08-07 to 2026-08-08**, see below |
 
 **Verified on real hardware**, not only in tests: the full inference path with
 tool calling, an agent loop over ten graduated rungs including a multi-step
@@ -394,6 +394,44 @@ Twelve migrations, head `a1d6e93c7f52`. Thirty use cases, twenty-five routers
 `responses` landed on 2026-08-07). Seventeen entity modules, nineteen frontend
 feature folders. 742 unit tests and 104 integration tests on the backend, 241 on
 the frontend; ruff, mypy, tsc, eslint and a real `next build` all clean.
+
+### CI had been red for five commits and every document said it was green
+
+Opening the pull request for this work ran CI on a branch for the first time in
+a while, and the frontend job failed. It was not this work: `main` had been red
+since **2026-08-07**, five consecutive commits, and the cause was one line.
+
+`e800f55` renamed a nav item from `API` to `API reference` — a good rename, made
+because "'API' was too bare to be useful once 'Connect an agent' sat beside it".
+The chat cancellation test located that link by `getByRole('link', { name: 'API',
+exact: true })`, and `exact: true` is exactly what stops `API` matching
+`API reference`. Backend and audit passed throughout; only the Playwright job
+failed, and only that one test in it.
+
+**What is worth recording is not the rename. It is that nobody read the job.**
+The gates row in this file and the CI item in ROADMAP both said "All green" for
+those five commits, including in entries written after the breakage. This is the
+same shape this repository keeps finding in its own controls — a thing described
+as in force which is not — arriving in the one place whose whole job is to
+notice that.
+
+Two things follow from it.
+
+The locator is now the destination rather than the label: `getByRole('navigation')`
+scoped, matched on `/api reference/i`, with the existing URL assertion still
+pinning where it lands. The coupling was the defect rather than the rename. This
+test is about whether client-side navigation aborts the stream; *which* link it
+leaves through is incidental, so asserting the nav's copy gave it a way to fail
+that has nothing to do with what it checks. It is the only accessible-name
+locator in the suite pointed at navigation chrome, so this is one fix rather than
+a class of them.
+
+And **`failOnFlakyTests` did its job while nothing read the result**. The run
+retried twice and reported the failure clearly. The gap is not detection, it is
+that a red pipeline on `main` produced no signal anybody acted on — the same
+argument the 2026-07-30 entry makes for keeping the audit job advisory, running
+in the other direction. A branch protection rule, or the health monitor's mail
+path pointed at the workflow, would close it; neither is done.
 
 ### Deployed and verified the same day
 
