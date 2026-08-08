@@ -61,7 +61,19 @@ test('cancels streams through Stop and page navigation', async ({
     .fill('Keep generating until I leave this page.');
   await page.getByRole('button', { name: 'Send' }).click();
   await expect(page.getByText('Partial reply')).toHaveCount(2);
-  await page.getByRole('link', { name: 'API', exact: true }).click();
+  // Located by destination, not by label. This was
+  // `getByRole('link', { name: 'API', exact: true })` until 2026-08-08, and
+  // renaming that nav item to 'API reference' on 2026-08-07 broke it — with
+  // `exact: true`, 'API' stops matching. **CI was red on `main` for five
+  // consecutive commits** before anyone read the frontend job, while ROADMAP
+  // and PROGRESS both said the gates were green.
+  //
+  // The coupling was the defect rather than the rename. This test is about
+  // whether client-side navigation aborts the stream; *which* link it leaves
+  // through is incidental, so asserting the nav's copy gave it a way to fail
+  // that has nothing to do with what it checks. The URL assertion below
+  // already pins the destination.
+  await page.getByRole('navigation').getByRole('link', { name: /api reference/i }).click();
   await expect(page).toHaveURL(/\/api-docs$/);
 
   await expect
