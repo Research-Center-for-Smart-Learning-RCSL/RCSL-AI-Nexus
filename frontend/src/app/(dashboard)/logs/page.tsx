@@ -11,8 +11,15 @@ export default function LogsPage() {
         <h1 className="font-heading text-lg font-semibold">Audit log</h1>
         <p className="max-w-prose text-sm text-muted-foreground">
           Every administrative action, with who took it and whether it was
-          allowed. Append-only and never edited from here, which is what makes
-          it evidence rather than a view.
+          allowed — including the attempts that were refused, which are the ones
+          worth reading. Append-only and never edited from here, which is what
+          makes it evidence rather than a view.
+        </p>
+        <p className="mt-2 max-w-prose text-sm text-muted-foreground">
+          This records <strong>what was done to the platform</strong>: keys
+          issued, policies edited, models loaded, sign-ins. It does not record
+          what anyone asked a model, which is a separate and more sensitive
+          thing, kept off by default.
         </p>
       </div>
       <LogsTable />

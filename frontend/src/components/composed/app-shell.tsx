@@ -87,14 +87,25 @@ type NavGroup = {
 };
 
 // Grouped by what the reader came to do, not by which part of the backend
-// serves it. Thirteen flat entries is a list nobody scans; four named groups is
-// a list somebody skips three quarters of.
+// serves it. Thirteen flat entries is a list nobody scans; five named groups is
+// a list somebody skips four fifths of.
 //
-// The grouping also happens to fall along role lines, which is the sign it is
-// the right cut rather than a tidy one: a `user` sees Work and one entry of
-// Insight, a `curator` sees Work and Knowledge, an `operator` sees Fleet and
-// Insight and none of Administration. Nobody is shown a group they have no
-// business in, because a group with no visible items is not rendered at all.
+// The grouping falls along role lines, which is the sign it is the right cut
+// rather than a tidy one: a `user` sees Integration, Content and one entry of
+// Insight; a `curator` sees those plus authorship of both Content screens; an
+// `operator` sees Fleet and Insight and none of Administration. Nobody is
+// shown a group they have no business in, because a group with no visible
+// items is not rendered at all.
+//
+// **Content is separate from Fleet, and was not until 2026-08-09.** Prompt
+// templates and knowledge documents had been filed under Fleet, where the
+// authorization model says plainly they do not belong: `_CURATOR_SCOPES` is
+// "what the models are told, and nothing else", and its docstring gives the
+// reason as "content authorship, which is why neither is with the role that
+// runs the nodes". The navigation had them with exactly that role. The visible
+// symptom was that a `user` — who holds `prompt:read` and none of
+// `model:read`, `routing:read`, `node:read` — saw a group called Fleet
+// containing one entry, Prompts, on a deployment where they have no fleet.
 const NAV_GROUPS: NavGroup[] = [
   {
     id: 'integration',
@@ -145,7 +156,10 @@ const NAV_GROUPS: NavGroup[] = [
       },
       {
         href: '/routing-policies',
-        label: 'Routing',
+        // Matches the page's own heading. 'Routing' meant the reader landed on
+        // a title they had not clicked, which costs nothing to avoid and is
+        // the difference when following written instructions.
+        label: 'Routing policies',
         icon: <RouteIcon className="size-4" />,
         requires: 'routing:read',
       },
@@ -155,9 +169,18 @@ const NAV_GROUPS: NavGroup[] = [
         icon: <ServerIcon className="size-4" />,
         requires: 'node:read',
       },
+    ],
+  },
+  {
+    id: 'content',
+    label: 'Content',
+    // What the models are told, as opposed to what runs them. The split
+    // from Fleet mirrors the one the authorization model already makes:
+    // `curator` holds both writes here and none of the fleet's reads.
+    items: [
       {
         href: '/prompt-templates',
-        label: 'Prompts',
+        label: 'Prompt templates',
         icon: <FileTextIcon className="size-4" />,
         // `prompt:read` is a base scope, unlike `knowledge:read`, so this is
         // the one Knowledge-group entry a `user` sees: choosing a template is
