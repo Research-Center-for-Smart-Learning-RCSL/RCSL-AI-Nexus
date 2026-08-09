@@ -52,7 +52,11 @@ export function CodeBlock({
       <pre className="overflow-x-auto rounded-lg bg-muted p-3 pr-12 font-mono text-xs leading-relaxed">
         {code}
       </pre>
+      {/* Interface, not content: `data-md-skip` keeps the button's label out of
+          a Markdown export of the surrounding page, where "Copy config.toml"
+          would otherwise appear as a line of prose under the snippet. */}
       <Button
+        data-md-skip
         variant="ghost"
         size="xs"
         type="button"

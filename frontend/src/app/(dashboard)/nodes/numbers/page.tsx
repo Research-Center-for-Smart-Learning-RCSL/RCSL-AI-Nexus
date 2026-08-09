@@ -19,9 +19,8 @@ export default function HostNumbersPage() {
           Where these numbers come from
         </h1>
         <p className="max-w-prose text-sm text-muted-foreground">
-          The compute host panel, figure by figure — what each one is measured
-          from, which one is derived and why, and what is deliberately not
-          shown.
+          Reference for the compute-host panel: the collection method, a
+          definition for each figure, and what is excluded from collection.
         </p>
       </div>
       <HostNumbersExplainer />

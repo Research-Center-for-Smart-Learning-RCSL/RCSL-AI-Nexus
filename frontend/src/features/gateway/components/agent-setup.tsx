@@ -23,7 +23,10 @@
  * a limit needs testing at least as much as what is written here as a step.**
  */
 
+import { useRef } from 'react';
+
 import { CodeBlock } from '@/components/composed/code-block';
+import { ExportMarkdown } from '@/components/composed/export-markdown';
 import { useAssistantSurface } from '@/features/assistant/context';
 import { useGatewayInfo } from '@/features/gateway/hooks/use-gateway';
 
@@ -53,6 +56,9 @@ function Step({
 
 export function AgentSetup() {
   const { data, isLoading } = useGatewayInfo();
+  // Exported from what is rendered rather than from a second copy of it, so the
+  // capability and base URL below travel with the file. See lib/markdown-export.
+  const content = useRef<HTMLDivElement>(null);
   // The screen the assistant's own instructions send people to, which until
   // 2026-08-09 registered nothing — so the drawer fell back to `other`, whose
   // guidance opens "The operator has no settings form open", on the one page
@@ -69,7 +75,15 @@ export function AgentSetup() {
 
   return (
     <div className="space-y-8">
-      <section className="space-y-3">
+      <div className="flex justify-end" data-md-skip>
+        <ExportMarkdown
+          contentRef={content}
+          title="Connect an agent"
+          filename="connect-an-agent"
+        />
+      </div>
+      <div ref={content} className="space-y-8">
+        <section className="space-y-3">
         <h2 className="font-heading text-base font-semibold">
           Codex — verified against this deployment
         </h2>
@@ -437,6 +451,7 @@ wire_api = "responses"`}
           off. Ask for it before pointing real work at this.
         </p>
       )}
+      </div>
     </div>
   );
 }
