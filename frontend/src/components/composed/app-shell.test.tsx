@@ -135,7 +135,10 @@ const SCOPES: Record<string, ScopeName[]> = {
     'user:read',
     'tenant:read',
   ],
-  curator: [...BASE, 'knowledge:read', 'knowledge:write'],
+  // `prompt:write` is what makes this role the one that authors templates;
+  // it gates controls inside the screen rather than the link to it, which is
+  // why its absence did not show up in any assertion here.
+  curator: [...BASE, 'knowledge:read', 'knowledge:write', 'prompt:write'],
   auditor: [
     'chat:use',
     'api_key:read_own',
@@ -148,6 +151,10 @@ const SCOPES: Record<string, ScopeName[]> = {
     'user:read',
     'tenant:read',
     'knowledge:read',
+    // `_AUDITOR_SCOPES` is built from scratch rather than from `_BASE_SCOPES`,
+    // so it lists this one explicitly and so must this copy. Missed by the
+    // pass that fixed BASE and ALL, which is the same drift one layer down.
+    'prompt:read',
   ],
   user: BASE,
 };
@@ -262,7 +269,9 @@ describe('the links a role can see', () => {
     signedInWith(SCOPES.auditor);
     render(<AppShell>content</AppShell>);
 
-    expect(sidebarLinks()).toHaveLength(13);
+    // 14 since 2026-08-09: Prompt templates, which an auditor has always been
+    // able to open and which this file's scope map did not know they held.
+    expect(sidebarLinks()).toHaveLength(14);
     expect(sidebarLinks()).not.toContain('Retention');
   });
 

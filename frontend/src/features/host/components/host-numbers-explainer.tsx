@@ -241,9 +241,23 @@ export function HostNumbersExplainer() {
           <Definition term="Memory budget">
             <p>
               A load is refused if it would cause total declared or observed
-              residency to exceed 80% of the host&apos;s total memory. The
-              remaining share covers the operating system, the containers, and
-              inference working memory not accounted for in any model profile.
+              residency to exceed 80% of the node&apos;s{' '}
+              <em>configured</em> total memory. The remaining share covers the
+              operating system, the containers, and inference working memory
+              not accounted for in any model profile.
+            </p>
+            <p>
+              <strong>
+                That configured figure, not the measurement above, is what the
+                check uses.
+              </strong>{' '}
+              The two describe the same machine and are recorded separately: one
+              is a number an administrator entered when registering the node,
+              the other is read from the host each time this page loads. They
+              are worth comparing — a configured total above the real capacity
+              permits loads that push the host into swap — but the budget is
+              never computed from the measured figure, and reconciling them as
+              though it were will not add up.
             </p>
             <p>
               The check is a refusal rather than a warning. On unified memory,

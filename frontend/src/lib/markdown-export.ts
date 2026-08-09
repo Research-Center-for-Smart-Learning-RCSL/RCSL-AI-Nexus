@@ -137,8 +137,16 @@ function listToMarkdown(
       const marker = ordered ? `${index + 1}.` : '-';
       // Nested lists are rendered as their own blocks and re-indented, so a
       // list inside a list keeps its structure instead of flattening.
-      const nested = Array.from(item.children).filter(
-        (child) => child.tagName === 'UL' || child.tagName === 'OL',
+      // Every descendant list this item owns, not only its direct children:
+      // the clone below strips *all* of them, so re-emitting only direct
+      // children silently deleted any list wrapped in a `div`. A list whose
+      // nearest ancestor list is also inside this item belongs to a deeper
+      // level and is reached by recursion instead.
+      const nested = Array.from(item.querySelectorAll('ul, ol')).filter(
+        (list) => {
+          const parentList = list.parentElement?.closest('ul, ol') ?? null;
+          return parentList === null || !item.contains(parentList);
+        },
       );
       const own = inlineOf(
         (() => {
@@ -159,6 +167,55 @@ function listToMarkdown(
     })
     .filter(Boolean)
     .join('\n');
+}
+
+const BLOCK_TAGS = new Set([
+  'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+  'P', 'PRE', 'UL', 'OL', 'TABLE', 'DL', 'DD', 'DT',
+  'DIV', 'SECTION', 'ARTICLE', 'ASIDE', 'MAIN', 'HEADER', 'FOOTER',
+  'FIGURE', 'BLOCKQUOTE', 'FORM', 'FIELDSET', 'HR', 'NAV',
+]);
+/** Everything else is inline, which is the right default for markup we author. */
+
+/**
+ * A container holding prose *and* elements, in document order.
+ *
+ * Runs of inline nodes become one paragraph; a block-level child is emitted as
+ * its own block. **Walking `children` instead — which is what this did until
+ * 2026-08-09 — discards every text node**, because `children` is elements only.
+ * A definition like "Delete the `model` and `model_provider` lines from
+ * `~/.codex/config.toml`." exported as three fragments with all the prose
+ * between them missing, and the code spans stripped of their backticks: each
+ * `code` element was reached as a *container* rather than as inline content, so
+ * the `CODE` case never ran and its text was backslash-escaped instead.
+ *
+ * The module's own comment claimed an unhandled structure degrades "to
+ * something readable rather than to nothing". It did not; it degraded to
+ * something worse than nothing, which is a fragment that looks like a complete
+ * instruction. The two pages carrying an export button hold 37 definition
+ * descriptions and nearly all of them mix prose with `code`.
+ */
+function mixedContent(element: Element): string[] {
+  const out: string[] = [];
+  let run: Node[] = [];
+
+  function flush(): void {
+    if (run.length === 0) return;
+    const text = run.map(inline).join('').trim();
+    run = [];
+    if (text) out.push(text);
+  }
+
+  for (const child of Array.from(element.childNodes)) {
+    if (child.nodeType === 1 && BLOCK_TAGS.has((child as Element).tagName)) {
+      flush();
+      out.push(...blocks(child));
+    } else {
+      run.push(child);
+    }
+  }
+  flush();
+  return out;
 }
 
 /**
@@ -223,19 +280,10 @@ function blocks(node: Node): string[] {
       }
       return out.length ? [out.join('\n')] : [];
     }
-    case 'DD': {
-      // Only reached through the `DL` case above, where a `dd` holding its own
-      // paragraphs needs them separated rather than run together.
-      const inner = Array.from(element.children).flatMap(blocks);
-      return inner.length ? inner : [inlineOf(element)].filter(Boolean);
-    }
-    default: {
-      const nested = Array.from(element.childNodes).flatMap(blocks);
-      if (nested.length) return nested;
-      // A container with no block children still holds text worth keeping.
-      const text = inlineOf(element);
-      return text ? [text] : [];
-    }
+    case 'DD':
+      return mixedContent(element);
+    default:
+      return mixedContent(element);
   }
 }
 
@@ -268,8 +316,10 @@ export function elementToMarkdown(
     head.push(`Exported from ${options.sourceUrl} on ${stamp}.`);
   }
 
-  return (
-    [...head, body].filter(Boolean).join('\n\n').replace(/\n{3,}/g, '\n\n') +
-    '\n'
-  );
+  // Joined, not tidied. A trailing `replace(/\n{3,}/g, ...)` over the whole
+  // document also rewrote the inside of fenced blocks, so a snippet containing
+  // two blank lines came out altered — against this module's one hard promise,
+  // that a code block reaches the reader exactly as it was on screen. Blocks
+  // are trimmed individually above, which is what the collapse was for.
+  return [...head, body].filter(Boolean).join('\n\n') + '\n';
 }

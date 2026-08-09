@@ -319,6 +319,55 @@ async def test_a_generation_that_is_entirely_thinking_still_produces_chunks(patc
     assert chunks[-1].finish_reason == "length"
 
 
+async def test_a_tool_call_cut_off_at_the_ceiling_reports_length_not_tool_calls(
+    patch_httpx,
+) -> None:
+    """The residual half of the truncation bug fixed on 2026-08-09.
+
+    `tool_calls` overrides `stop`, because a successful call-producing
+    generation reports `stop` and an agent loop branches on this field alone.
+    It must not override `length`: a generation cut off at the ceiling may have
+    stopped part way through `arguments`, so the client would be invited to
+    execute a JSON fragment — and `/v1/responses` keys `response.incomplete` on
+    this value, so the turn would also be reported as a finished one.
+    """
+    call = {"function": {"name": "sh", "arguments": {"cmd": "ls"}}}
+    events = [
+        {"message": {"content": "", "tool_calls": [call]}, "done": False},
+        {"message": {"content": ""}, "done": True, "done_reason": "length", "eval_count": 12},
+    ]
+    patch_httpx(lambda request: httpx.Response(200, content=ndjson(*events)))
+
+    chunks = []
+    async with aclosing(OllamaAdapter("http://ollama.invalid").generate("m", MESSAGES)) as s:
+        async for chunk in s:
+            chunks.append(chunk)
+
+    assert chunks[-1].finish_reason == "length"
+    # The calls that did arrive are still forwarded; what changes is the reason
+    # reported for the turn, not whether the caller sees what was produced.
+    assert any(c.tool_calls for c in chunks)
+
+
+async def test_a_completed_tool_call_still_reports_tool_calls(patch_httpx) -> None:
+    """The behaviour the override exists for, pinned so the fix above cannot
+    quietly take it away: Ollama ends a call-producing generation with `stop`,
+    which stalls an agent loop if forwarded."""
+    call = {"function": {"name": "sh", "arguments": {"cmd": "ls"}}}
+    events = [
+        {"message": {"content": "", "tool_calls": [call]}, "done": False},
+        {"message": {"content": ""}, "done": True, "done_reason": "stop", "eval_count": 12},
+    ]
+    patch_httpx(lambda request: httpx.Response(200, content=ndjson(*events)))
+
+    chunks = []
+    async with aclosing(OllamaAdapter("http://ollama.invalid").generate("m", MESSAGES)) as s:
+        async for chunk in s:
+            chunks.append(chunk)
+
+    assert chunks[-1].finish_reason == "tool_calls"
+
+
 async def test_think_false_is_sent_only_when_thinking_is_disabled(patch_httpx) -> None:
     """`think: true` is never sent, at any setting.
 

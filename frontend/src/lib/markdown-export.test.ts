@@ -53,6 +53,57 @@ describe('elementToMarkdown', () => {
     expect(markdown).toContain('Deeply nested but still content.');
   });
 
+  it('keeps the prose around inline elements in a description', () => {
+    // The defect this file failed to catch until 2026-08-09: the `dd` case
+    // walked `children`, which is elements only, so every text node between
+    // them was discarded and each `code` was emitted as its own fragment with
+    // its backticks stripped. The test below passed throughout, because it
+    // used a `dd` containing nothing but bare text.
+    const markdown = render(
+      '<dl><dt>go back</dt><dd>Delete the <code>model</code> and ' +
+        '<code>model_provider</code> lines from <code>~/.codex/config.toml</code>.' +
+        '</dd></dl>',
+    );
+
+    expect(markdown).toContain(
+      '- **go back** — Delete the `model` and `model_provider` lines from ' +
+        '`~/.codex/config.toml`.',
+    );
+  });
+
+  it('keeps the prose around inline elements in any container', () => {
+    const markdown = render('<div>Base URL: <code>https://x/v1</code> today.</div>');
+
+    expect(markdown).toContain('Base URL: `https://x/v1` today.');
+  });
+
+  it('separates a paragraph from prose that sits beside it', () => {
+    // Mixed content: a run of inline nodes is one block, a block child is its
+    // own, and neither swallows the other.
+    const markdown = render('<div>Lead in.<p>A paragraph.</p>Trailing note.</div>');
+
+    expect(markdown).toContain('Lead in.');
+    expect(markdown).toContain('A paragraph.');
+    expect(markdown).toContain('Trailing note.');
+  });
+
+  it('keeps a nested list that sits inside a wrapper element', () => {
+    // Stripped by one selector and re-emitted by another, so it vanished.
+    const markdown = render(
+      '<ul><li>Top<div><ul><li>Inner</li></ul></div></li></ul>',
+    );
+
+    expect(markdown).toContain('- Top');
+    expect(markdown).toContain('Inner');
+  });
+
+  it('does not rewrite the inside of a code block', () => {
+    // Two blank lines inside a snippet are the author's, not noise to tidy.
+    const markdown = render('<pre>first\n\n\nlast</pre>');
+
+    expect(markdown).toContain('first\n\n\nlast');
+  });
+
   it('renders a definition list as terms and descriptions', () => {
     const markdown = render(
       '<dl><dt>401</dt><dd>Wrong, expired or revoked key.</dd>' +
