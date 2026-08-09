@@ -204,6 +204,102 @@ remains the Phase 3 increment.
 
 ---
 
+## 2026-08-09
+
+### An operator's own Codex session found three things the verification missed
+
+The `/v1/responses` work of 2026-08-07 was verified end to end — real client,
+real public entrance, a tool call executed and answered — and everything below
+survived that verification. Not because the checks were sloppy, but because
+each of these is **something nobody had tried** rather than something that had
+failed. A harness exercises the path it was written for; the failure modes it
+cannot report are the ones outside it.
+
+**Replies were being cut off, and reported as whole.** One `usage_records` row
+from a real session: `prompt_tokens = 32231`, `tokens = 537`, against
+`gemma4-31b-q8` registered at `context_length = 32768`. **32231 + 537 = 32768
+exactly.** The model did not stop, it ran out of window, mid-sentence. A
+context window holds the prompt and the answer in one space, and an agent
+replays the whole conversation every turn, so the room to answer in shrinks
+with every step of a task and reaches zero while the task is still going.
+
+Two of our own decisions made it worse:
+
+- `MAX_CONTEXT_LENGTH` is 65536, twice the largest window any registered model
+  had. **The guardrail that refuses an oversized prompt was admitting prompts
+  that left no room for an answer**, so `413 context_too_long` could never
+  fire — the prompt was never the thing that was too long. `num_predict =
+  16384` bounds an answer from above; this one was bounded from below by the
+  remainder.
+- `responses_sse.py` never read `chunk.finish_reason`. Ollama reports
+  `done_reason: "length"` and `/v1/chat/completions` forwards it, but the
+  Responses translation ended every stream that did not raise with
+  `response.completed`, and `_collect` hardcoded the same. So the client was
+  told a truncated answer was complete, which is the lie the failure path in
+  that module was written specifically to avoid — told about the other way a
+  stream ends badly. **There are three terminal events, not two**, and the one
+  that was missing is the common case.
+
+Both fixed. The module now ends a cut-off stream with `response.incomplete`
+carrying `incomplete_details: {"reason": "max_output_tokens"}` and an
+`"incomplete"` text item; `"stop"` and `"tool_calls"` stay `completed`, held by
+a test, because reporting an ordinary end as incomplete would tell an agent to
+continue a turn the model had finished.
+
+**And the window was raised to 131072, which turned out to cost 0.11 GiB.**
+Measured by loading the same weights at both sizes: 31.36 GiB at `num_ctx =
+32768`, 31.47 GiB at 131072. `gemma4` is almost entirely sliding-window
+attention — 60 layers against `attention.sliding_window = 1024` — so only the
+few full-attention layers scale with context at all. **The window had been
+costed as though this were an ordinary dense model, and set low to be safe; it
+was never expensive.** It is now twice `MAX_CONTEXT_LENGTH`, so a full-size
+prompt still leaves 65536 tokens to answer in and the window cannot be what
+binds. Residency 36.39 GiB against the 51.2 GiB budget, up from 36.30.
+`gemma4-31b` (the q4 rollback) was raised with it — same architecture, same
+layer count, KV cache independent of weight quantisation — **inferred from the
+measurement rather than separately measured**, and said so. `glm47-flash`
+stays at 32768: different attention, nobody has measured it.
+
+**What binds next is time, and it is not in this repository.** Prompt
+evaluation emits no bytes, and that 32231-token prompt was 273 seconds of
+silence — 117.9 tok/s, the figure recorded 2026-07-27, still holding. nginx
+`proxy_read_timeout` on the inference host is `300s`, an open ROADMAP item
+since before any of this. **27 seconds of headroom, about 3200 prompt tokens.**
+Past it the connection resets mid-evaluation with nothing in any application
+log. Ollama's prefix cache has been hiding it, since a continuing conversation
+re-evaluates only its new tokens — so it is a first turn or a cache miss that
+pays the full cost. The window fix buys less than it appears to until that
+value reaches `1560s`.
+
+### Two documentation failures of the same kind, in opposite directions
+
+**`/agent-setup` said Codex in the ChatGPT desktop app was "Not possible".** It
+works, and needs no separate setup: the desktop app reads the same
+`~/.codex/config.toml` the CLI does, so finishing the CLI steps points the app
+here too. An operator connected the CLI and watched the app follow on its own.
+Nobody had tested it — the CLI had been walked end to end and the sentence
+about the app was assumption filling the gap. The 2026-08-07 entry records this
+page correcting a *step* that had never been tried. **A limit that has never
+been tried is the same defect wearing the opposite sign, and is harder to
+notice, because nothing fails.** What remains true is narrower and now says so:
+Codex on the web runs on OpenAI's machines and cannot be pointed anywhere.
+
+**And nothing said how to undo any of it.** The configuration changes the
+client's *default* — which is exactly why the desktop app followed it across —
+and neither the page nor the runbook said how to reverse that, run both side by
+side, or what actually disconnects a client. Now in both: delete two lines to
+go back, `--profile` to keep both, `-c` for one invocation, and the point that
+**none of those disconnect anything on this side** — they are settings on a
+machine the operator controls, and revoking the key is the only disconnect this
+platform enforces. Written against `codex --help` on the installed 0.147.0
+rather than from memory, which is what caught that `--profile <name>` layers a
+separate `$CODEX_HOME/<name>.config.toml` in this version, not the
+`[profiles.<name>]` table inside `config.toml` that older guides describe. That
+is the third time this file has recorded a client's schema moving under a
+document that stated it confidently.
+
+---
+
 ## 2026-08-08
 
 ### The prompt log that section 9.2 described for four months

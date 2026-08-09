@@ -43,6 +43,7 @@ const SURFACE_LABELS: Record<string, string> = {
   'api_keys.edit': 'Editing a key',
   'api_keys.list': 'Your API keys',
   api_docs: 'Integration',
+  agent_setup: 'Connecting an agent',
   other: 'This platform',
 };
 

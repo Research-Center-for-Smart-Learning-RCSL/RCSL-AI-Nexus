@@ -27,6 +27,7 @@ AssistSurface = Literal[
     "api_keys.create",
     "api_keys.edit",
     "api_docs",
+    "agent_setup",
     "other",
 ]
 """Which screen the operator has open.
@@ -35,6 +36,13 @@ A closed set rather than free text: it selects which guidance the system prompt
 carries, and a caller able to name an arbitrary surface would be writing part of
 the prompt. `other` is the honest answer for every screen the assistant has no
 specific help for, and it is what the drawer sends by default.
+
+`agent_setup` was missing until 2026-08-09, and its absence was worse than a
+gap: the system prompt tells the operator to go to that screen, and when they
+got there the drawer fell back to `other` — whose guidance opens "The operator
+has no settings form open". **The one page the assistant sends people to was
+the one page it did not know it was on.** A surface added to this list has to
+be added in three more places or it does nothing; see `_SURFACE_HELP`.
 """
 
 
