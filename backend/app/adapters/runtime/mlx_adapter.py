@@ -83,10 +83,19 @@ def _finish_reason(reason: str | None, *, called_tools: bool) -> str:
     end: reporting `tool_calls` with nothing in `tool_calls` leaves the client
     waiting to execute something it was never given, which is worse than the
     "stop" this exists to correct, because there is no content to fall back on.
+
+    **`length` outranks it in turn** (2026-08-09). A generation cut off at the
+    token ceiling or the context window may have stopped part way through a
+    call's `arguments`, leaving a JSON fragment; reporting `tool_calls` there
+    invites the client to execute something incomplete, and reports a truncated
+    turn as a finished one on `/v1/responses`, whose `response.incomplete` event
+    keys on this value. `stop` is the only reason `tool_calls` needs to
+    override, because `stop` is what a *successful* call-producing generation
+    reports.
     """
-    if called_tools:
-        return "tool_calls"
     mapped = _FINISH_REASONS.get(reason or "stop", "stop")
+    if called_tools:
+        return "length" if mapped == "length" else "tool_calls"
     if mapped == "tool_calls":
         # The server ended on tool calls and none survived parsing. Reporting
         # "stop" at least terminates the turn with whatever content there was.

@@ -94,10 +94,19 @@ def _finish_reason(done_reason: str | None, *, called_tools: bool) -> str:
     mentioned tool calls". The inverse mistake stalls the loop from the other
     end: `tool_calls` with an empty list leaves the client waiting to execute
     something it was never given, and with no content to fall back on.
+
+    **`length` outranks it in turn** (2026-08-09). A generation cut off at the
+    token ceiling or the context window may have stopped part way through a
+    call's `arguments`, leaving a JSON fragment; reporting `tool_calls` there
+    invites the client to execute something incomplete, and reports a truncated
+    turn as a finished one on `/v1/responses`, whose `response.incomplete` event
+    keys on this value. `stop` is the only reason `tool_calls` needs to
+    override, because `stop` is what a *successful* call-producing generation
+    reports.
     """
-    if called_tools:
-        return "tool_calls"
     mapped = _FINISH_REASONS.get(done_reason or "stop", "stop")
+    if called_tools:
+        return "length" if mapped == "length" else "tool_calls"
     if mapped == "tool_calls":
         logger.warning("ollama reported done_reason=tool_calls with no usable calls")
         return "stop"
