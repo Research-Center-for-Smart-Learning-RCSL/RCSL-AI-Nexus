@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 
 import { AppShell } from '@/components/composed/app-shell';
+import { ROLE_SCOPES } from '@/lib/generated/role-scopes';
 import type { ScopeName } from '@/lib/session';
 
 /**
@@ -76,88 +77,20 @@ vi.mock('@/lib/session', async (importOriginal) => {
 });
 
 /** Every scope the backend defines, so `admin` is expressed as "all of them". */
-const ALL: ScopeName[] = [
-  'chat:use',
-  'model:read',
-  'model:write',
-  'routing:read',
-  'routing:write',
-  'api_key:read_own',
-  'api_key:write_own',
-  'api_key:write_any',
-  'user:read',
-  'user:write',
-  'node:read',
-  'node:write',
-  'tenant:read',
-  'tenant:write',
-  'usage:read_own',
-  'usage:read_all',
-  'logs:read',
-  'knowledge:read',
-  'knowledge:write',
-  'retention:write',
-  // Added 2026-08-09. This list is a hand-maintained copy of the backend's
-  // role map, and it had drifted: `prompt:read` is in `_BASE_SCOPES` there,
-  // held by every human role, while these three were in neither list here. The
-  // effect was that every assertion below described a sidebar no real role has
-  // ever been shown, and the two entries gated on them were tested by nobody.
-  // A scope added to `role_authorization.py` has to be added here too; nothing
-  // enforces that, which is the hazard worth stating rather than hiding.
-  'prompt:read',
-  'prompt:write',
-  'prompt_log:read',
-];
-
-const BASE: ScopeName[] = [
-  'chat:use',
-  'api_key:read_own',
-  'api_key:write_own',
-  'usage:read_own',
-  // Selecting a prompt template is part of asking a question, so `_BASE_SCOPES`
-  // grants it to every human role. Missing here until 2026-08-09.
-  'prompt:read',
-];
-
-const SCOPES: Record<string, ScopeName[]> = {
-  admin: ALL,
-  operator: [
-    ...BASE,
-    'model:read',
-    'model:write',
-    'node:read',
-    'node:write',
-    'routing:read',
-    'routing:write',
-    'logs:read',
-    'usage:read_all',
-    'knowledge:read',
-    'user:read',
-    'tenant:read',
-  ],
-  // `prompt:write` is what makes this role the one that authors templates;
-  // it gates controls inside the screen rather than the link to it, which is
-  // why its absence did not show up in any assertion here.
-  curator: [...BASE, 'knowledge:read', 'knowledge:write', 'prompt:write'],
-  auditor: [
-    'chat:use',
-    'api_key:read_own',
-    'usage:read_own',
-    'usage:read_all',
-    'logs:read',
-    'model:read',
-    'routing:read',
-    'node:read',
-    'user:read',
-    'tenant:read',
-    'knowledge:read',
-    // `_AUDITOR_SCOPES` is built from scratch rather than from `_BASE_SCOPES`,
-    // so it lists this one explicitly and so must this copy. Missed by the
-    // pass that fixed BASE and ALL, which is the same drift one layer down.
-    'prompt:read',
-  ],
-  user: BASE,
-};
+// The role map comes from the backend now, not from a copy kept here.
+//
+// This block used to be a hand-written transcription of
+// `role_authorization.py`, and it disagreed with it twice on 2026-08-09:
+// `prompt:read` reaches every human role and was listed for none, and after
+// that was corrected the two role sets built from scratch rather than from
+// `_BASE_SCOPES` — `auditor` and `curator` — were still missing entries. Each
+// time the suite stayed green while describing a navigation nobody is shown.
+//
+// **The assertions below are unchanged in kind.** What a role *holds* is now
+// followed rather than restated; what a role can *see* is still written out
+// link by link, so a scope change that alters the navigation fails here with
+// the expected list beside it. Generation removes the copy, not the check.
+const SCOPES: Record<string, readonly ScopeName[]> = ROLE_SCOPES;
 
 function signedInWith(scopes: ScopeName[] | undefined, at = '/') {
   session.me.scopes = scopes;
@@ -176,7 +109,9 @@ function sidebarLinks(): string[] {
 beforeEach(() => {
   replace.mockClear();
   window.localStorage.clear();
-  signedInWith(BASE);
+  // `user` is exactly `_BASE_SCOPES` on the backend, which is what this
+  // default stood for when it was written by hand.
+  signedInWith(SCOPES.user);
 });
 
 describe('the links a role can see', () => {
