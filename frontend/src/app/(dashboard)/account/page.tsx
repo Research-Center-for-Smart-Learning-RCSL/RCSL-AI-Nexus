@@ -15,9 +15,16 @@ export default function AccountPage() {
       <div>
         <h1 className="font-heading text-lg font-semibold">Account</h1>
         <p className="max-w-prose text-sm text-muted-foreground">
-          Your own password and authenticator. Nothing here affects anyone
-          else&apos;s account, and administrators change these the same way you
-          do.
+          Your own password and authenticator app. Nothing here affects anyone
+          else&apos;s account, and administrators change theirs the same way —
+          nobody can set another person&apos;s password from this application.
+        </p>
+        <p className="mt-2 max-w-prose text-sm text-muted-foreground">
+          These are needed only for signing in from outside the private network;
+          over the private network you are already identified and neither is
+          asked for. Keep the recovery codes somewhere other than the device
+          holding the authenticator, since they are what remains if that device
+          is lost.
         </p>
       </div>
       <AccountSettings />

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 
+import { RelatedScreens } from '@/components/composed/related-screens';
 import { PromptLogsTable } from '@/features/prompt-logs/components/prompt-logs-table';
 
 export const metadata: Metadata = { title: 'Transcripts' };
@@ -22,6 +23,27 @@ export default function PromptLogsPage() {
         </p>
       </div>
       <PromptLogsTable />
+      <RelatedScreens
+        items={[
+          {
+            href: '/api-keys',
+            label: 'API keys',
+            note: 'where capture is switched on: opening a debug window on a key is what causes anything to appear here, and it closes itself',
+          },
+          {
+            href: '/retention',
+            label: 'Retention',
+            requires: 'retention:write',
+            note: 'how long these are kept once captured, which is the window to keep shortest of any on that screen',
+          },
+          {
+            href: '/logs',
+            label: 'Audit log',
+            requires: 'logs:read',
+            note: 'where your having opened one of these is recorded',
+          },
+        ]}
+      />
     </div>
   );
 }

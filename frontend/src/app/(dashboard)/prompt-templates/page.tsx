@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 
+import { RelatedScreens } from '@/components/composed/related-screens';
 import { PromptTemplateTable } from '@/features/prompt-templates/components/prompt-template-table';
 
 export const metadata: Metadata = { title: 'Prompt templates' };
@@ -10,16 +11,45 @@ export default function PromptTemplatesPage() {
     <div className="space-y-4">
       <div>
         <h1 className="font-heading text-lg font-semibold">Prompt templates</h1>
-        <p className="text-sm text-muted-foreground">
-          A named system prompt a caller selects with{' '}
-          <code className="font-mono text-xs">&quot;prompt_template&quot;</code>.
-          It is placed at the front of the conversation, ahead of any system
-          message the caller sends, which is kept. There is no variable
-          substitution — what a caller chooses is which template, not what it
-          says.
+        <p className="max-w-prose text-sm text-muted-foreground">
+          Standing instructions to a model, saved under a name so they can be
+          reused without being retyped. A template holds a name, a short
+          description, and the instruction text itself — for example a reviewing
+          style, a required output language, or a tone to keep to.
+        </p>
+        <p className="mt-2 max-w-prose text-sm text-muted-foreground">
+          Applying one is a choice made per request: pick it in the chat
+          composer, or send its name as{' '}
+          <code className="font-mono text-xs">prompt_template</code> from your
+          own code. The text is placed at the front of the conversation, ahead
+          of any instructions the caller sends, and those are kept rather than
+          replaced. A name that does not exist is refused, so a request never
+          quietly runs without the template it asked for.
+        </p>
+        <p className="mt-2 max-w-prose text-sm text-muted-foreground">
+          <strong>There is no variable substitution.</strong> A template is
+          fixed text; what a caller chooses is which one, never what it says.
+          That is deliberate — a template whose body could be filled in from a
+          request would let the caller write the instructions the model treats
+          as authoritative. Templates belong to your tenant and are not visible
+          to any other.
         </p>
       </div>
       <PromptTemplateTable />
+      <RelatedScreens
+        items={[
+          {
+            href: '/chat',
+            label: 'Chat',
+            note: 'the composer lists these templates, and picking one applies it to that conversation only',
+          },
+          {
+            href: '/api-docs',
+            label: 'API reference',
+            note: 'the request field to send a template name from your own code, alongside the other options a request accepts',
+          },
+        ]}
+      />
     </div>
   );
 }

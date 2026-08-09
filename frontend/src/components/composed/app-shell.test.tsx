@@ -97,6 +97,16 @@ const ALL: ScopeName[] = [
   'knowledge:read',
   'knowledge:write',
   'retention:write',
+  // Added 2026-08-09. This list is a hand-maintained copy of the backend's
+  // role map, and it had drifted: `prompt:read` is in `_BASE_SCOPES` there,
+  // held by every human role, while these three were in neither list here. The
+  // effect was that every assertion below described a sidebar no real role has
+  // ever been shown, and the two entries gated on them were tested by nobody.
+  // A scope added to `role_authorization.py` has to be added here too; nothing
+  // enforces that, which is the hazard worth stating rather than hiding.
+  'prompt:read',
+  'prompt:write',
+  'prompt_log:read',
 ];
 
 const BASE: ScopeName[] = [
@@ -104,6 +114,9 @@ const BASE: ScopeName[] = [
   'api_key:read_own',
   'api_key:write_own',
   'usage:read_own',
+  // Selecting a prompt template is part of asking a question, so `_BASE_SCOPES`
+  // grants it to every human role. Missing here until 2026-08-09.
+  'prompt:read',
 ];
 
 const SCOPES: Record<string, ScopeName[]> = {
@@ -164,20 +177,22 @@ describe('the links a role can see', () => {
     signedInWith(SCOPES.admin);
     render(<AppShell>content</AppShell>);
 
-    // Chat is pinned above every group; then Integration, Fleet, Insight,
-    // Administration.
+    // Chat is pinned above every group; then Integration, Fleet, Content,
+    // Insight, Administration.
     expect(sidebarLinks()).toEqual([
       'Chat',
       'API keys',
       'API reference',
       'Connect an agent',
       'Models',
-      'Routing',
+      'Routing policies',
       'Nodes',
+      'Prompt templates',
       'Knowledge',
       'Dashboard',
       'Usage',
       'Logs',
+      'Transcripts',
       'Users',
       'Tenants',
       'Retention',
@@ -191,11 +206,16 @@ describe('the links a role can see', () => {
     signedInWith(SCOPES.user);
     render(<AppShell>content</AppShell>);
 
+    // `Prompt templates` is the whole of what a member sees under Content, and
+    // the reason that group is not called Fleet: they hold none of
+    // `model:read`, `routing:read` or `node:read`, so a Fleet group would have
+    // shown them one content entry under an infrastructure heading.
     expect(sidebarLinks()).toEqual([
       'Chat',
       'API keys',
       'API reference',
       'Connect an agent',
+      'Prompt templates',
       'Usage',
     ]);
   });
@@ -207,7 +227,7 @@ describe('the links a role can see', () => {
     const links = sidebarLinks();
     expect(links).toContain('Models');
     expect(links).toContain('Nodes');
-    expect(links).toContain('Routing');
+    expect(links).toContain('Routing policies');
     // Present, because diagnosing load means knowing whose it is. Both read-only
     // server-side; the screens hide their own write controls.
     expect(links).toContain('Users');
@@ -218,11 +238,15 @@ describe('the links a role can see', () => {
     signedInWith(SCOPES.curator);
     render(<AppShell>content</AppShell>);
 
+    // Both Content entries and no Fleet entry, which is the role's definition
+    // rendered: `_CURATOR_SCOPES` is "what the models are told, and nothing
+    // else".
     expect(sidebarLinks()).toEqual([
       'Chat',
       'API keys',
       'API reference',
       'Connect an agent',
+      'Prompt templates',
       'Knowledge',
       'Usage',
     ]);

@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 
+import { RelatedScreens } from '@/components/composed/related-screens';
 import { ApiKeyTable } from '@/features/api-keys/components/api-key-table';
 
 export const metadata: Metadata = { title: 'API keys' };
@@ -11,15 +11,40 @@ export default function ApiKeysPage() {
       <div>
         <h1 className="font-heading text-lg font-semibold">API keys</h1>
         <p className="max-w-prose text-sm text-muted-foreground">
-          Keys authenticate applications against the public gateway. Only a
-          peppered hash is stored, so a key is shown once and never again. The{' '}
-          <Link href="/api-docs" className="underline">
-            API reference
-          </Link>{' '}
-          covers where to send one and what the endpoint expects.
+          Keys let your own code and tools call this deployment from outside.
+          A key is <strong>shown once, when it is created</strong> — only a
+          one-way hash is stored, so a lost key is replaced rather than
+          recovered. Each key is scoped to the capabilities it may ask for;
+          issue the narrowest set that does the job, since a key that can reach
+          everything is worth more to whoever finds it.
         </p>
       </div>
       <ApiKeyTable />
+      <RelatedScreens
+        items={[
+          {
+            href: '/api-docs',
+            label: 'API reference',
+            note: 'where to send a key and what a request looks like, rendered from this deployment',
+          },
+          {
+            href: '/agent-setup',
+            label: 'Connect an agent',
+            note: 'the same key wired into a coding agent, step by step, including the two limits below that are wrong by default for that use',
+          },
+          {
+            href: '/usage',
+            label: 'Usage',
+            note: 'what has actually been spent against a key, in the same token figure its daily quota is measured in',
+          },
+          {
+            href: '/routing-policies',
+            label: 'Routing policies',
+            requires: 'routing:read',
+            note: 'a key can only be scoped to a capability that has a policy, so a capability has to exist there before it can be granted here',
+          },
+        ]}
+      />
     </div>
   );
 }
