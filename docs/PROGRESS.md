@@ -263,55 +263,102 @@ stays at 32768: different attention, nobody has measured it.
 **What binds next is time, and it is not in this repository.** Prompt
 evaluation emits no bytes, and that 32231-token prompt was 273 seconds of
 silence — 117.9 tok/s, the figure recorded 2026-07-27, still holding. nginx
-`proxy_read_timeout` on the inference host is `300s`, an open ROADMAP item
-since before any of this. **27 seconds of headroom, about 3200 prompt tokens.**
-Past it the connection resets mid-evaluation with nothing in any application
-log. Ollama's prefix cache has been hiding it, since a continuing conversation
-re-evaluates only its new tokens — so it is a first turn or a cache miss that
-pays the full cost. The window fix buys less than it appears to until that
-value reaches `1560s`.
+~~`proxy_read_timeout` on the inference host is `300s`, so that is 27 seconds
+of headroom.~~ **Struck the same day.** The live value is `86400s`, read from
+the running configuration on 2026-08-07 and recorded in this file; `ROADMAP.md`
+was never updated and was trusted over it. Nothing is close to cutting these
+requests, and the truncation above had nothing to do with nginx — see the next
+section, which is about how that was got wrong rather than about a timeout.
+What survives is the cost itself: Ollama's prefix cache hides it, since a
+continuing conversation re-evaluates only its new tokens, so it is a first turn
+or a cache miss that pays the full 273 seconds.
 
-### The nginx timeout, and changing what a number is derived from
+### The nginx timeout, and deriving a number instead of reading it
 
-`3600s` was requested from the administrator for `proxy_read_timeout` on both
-hosts, replacing the `1560s` the design had named. **The change worth recording
-is not the value but what it is fitted to.**
+**Everything this section originally said was built on a value this repository
+had already recorded as wrong, and the request went to the administrator before
+that was noticed.** Kept rather than deleted, because the mistake is more
+instructive than the change was.
 
-`1560s` was the platform's own worst case for one request — `REQUEST_TIMEOUT_
-SECONDS` 600 reading plus `GENERATION_DEADLINE_SECONDS` 900 writing — plus a
-minute. Defensible, and still the wrong kind of number: it ties the outer limit
-to inner ones, so every future change to an inner one expires it silently, on
-the one machine nothing in this repository can test. It had moved the coupling
-down a level rather than removing it. What breaks when `MAX_CONTEXT_LENGTH`
-next doubles is `REQUEST_TIMEOUT_SECONDS`, and nginx would then have to follow
-again — the same sequence as 2026-08-05, one step further along.
+What was believed: `proxy_read_timeout` on the inference host is `300s`; a real
+Codex prompt evaluation had just been measured at 273 seconds; therefore the
+platform was 27 seconds from having long turns cut, and the administrator
+should raise the value. `3600s` was proposed and asked for, derived — carefully
+— from the model's architectural maximum rather than from any tunable, on the
+reasoning that a bound fitted to a setting expires whenever the setting moves.
 
-`3600s` is fitted instead to the longest silence this hardware can ever
-produce: `gemma4:31b-it-q8_0` tops out at its architectural maximum of 262144
-tokens, and at the measured 117.9 tok/s that evaluates in 2224 seconds. **No
-settings file can invalidate that number.** It is not removed altogether
-because `proxy_read_timeout` is what reclaims a connection from a genuinely
-hung upstream, and nginx worker connections are finite — unbounded turns a hang
-into pinned connections, which is a resource a caller who can stall a request
-gets to consume. At `3600s` normal operation never reaches it, since the
-platform's own 1500-second worst case fires first, so raising it *strengthens*
-the arrangement §5 already wanted rather than weakening it.
+What is true: **the live value is `86400s`.** It was read directly from the
+running configuration on 2026-08-07, after shell access to the proxy host
+settled the duplicate-server-block question, and recorded in this file that day
+— "far above the 1560s that request was about to ask for; the timeout defect
+corrected in `deployment.md` was real against the spec and had never been real
+in the deployment". `ROADMAP.md` still said `300s`. **The header of this file
+says, in as many words, that when the two disagree the other file is the wrong
+one.** The line was read at the start of the session that then trusted
+`ROADMAP.md` anyway.
 
-Expect one consequence: on the management host the proxy is now looser than
-the frontend's own `experimental.proxyTimeout` (1560000 ms), so Next is what
-cuts a stalled request there and an nginx value of `3600s` is not observable
-from that host. The inference host proxies the gateway directly.
+Three things worth keeping from it:
 
-**`client_max_body_size 10m` on the inference host was raised and deliberately
-deferred** the same day. It remains open (ROADMAP, "External coordination");
-the application-side ceiling that landed 2026-08-07 is what is actually holding
-the line, and the two are not redundant — nginx keeps the bytes off the
-machine, the middleware keeps them out of the process.
+- **A request that completes is not evidence about a limit.** The 273-second
+  measurement was offered as "27 seconds of headroom". It shows only that
+  nothing cut the request; it cannot distinguish `300s` from `86400s`. Only a
+  request that runs *past* a suspected limit distinguishes anything, which is
+  the shape any check of an external machine has to take.
+- **Rigour in a derivation does not substitute for reading the value.** The
+  argument for fitting the bound to hardware rather than to settings is sound
+  and is kept in `deployment.md` §5. It was applied to a number that was not in
+  force, which made it worthless — and the more carefully it was argued, the
+  more convincing the wrong conclusion became.
+- **This is the same failure as the other three in this entry, in a fourth
+  place.** The runbook stated a setting nobody had retried; `/agent-setup`
+  stated a limit nobody had tried; the assistant pointed at a screen it could
+  not see. Here a plan file stated a value nobody had re-read. Every one of
+  them was a document confidently describing a world it had stopped checking.
 
-**The item stays open until it is measured, not until it is reported.**
-`nginx -T` runs on somebody else's machine, which is how this line survived on
-assurances before; from here the check is a request whose prompt evaluation
-exceeds 300 seconds, and whether it answers or resets.
+**What is actually worth doing is the opposite of what was asked for**, and it
+is small. `86400s` is a day, which is generous to the point of not being a
+backstop: `proxy_read_timeout` is what reclaims a connection from a genuinely
+hung upstream, and worker connections are finite. `3600s` restores that while
+staying far above the 556-second worst case a full `MAX_CONTEXT_LENGTH` prompt
+costs. **No symptom is waiting on it**, and whoever is asked should be told so;
+an urgent request with nothing behind it spends credibility the next real one
+will need.
+
+`client_max_body_size` on that block is `512m`, not unset — same reading, same
+date, same failure to propagate. The 200 MiB that got through came from NPM's
+block, which set none and has since been disabled. It was deliberately deferred
+on 2026-08-09, and the deferral is better founded than the reasoning it was
+made on: there is no hole, only a value above the intended `10m`.
+
+**Settled the same day by running `nginx -T`, which is what should have
+happened first.** The operator had the opposite recollection — `300s`, matching
+`ROADMAP.md` — so rather than argue from two documents, the running
+configuration was read:
+
+| | `llm.rcsl.online` | `llmapi.rcsl.online` |
+|---|---|---|
+| `proxy_read_timeout` | `86400s` | `86400s` |
+| `proxy_buffering` | `off` | `off` |
+| `client_max_body_size` | `64m`, as designed | `512m`, against `10m` designed |
+
+Both from `data/nginx/custom/http.conf`. The three other timeouts on that
+machine — `3600s`, `86400s`, `24h` under `data/nginx/proxy_host/` — belong to
+unrelated proxy hosts and were the sort of near-miss that makes a `grep` alone
+untrustworthy.
+
+**One command closed three things that had been open for weeks, none of which
+it was run to answer.** `proxy_buffering off` is confirmed live on both hosts
+for the first time. `server_name llmapi.rcsl.online` appears exactly once and
+`nginx -t` reports no `conflicting server name`, so the duplicate-block repair
+of 2026-08-07 holds and has not regressed — a thing no external probe could
+establish. And the management host's directives, which this entry had just
+finished describing as never read, are now known.
+
+That is the part worth keeping. **The value was argued about across three
+documents and two people for most of a day, and reading it took one command on
+a machine both had access to.** Every wrong belief this repository has held
+about that host — missing headers, `300s`, an unset body limit — was corrected
+by reading it, and none was ever corrected by reasoning about it.
 
 ### Two documentation failures of the same kind, in opposite directions
 

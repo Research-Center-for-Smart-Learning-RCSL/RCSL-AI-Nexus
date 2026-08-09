@@ -318,34 +318,50 @@ the model's `context_length` was the tell, and `completed` is `true` on those
 rows because the cut happened inside the runtime rather than at the platform's
 own ceiling — which is itself worth knowing when reading the table.
 
-### 5.2 What binds next is time, not tokens, and it is outside this repository
+### 5.2 Prompt evaluation is slow, and nginx is not the thing that cuts it
 
 Raising the window moves the constraint rather than removing it. Prompt
 evaluation produces no bytes at all while it runs, and the 32231-token prompt
 above took **273 seconds** of silence — 117.9 tok/s, the same figure
-[`PROGRESS.md`](../PROGRESS.md) recorded on 2026-07-27.
+[`PROGRESS.md`](../PROGRESS.md) recorded on 2026-07-27. A first turn or a cache
+miss pays that in full; a continuing conversation re-evaluates only its new
+tokens, which is what makes the cost easy to miss.
 
-**nginx `proxy_read_timeout` on the inference host is still `300s`**
-([ROADMAP.md](../ROADMAP.md), "External coordination"). That is 27 seconds of
-headroom, or about 3200 more prompt tokens. Past it the connection is reset
-mid-evaluation, with nothing in any application log, and the agent sees a
-transport error rather than any code this platform chose.
+> **This section said, until 2026-08-09, that `proxy_read_timeout` on the
+> inference host was `300s` and that a long prompt was 27 seconds from being
+> cut. That was wrong, and it was already recorded as wrong in this
+> repository.** On 2026-08-07, after shell access to the proxy host, the
+> running configuration for `llmapi.rcsl.online` was read directly: its
+> `proxy_read_timeout` is **86400s** ([`PROGRESS.md`](../PROGRESS.md),
+> 2026-08-07). The `300s` figure came from [`ROADMAP.md`](../ROADMAP.md), which
+> was never updated after that reading — and `PROGRESS.md` states in its own
+> header that when the two disagree, it is the other file that is wrong.
+>
+> **The 273-second measurement was offered as evidence and is not.** That
+> request *completed*. A request that finishes tells you the limit was not
+> reached; it cannot distinguish `300s` from `86400s`. Only a request that runs
+> **past** a suspected limit distinguishes anything.
 
-So the window fix buys less than it looks like it should until that value is
-raised. **`3600s` was requested from the administrator on 2026-08-09 and is not
-yet confirmed.** It is deliberately larger than the `1560s` the design used to
-name: that figure was the platform's own worst case plus a minute, which tied
-the outer limit to inner ones and would expire again the next time one of them
-moved. `3600s` is fitted to the longest silence this hardware can produce at
-all — a full 262144-token context at 117.9 tok/s is 2224 seconds — so it
-survives any settings change, while still being low enough to reclaim a
-connection from a hung upstream. [`deployment.md`](../architecture/deployment.md)
-§5 carries the derivation.
+So there is no cliff at 300 seconds, and the truncation in 5.1 had nothing to
+do with nginx. The correct statement is narrower: **prompt evaluation is the
+dominant cost of a long agent turn, and no proxy timeout on this deployment is
+currently close to binding it.**
 
-**Until it is confirmed by measurement rather than by report, assume `300s`.**
-Ollama's prefix cache is what has been hiding the problem — a continuing
-conversation re-evaluates only its new tokens, so it is the *first* turn of a
-long one, or a cache miss, that pays the full 273 seconds.
+What is still worth doing is the opposite of what this section used to ask for.
+`86400s` is a day, which is generous to the point of not being a backstop at
+all: `proxy_read_timeout` is what reclaims a connection from an upstream that
+has genuinely hung, and worker connections are finite. Lowering it to `3600s`
+— comfortably above the 556-second worst case a full `MAX_CONTEXT_LENGTH`
+prompt costs, and above the platform's own 1500-second per-request budget —
+would restore that property. **It is a tidy-up with no user-visible symptom
+behind it, not a fix**, and it should be described that way to whoever owns
+that machine.
+
+Both hosts read `86400s`, confirmed by `nginx -T` on 2026-08-09 — including
+the management host, whose directives had never been read before that. The same
+command showed `proxy_buffering off` live on both, and `server_name
+llmapi.rcsl.online` appearing exactly once with no conflict warning, so the
+duplicate-block repair of 2026-08-07 is holding.
 
 ## 6. Debugging an integration
 
