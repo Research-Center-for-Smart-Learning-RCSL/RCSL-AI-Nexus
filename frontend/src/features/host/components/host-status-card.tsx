@@ -1,5 +1,7 @@
 'use client';
 
+import Link from 'next/link';
+
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Spinner } from '@/components/composed/spinner';
@@ -129,7 +131,14 @@ export function HostStatusCard() {
         Read from the Mac itself by a launchd agent, not from inside a container:
         a container here would describe the Linux VM it runs in. The memory
         budget that governs model loads still uses the configured 64 GB rather
-        than this figure.
+        than this figure.{' '}
+        <Link
+          href="/nodes/numbers"
+          className="underline underline-offset-2 hover:text-foreground"
+        >
+          Where these numbers come from
+        </Link>
+        .
       </p>
     </div>
   );

@@ -222,6 +222,12 @@ server {
 
         # Required for SSE. Without these, streamed output is buffered until
         # the response completes and appears to users as "the model is slow".
+        #
+        # `3600s` is the target; the machine currently runs `86400s` on both
+        # hosts (confirmed by `nginx -T`, 2026-08-09) and nothing is waiting on
+        # the difference. Stated here because a template that silently disagrees
+        # with the deployment is how `300s` survived in ROADMAP.md for two days
+        # after the real value had been read.
         proxy_buffering    off;
         proxy_read_timeout 3600s;
         proxy_http_version 1.1;
@@ -235,13 +241,22 @@ server {
 
 It was correct when written: `MAX_CONTEXT_LENGTH` was 32768, so the worst silence was 278 seconds and fit inside 300. **The ceiling doubled on 2026-08-05 and this file was not one of the places that got updated.** `config.py` already says those values "are one decision and have to be changed together" and names two readers; nginx is the third, and it is the one nobody can see from the repository.
 
-**`3600s`, and deliberately not fitted to any value in this repository (2026-08-09).** The published figure was `1560s`: the platform's own worst case for one request — `REQUEST_TIMEOUT_SECONDS` 600 reading plus `GENERATION_DEADLINE_SECONDS` 900 writing — plus a minute, matching the frontend's `experimental.proxyTimeout`. That was a defensible number and it was still the wrong *kind* of number. Fitting the outer limit to the inner ones means every future change to an inner one silently expires it, on the one machine no test here can reach; `1560s` had simply moved the coupling down a level rather than removing it, since what breaks when `MAX_CONTEXT_LENGTH` next doubles is `REQUEST_TIMEOUT_SECONDS`, and nginx then has to follow again.
+**What is actually running is `86400s` on both hosts, confirmed by `nginx -T` on 2026-08-09.** This section did not say so until that day, and the reading is not new — `llmapi`'s value was read on 2026-08-07 and recorded in [PROGRESS.md](../PROGRESS.md); it simply never reached [ROADMAP.md](../ROADMAP.md), which went on saying `300s`. The 2026-08-09 run settled it against the running configuration rather than against either file:
 
-So it is now fitted to **what this hardware can ever legitimately go quiet for**, which nothing in a settings file can change: `gemma4:31b-it-q8_0` tops out at its own architectural maximum of 262144 tokens, and at the measured 117.9 tok/s a full evaluation of that is `262144 / 117.9 = 2224` seconds. `3600s` clears it by 60%. You cannot construct a longer honest silence here without changing the model.
+| | `llm.rcsl.online` | `llmapi.rcsl.online` |
+|---|---|---|
+| `proxy_read_timeout` | `86400s` | `86400s` |
+| `proxy_buffering` | `off` | `off` |
+| `client_max_body_size` | `64m` — matches this section | `512m` — this section says `10m` |
+| defined in | `data/nginx/custom/http.conf` | `data/nginx/custom/http.conf` |
 
-**It stays a real backstop, and that is why it is not simply removed.** `proxy_read_timeout` is what reclaims the connection when the upstream has genuinely hung, and nginx worker connections are finite — an unbounded value turns a hung gateway into pinned connections, which is a resource an attacker who can stall a request gets to consume. At `3600s` a hang is reclaimed in an hour while normal operation never reaches it, because the platform's own 1500-second worst case fires first. Raising it therefore *strengthens* the arrangement this section already wanted — the limit that fires is always the platform's own, the same trade `upload_policy.py` documents for body size — rather than weakening it.
+**Three things that were open closed with the same command.** `proxy_buffering off` is confirmed live on both hosts for the first time. `server_name llmapi.rcsl.online` appears exactly once and `nginx -t` reports no `conflicting server name`, so the duplicate-block repair of 2026-08-07 holds and has not regressed — previously unverifiable from outside. And **the management host's directives had never been read at all**; they are now known rather than assumed, which was the last place in this section where a value was being taken on trust. The timeout defect this section spent three paragraphs deriving **was real against the specification and had never once been real in the deployment** — the same duplicate-server-block story as the headers, one file further on. Read the derivation above as the reasoning for a target, not as a description of a fault.
 
-One consequence worth expecting: on the management host the proxy is now looser than the frontend's `experimental.proxyTimeout` (`next.config.js`, 1560000 ms), so Next is what cuts a stalled request there. That is the inner limit firing, which is correct, but it means an nginx value raised to `3600s` will not be observable from that host. The inference host proxies the gateway directly and has no such layer.
+**The remaining case is for lowering it, and it is weak on purpose.** A day is generous to the point of not being a backstop: `proxy_read_timeout` is what reclaims a connection from an upstream that has genuinely hung, and nginx worker connections are finite, so an effectively unbounded value turns a hang into pinned connections. `3600s` restores that property while staying far above anything legitimate. **The comparison to make is against another between-reads bound, not against a whole-request one**: `proxy_read_timeout` limits the gap between bytes, so its counterpart is `REQUEST_TIMEOUT_SECONDS` (600), inside which the longest honest silence — a full `MAX_CONTEXT_LENGTH` prompt at `65536 / 117.9 = 556` seconds — already has to fit. The 1500-second figure below is the sum of that and the generation deadline, which is a budget for a whole request and bounds nothing about a single gap; setting them side by side is the same conflation this section warns about two paragraphs up. **Nothing user-visible is waiting on this**, and whoever is asked should be told that; an urgent-sounding request for a change with no symptom behind it spends credibility that the next real one will need.
+
+**A note on how the wrong number survived.** `1560s` was derived from the platform's own limits, and the 2026-08-09 revision proposed `3600s` derived instead from the model's architectural maximum — `262144 / 117.9 = 2224` seconds — on the reasoning that a bound fitted to a tunable expires whenever the tunable moves. That reasoning is worth keeping for choosing a target, with one qualification it did not carry: **2224 seconds is not a silence this deployment can currently produce**, because `MAX_CONTEXT_LENGTH` refuses a prompt that large with a `413` and `REQUEST_TIMEOUT_SECONDS` would cut the gap at 600 anyway. It is the bound that survives *changing* those two, which is a different and much weaker claim than the one it was written as. What the revision did not do, and what mattered more than any of this, was check whether the value being "corrected" was the value in force. **It was not, and this repository already knew: the reading was in `PROGRESS.md` and had never been propagated to `ROADMAP.md`, which is the direction `PROGRESS.md`'s own header says to distrust.** Deriving a number more rigorously is worth nothing next to reading the one that is live.
+
+**The management host reads `86400s` and `64m`**, the latter exactly as specified above. Its value could not have been learned from outside in any case: the frontend's own `experimental.proxyTimeout` (`next.config.js`, 1560000 ms) sits in front of it and cuts a stalled request first, which is the inner limit firing and is correct. Reading the file was the only way, and it took one command.
 
 ## 6. What Is Lost Without a CDN, and Who Covers It
 
