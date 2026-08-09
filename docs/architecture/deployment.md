@@ -193,7 +193,7 @@ server {
 
         # The admin chat endpoint streams
         proxy_buffering    off;
-        proxy_read_timeout 1560s;
+        proxy_read_timeout 3600s;
         proxy_http_version 1.1;
     }
 }
@@ -223,7 +223,7 @@ server {
         # Required for SSE. Without these, streamed output is buffered until
         # the response completes and appears to users as "the model is slow".
         proxy_buffering    off;
-        proxy_read_timeout 1560s;
+        proxy_read_timeout 3600s;
         proxy_http_version 1.1;
     }
 }
@@ -233,7 +233,15 @@ server {
 
 **`proxy_read_timeout` was `300s` here until 2026-08-07, and that number became wrong without anyone touching it.** It bounds the gap between reads, and **prompt evaluation produces no bytes at all** — so the longest legitimate silence is a full context being read, which `config.py` sizes at `65536 / 117.9 = 556` seconds against the platform's own 600-second per-read ceiling. `300s` cuts that in half, and the cut arrives as a reset with nothing in any application log, which is the failure mode this whole section exists to avoid.
 
-It was correct when written: `MAX_CONTEXT_LENGTH` was 32768, so the worst silence was 278 seconds and fit inside 300. **The ceiling doubled on 2026-08-05 and this file was not one of the places that got updated.** `config.py` already says those values "are one decision and have to be changed together" and names two readers; nginx is the third, and it is the one nobody can see from the repository. `1560s` matches the frontend's `experimental.proxyTimeout` and is above the 1500-second worst case for one request, so the limit that fires is always the platform's own — the same arrangement `upload_policy.py` documents for body size.
+It was correct when written: `MAX_CONTEXT_LENGTH` was 32768, so the worst silence was 278 seconds and fit inside 300. **The ceiling doubled on 2026-08-05 and this file was not one of the places that got updated.** `config.py` already says those values "are one decision and have to be changed together" and names two readers; nginx is the third, and it is the one nobody can see from the repository.
+
+**`3600s`, and deliberately not fitted to any value in this repository (2026-08-09).** The published figure was `1560s`: the platform's own worst case for one request — `REQUEST_TIMEOUT_SECONDS` 600 reading plus `GENERATION_DEADLINE_SECONDS` 900 writing — plus a minute, matching the frontend's `experimental.proxyTimeout`. That was a defensible number and it was still the wrong *kind* of number. Fitting the outer limit to the inner ones means every future change to an inner one silently expires it, on the one machine no test here can reach; `1560s` had simply moved the coupling down a level rather than removing it, since what breaks when `MAX_CONTEXT_LENGTH` next doubles is `REQUEST_TIMEOUT_SECONDS`, and nginx then has to follow again.
+
+So it is now fitted to **what this hardware can ever legitimately go quiet for**, which nothing in a settings file can change: `gemma4:31b-it-q8_0` tops out at its own architectural maximum of 262144 tokens, and at the measured 117.9 tok/s a full evaluation of that is `262144 / 117.9 = 2224` seconds. `3600s` clears it by 60%. You cannot construct a longer honest silence here without changing the model.
+
+**It stays a real backstop, and that is why it is not simply removed.** `proxy_read_timeout` is what reclaims the connection when the upstream has genuinely hung, and nginx worker connections are finite — an unbounded value turns a hung gateway into pinned connections, which is a resource an attacker who can stall a request gets to consume. At `3600s` a hang is reclaimed in an hour while normal operation never reaches it, because the platform's own 1500-second worst case fires first. Raising it therefore *strengthens* the arrangement this section already wanted — the limit that fires is always the platform's own, the same trade `upload_policy.py` documents for body size — rather than weakening it.
+
+One consequence worth expecting: on the management host the proxy is now looser than the frontend's `experimental.proxyTimeout` (`next.config.js`, 1560000 ms), so Next is what cuts a stalled request there. That is the inner limit firing, which is correct, but it means an nginx value raised to `3600s` will not be observable from that host. The inference host proxies the gateway directly and has no such layer.
 
 ## 6. What Is Lost Without a CDN, and Who Covers It
 

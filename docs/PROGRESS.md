@@ -271,6 +271,48 @@ re-evaluates only its new tokens — so it is a first turn or a cache miss that
 pays the full cost. The window fix buys less than it appears to until that
 value reaches `1560s`.
 
+### The nginx timeout, and changing what a number is derived from
+
+`3600s` was requested from the administrator for `proxy_read_timeout` on both
+hosts, replacing the `1560s` the design had named. **The change worth recording
+is not the value but what it is fitted to.**
+
+`1560s` was the platform's own worst case for one request — `REQUEST_TIMEOUT_
+SECONDS` 600 reading plus `GENERATION_DEADLINE_SECONDS` 900 writing — plus a
+minute. Defensible, and still the wrong kind of number: it ties the outer limit
+to inner ones, so every future change to an inner one expires it silently, on
+the one machine nothing in this repository can test. It had moved the coupling
+down a level rather than removing it. What breaks when `MAX_CONTEXT_LENGTH`
+next doubles is `REQUEST_TIMEOUT_SECONDS`, and nginx would then have to follow
+again — the same sequence as 2026-08-05, one step further along.
+
+`3600s` is fitted instead to the longest silence this hardware can ever
+produce: `gemma4:31b-it-q8_0` tops out at its architectural maximum of 262144
+tokens, and at the measured 117.9 tok/s that evaluates in 2224 seconds. **No
+settings file can invalidate that number.** It is not removed altogether
+because `proxy_read_timeout` is what reclaims a connection from a genuinely
+hung upstream, and nginx worker connections are finite — unbounded turns a hang
+into pinned connections, which is a resource a caller who can stall a request
+gets to consume. At `3600s` normal operation never reaches it, since the
+platform's own 1500-second worst case fires first, so raising it *strengthens*
+the arrangement §5 already wanted rather than weakening it.
+
+Expect one consequence: on the management host the proxy is now looser than
+the frontend's own `experimental.proxyTimeout` (1560000 ms), so Next is what
+cuts a stalled request there and an nginx value of `3600s` is not observable
+from that host. The inference host proxies the gateway directly.
+
+**`client_max_body_size 10m` on the inference host was raised and deliberately
+deferred** the same day. It remains open (ROADMAP, "External coordination");
+the application-side ceiling that landed 2026-08-07 is what is actually holding
+the line, and the two are not redundant — nginx keeps the bytes off the
+machine, the middleware keeps them out of the process.
+
+**The item stays open until it is measured, not until it is reported.**
+`nginx -T` runs on somebody else's machine, which is how this line survived on
+assurances before; from here the check is a request whose prompt evaluation
+exceeds 300 seconds, and whether it answers or resets.
+
 ### Two documentation failures of the same kind, in opposite directions
 
 **`/agent-setup` said Codex in the ChatGPT desktop app was "Not possible".** It
