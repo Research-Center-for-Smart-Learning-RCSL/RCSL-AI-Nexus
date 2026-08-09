@@ -332,9 +332,18 @@ mid-evaluation, with nothing in any application log, and the agent sees a
 transport error rather than any code this platform chose.
 
 So the window fix buys less than it looks like it should until that value is
-raised to `1560s`. It is an open item on somebody else's machine, it predates
-this finding, and this is the measurement that says when it starts to matter:
-now. Ollama's prefix cache is what has been hiding it — a continuing
+raised. **`3600s` was requested from the administrator on 2026-08-09 and is not
+yet confirmed.** It is deliberately larger than the `1560s` the design used to
+name: that figure was the platform's own worst case plus a minute, which tied
+the outer limit to inner ones and would expire again the next time one of them
+moved. `3600s` is fitted to the longest silence this hardware can produce at
+all — a full 262144-token context at 117.9 tok/s is 2224 seconds — so it
+survives any settings change, while still being low enough to reclaim a
+connection from a hung upstream. [`deployment.md`](../architecture/deployment.md)
+§5 carries the derivation.
+
+**Until it is confirmed by measurement rather than by report, assume `300s`.**
+Ollama's prefix cache is what has been hiding the problem — a continuing
 conversation re-evaluates only its new tokens, so it is the *first* turn of a
 long one, or a cache miss, that pays the full 273 seconds.
 
