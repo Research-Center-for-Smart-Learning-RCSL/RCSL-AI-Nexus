@@ -2,8 +2,11 @@
 
 import Link from 'next/link';
 
+import { useRef } from 'react';
+
 import { Badge } from '@/components/ui/badge';
 import { CodeBlock } from '@/components/composed/code-block';
+import { ExportMarkdown } from '@/components/composed/export-markdown';
 import { useGatewayInfo } from '@/features/gateway/hooks/use-gateway';
 import { useAssistantSurface } from '@/features/assistant/context';
 
@@ -57,9 +60,20 @@ export function ApiReference() {
   const baseUrl = data?.base_url ?? 'https://<gateway>';
   const capabilities = data?.capabilities ?? [];
   const sample = capabilities[0] ?? 'chat';
+  // As on the agent-setup page: generated from what is rendered, so the origin
+  // and capability list in the export are this deployment's own.
+  const content = useRef<HTMLDivElement>(null);
 
   return (
     <div className="space-y-8">
+      <div className="flex justify-end" data-md-skip>
+        <ExportMarkdown
+          contentRef={content}
+          title="API reference"
+          filename="rcsl-ai-nexus-api-reference"
+        />
+      </div>
+      <div ref={content} className="space-y-8">
       {/* An inline notice, not an early return. Only the origin and the
           capability badges come from the network; the header format, the
           capability convention, the request fields and the error table are the
@@ -855,6 +869,7 @@ data: [DONE]`}
           rather than left to be discovered.
         </p>
       </section>
+      </div>
     </div>
   );
 }
