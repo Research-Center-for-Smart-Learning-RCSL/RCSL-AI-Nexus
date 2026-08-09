@@ -1398,7 +1398,7 @@ export interface components {
              * @default other
              * @enum {string}
              */
-            surface: "api_keys.list" | "api_keys.create" | "api_keys.edit" | "api_docs" | "other";
+            surface: "api_keys.list" | "api_keys.create" | "api_keys.edit" | "api_docs" | "agent_setup" | "other";
         };
         /** AuditEntryResponse */
         AuditEntryResponse: {

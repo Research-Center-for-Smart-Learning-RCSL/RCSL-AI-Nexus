@@ -320,6 +320,7 @@ async def _collect(
     calls: list[ToolCall] = []
     output_tokens = 0
     input_tokens = 0
+    finish_reason: str | None = None
 
     async with aclosing(generation) as stream:
         async for chunk in stream:
@@ -328,12 +329,21 @@ async def _collect(
             output_tokens += chunk.token_count
             if chunk.prompt_tokens:
                 input_tokens = chunk.prompt_tokens
+            if chunk.finish_reason:
+                finish_reason = chunk.finish_reason
+
+    # The same correction the streaming path carries, for the same reason: this
+    # function hardcoded `status="completed"`, so a reply cut off at the
+    # context window came back declared whole. See `responses_sse` for why
+    # `"length"` is the only reason that means truncation.
+    truncated = finish_reason == "length"
 
     output: list[OutputMessage | OutputFunctionCall] = []
     if text:
         output.append(
             OutputMessage(
                 id=f"msg_{response_id[5:]}",
+                status="incomplete" if truncated else "completed",
                 content=[OutputTextPart(text=text)],
             )
         )
@@ -350,7 +360,7 @@ async def _collect(
     return ResponsePayload(
         id=response_id,
         created_at=created,
-        status="completed",
+        status="incomplete" if truncated else "completed",
         model=model,
         output=output,
         usage=ResponseUsage(
@@ -358,4 +368,5 @@ async def _collect(
             output_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
         ),
+        incomplete_details={"reason": "max_output_tokens"} if truncated else None,
     )

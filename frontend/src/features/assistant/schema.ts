@@ -29,6 +29,7 @@ export const assistSurfaceSchema = z.enum([
   'api_keys.create',
   'api_keys.edit',
   'api_docs',
+  'agent_setup',
   'other',
 ]);
 export type AssistSurface = z.infer<typeof assistSurfaceSchema>;

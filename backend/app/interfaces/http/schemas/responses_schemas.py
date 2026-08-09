@@ -220,7 +220,11 @@ class OutputMessage(BaseModel):
     type: Literal["message"] = "message"
     id: str
     role: Literal["assistant"] = "assistant"
-    status: Literal["completed"] = "completed"
+    status: Literal["completed", "incomplete"] = "completed"
+    """An item's own status, which is not always the response's: a message
+    closed because a tool call began is complete, in a response that is still
+    running. `"incomplete"` is the one that was missing — it marks the text
+    that was cut off, next to the `incomplete_details` on the response."""
     content: list[OutputTextPart]
 
 

@@ -11,6 +11,14 @@ protocols disagree about the thing `sse.py` exists to get right:
   after a failure would be the same lie `sse.py`'s docstring warns about, in
   the other protocol's vocabulary.
 
+**There are three terminal events, not two** (2026-08-09). `response.incomplete`
+is what a reply that was cut off ends with, and it was missing: this module
+ignored `finish_reason` entirely and called everything that did not raise
+`completed`. A stream can end badly without failing, and that is the common
+case rather than the exotic one — the context window fills, the token ceiling
+binds, the generation deadline fires — so the event that was absent is the one
+an agent client meets most.
+
 Everything else in that module's contract is kept, because it is about
 streaming rather than about the envelope: the first chunk is pulled before the
 response object exists (see `sse.prime`), the generator is closed with
@@ -69,12 +77,12 @@ def event(name: str, payload: dict[str, object]) -> str:
     return f"event: {name}\ndata: {json.dumps(body, separators=(',', ':'))}\n\n"
 
 
-def _message_item(item_id: str, text: str) -> dict[str, object]:
+def _message_item(item_id: str, text: str, status: str = "completed") -> dict[str, object]:
     return {
         "type": "message",
         "id": item_id,
         "role": "assistant",
-        "status": "completed",
+        "status": status,
         "content": [{"type": "output_text", "text": text, "annotations": []}],
     }
 
@@ -111,6 +119,19 @@ async def _events(
     message_text = ""
     completion_tokens = 0
     prompt_tokens = 0
+    finish_reason: str | None = None
+    """The last reason the use case reported, which decides the terminal event.
+
+    Read here rather than ignored, which is what this module did until
+    2026-08-09. `finish_reason: "length"` is how both runtimes and this
+    platform's own ceiling say an answer was cut off, `/v1/chat/completions`
+    forwards it, and dropping it here meant a truncated reply arrived as
+    `response.completed` — the same lie the failure path above is written to
+    avoid, told about the other way a stream can end badly. A real Codex
+    session met it: a 32231-token prompt against a 32768-token window left 537
+    tokens to answer in, the model stopped mid-sentence, and the client was
+    told the reply was whole. See the runbook, section 5.1.
+    """
 
     def base(status: str) -> dict[str, object]:
         return {
@@ -121,8 +142,14 @@ async def _events(
             "model": model,
         }
 
-    def close_message(item_id: str, text: str, index: int) -> list[str]:
-        """Both halves of ending a text item, in the order a client expects."""
+    def close_message(item_id: str, text: str, index: int, status: str = "completed") -> list[str]:
+        """Both halves of ending a text item, in the order a client expects.
+
+        `status` is the item's own, which is not always the response's. A
+        message closed because a tool call began is complete as a message, so
+        the default holds at the two call sites inside the loop; only the final
+        close, below, can be the one that was cut off.
+        """
         return [
             event(
                 "response.output_text.done",
@@ -139,7 +166,7 @@ async def _events(
                 {
                     "sequence_number": seq(),
                     "output_index": index,
-                    "item": _message_item(item_id, text),
+                    "item": _message_item(item_id, text, status),
                 },
             ),
         ]
@@ -158,11 +185,14 @@ async def _events(
         carrying both must not lose either.
         """
         nonlocal message_id, message_text, output_index, completion_tokens, prompt_tokens
+        nonlocal finish_reason
         completion_tokens += chunk.token_count
         # Assigned, not summed: a runtime reports it once, on the terminal
         # chunk, for the whole request.
         if chunk.prompt_tokens:
             prompt_tokens = chunk.prompt_tokens
+        if chunk.finish_reason:
+            finish_reason = chunk.finish_reason
 
         out: list[str] = []
 
@@ -289,25 +319,45 @@ async def _events(
         )
         return
 
+    # A stream that ran out of room, rather than one that finished. This
+    # protocol spells that `response.incomplete`, and the distinction is the
+    # whole point of reading `finish_reason`: a client that sees `completed`
+    # renders half a sentence as the answer, while one that sees `incomplete`
+    # can say so, or continue the turn itself. `"length"` is the only reason
+    # either runtime or this platform's own ceiling produces; anything else
+    # ended normally.
+    truncated = finish_reason == "length"
+
     if message_id is not None:
-        for frame in close_message(message_id, message_text, output_index):
+        for frame in close_message(
+            message_id, message_text, output_index, "incomplete" if truncated else "completed"
+        ):
             yield frame
-        output.append(_message_item(message_id, message_text))
+        output.append(
+            _message_item(message_id, message_text, "incomplete" if truncated else "completed")
+        )
+
+    terminal: dict[str, object] = {
+        **base("incomplete" if truncated else "completed"),
+        "output": output,
+        "usage": {
+            "input_tokens": prompt_tokens,
+            "output_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
+    if truncated:
+        # `max_output_tokens` is this API's vocabulary for "the model was cut
+        # off", and the reason clients branch on. It is the honest label even
+        # when the ceiling that bound the answer was the context window rather
+        # than the caller's own `max_output_tokens`: from here the two are the
+        # same event, and inventing a reason outside the enumeration would
+        # leave a client with a value it has no branch for.
+        terminal["incomplete_details"] = {"reason": "max_output_tokens"}
 
     yield event(
-        "response.completed",
-        {
-            "sequence_number": seq(),
-            "response": {
-                **base("completed"),
-                "output": output,
-                "usage": {
-                    "input_tokens": prompt_tokens,
-                    "output_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens,
-                },
-            },
-        },
+        "response.incomplete" if truncated else "response.completed",
+        {"sequence_number": seq(), "response": terminal},
     )
 
 

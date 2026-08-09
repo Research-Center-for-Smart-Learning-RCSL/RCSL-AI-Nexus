@@ -14,9 +14,17 @@
  * this deployment rather than copied from a client's documentation, which is
  * the distinction that matters: the previous version of these instructions
  * recommended a Codex setting that had been removed six months earlier.
+ *
+ * That distinction cuts the other way too, and did on 2026-08-09. This page
+ * called Codex in the ChatGPT desktop app impossible, which was not a finding
+ * but an assumption filling the space where the CLI had been tested and the
+ * app had not. An operator connected the CLI and the app followed it across on
+ * its own, because both read `~/.codex/config.toml`. **What is written here as
+ * a limit needs testing at least as much as what is written here as a step.**
  */
 
 import { CodeBlock } from '@/components/composed/code-block';
+import { useAssistantSurface } from '@/features/assistant/context';
 import { useGatewayInfo } from '@/features/gateway/hooks/use-gateway';
 
 function Step({
@@ -45,6 +53,11 @@ function Step({
 
 export function AgentSetup() {
   const { data, isLoading } = useGatewayInfo();
+  // The screen the assistant's own instructions send people to, which until
+  // 2026-08-09 registered nothing — so the drawer fell back to `other`, whose
+  // guidance opens "The operator has no settings form open", on the one page
+  // where that is most obviously untrue.
+  useAssistantSurface({ surface: 'agent_setup' });
   const baseUrl = data?.base_url ?? 'https://<gateway>';
   const capabilities = data?.capabilities ?? [];
   // `code` is the capability an agent should use when one exists: it is the one
@@ -235,6 +248,62 @@ wire_api = "responses"`}
       </section>
 
       <section className="space-y-3">
+        <h2 className="font-heading text-base font-semibold">
+          Going back, and keeping both
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          Step 3 changes the client&apos;s <em>default</em>, which is why the
+          desktop app followed it across. Undoing that is a matter of the same
+          file — there is nothing to uninstall, and nothing on this platform to
+          disconnect.
+        </p>
+        <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[11rem_1fr]">
+          <dt className="font-mono text-muted-foreground">go back</dt>
+          <dd>
+            Delete the <code>model</code> and <code>model_provider</code> lines
+            from <code>~/.codex/config.toml</code>. The client returns to its
+            own default. The <code>[model_providers.rcsl]</code> block can stay
+            — it describes a provider, and nothing selects it once those two
+            lines are gone.{' '}
+            <strong>
+              Restart the desktop app afterwards; it reads the file at startup.
+            </strong>{' '}
+            You may need <code>codex login</code> to use OpenAI again, since
+            pointing here never required it.
+          </dd>
+          <dt className="font-mono text-muted-foreground">keep both</dt>
+          <dd>
+            Better than switching back and forth. Put the provider block in{' '}
+            <code>~/.codex/rcsl.config.toml</code> instead, leave{' '}
+            <code>config.toml</code> alone, and run{' '}
+            <CodeBlock code={'codex --profile rcsl'} label="Copy" /> Plain{' '}
+            <code>codex</code> stays on the default. Note this is a{' '}
+            <strong>separate file</strong> per profile in{' '}
+            <code>0.147.0</code>, not a <code>[profiles.x]</code> table inside{' '}
+            <code>config.toml</code> as older guides show — check{' '}
+            <code>codex --help</code> against your own version.
+          </dd>
+          <dt className="font-mono text-muted-foreground">just once</dt>
+          <dd>
+            <CodeBlock
+              code={`codex -c model_provider=rcsl -c model=${agentCapability}`}
+              label="Copy"
+            />
+            Nothing is written to any file. Useful for proving the platform
+            half works without committing the machine to it.
+          </dd>
+          <dt className="font-mono text-muted-foreground">really disconnect</dt>
+          <dd>
+            <strong>Revoke the key</strong>, on API keys. Everything above is a
+            setting on a machine you control, and a copy of the configuration
+            on some other machine keeps working. Revoking is the only one of
+            these that this platform enforces, and the only one that holds if
+            the key has gone somewhere you did not intend.
+          </dd>
+        </dl>
+      </section>
+
+      <section className="space-y-3">
         <h2 className="font-heading text-base font-semibold">Other clients</h2>
         <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[11rem_1fr]">
           <dt className="font-mono text-muted-foreground">Cline, Continue</dt>
@@ -257,12 +326,29 @@ wire_api = "responses"`}
             of the gateway is the only route today.
           </dd>
           <dt className="font-mono text-muted-foreground">
-            Codex in ChatGPT
+            Codex in the ChatGPT app
           </dt>
           <dd>
-            <strong>Not possible.</strong> The hosted version cannot be pointed
-            at a custom endpoint. The CLI and the desktop app read the
-            configuration above; the browser one does not.
+            <strong>Works, and needs no second setup.</strong> The desktop app
+            reads the same <code>~/.codex/config.toml</code> the CLI does, so
+            finishing step 3 points the app at this gateway as well —{' '}
+            <strong>
+              observed on macOS on 2026-08-09: the app switched over on its own,
+              with nothing configured inside it
+            </strong>
+            . An earlier version of this page called that impossible, having
+            tested only the CLI. Confirm it the same way as anything else, on
+            Usage.
+          </dd>
+          <dt className="font-mono text-muted-foreground">
+            Codex on the web
+          </dt>
+          <dd>
+            <strong>Not possible</strong>, and this is the one that genuinely
+            is not. <code>chatgpt.com/codex</code> runs on OpenAI&apos;s
+            machines, reads no file on yours, and has no setting for a custom
+            endpoint. Local surfaces — CLI, IDE extension, desktop app — all
+            read the configuration above; the browser one cannot.
           </dd>
         </dl>
       </section>
@@ -313,6 +399,23 @@ wire_api = "responses"`}
             succeeded and the model simply did not call the tool. Try a
             different model before changing anything else — no amount of client
             configuration fixes it.
+          </dd>
+
+          <dt className="font-mono text-xs text-muted-foreground">
+            The answer stops mid-sentence
+          </dt>
+          <dd>
+            <strong>Fixed on 2026-08-09, in both halves.</strong> A model&apos;s
+            context window holds the prompt and the answer together, and an
+            agent replays the whole conversation every turn — so the room left
+            to answer in shrank as a task went on. Measured here that day: a
+            prompt of 32231 tokens and a reply of 537, against a 32768-token
+            window. The reply was exactly what was left, and the platform
+            reported it as a normal completion, so the client had nothing to
+            show. The window is now 131072 tokens — twice what a caller may
+            send — and a truncated reply now ends as{' '}
+            <code>response.incomplete</code>. If you still see this, it is the
+            output ceiling rather than the window, and the response says so.
           </dd>
 
           <dt className="font-mono text-xs text-muted-foreground">

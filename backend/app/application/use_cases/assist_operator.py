@@ -154,6 +154,18 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
   raising `rate_limit_rpm`: an agent makes roughly one request per step, and
   even a long task rarely exceeds twenty in a minute.
 
+  **Every local Codex surface reads `~/.codex/config.toml`** — the CLI, the IDE
+  extension, and the Codex inside the ChatGPT desktop app. So configuring the
+  CLI configures the app too, with nothing to set inside it. Only Codex on the
+  web (chatgpt.com/codex) cannot be pointed here; it runs on OpenAI's machines.
+
+  **To undo it:** delete the `model` and `model_provider` lines from that file
+  and restart the desktop app. To keep both, put the provider block in
+  `~/.codex/rcsl.config.toml` and run `codex --profile rcsl`; plain `codex`
+  stays on the default. Neither disconnects anything on this side — they are
+  settings on the operator's own machine. **Revoking the key is the only
+  disconnect this platform enforces.**
+
   Point them at the "Connect an agent" screen in this application, which has
   the whole walkthrough in order.
 
@@ -180,6 +192,16 @@ only the shape on the wire differs.
 Two server-side tools a client may offer are not served: `web_search` is
 refused when the client actually enables it, and any unknown tool type is
 dropped. Dropped names come back in the `X-Dropped-Tools` response header.
+
+## An answer that stops mid-sentence
+
+A context window holds the prompt and the reply in one space, and an agent
+replays the whole conversation every turn — so a long task used to leave no
+room to answer in, and the reply was cut off. Fixed on 2026-08-09: the window
+is now larger than any prompt a caller may send, and a reply that is still cut
+short ends as `response.incomplete` rather than being reported as complete. If
+an operator describes this, ask whether it is recent; before that date it was
+silent, and the answer is to start a fresh conversation.
 
 ## What this deployment can currently issue keys for
 
@@ -251,6 +273,13 @@ _SURFACE_HELP: dict[str, str] = {
         "The operator is reading the integration documentation. They are most "
         "likely wiring a key into their own code, so prefer a concrete snippet "
         "over prose, and remember the capability convention above."
+    ),
+    "agent_setup": (
+        "The operator is on the 'Connect an agent' walkthrough — the screen you "
+        "send people to. They are wiring up Codex, or undoing it. Everything in "
+        "the coding-agent section above applies; that page carries the same "
+        "steps in order, so point at the step rather than retyping it, and "
+        "prefer its wording to your own where they differ."
     ),
     "other": (
         "The operator has no settings form open. Answer their question about the "

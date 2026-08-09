@@ -33,6 +33,14 @@ management UI for the wire reference an integrator reads.
 > The gateway now serves `/v1/responses` as well, and section 3 says
 > `wire_api = "responses"`. Verified end to end the same day: real Codex, real
 > public entrance, a tool call executed and answered.
+>
+> **Amended 2026-08-09, from a real session rather than a harness.** Three
+> things this file got wrong survived that verification, because each was
+> something nobody had tried rather than something that had failed: replies
+> were being cut off mid-sentence and reported as complete (section 5.1),
+> Codex in the ChatGPT desktop app was described as impossible when it works
+> and needs no separate setup (section 3), and there was nothing anywhere
+> about how to undo any of it (section 3.1).
 
 ---
 
@@ -132,12 +140,50 @@ Three things are easy to get wrong:
   the documented interface for everything else.
 - **`base_url` ends in `/v1`.** The client appends `/chat/completions`.
 
-The CLI and the IDE extension read the same file. The ChatGPT-hosted web version
-cannot be pointed at a custom endpoint at all.
+**Every local Codex surface reads this one file**: the CLI, the IDE extension,
+and the Codex built into the ChatGPT desktop app. Configuring the CLI therefore
+configures all three, which is a correction — this file and the `/agent-setup`
+page both said the desktop app could not be pointed here, and on 2026-08-09 an
+operator connected the CLI and watched the app switch over with nothing
+configured inside it. Neither document had tested it; both stated it anyway.
+
+What remains true is narrower: **Codex on the web** (`chatgpt.com/codex`) runs
+on OpenAI's machines, reads no file on yours, and cannot be pointed at a custom
+endpoint.
 
 **Confirm the field names against your installed version** (`codex --version`)
 before spending time debugging. This file records what the gateway needs; the
 client's configuration schema is not ours and has changed between releases.
+
+### 3.1 Undoing it, and running both
+
+The configuration above changes the client's **default**, which is why the
+desktop app followed the CLI across without being asked. Whoever connects an
+agent should be told how to reverse that in the same breath as how to do it —
+a default someone does not know how to unset is a worse thing to have handed
+them than one they chose per invocation.
+
+- **Back to the client's own default.** Delete the `model` and
+  `model_provider` lines from `~/.codex/config.toml`. The
+  `[model_providers.rcsl]` block may stay: it *describes* a provider, and
+  nothing selects it once those two lines are gone. Restart the desktop app,
+  which reads the file at startup. `codex login` may be needed to use OpenAI
+  again, since pointing here never required it.
+- **Both, side by side.** Put the provider block in
+  `~/.codex/rcsl.config.toml` and leave `config.toml` untouched, then run
+  `codex --profile rcsl`. Plain `codex` stays on the default. In `0.147.0`
+  `--profile <name>` layers **a separate `$CODEX_HOME/<name>.config.toml`**
+  over the base config — not a `[profiles.<name>]` table inside `config.toml`,
+  which is what older guides describe and what this file would have said had
+  `codex --help` not been read first. The same caution as above, applied.
+- **Once, without writing anything.** `codex -c model_provider=rcsl -c
+  model=code`.
+
+**None of these disconnect anything on this side**, and it is worth being clear
+with an integrator about that. They are settings on a machine you control, and
+a copy of the configuration elsewhere keeps working. The disconnect this
+platform enforces is **revoking the key** (section 2), which is also the only
+one that helps if the key has reached somewhere you did not intend.
 
 ## 4. Check it end to end
 
@@ -182,6 +228,7 @@ you about. Try a different model before touching anything else.
 | `422` naming `functions` or `function_call` | The client sent the deprecated OpenAI spellings, which are refused rather than silently ignored (before 2026-08-05 they were dropped, and the client stalled with prose and no error). Configure it to send `tools` / `tool_choice` |
 | Very slow first token on every step | Deliberation is still on for the capability. See section 1, step 3 |
 | Tool calls never happen, no error | The model does not do function calling. See section 4 |
+| The reply stops mid-sentence, no error | The conversation has crowded the answer out of the model's context window. See 5.1 |
 
 Two behaviours that are correct but surprising:
 
@@ -189,6 +236,107 @@ Two behaviours that are correct but surprising:
 - **`parallel_tool_calls` is accepted and ignored.** Neither runtime offers a
   way to bound how many calls a model emits in one turn, and dropping the
   extras here would discard output the model produced and the caller paid for.
+
+### 5.1 The reply that stops mid-sentence
+
+**A context window holds the prompt and the answer in the same space.** Ollama
+is given `num_ctx` from the model's registered `context_length`, and what is
+left to answer in is that figure minus everything the prompt already occupies.
+An agent replays the whole conversation on every turn and grows it with file
+contents and tool output, so the room to answer in shrinks with every step of a
+task, reaching zero while the task is still going.
+
+Measured on this deployment on 2026-08-09, from a real Codex session — one row
+in `usage_records`:
+
+| | tokens |
+|---|---|
+| prompt | 32231 |
+| reply | 537 |
+| `num_ctx` for `gemma4-31b-q8` | 32768 |
+
+**32231 + 537 = 32768 exactly.** The model did not choose to stop; it ran out
+of window, in the middle of a sentence.
+
+**Two things made this worse than it needed to be, both ours, both fixed the
+same day.**
+
+**The guardrail was at the wrong height.** `MAX_CONTEXT_LENGTH` is 65536 — the
+ceiling on what a caller may *send* — against a registered window of 32768.
+The check that exists to refuse an oversized prompt was admitting prompts that
+left no room for an answer, and `413 context_too_long` never fired because the
+prompt was never the thing that was too long. `num_predict = 16384` could not
+help either: it bounds an answer from above, and this one was bounded from
+below by what was left over.
+
+**`gemma4-31b-q8` now registers `context_length = 131072`**, twice what a
+caller may send, so a full 65536-token prompt still leaves 65536 to answer in
+and the window cannot be the thing that binds. This cost almost nothing, which
+is the part worth recording — measured on 2026-08-09 by loading the same
+weights at both sizes:
+
+| `num_ctx` | resident |
+|---|---|
+| 32768 | 31.36 GiB |
+| 131072 | 31.47 GiB |
+
+**0.11 GiB for four times the window.** `gemma4` is almost entirely sliding-
+window attention — 60 layers against `attention.sliding_window = 1024` — so
+only the few full-attention layers scale with context at all. The window had
+been costed as if it were an ordinary dense model and set low to be safe; it
+was never expensive. Residency is 36.39 GiB against the 51.2 GiB budget, up
+from 36.30. `gemma4-31b` (the q4 build kept as the rollback) was raised with
+it: same architecture, same layer count, and a KV cache that does not depend on
+weight quantisation — **inferred from the measurement above rather than
+separately measured**. `glm47-flash` is left at 32768 for the opposite reason:
+different attention, and nobody has measured it.
+
+**And nothing told the client.** Ollama reports `done_reason: "length"`, and
+`/v1/chat/completions` passes it through as `finish_reason: "length"` — the
+signal an OpenAI client reads to know a reply was cut. The `/v1/responses`
+translation dropped it: `interfaces/http/responses_sse.py` never read
+`chunk.finish_reason`, so it emitted `response.completed` whatever happened,
+and `_collect` hardcoded the same for the non-streaming path. So Codex — which
+speaks `responses`, per section 3 — was told a truncated answer was a whole
+one.
+
+That module now ends a cut-off stream with **`response.incomplete`**, carrying
+`status: "incomplete"` and `incomplete_details: {"reason":
+"max_output_tokens"}`, with the text item marked `"incomplete"` beside it; the
+non-streaming body reports the same. There are three terminal events, not two,
+and the missing one was the common case. `"length"` is the only reason that
+means truncation — `"stop"` and `"tool_calls"` stay `completed`, and a test
+holds that line, because reporting an ordinary end as incomplete would tell an
+agent to continue a turn the model had finished.
+
+**What can still truncate**, honestly and now visibly: the 16384-token output
+ceiling, and the 900-second generation deadline. Both report `length` and both
+arrive as `response.incomplete`.
+
+`usage_records` remains where to confirm any of this. `prompt_tokens` close to
+the model's `context_length` was the tell, and `completed` is `true` on those
+rows because the cut happened inside the runtime rather than at the platform's
+own ceiling — which is itself worth knowing when reading the table.
+
+### 5.2 What binds next is time, not tokens, and it is outside this repository
+
+Raising the window moves the constraint rather than removing it. Prompt
+evaluation produces no bytes at all while it runs, and the 32231-token prompt
+above took **273 seconds** of silence — 117.9 tok/s, the same figure
+[`PROGRESS.md`](../PROGRESS.md) recorded on 2026-07-27.
+
+**nginx `proxy_read_timeout` on the inference host is still `300s`**
+([ROADMAP.md](../ROADMAP.md), "External coordination"). That is 27 seconds of
+headroom, or about 3200 more prompt tokens. Past it the connection is reset
+mid-evaluation, with nothing in any application log, and the agent sees a
+transport error rather than any code this platform chose.
+
+So the window fix buys less than it looks like it should until that value is
+raised to `1560s`. It is an open item on somebody else's machine, it predates
+this finding, and this is the measurement that says when it starts to matter:
+now. Ollama's prefix cache is what has been hiding it — a continuing
+conversation re-evaluates only its new tokens, so it is the *first* turn of a
+long one, or a cache miss, that pays the full 273 seconds.
 
 ## 6. Debugging an integration
 
