@@ -25,15 +25,20 @@
 
 import Link from 'next/link';
 
-import { useSession, type ScopeName } from '@/lib/session';
+import type { KnownScope } from '@/lib/generated/role-scopes';
+import { useSession } from '@/lib/session';
 
 export type RelatedScreen = {
   href: string;
   label: string;
   /** What the entry adds, not what the target screen is. */
   note: string;
-  /** Omitted when every signed-in reader holds what the target needs. */
-  requires?: ScopeName;
+  /** Omitted when every signed-in reader holds what the target needs.
+   *
+   * `KnownScope` rather than `ScopeName`: a typo in an authored scope name
+   * would drop the entry for everybody, silently, which is exactly the failure
+   * this component exists to avoid in the other direction. */
+  requires?: KnownScope;
 };
 
 export function RelatedScreens({

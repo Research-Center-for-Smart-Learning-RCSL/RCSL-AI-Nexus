@@ -61,3 +61,23 @@ cat "$OUT" >> "$OUT.tmp"
 mv "$OUT.tmp" "$OUT"
 
 echo "wrote $OUT"
+
+# --- the role map -------------------------------------------------------------
+#
+# A second output from the same source, for the same reason. `app-shell.test.tsx`
+# held a hand-copied version of `role_authorization.py` and drifted from it twice
+# in one day: `prompt:read` is in `_BASE_SCOPES` and reaches every human role
+# while the copy listed it for none, so every navigation assertion in that file
+# described a sidebar no real role has ever been shown, and the two entries
+# gated on it were covered by nothing. Correcting the copy is not a fix, because
+# the next scope added recreates it.
+
+ROLES_OUT=frontend/src/lib/generated/role-scopes.ts
+
+# `PYTHONPATH=.` because running a *file* puts that file's directory on the
+# path rather than the working directory, so `app` would not be importable from
+# a script living in scripts/. The OpenAPI step above sidesteps this by using
+# `-c`, where the working directory is what lands on the path.
+( cd backend && AUTH_MODE=tailnet PYTHONPATH=. uv run python ../scripts/emit_role_scopes.py ) > "$ROLES_OUT"
+
+echo "wrote $ROLES_OUT"

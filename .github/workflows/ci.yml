@@ -139,11 +139,20 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Generated API types are current
+      - name: Generated API types and role map are current
         run: |
           ./scripts/generate-api-types.sh
           git diff --exit-code -- frontend/src/lib/generated/admin-api.ts || {
             echo "::error::admin-api.ts is stale. Run scripts/generate-api-types.sh and commit the result."
+            exit 1
+          }
+          # The role map is checked here for the reason the file itself records:
+          # the copy this replaced drifted from role_authorization.py twice in
+          # one day, and both times the frontend suite stayed green while
+          # asserting a navigation no real role is shown. A scope added to a
+          # role now fails this step until it is regenerated.
+          git diff --exit-code -- frontend/src/lib/generated/role-scopes.ts || {
+            echo "::error::role-scopes.ts is stale. Run scripts/generate-api-types.sh and commit the result."
             exit 1
           }
 

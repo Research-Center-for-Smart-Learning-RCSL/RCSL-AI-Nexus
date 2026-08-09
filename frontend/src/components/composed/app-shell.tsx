@@ -49,7 +49,8 @@ import { ErrorState } from '@/components/composed/error-state';
 import { Logo } from '@/components/composed/logo';
 import { Spinner } from '@/components/composed/spinner';
 import { ThemeToggle } from '@/components/composed/theme-toggle';
-import { useSession, useSessionExpiry, type ScopeName } from '@/lib/session';
+import type { KnownScope } from '@/lib/generated/role-scopes';
+import { useSession, useSessionExpiry } from '@/lib/session';
 import { TAILSCALE_CONNECTION_LOST } from '@/features/auth/messages';
 import {
   AssistantContextProvider,
@@ -69,7 +70,11 @@ type NavItem = {
   /**
    * The scope the screen's own first request needs. Absent means everyone.
    */
-  requires?: ScopeName;
+  requires?: KnownScope;
+  /** `KnownScope`, not `ScopeName`: this value is *authored*, and `ScopeName`
+      is `string` because it types what the server sends. A misspelling here
+      would hide the entry from every role rather than fail, which is the
+      quietest possible way to remove a screen from the navigation. */
 };
 
 // Each entry names the scope its screen actually needs, rather than the
