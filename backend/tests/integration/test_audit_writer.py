@@ -21,6 +21,7 @@ from app.adapters.audit.postgres_audit import PostgresAudit
 from app.adapters.persistence.sqlalchemy_models import AuditLogRow
 from app.application.audit_subject import unknown_subject
 from app.domain.entities.actor import Actor, Role
+from app.domain.entities.audit import AuditAction
 from app.shared.clock import FixedClock
 
 from .test_logs_and_usage import NOW
@@ -53,7 +54,7 @@ async def test_a_failed_login_for_an_unknown_account_actually_lands(writer_and_s
 
     await audit.record(
         unknown_subject("nobody@example.org"),
-        "user.sign_in_failed",
+        AuditAction.USER_SIGN_IN_FAILED,
         target="unknown",
         outcome="failed",
         detail={"client_ip": "203.0.113.7", "reason": "unknown_login"},
@@ -78,7 +79,7 @@ async def test_an_over_long_target_is_trimmed_rather_than_dropped(writer_and_ses
     )
 
     await audit.record(
-        actor, "authz.denied", target="/admin/models/" + "A" * 5000, outcome="denied"
+        actor, AuditAction.AUTHZ_DENIED, target="/admin/models/" + "A" * 5000, outcome="denied"
     )
 
     (row,) = await _rows(session)
@@ -97,7 +98,7 @@ async def test_a_maximum_length_login_is_not_trimmed(writer_and_session) -> None
     login = "a" * 243 + "@example.org"
     assert len(login) == 255
 
-    await audit.record(unknown_subject(login), "user.sign_in_failed", outcome="failed")
+    await audit.record(unknown_subject(login), AuditAction.USER_SIGN_IN_FAILED, outcome="failed")
 
     (row,) = await _rows(session)
     assert row.actor_display == login
