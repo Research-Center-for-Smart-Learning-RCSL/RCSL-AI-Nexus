@@ -20,6 +20,7 @@ import uuid
 from dataclasses import replace
 
 from app.domain.entities.actor import Actor, Scope
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.model import RuntimeKind
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.exceptions import ModelStateConflictError, NodeNotFoundError
@@ -83,7 +84,10 @@ class ManageNodes:
         node = replace(node, status=await self._health.probe(node))
         await self._nodes.save(node)
         await self._audit.record(
-            actor, "node.registered", target=node.id, detail={"name": name, "address": address}
+            actor,
+            AuditAction.NODE_REGISTERED,
+            target=node.id,
+            detail={"name": name, "address": address},
         )
         return node
 
@@ -118,7 +122,7 @@ class ManageNodes:
         # online offline and the reverse, and a stale status would misroute.
         updated = replace(updated, status=await self._health.probe(updated))
         await self._nodes.save(updated)
-        await self._audit.record(actor, "node.updated", target=node.id)
+        await self._audit.record(actor, AuditAction.NODE_UPDATED, target=node.id)
         return updated
 
     async def delete(self, actor: Actor, node_id: str) -> None:
@@ -136,7 +140,9 @@ class ManageNodes:
             )
 
         await self._nodes.delete(node.id)
-        await self._audit.record(actor, "node.removed", target=node.id, detail={"name": node.name})
+        await self._audit.record(
+            actor, AuditAction.NODE_REMOVED, target=node.id, detail={"name": node.name}
+        )
 
     async def check_health(self, actor: Actor, node_id: str) -> Node:
         """Probe a node now and persist the observed status.

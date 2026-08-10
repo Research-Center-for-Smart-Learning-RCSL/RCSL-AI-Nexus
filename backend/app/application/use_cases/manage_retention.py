@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from app.domain.entities.actor import Actor, Scope
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.retention import (
     PurgeOutcome,
     RetentionBounds,
@@ -122,7 +123,7 @@ class ManageRetention:
         await self._policies.set_policy(policy)
         await self._audit.record(
             actor=actor,
-            action="retention.policy_set",
+            action=AuditAction.RETENTION_POLICY_SET,
             target=dataset.value,
             outcome="success",
             detail={"days": str(days)},
@@ -176,7 +177,7 @@ class ManageRetention:
         deleted = await self._purges[dataset].delete_older_than(cutoff)
         await self._audit.record(
             actor=actor,
-            action="retention.purged",
+            action=AuditAction.RETENTION_PURGED,
             target=dataset.value,
             outcome="success",
             detail={

@@ -28,6 +28,7 @@ from ipaddress import IPv4Network, IPv6Network, ip_network
 
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.api_key import ApiKey
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.capability import ISSUABLE_CAPABILITIES
 from app.domain.exceptions import (
     InvalidCidrError,
@@ -168,7 +169,7 @@ class ManageApiKeys:
 
         await self._audit.record(
             actor,
-            "api_key.issued",
+            AuditAction.API_KEY_ISSUED,
             target=key.key_id,
             detail={"name": key.name, "owner": owner_id},
         )
@@ -239,7 +240,7 @@ class ManageApiKeys:
         # changes what a leaked key can reach.
         await self._audit.record(
             actor,
-            "api_key.updated",
+            AuditAction.API_KEY_UPDATED,
             target=key.key_id,
             detail={"scopes": ",".join(sorted(updated.scopes))},
         )
@@ -250,7 +251,7 @@ class ManageApiKeys:
         self._require_owner_permission(actor, key.owner_id)
 
         await self._keys.revoke(key_id, self._clock.now())
-        await self._audit.record(actor, "api_key.revoked", target=key_id)
+        await self._audit.record(actor, AuditAction.API_KEY_REVOKED, target=key_id)
 
     async def set_debug_window(self, actor: Actor, key_id: str, *, minutes: int) -> ApiKey:
         """Open, extend, or close (minutes=0) the key's debug window.
@@ -275,7 +276,7 @@ class ManageApiKeys:
 
         await self._audit.record(
             actor,
-            "api_key.debug_window_set",
+            AuditAction.API_KEY_DEBUG_WINDOW_SET,
             target=key.key_id,
             detail={"until": until.isoformat() if until else "off"},
         )

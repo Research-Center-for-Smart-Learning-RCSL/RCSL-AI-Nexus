@@ -20,6 +20,7 @@ from dataclasses import replace
 from typing import Protocol
 
 from app.domain.entities.actor import Actor, Scope
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.model import Model, ModelState, ResourceProfile, RuntimeKind
 from app.domain.entities.node import Node
 from app.domain.exceptions import (
@@ -137,7 +138,10 @@ class ManageModels:
         )
         await self._models.save(model)
         await self._audit.record(
-            actor, "model.registered", target=model.id, detail={"alias": alias, "ref": ref}
+            actor,
+            AuditAction.MODEL_REGISTERED,
+            target=model.id,
+            detail={"alias": alias, "ref": ref},
         )
         return model
 
@@ -216,7 +220,7 @@ class ManageModels:
             ),
         )
         await self._models.save(updated)
-        await self._audit.record(actor, "model.updated", target=model.id)
+        await self._audit.record(actor, AuditAction.MODEL_UPDATED, target=model.id)
         return updated
 
     async def delete(self, actor: Actor, model_id: str) -> None:
@@ -240,7 +244,7 @@ class ManageModels:
 
         await self._models.delete(model.id)
         await self._audit.record(
-            actor, "model.deleted", target=model.id, detail={"alias": model.alias}
+            actor, AuditAction.MODEL_DELETED, target=model.id, detail={"alias": model.alias}
         )
 
     async def load(self, actor: Actor, model_id: str) -> Model:
@@ -290,7 +294,9 @@ class ManageModels:
             # it exactly when it mattered: a half-resident model then read as
             # DOWNLOADED and the budget stopped counting its memory.
             await self._state.commit(model.id, ModelState.ERROR)
-            await self._audit.record(actor, "model.loaded", target=model.id, outcome="failed")
+            await self._audit.record(
+                actor, AuditAction.MODEL_LOADED, target=model.id, outcome="failed"
+            )
             raise
 
         # The success transition may ride the request transaction: if that
@@ -298,7 +304,7 @@ class ManageModels:
         # not claim it did. Reconciliation at the next deploy would move a
         # LOADING left by such a failure to ERROR.
         await self._models.set_state(model.id, ModelState.LOADED)
-        await self._audit.record(actor, "model.loaded", target=model.id)
+        await self._audit.record(actor, AuditAction.MODEL_LOADED, target=model.id)
         return _with_state(model, ModelState.LOADED)
 
     async def unload(self, actor: Actor, model_id: str) -> Model:
@@ -323,11 +329,13 @@ class ManageModels:
             # unload failed, so as far as anyone knows the weights are still
             # resident and the memory budget must keep counting them.
             await self._state.commit(model.id, ModelState.LOADED)
-            await self._audit.record(actor, "model.unloaded", target=model.id, outcome="failed")
+            await self._audit.record(
+                actor, AuditAction.MODEL_UNLOADED, target=model.id, outcome="failed"
+            )
             raise
 
         await self._models.set_state(model.id, ModelState.DOWNLOADED)
-        await self._audit.record(actor, "model.unloaded", target=model.id)
+        await self._audit.record(actor, AuditAction.MODEL_UNLOADED, target=model.id)
         return _with_state(model, ModelState.DOWNLOADED)
 
     async def _require(self, model_id: str) -> Model:

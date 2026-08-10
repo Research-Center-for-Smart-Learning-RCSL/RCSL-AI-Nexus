@@ -16,6 +16,7 @@ from app.application.use_cases.accept_invitation import Enrolment
 from app.application.use_cases.pending_enrolment import PendingEnrolment
 from app.application.use_cases.recovery_codes import reissue_recovery_codes
 from app.domain.entities.actor import Actor
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.user import User
 from app.domain.exceptions import (
     InvalidCredentialsError,
@@ -86,7 +87,7 @@ class ManageOwnAccount:
         # that the old one may be in someone else's hands, and leaving their
         # session alive would make the change cosmetic.
         await self._sessions.invalidate_others(user.id, session_id, self._clock.now())
-        await self._audit.record(actor, "user.password_changed", target=user.id)
+        await self._audit.record(actor, AuditAction.USER_PASSWORD_CHANGED, target=user.id)
 
     async def begin_totp_reenrolment(self, actor: Actor, *, current_password: str) -> Enrolment:
         """Issue a new secret without touching the working one.
@@ -147,7 +148,7 @@ class ManageOwnAccount:
 
         codes = await reissue_recovery_codes(self._invitations, self._tokens, user.id)
         await self._sessions.invalidate_others(user.id, session_id, self._clock.now())
-        await self._audit.record(actor, "user.totp_reenrolled", target=user.id)
+        await self._audit.record(actor, AuditAction.USER_TOTP_REENROLLED, target=user.id)
         return codes
 
     async def _require_self(self, actor: Actor) -> User:
@@ -178,6 +179,6 @@ class ManageOwnAccount:
 
         if not await self._hasher.verify(current_password, current_hash):
             await self._audit.record(
-                actor, "user.password_verified", target=user.id, outcome="denied"
+                actor, AuditAction.USER_PASSWORD_VERIFIED, target=user.id, outcome="denied"
             )
             raise InvalidCredentialsError(detail=f"wrong current password user={user.id}")

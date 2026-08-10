@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.adapters.persistence.sqlalchemy_models import AuditLogRow
 from app.domain.entities.actor import Actor
+from app.domain.entities.audit import AuditAction
 from app.shared.clock import Clock
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,7 @@ class PostgresAudit:
     async def record(
         self,
         actor: Actor,
-        action: str,
+        action: AuditAction,
         *,
         target: str | None = None,
         outcome: str = "success",
@@ -75,7 +76,9 @@ class PostgresAudit:
             actor_id=_fit(actor.id, "actor_id"),
             actor_display=_fit(actor.display, "actor_display"),
             actor_source=_fit(actor.source, "actor_source"),
-            action=_fit(action, "action"),
+            # `.value`, so what lands in the column is plain text rather than an
+            # enum member the driver would have to know how to adapt.
+            action=_fit(action.value, "action"),
             target=_fit(target, "target"),
             outcome=outcome,
             detail=detail or {},
