@@ -276,7 +276,8 @@ exhaustively covered.
 Currently 233 Vitest tests across 27 files — the SSE reader and frame schema, the API
 client's CSRF and 401 handling, `safe-redirect`, the password schema, the key
 form's own rules, and the assistant's proposal parsing, transcript handling and
-page-context registry — plus five Playwright paths. The browser tests intercept
+page-context registry — plus five Playwright paths, and one more under §9.1 that
+runs against a real backend. The five intercept
 the admin API at the network boundary: they cover the real Next.js pages,
 accessible controls, form state, requests and navigation without needing a
 shared account or mutable Postgres fixture. The API key path keeps a stateful
@@ -299,8 +300,40 @@ hot-reloading loop for local iteration, and is what `test:e2e:ui` uses. Because
 that build inlines a test CSRF cookie name, it writes to `.next-e2e` rather
 than to the `.next` that `pnpm build` produces.
 
+### 9.1 The full-stack path, and why it is a separate command
+
+Everything above stops at the browser's network boundary. That is the right
+bound for a form's contract and it cannot answer one question: does editing a
+routing policy change which model the **gateway** serves? `routing-policies.spec.ts`
+proves the form sends the right PUT and the backend integration suite proves the
+gateway routes on what is stored, so both stay green if the two are connected to
+different things -- an alias the form writes and the gateway never reads, a save
+that lands in a different tenant.
+
+`pnpm test:e2e:full` runs the paths under `e2e/full-stack` against the real admin
+entrance, the real gateway and a Postgres it drops and rebuilds from Alembic
+(`E2E_DATABASE_URL`). Nothing inside the applications is stubbed. The admin
+entrance runs in `AUTH_MODE=dev`, which substitutes the header `tailscale serve`
+injects and leaves the users lookup, the role, the scopes and CSRF exactly as
+deployed. The runtime is a fake Ollama the **real** adapter reaches over HTTP, so
+the assertion is the model reference the gateway asked for, read off a socket
+rather than from an injected double. `CACHE_BACKEND=memory` is the one deployment
+difference, and configuration refuses it under `ENV=production`.
+
+**A separate mode rather than an addition to the default run**, because the
+default paths must stay runnable with no database. Making all of them depend on
+one is how this join went untested for as long as it did -- the local Docker
+daemon was unavailable on the day the browser paths were written, and a harness
+nobody could run would not have been written honestly. In CI it is its own job
+with its own Postgres service.
+
+What it does not prove is inference. The runtime answers on the wire but does not
+run a model, which is the same boundary everything else in this repository stops
+at away from the Mac Studio.
+
 A Node coordinator chooses an unused loopback port and terminates the build,
-Next and Playwright process trees, because Playwright's ordinary `webServer`
+Next, Playwright and (in full-stack mode) both uvicorn process trees, because
+Playwright's ordinary `webServer`
 teardown leaves Next's worker alive on Windows after the tests have finished.
 Spawn failures, signals and the runner's own deadlines (five minutes for the
 build, ten for the tests) all converge on the same cleanup; CI adds an outer
@@ -327,4 +360,4 @@ What is still outstanding:
 
 - **Storybook** for `components/ui` and `components/composed`. The composed layer is reused across eighteen feature folders, so a break there is expensive; stories cover loading, empty, error, and large-dataset states. Not started, and one of the two items left in Phase 2.
 - **Vitest with Testing Library** across the remaining `features/*/hooks`. Started: `useChatStream` and `useAssistant` are driven through `renderHook` with the API module mocked, which is the pattern the rest should follow.
-- **Playwright**, beyond the five browser paths now present, for the full-stack join: edit a routing policy and confirm actual gateway selection changes, and eventually run the management browser against isolated Postgres state. Not every module needs an end-to-end test.
+- **Playwright**, beyond the paths now present. The full-stack join landed 2026-08-10 (§9.1): a policy edited in the browser is observed changing which model the gateway asks its runtime for, against a real Postgres. What remains is breadth rather than a missing kind of coverage — the same harness could carry key issue to first gateway call, and a model unload to the refusal that follows. Not every module needs an end-to-end test.
