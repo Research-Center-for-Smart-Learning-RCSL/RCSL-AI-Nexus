@@ -271,7 +271,13 @@ jobs:
       # exists for that and nothing else.
       - name: Browser to gateway
         working-directory: frontend
-        timeout-minutes: 20
+        # One minute above the runner's own worst case, the same rule the
+        # frontend job states: three for the seed, two apiece for the two
+        # backends to answer /healthz, five for the Next build and ten for the
+        # tests is 22, so a stall is reported by the runner -- which can say
+        # which half stalled -- rather than by a step that can only say it ran
+        # out of time.
+        timeout-minutes: 23
         env:
           E2E_DATABASE_URL: postgresql+asyncpg://nexus:devpw@127.0.0.1:5432/nexus
         run: pnpm test:e2e:full
