@@ -76,9 +76,14 @@ class PostgresAudit:
             actor_id=_fit(actor.id, "actor_id"),
             actor_display=_fit(actor.display, "actor_display"),
             actor_source=_fit(actor.source, "actor_source"),
-            # `.value`, so what lands in the column is plain text rather than an
-            # enum member the driver would have to know how to adapt.
-            action=_fit(action.value, "action"),
+            # `str()` rather than `.value`, so what lands in the column is plain
+            # text either way. `AuditAction` is a `StrEnum`, so both spellings
+            # produce the same string for a member -- but `.value` raises on a
+            # plain `str`, and it would raise *here*, outside the `try` below,
+            # turning a successful administrative action into a 500 over an
+            # audit write. That is the one failure this adapter is built to
+            # prevent, so the type is not relied on to be the only guard.
+            action=_fit(str(action), "action"),
             target=_fit(target, "target"),
             outcome=outcome,
             detail=detail or {},

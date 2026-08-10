@@ -11,9 +11,12 @@ way nothing else reports.
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 
-from app.adapters.audit.postgres_audit import _WIDTHS
+from app.adapters.audit.postgres_audit import _WIDTHS, PostgresAudit
+from app.application.audit_subject import unknown_subject
 from app.domain.entities.audit import AuditAction
+from app.shared.clock import FixedClock
 
 
 def test_no_member_is_an_alias() -> None:
@@ -44,3 +47,27 @@ def test_every_value_is_a_dotted_lowercase_name() -> None:
     shape = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
     for action in AuditAction:
         assert shape.match(action.value), action.value
+
+
+async def test_a_plain_string_action_does_not_escape_the_writer() -> None:
+    """The type is the guard; it must not also be the only one.
+
+    `PostgresAudit` builds its row before the `try` that swallows a failed
+    write, so anything that raises while reading the action turns a successful
+    administrative action into a 500 -- the one outcome that adapter's whole
+    independent-transaction design exists to prevent. Reaching for `.value`
+    there did exactly that for any caller mypy had not seen, which is every
+    caller in a test and any built dynamically.
+    """
+    audit = PostgresAudit(_refusing_sessions, FixedClock(datetime(2026, 8, 10, tzinfo=UTC)))
+
+    await audit.record(unknown_subject("nobody@example.org"), "user.sign_in_failed")  # type: ignore[arg-type]
+
+
+def _refusing_sessions():  # type: ignore[no-untyped-def]
+    """Stands in for the session factory, and fails the way a database does.
+
+    The write must be reached and then fail, so that what the test observes is
+    the swallow rather than an error raised before any write was attempted.
+    """
+    raise ConnectionError("no database in a unit test")
