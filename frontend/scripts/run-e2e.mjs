@@ -21,77 +21,40 @@
  * artefact that ships: it has a test CSRF cookie name inlined into the client
  * bundle. Sharing `.next` with `pnpm build` would let that value escape into
  * something a person could mistake for a deployable build.
+ *
+ * `--full-stack` swaps the deterministic admin fixture for the real admin
+ * entrance, the real gateway and a Postgres this run rebuilds, and runs only
+ * the paths under `e2e/full-stack`. It is a separate mode rather than an
+ * addition because the default run must stay runnable with no database: making
+ * every path depend on one is how the browser-to-gateway join went untested for
+ * as long as it did. See `e2e/support/full-stack.mjs`.
  */
 
-import { spawn } from 'node:child_process';
-import { createServer as createPortProbe } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { startAdminTestServer } from '../e2e/support/admin-server.mjs';
+import { startFullStack } from '../e2e/support/full-stack.mjs';
+import {
+  availablePort,
+  delay,
+  isWindows,
+  resultOf,
+  spawnTracked,
+  stopProcessTree,
+  withTimeout,
+} from '../e2e/support/processes.mjs';
 
 const frontendDir = join(dirname(fileURLToPath(import.meta.url)), '..');
-const isWindows = process.platform === 'win32';
-const children = new WeakMap();
+const repoRoot = join(frontendDir, '..');
 
 const runnerArgs = process.argv.slice(2);
 if (runnerArgs[0] === '--') runnerArgs.shift();
 const devMode = runnerArgs.includes('--dev');
-const testArgs = runnerArgs.filter((argument) => argument !== '--dev');
-
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-async function withTimeout(promise, milliseconds, message) {
-  let timer;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), milliseconds);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function spawnTracked(command, args, options, label) {
-  const child = spawn(command, args, options);
-  const result = new Promise((resolve) => {
-    child.once('error', (cause) =>
-      resolve({
-        code: 1,
-        signal: null,
-        error: new Error(`Could not start ${label}.`, { cause }),
-      }),
-    );
-    child.once('exit', (code, signal) => resolve({ code: code ?? 1, signal }));
-  });
-  children.set(child, result);
-  return child;
-}
-
-function resultOf(child) {
-  return children.get(child);
-}
-
-async function availablePort(host, requestedPort = 0) {
-  return new Promise((resolve, reject) => {
-    const probe = createPortProbe();
-    probe.once('error', reject);
-    probe.listen({ host, port: requestedPort, exclusive: true }, () => {
-      const address = probe.address();
-      if (!address || typeof address === 'string') {
-        probe.close();
-        reject(new Error('Could not reserve a loopback port for Next.js.'));
-        return;
-      }
-      probe.close((error) => (error ? reject(error) : resolve(address.port)));
-    });
-  });
-}
+const fullStackMode = runnerArgs.includes('--full-stack');
+const testArgs = runnerArgs.filter(
+  (argument) => argument !== '--dev' && argument !== '--full-stack',
+);
 
 async function serverAddress() {
   const requested = process.env.PLAYWRIGHT_BASE_URL;
@@ -115,57 +78,36 @@ async function serverAddress() {
   return url;
 }
 
-async function stopProcessTree(child, label) {
-  if (!child?.pid || child.exitCode !== null) return;
-
-  if (isWindows) {
-    const killer = spawnTracked(
-      'taskkill',
-      ['/PID', String(child.pid), '/T', '/F'],
-      { stdio: 'ignore', windowsHide: true },
-      `taskkill for ${label}`,
-    );
-    try {
-      const result = await withTimeout(
-        resultOf(killer),
-        10_000,
-        `Timed out terminating the ${label} process tree.`,
-      );
-      if (result.error || (result.code !== 0 && child.exitCode === null)) {
-        console.warn(`Could not confirm that the ${label} process tree stopped.`);
-      }
-    } catch (error) {
-      console.warn(error instanceof Error ? error.message : String(error));
-      killer.kill();
-    }
-    child.unref();
-    return;
-  }
-
-  try {
-    process.kill(-child.pid, 'SIGTERM');
-  } catch {
-    return;
-  }
-  await Promise.race([resultOf(child), delay(2_000)]);
-
-  // The group can outlive its leader. Probe the group rather than relying on
-  // child.exitCode, then force down any worker that ignored SIGTERM.
-  try {
-    process.kill(-child.pid, 0);
-    process.kill(-child.pid, 'SIGKILL');
-  } catch {
-    // The process group is already gone.
-  }
-}
-
 const serverURL = await serverAddress();
 const baseURL = serverURL.origin;
-const adminServer = await startAdminTestServer();
+
+// Two mutually exclusive worlds behind one command. The default run proves the
+// browser's own contracts against a deterministic fixture; `--full-stack` runs
+// the paths that only mean something with a real backend behind them, and gives
+// Next a real admin entrance to proxy to. Mixing them would make every default
+// run depend on a Postgres, which is what kept the join untested for so long.
+const adminServer = fullStackMode ? null : await startAdminTestServer();
+const fullStack = fullStackMode
+  ? await startFullStack({
+      repoRoot,
+      databaseUrl: process.env.E2E_DATABASE_URL,
+    })
+  : null;
+
 const childEnv = {
   ...process.env,
-  ADMIN_API_URL: adminServer.url,
-  E2E_ADMIN_API_URL: adminServer.url,
+  ADMIN_API_URL: fullStack ? fullStack.adminUrl : adminServer.url,
+  E2E_ADMIN_API_URL: fullStack ? fullStack.adminUrl : adminServer.url,
+  ...(fullStack
+    ? {
+        E2E_FULL_STACK: '1',
+        E2E_GATEWAY_URL: fullStack.gatewayUrl,
+        E2E_GATEWAY_KEY: fullStack.gatewayKey,
+        E2E_RUNTIME_URL: fullStack.runtimeUrl,
+        E2E_INITIAL_ALIAS: fullStack.initialAlias,
+        E2E_MODEL_REFS: JSON.stringify(fullStack.refs),
+      }
+    : {}),
   // Inlined into the client bundle at build time. The shipped default is
   // `__Host-nexus_csrf`, which requires Secure and is therefore dropped over
   // the loopback http origin these tests use.
@@ -195,7 +137,8 @@ function stopServers() {
       await stopProcessTree(tests, 'Playwright');
       await stopProcessTree(nextServer, 'Next.js');
       await stopProcessTree(builder, 'the Next.js build');
-      await adminServer.close();
+      await adminServer?.close();
+      await fullStack?.close();
     })();
   }
   return shutdownPromise;
