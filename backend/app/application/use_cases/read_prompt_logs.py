@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.domain.entities.actor import Actor, Scope
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.prompt_log import PromptLogEntry, PromptLogSummary
 from app.domain.exceptions import PromptLogNotFoundError
 from app.domain.ports.repositories import PromptLogRepositoryPort
@@ -120,7 +121,7 @@ class ReadPromptLogs:
 
         await self._audit.record(
             actor=actor,
-            action="prompt_log.read",
+            action=AuditAction.PROMPT_LOG_READ,
             target=entry_id,
             outcome="success",
             # Handles only. Nothing from `messages`, `completion` or `reasoning`

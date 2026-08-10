@@ -16,6 +16,7 @@ See docs/ARCHITECTURE.md section 2.4.
 from __future__ import annotations
 
 from app.domain.entities.actor import Actor, Scope
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.capability import ROUTABLE_CAPABILITIES
 from app.domain.entities.routing_policy import RoutingCandidate, RoutingPolicy
 from app.domain.exceptions import ModelNotFoundError, ModelStateConflictError
@@ -98,7 +99,7 @@ class ManageRoutingPolicies:
         await self._policies.save(policy)
         await self._audit.record(
             actor,
-            "routing_policy.saved",
+            AuditAction.ROUTING_POLICY_SAVED,
             target=capability,
             detail={
                 "candidates": ",".join(c.model_alias for c in ordered),
@@ -117,4 +118,4 @@ class ManageRoutingPolicies:
             raise ModelNotFoundError(detail=f"no policy for {capability}")
 
         await self._policies.delete(capability)
-        await self._audit.record(actor, "routing_policy.deleted", target=capability)
+        await self._audit.record(actor, AuditAction.ROUTING_POLICY_DELETED, target=capability)

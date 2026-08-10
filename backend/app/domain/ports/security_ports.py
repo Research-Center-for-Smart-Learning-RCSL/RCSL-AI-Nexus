@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Protocol
 
 from app.domain.entities.actor import Actor, Scope
+from app.domain.entities.audit import AuditAction
 
 
 class PasswordHasherPort(Protocol):
@@ -121,7 +122,7 @@ class AuditPort(Protocol):
     async def record(
         self,
         actor: Actor,
-        action: str,
+        action: AuditAction,
         *,
         target: str | None = None,
         outcome: str = "success",

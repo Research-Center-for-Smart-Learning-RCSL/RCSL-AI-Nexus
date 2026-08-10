@@ -29,6 +29,7 @@ from hmac import compare_digest
 
 from app.application.audit_subject import subject_for, unknown_subject
 from app.domain.entities.actor import Actor
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.user import User
 from app.domain.exceptions import (
     InvalidCredentialsError,
@@ -46,13 +47,6 @@ from app.domain.ports.security_ports import (
 from app.domain.services.login_throttle import LoginThrottle
 from app.domain.services.token_service import TokenService
 from app.shared.clock import Clock
-
-SIGNED_IN = "user.signed_in"
-SIGN_IN_FAILED = "user.sign_in_failed"
-SIGN_IN_THROTTLED = "user.sign_in_throttled"
-RECOVERY_CODE_USED = "user.recovery_code_used"
-"""The four login actions, named here so the tests and the logs screen agree
-with the writer rather than with a string typed twice."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,7 +110,7 @@ class AuthenticateLocal:
 
         await self._audit.record(
             subject,
-            SIGN_IN_THROTTLED,
+            AuditAction.USER_SIGN_IN_THROTTLED,
             target=subject.id,
             outcome="denied",
             detail={"client_ip": client_ip, "step": step},
@@ -184,7 +178,7 @@ class AuthenticateLocal:
         """
         await self._audit.record(
             subject,
-            SIGN_IN_FAILED,
+            AuditAction.USER_SIGN_IN_FAILED,
             target=subject.id,
             outcome="failed",
             detail={"client_ip": client_ip, "reason": reason},
@@ -325,14 +319,14 @@ class AuthenticateLocal:
         # without reading inside anyone's `detail`, and section 12 names
         # recovery code use as its own event for the same reason: bypassing the
         # second factor is worth seeing without knowing to look for it.
-        await self._audit.record(subject, RECOVERY_CODE_USED, target=user.id)
+        await self._audit.record(subject, AuditAction.USER_RECOVERY_CODE_USED, target=user.id)
         await self._signed_in(subject, client_ip=client_ip, factor="recovery_code")
         return user
 
     async def _signed_in(self, subject: Actor, *, client_ip: str, factor: str) -> None:
         await self._audit.record(
             subject,
-            SIGNED_IN,
+            AuditAction.USER_SIGNED_IN,
             target=subject.id,
             detail={"client_ip": client_ip, "factor": factor},
         )

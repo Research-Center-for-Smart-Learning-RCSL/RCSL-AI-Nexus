@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from app.domain.entities.actor import Actor, Role, Scope
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.user import User
 from app.domain.exceptions import (
     LastAdministratorError,
@@ -103,10 +104,13 @@ class ManageUsers:
             # until it expired.
             await self._sessions.invalidate_all(user.id, self._clock.now())
             await self._audit.record(
-                actor, "user.role_changed", target=user.id, detail={"role": updated.role.value}
+                actor,
+                AuditAction.USER_ROLE_CHANGED,
+                target=user.id,
+                detail={"role": updated.role.value},
             )
         else:
-            await self._audit.record(actor, "user.updated", target=user.id)
+            await self._audit.record(actor, AuditAction.USER_UPDATED, target=user.id)
 
         return updated
 
@@ -130,7 +134,9 @@ class ManageUsers:
             await self._sessions.invalidate_all(user.id, now)
 
         await self._audit.record(
-            actor, "user.disabled" if disabled else "user.enabled", target=user.id
+            actor,
+            AuditAction.USER_DISABLED if disabled else AuditAction.USER_ENABLED,
+            target=user.id,
         )
         return replace(user, disabled_at=now if disabled else None)
 
@@ -173,7 +179,7 @@ class ManageUsers:
 
         await self._audit.record(
             actor,
-            "user.debug_window_set",
+            AuditAction.USER_DEBUG_WINDOW_SET,
             target=user.id,
             detail={"until": until.isoformat() if until else "off"},
         )
@@ -205,7 +211,7 @@ class ManageUsers:
         await self._users.delete(user.id)
 
         await self._audit.record(
-            actor, "user.deleted", target=user.id, detail={"login": user.login}
+            actor, AuditAction.USER_DELETED, target=user.id, detail={"login": user.login}
         )
 
     async def _assert_not_last_admin(self, user: User) -> None:

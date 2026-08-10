@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from app.application.use_cases.issue_invitation import IssuedInvitation, IssueInvitation
 from app.domain.entities.actor import Actor, Role, Scope
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.tenant import Tenant
 from app.domain.exceptions import ModelStateConflictError
 from app.domain.ports.repositories import TenantRepositoryPort
@@ -71,5 +72,7 @@ class ManageTenants:
             role=Role.ADMIN,
             tenant_id=tenant.id,
         )
-        await self._audit.record(actor, "tenant.created", target=tenant.id, detail={"name": name})
+        await self._audit.record(
+            actor, AuditAction.TENANT_CREATED, target=tenant.id, detail={"name": name}
+        )
         return TenantCreated(tenant=tenant, invitation=issued)

@@ -81,3 +81,17 @@ ROLES_OUT=frontend/src/lib/generated/role-scopes.ts
 ( cd backend && AUTH_MODE=tailnet PYTHONPATH=. uv run python ../scripts/emit_role_scopes.py ) > "$ROLES_OUT"
 
 echo "wrote $ROLES_OUT"
+
+# --- the audit action catalogue -----------------------------------------------
+#
+# A third output, and the same defect a third time: `features/logs/schema.ts`
+# held a hand-kept list of every action the backend writes, for the filter's
+# suggestions, and it had drifted by eight names before 2026-08-08. The filter
+# matches exactly, so each missing name was an action nobody could filter for
+# without already knowing its spelling.
+
+AUDIT_OUT=frontend/src/lib/generated/audit-actions.ts
+
+( cd backend && AUTH_MODE=tailnet PYTHONPATH=. uv run python ../scripts/emit_audit_actions.py ) > "$AUDIT_OUT"
+
+echo "wrote $AUDIT_OUT"
