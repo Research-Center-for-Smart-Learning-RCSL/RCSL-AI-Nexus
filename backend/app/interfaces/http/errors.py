@@ -17,6 +17,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.domain.entities.audit import AuditAction
 from app.domain.exceptions import (
     AssistantUnavailableError,
     CollectionNotFoundError,
@@ -159,9 +160,6 @@ def _log(request: Request, exc: DomainError, status: int) -> None:
     )
 
 
-AUTHZ_DENIED = "authz.denied"
-
-
 async def _audit_refusal(request: Request, exc: NotAuthorizedError) -> None:
     """Record an authorization failure, from the one place none can bypass.
 
@@ -194,7 +192,7 @@ async def _audit_refusal(request: Request, exc: NotAuthorizedError) -> None:
 
     await audit.record(
         actor,
-        AUTHZ_DENIED,
+        AuditAction.AUTHZ_DENIED,
         # The path, not the resource id: this says what was reached for, and
         # the handler cannot know which path parameter was the subject.
         target=request.url.path,

@@ -22,6 +22,7 @@ from app.adapters.persistence.repositories import PostgresUserRepository
 from app.adapters.session.session_store import SessionStore
 from app.application.audit_subject import subject_for
 from app.application.use_cases.authenticate_local import AuthenticateLocal
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.user import User
 from app.domain.exceptions import InvalidCredentialsError
 from app.domain.ports.infrastructure_ports import CachePort
@@ -131,7 +132,7 @@ async def logout(
         if signing_out is not None:
             await audit.record(
                 subject_for(signing_out),
-                "user.signed_out",
+                AuditAction.USER_SIGNED_OUT,
                 target=signing_out.id,
                 detail={"client_ip": _client_ip(request)},
             )

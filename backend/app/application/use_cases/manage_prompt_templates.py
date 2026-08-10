@@ -17,6 +17,7 @@ import uuid
 from dataclasses import replace
 
 from app.domain.entities.actor import Actor, Scope
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.prompt_template import MAX_SYSTEM_PROMPT_CHARS, PromptTemplate
 from app.domain.exceptions import (
     ModelStateConflictError,
@@ -81,7 +82,7 @@ class ManagePromptTemplates:
         # entity is ever without them.
         template = await self._templates.get(template.id) or template
         await self._audit.record(
-            actor, "prompt_template.created", target=template.id, detail={"name": name}
+            actor, AuditAction.PROMPT_TEMPLATE_CREATED, target=template.id, detail={"name": name}
         )
         return template
 
@@ -121,7 +122,7 @@ class ManagePromptTemplates:
         # what every selecting caller is told would be the worst row to drop.
         await self._audit.record(
             actor,
-            "prompt_template.updated",
+            AuditAction.PROMPT_TEMPLATE_UPDATED,
             target=updated.id,
             detail={"name": updated.name, "prompt_chars": str(len(updated.system_prompt))},
         )
@@ -136,7 +137,10 @@ class ManagePromptTemplates:
         # but the next request naming it is refused rather than served without
         # it. See ApplyPromptTemplate.
         await self._audit.record(
-            actor, "prompt_template.deleted", target=template.id, detail={"name": template.name}
+            actor,
+            AuditAction.PROMPT_TEMPLATE_DELETED,
+            target=template.id,
+            detail={"name": template.name},
         )
 
     def _validated_name(self, name: str) -> str:

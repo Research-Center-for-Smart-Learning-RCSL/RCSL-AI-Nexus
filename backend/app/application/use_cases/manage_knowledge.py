@@ -17,6 +17,7 @@ import logging
 import uuid
 
 from app.domain.entities.actor import Actor, Scope
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.knowledge import (
     DocumentStatus,
     KnowledgeCollection,
@@ -102,7 +103,10 @@ class ManageKnowledge:
         )
         await self._knowledge.save_collection(collection)
         await self._audit.record(
-            actor, "knowledge.collection_created", target=collection.id, detail={"name": name}
+            actor,
+            AuditAction.KNOWLEDGE_COLLECTION_CREATED,
+            target=collection.id,
+            detail={"name": name},
         )
         # Read back, so the caller receives the server-assigned `created_at`
         # rather than the null the unsaved entity carries. The create paths that
@@ -134,7 +138,7 @@ class ManageKnowledge:
         await self._knowledge.delete_collection(collection.id)
         await self._audit.record(
             actor,
-            "knowledge.collection_deleted",
+            AuditAction.KNOWLEDGE_COLLECTION_DELETED,
             target=collection.id,
             detail={"name": collection.name, "documents": str(len(documents))},
         )
@@ -249,7 +253,7 @@ class ManageKnowledge:
         # recorded here and must not be. security.md section 9.2.
         await self._audit.record(
             actor,
-            "knowledge.document_uploaded",
+            AuditAction.KNOWLEDGE_DOCUMENT_UPLOADED,
             target=document_id,
             detail={
                 "filename": safe_name,
@@ -271,7 +275,7 @@ class ManageKnowledge:
         await self._forget_document(document)
         await self._audit.record(
             actor,
-            "knowledge.document_deleted",
+            AuditAction.KNOWLEDGE_DOCUMENT_DELETED,
             target=document_id,
             detail={"filename": document.filename},
         )

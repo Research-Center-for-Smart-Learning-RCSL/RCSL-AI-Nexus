@@ -23,6 +23,7 @@ from contextlib import aclosing
 
 from app.application.use_cases.manage_models import ModelStateCommitterPort
 from app.domain.entities.actor import Actor, Scope
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.model import Model, ModelState, RuntimeKind
 from app.domain.exceptions import ModelNotFoundError, ModelStateConflictError
 from app.domain.ports.infrastructure_ports import JobProgressPort, JobStatus
@@ -80,7 +81,10 @@ class DownloadModel:
         )
         await self._jobs.set(status, ttl_seconds=JOB_TTL_SECONDS)
         await self._audit.record(
-            actor, "model.download_started", target=model.id, detail={"job": status.job_id}
+            actor,
+            AuditAction.MODEL_DOWNLOAD_STARTED,
+            target=model.id,
+            detail={"job": status.job_id},
         )
         return status
 

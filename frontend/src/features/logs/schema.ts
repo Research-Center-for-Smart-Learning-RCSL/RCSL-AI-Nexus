@@ -43,71 +43,12 @@ export type LogFilters = {
  * which is advice that cannot work: there is no value between `user` and
  * `user.invited` that matches anything.
  *
- * A `datalist` rather than a `select`, so a name added to the backend after
- * this list was written is still typeable rather than unreachable. Kept
- * alphabetical to match how it renders.
+ * A `datalist` rather than a `select`, so a name the backend gained after this
+ * bundle was built is still typeable rather than unreachable.
  *
- * **It had drifted by eight names before 2026-08-08**, found while adding
- * `prompt_log.read`: both `debug_window_set` events, all three
- * `prompt_template.*` and both `retention.*` had shipped without being added
- * here. Every one of them is an action an operator could only filter for by
- * already knowing its exact spelling — which is the failure this list was
- * written to remove, reappearing because the list and the actions live in
- * different languages with nothing joining them.
- *
- * The durable fix is the one `/admin/roles` already uses for the role
- * catalogue: serve the set from the table that writes it, so the screen
- * explaining a thing is generated from the thing. Recorded in PROGRESS
- * 2026-08-08 rather than done here, because it is a different change from the
- * one this list was touched for.
+ * **Generated, since the hand-kept version drifted by eight names** before
+ * 2026-08-08. Re-exported from here rather than imported directly by the table,
+ * so the screen keeps taking its vocabulary from one module whether or not a
+ * given part of it is generated.
  */
-export const AUDIT_ACTIONS = [
-  'api_key.debug_window_set',
-  'api_key.issued',
-  'api_key.revoked',
-  'api_key.updated',
-  'authz.denied',
-  'bootstrap.first_admin',
-  'knowledge.collection_created',
-  'knowledge.collection_deleted',
-  'knowledge.document_deleted',
-  'knowledge.document_uploaded',
-  'model.deleted',
-  'model.download_started',
-  'model.loaded',
-  'model.registered',
-  'model.unloaded',
-  'model.updated',
-  'node.registered',
-  'node.removed',
-  'node.updated',
-  'prompt_log.read',
-  'prompt_template.created',
-  'prompt_template.deleted',
-  'prompt_template.updated',
-  'retention.policy_set',
-  'retention.purged',
-  'routing_policy.deleted',
-  'routing_policy.saved',
-  'tenant.created',
-  'user.debug_window_set',
-  'user.deleted',
-  'user.disabled',
-  'user.enabled',
-  'user.invitation_accepted',
-  'user.invitation_reissued',
-  'user.invited',
-  'user.password_changed',
-  'user.password_reset_consumed',
-  'user.password_reset_issued',
-  'user.password_verified',
-  'user.recovery_code_used',
-  'user.role_changed',
-  'user.sign_in_failed',
-  'user.sign_in_throttled',
-  'user.signed_in',
-  'user.signed_out',
-  'user.totp_enrolled',
-  'user.totp_reenrolled',
-  'user.updated',
-] as const;
+export { AUDIT_ACTIONS, type KnownAuditAction } from '@/lib/generated/audit-actions';

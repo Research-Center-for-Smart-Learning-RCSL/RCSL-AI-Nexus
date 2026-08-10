@@ -18,7 +18,7 @@ import {
 import { EmptyState } from '@/components/composed/empty-state';
 import { ErrorState } from '@/components/composed/error-state';
 import { useLogs } from '@/features/logs/hooks/use-logs';
-import { AUDIT_ACTIONS, type AuditEntry } from '@/features/logs/schema';
+import { AUDIT_ACTIONS, type AuditEntry, type KnownAuditAction } from '@/features/logs/schema';
 
 const PAGE_SIZE = 50;
 // The three values the backend writes, and the filter is an exact match on the
@@ -95,9 +95,7 @@ export function LogsTable() {
   // An exact match that found nothing is a different situation from a filter
   // nobody set, and only one of them has advice worth giving.
   const filtered = Boolean(action || outcome);
-  const unknownAction = Boolean(
-    action && !AUDIT_ACTIONS.includes(action as (typeof AUDIT_ACTIONS)[number]),
-  );
+  const unknownAction = Boolean(action && !AUDIT_ACTIONS.includes(action as KnownAuditAction));
 
   if (error) {
     return <ErrorState error={error} onRetry={() => void refetch()} />;

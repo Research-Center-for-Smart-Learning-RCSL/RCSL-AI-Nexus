@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from app.domain.entities.actor import Actor, Role, Scope
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.invitation import Invitation, InvitationPurpose
 from app.domain.entities.user import User
 from app.domain.exceptions import UserAlreadyExistsError, UserNotFoundError
@@ -103,7 +104,7 @@ class IssueInvitation:
         issued = await self._issue(user, InvitationPurpose.ONBOARD)
         await self._audit.record(
             actor,
-            "user.invited",
+            AuditAction.USER_INVITED,
             target=user.id,
             detail={"login": user.login, "role": role.value},
         )
@@ -124,7 +125,7 @@ class IssueInvitation:
             raise UserAlreadyExistsError(detail=f"user {user.id} already enrolled")
 
         issued = await self._issue(user, InvitationPurpose.ONBOARD)
-        await self._audit.record(actor, "user.invitation_reissued", target=user.id)
+        await self._audit.record(actor, AuditAction.USER_INVITATION_REISSUED, target=user.id)
         return issued
 
     async def issue_password_reset(self, actor: Actor, *, user_id: str) -> IssuedInvitation:
@@ -140,7 +141,7 @@ class IssueInvitation:
             raise UserNotFoundError(detail=f"user {user.id} has not completed onboarding")
 
         issued = await self._issue(user, InvitationPurpose.PASSWORD_RESET)
-        await self._audit.record(actor, "user.password_reset_issued", target=user.id)
+        await self._audit.record(actor, AuditAction.USER_PASSWORD_RESET_ISSUED, target=user.id)
         return issued
 
     async def _require_user(self, user_id: str) -> User:

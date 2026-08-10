@@ -25,6 +25,7 @@ import logging
 import uuid
 
 from app.domain.entities.actor import Actor, Role
+from app.domain.entities.audit import AuditAction
 from app.domain.entities.user import User
 from app.domain.ports.repositories import UserRepositoryPort
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
@@ -80,7 +81,7 @@ class BootstrapFirstAdmin:
         )
         await self._audit.record(
             actor,
-            "bootstrap.first_admin",
+            AuditAction.BOOTSTRAP_FIRST_ADMIN,
             target=created.id,
             detail={"login": created.login},
         )
