@@ -15,7 +15,14 @@ export default defineConfig({
   testIgnore: process.env.E2E_FULL_STACK ? [] : ['**/full-stack/**'],
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 2 : 0,
+  // No retries for the full-stack paths, whatever CI would otherwise ask for.
+  // The database is seeded once per `run-e2e.mjs --full-stack`, before
+  // Playwright starts, and the path under it edits the policy it began by
+  // asserting. A retry therefore opens on state the previous attempt left, and
+  // fails at the *precondition* rather than at the claim -- so retries cannot
+  // pass, and the report names the wrong assertion. Re-running the command
+  // re-seeds, which is the recovery that works.
+  retries: process.env.E2E_FULL_STACK ? 0 : process.env.CI ? 2 : 0,
   // Retries exist to tell a flaky test from a broken one, not to hide it. With
   // this off, a test that fails and then passes leaves CI green and says so
   // only in a report nobody opens; the paths here assert cancellation and CSRF

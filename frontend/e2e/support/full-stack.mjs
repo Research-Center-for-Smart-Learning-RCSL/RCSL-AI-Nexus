@@ -63,7 +63,7 @@ function backendEnv(repoRoot, { databaseUrl, ollamaUrl }) {
   };
 }
 
-async function seedDatabase(repoRoot, env) {
+async function seedDatabase(repoRoot, env, register) {
   const seeder = spawnTracked(
     'uv',
     ['run', 'python', join(repoRoot, 'scripts', 'e2e_seed_stack.py')],
@@ -74,18 +74,29 @@ async function seedDatabase(repoRoot, env) {
       // migration failure is readable rather than swallowed into a timeout.
       stdio: ['ignore', 'pipe', 'inherit'],
       shell: isWindows,
+      detached: !isWindows,
     },
     'the E2E database seeder',
   );
+  // Registered before it is awaited, so a run that gives up on the deadline
+  // below still takes the process down. Left alive it keeps asyncpg connections
+  // and an Alembic advisory lock against the very database the next attempt has
+  // to drop and rebuild.
+  register(() => stopProcessTree(seeder, 'the E2E database seeder'));
 
   let output = '';
   seeder.stdout.setEncoding('utf8');
   seeder.stdout.on('data', (chunk) => {
     output += chunk;
   });
+  // `exit` fires when the process ends; the pipes can still be undrained at
+  // that point, so waiting on it alone can read an empty or truncated summary
+  // from a seeder that succeeded. This is the one place in the run where stdout
+  // carries something load-bearing, and the failure would be intermittent.
+  const drained = new Promise((resolve) => seeder.stdout.once('end', resolve));
 
   const outcome = await withTimeout(
-    resultOf(seeder),
+    Promise.all([resultOf(seeder), drained]).then(([result]) => result),
     Number(process.env.E2E_SEED_TIMEOUT_MS ?? 3 * 60_000),
     'Seeding the E2E database exceeded its 3-minute deadline.',
   );
@@ -140,7 +151,7 @@ export async function startFullStack({ repoRoot, databaseUrl }) {
 
   try {
     const env = backendEnv(repoRoot, { databaseUrl, ollamaUrl: ollama.url });
-    const seeded = await seedDatabase(repoRoot, env);
+    const seeded = await seedDatabase(repoRoot, env, (stop) => started.push(stop));
 
     // The runtime can only claim the models once the seeder has decided what
     // they are, which is why it starts empty and is told afterwards.
