@@ -213,6 +213,80 @@ jobs:
         # PROGRESS.md 2026-07-26 lived: a rewrite resolved at build time.
         run: pnpm build
 
+  # The browser-to-Postgres join, in its own job rather than as a step in
+  # `frontend`. It needs the backend's Python environment and a database, which
+  # nothing else in that job does, and keeping it separate means the paths that
+  # need no database stay runnable when this one is broken or slow.
+  e2e-full-stack:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: nexus
+          POSTGRES_PASSWORD: devpw
+          POSTGRES_DB: nexus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexus"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: pnpm exec playwright install --with-deps chromium
+
+      # The runner drops and rebuilds this schema from Alembic on every run, so
+      # it must be a database nothing else is using. The service container above
+      # exists for that and nothing else.
+      - name: Browser to gateway
+        working-directory: frontend
+        timeout-minutes: 20
+        env:
+          E2E_DATABASE_URL: postgresql+asyncpg://nexus:devpw@127.0.0.1:5432/nexus
+        run: pnpm test:e2e:full
+
+      - name: Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-full-stack
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   audit:
     runs-on: ubuntu-latest
     # `continue-on-error` is on each scanning step below, **not on this job**,
