@@ -64,7 +64,11 @@ size, and the machine spends those nineteen minutes under a gigabyte free with
 swap at 0 bytes and nothing degrading. The leading candidate is still to do
 nothing, now with more behind it. What actually limits the deployment is the
 static budget's 9.87 GiB of headroom, which none of this touches. See the
-2026-08-07 and 2026-08-05 entries and "Open decisions".
+2026-08-07 and 2026-08-05 entries and "Open decisions". **2026-08-13 priced the
+trade this question was opened to consider and found the more interesting
+question is next to it**: the present main model is dense, so it reads all of
+itself for every token, and the gain available from a sparse model of the same
+or larger size does not need the SSD at all.
 
 **The public entrance is verified as of today**, under the renamed hosts:
 `verify-public-entrance.sh` passes 9 of 9. What remains there is three items
@@ -204,15 +208,215 @@ remains the Phase 3 increment.
 
 ---
 
+## 2026-08-13
+
+### Buying a stronger model with the SSD: the exchange rate, and the two conditions on it
+
+**Nothing here was measured on this host, deployed, or changed.** This is
+analysis of the question the 2026-08-05 open decision left standing, worked out
+from figures this file already carries plus one it explicitly does not have.
+Every derived number below is labelled as derived. The reason for insisting on
+the label is the 2026-08-05 entry itself: an inference drawn from a correlation
+was wrong there, and the label it carried was the only reason anybody checked
+it.
+
+The prompt was an external project,
+[TurboFieldfare](https://github.com/drumih/turbo-fieldfare) (Apache 2.0, read
+at commit `7dc8b59`). It runs Gemma 4 26B-A4B in about 2 GB of RAM on Apple
+Silicon by keeping a 1.35 GB shared core and the KV cache resident and
+streaming routed experts off SSD per token, behind a 16-slot LFU cache, with
+prefill chunked to 128 tokens so one fetched expert serves many rows. It
+publishes a loopback OpenAI-compatible server, so it looks at first like a
+third `ModelRuntimePort` adapter. It is not one, for reasons in the last
+section. What it is good for is that its measurements price a trade this
+deployment has an open decision about.
+
+#### The exchange rate, and why the trade is a cliff rather than a slope
+
+2026-08-07 established the missing half of a usable model: 372 GB/s of memory
+bandwidth, measured, and predictive (it called 19-20 tok/s against 21.9
+actual). The other half is the SSD's cold sequential read, and 2026-08-05
+records that the ~7 GB/s figure in conversation is **a specification claim for
+this class of machine, not a measurement of this one**. That measurement was
+attempted and failed, because the pages were already resident and the read
+never reached the device.
+
+Taking the claim at face value, the ratio is **53x**, and the per-token cost
+model extends to:
+
+```
+t_token = B_resident / 372 + B_streamed / 7        (GB, GB/s)
+```
+
+The consequence worth carrying is not the ratio but its sensitivity. For a
+model touching 1 GB per token:
+
+| Share of per-token bytes coming off SSD | Time per token | Slowdown |
+|---|---:|---:|
+| 0% | 2.7 ms | 1.0x |
+| 1% | 4.1 ms | **1.5x** |
+| 10% | 16.7 ms | **6.2x** |
+| 25% | 37.7 ms | 14.0x |
+
+**One percent of per-token bytes on the SSD costs a third of the throughput.**
+So this is not a slope that can be walked down carefully, it is a cliff, and
+the only question that matters for any candidate is how few bytes per token can
+be made to miss. That is also the answer to why TurboFieldfare works at all:
+Gemma 4 26B-A4B activates 3.88B parameters of 26B, most of the hot path is the
+resident shared core, and its own experiments report an expert-cache hit rate
+near 66%, which keeps the miss volume at a few hundred MB per token.
+
+#### Condition one: the model has to be sparse
+
+A dense model reads every weight for every token, so streaming pins the token
+rate directly to SSD bandwidth. There is nothing to tune. The candidate class
+is exactly one thing: **large total parameters, small active fraction, MoE**.
+
+#### Condition two: the model still has to mostly fit
+
+This is where the headline "26B in 2 GB" stops generalising, and the arithmetic
+is unforgiving. Miss volume rises with the fraction of experts that are absent,
+and that fraction is multiplied by 53.
+
+Worked against the 51.2 GiB budget, using published specification figures for
+the candidates that have **not been verified here and must be before anything
+is downloaded**:
+
+| Candidate (unverified sizes) | Total | Active | Resident share | Derived |
+|---|---:|---:|---:|---:|
+| A ~63 GB / 5.1B-active MoE | ~63 GB | 5.1B | ~87% | ~20 tok/s |
+| A ~125 GB / 22B-active MoE | ~125 GB | 22B | ~44% | ~1 tok/s |
+
+Roughly 1.2x oversubscription of the budget is survivable. 2x is not, and the
+failure is not gradual. **A candidate that does not almost fit is not a slow
+option, it is not an option.**
+
+#### The finding that reorders the whole question: sparsity beats streaming
+
+2026-08-07 measured `gemma4:31b-it-q8_0` at **13.6 tok/s**, dense, 31.4 GiB
+resident, because a dense model reads all 31.4 GiB for every token. The first
+candidate in the table above is a much larger model that reads about 2.7 GB per
+token, and lands faster.
+
+So on this hardware the largest available gain does not require SSD streaming
+at all. It requires **moving from a dense model to a sparse one**, which is
+better on both axes at once: more total parameters and fewer bytes per token.
+Streaming only enters as the mechanism that absorbs the overspill when such a
+model is slightly too big, and the OS is already doing a page-granularity
+version of it unassisted, which 2026-08-05 established and 2026-08-07 timed at
+a 19-minute tail.
+
+That reorders the experiment list at the bottom of this entry, and it means the
+interesting question is no longer "can the SSD take some of this" but "**is
+there a sparse model in the size class this machine can nearly hold**".
+
+**Prompt evaluation strengthens this rather than blocking it, which reverses
+the first reading of it.** 2026-08-07 measured q4 and q8 prompt evaluation as
+identical (189.4 against 189.9 at 9k, 150.5 against 152.0 at 32k) and drew the
+correct conclusion: it is compute-bound, not bandwidth-bound. Compute per token
+scales with **active** parameters, so a 5B-active model should evaluate prompts
+faster than the present 30.7B dense one, not slower, and the 556-second worst
+case that sits against a 600-second read timeout should improve. The first
+version of this analysis had prefill as the wall, on the strength of
+TurboFieldfare's M2 prefill numbers, and that was reasoning from a machine
+whose model does not fit at all. **Prefill is only the wall in the streaming
+regime**, where a prefill chunk touches most experts and the cost turns from
+compute into IO. It is one more reason the model has to nearly fit.
+
+#### Two things in this repository would block it, and one is a real decision
+
+**`assert_can_load` refuses first.** `DEFAULT_HEADROOM_FRACTION = 0.8` gives
+51.2 GiB and a candidate near 63 GB does not pass. The guardrail was built on
+the assumption that resident means wired means unavailable, and 2026-08-05
+disproved exactly that assumption on this machine: wired went from 40.6 GB to
+2.3 GB with nothing unloaded and every model still reported resident. A model
+that is deliberately oversubscribed needs `MemoryBudgetService` to distinguish
+**what must stay resident** from **what may be evictable file-backed pages**,
+and that is a [security.md](./architecture/security.md) section 4.3 change
+rather than a constant to edit. It is also the one piece of code work on this
+path.
+
+**`MAX_CONTEXT_LENGTH` may still have to move, but for the KV cache rather than
+for prefill.** 65536 tokens of KV at whatever geometry the candidate has is a
+resident cost that competes with the experts, and context is superlinear on
+unified memory. Whatever is left after that competition is what decides the
+miss rate, so the context ceiling and the model choice are one decision, in the
+same way `config.py` already says the ceiling and `REQUEST_TIMEOUT_SECONDS` are.
+
+#### TurboFieldfare itself is not the vehicle
+
+It cannot be pointed at another checkpoint. The `.gturbo` layout, the Metal
+kernels, the 25 sliding-window plus 5 full-attention split, and the router
+shapes are all specific to Gemma 4 26B-A4B. Using it for a different model is a
+Swift and Metal port, not a configuration.
+
+As a runtime adapter it is worse than MLX on the port's own terms: no `pull`
+(installation is a separate CLI), no `unload`, no residency endpoint, no
+`embed`, no `tool_choice: required`, one model fixed at process start, and its
+own documentation requires that only one model-owning process runs at a time,
+which contradicts the multi-resident design the registry and the budget are
+built around. Its own
+[benchmarks](https://github.com/drumih/turbo-fieldfare/blob/main/docs/BENCHMARKS.md)
+also measure it at 31-35 tok/s against mlx-lm's 76-82 on the same host and
+checkpoint, so on a machine with memory to spare it is 2.4x slower for nothing.
+
+What is worth taking is the design, recorded in
+[SYSTEM_DESIGN.md](https://github.com/drumih/turbo-fieldfare/blob/main/docs/SYSTEM_DESIGN.md):
+a bounded expert cache with an eviction policy, bounded parallel `pread`
+straight into GPU-visible buffers, chunked prefill so a fetched expert serves
+many rows, and overlapping the resident shared-expert branch with the IO. That
+is what a page cache does not do, and it is the difference between the 66% hit
+rate they measure and whatever the OS happens to achieve.
+
+#### Methodology worth importing regardless of the above
+
+[Validation and measurement lessons](https://github.com/drumih/turbo-fieldfare/blob/main/docs/experiments/summaries/09-validation-and-measurement-lessons.md)
+is the same discipline this file keeps arriving at, from a different direction,
+and three of its rules apply to work already planned here:
+
+- **Interleave A/B rounds.** Apparent 15-100% swings, including apparent 2x
+  wins on a first run, disappeared under interleaved ordering. Any comparison
+  run for the q4 quality question or for a candidate model should be ordered so
+  that warm-up and thermal state cannot be assigned to one variant.
+- **Mechanism counts are not outcomes.** They cut 21,217 allocations to two and
+  long prefill got 9% slower. End-to-end time stays the promotion gate.
+- **Profiled throughput is diagnostic only.** 6.14 tok/s clean, 4.23 under
+  instrumentation, 6.34 on a production-behaviour timeline. Three different
+  questions, not three samples.
+
+#### Not measured, and what each would take
+
+- **The SSD's cold sequential read on this machine.** Still the number the
+  entire model above rests on, still a specification claim, and now
+  load-bearing rather than incidental. Needs the privileges to drop the page
+  cache, and one sitting.
+- **Whether a sparse candidate in the right size class exists and is any good.**
+  The sizes in the table are published figures nobody here has checked, and
+  capability is a separate question from arithmetic. The ten-rung harness
+  answers "can the loop run", and 2026-08-07 already recorded that it has no
+  resolution at the level where q4 and q8 differ, so it will not answer this
+  either.
+- **Prompt evaluation for a low-active-parameter model.** Predicted to improve,
+  never observed. It is cheap to measure and it gates the context ceiling.
+- **What the KV cache costs at 65536 for a candidate's geometry.** This competes
+  with the experts for the same memory, and nobody has driven a request to the
+  ceiling and watched the figure, which 2026-08-05 also listed and which is now
+  a harder blocker than it was.
+- **Whether the OS evicts file-backed pages under real pressure**, still open
+  from 2026-08-05, and now the mechanism the whole approach would depend on
+  rather than a curiosity.
+
+---
+
 ## 2026-08-10
 
 ### The browser now reaches the gateway, and the join was the whole point
 
-The entry above ends by naming what was missing: "the browser, admin API,
-Postgres, gateway and a controllable runtime in one harness". That is now
-`pnpm test:e2e:full`, and the assertion it exists for is one line — the model
-reference the gateway asked its runtime for, after the browser edited the policy
-through the real form.
+The 2026-08-08 current-state block ends by naming what was missing: "the
+browser, admin API, Postgres, gateway and a controllable runtime in one
+harness". That is now `pnpm test:e2e:full`, and the assertion it exists for
+is one line — the model reference the gateway asked its runtime for, after the
+browser edited the policy through the real form.
 
 **Two green suites did not add up to this one, and that is the finding rather
 than the harness.** `routing-policies.spec.ts` proves the form sends the right

@@ -244,6 +244,39 @@ No open decisions block Phase 1.
   survives a full-context request. The "unexplained 3 GB" is closed: it was
   GiB against decimal GB, and the budget's units are consistent
 
+  **Priced 2026-08-13, and the pricing reorders the question.** Extending the
+  372 GB/s bandwidth model with the SSD's ~7 GB/s gives a ratio of 53x, and the
+  sensitivity is the finding: **1% of per-token bytes coming off SSD costs a
+  third of the throughput, 10% costs a factor of six**. So "spend SSD for RAM"
+  is a cliff rather than a slope, it works only for MoE models with a small
+  active fraction, and only while the model still nearly fits. Roughly 1.2x
+  oversubscription of the 51.2 GiB budget is survivable and 2x is not. The
+  larger finding is that this deployment does not need the trade to get the
+  gain: `gemma4:31b-it-q8_0` is **dense**, so it reads all 31.4 GiB per token
+  for 13.6 tok/s, while a much larger sparse MoE reads a few GB per token and
+  lands faster. Moving from dense to sparse is better on both axes at once.
+  Prompt evaluation is compute-bound (q4 and q8 measured identical), so a
+  low-active-parameter model should improve the 556-second worst case rather
+  than threaten it. Full derivation, the two blockers, and what is still
+  unmeasured in [PROGRESS.md](./PROGRESS.md) 2026-08-13. **The number the whole
+  model rests on is still a specification claim**: nobody has measured this
+  machine's cold sequential SSD read, and the one attempt hit resident pages.
+
+- **Whether a sparse model exists in the size class this machine can nearly
+  hold, and whether it is any better.** Raised 2026-08-13 by the entry above,
+  and it is the question that would actually change what this platform serves.
+  Two things gate it and neither is a download. `assert_can_load` refuses
+  anything past 51.2 GiB, and that guardrail assumes resident means wired means
+  unavailable, which 2026-08-05 disproved on this machine (40.6 GB wired to
+  2.3 GB with nothing unloaded); a deliberately oversubscribed model needs
+  `MemoryBudgetService` to separate what must stay resident from what may be
+  evictable file-backed pages, which is a [security.md](./architecture/security.md)
+  §4.3 change rather than a constant. And the KV cache at `MAX_CONTEXT_LENGTH`
+  competes with the experts for the same memory, so the context ceiling and the
+  model choice are one decision. Capability is separate from arithmetic: the
+  ten-rung harness already has no resolution at the level where q4 and q8
+  differ, so it will not settle this either.
+
 Settled:
 
 - Backend structure: full hexagonal architecture ([backend.md](./architecture/backend.md))
