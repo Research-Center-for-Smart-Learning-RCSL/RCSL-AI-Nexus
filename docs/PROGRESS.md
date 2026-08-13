@@ -70,6 +70,16 @@ question is next to it**: the present main model is dense, so it reads all of
 itself for every token, and the gain available from a sparse model of the same
 or larger size does not need the SSD at all.
 
+**The SSD half is closed as of 2026-08-14, by measurement, and the answer is
+no.** Through the mmap page faults Ollama uses the disk delivers 0.89 GB/s, not
+the 7 GB/s the pricing assumed — and at a measured 1.29x oversubscription prompt
+evaluation collapses 150x, ten times past the per-read timeout. What replaces it
+is better and needs no disk: `qwen3.6:35b-a3b-q8_0` fits in 37 GB and measures
+5.1x the generation and 7.7x the prompt evaluation of the deployed model. It is
+**not** measurably smarter — twelve checked tasks put three candidates within
+noise of each other — so the case for switching rests on the wall clock. Nothing
+has been switched. See the 2026-08-14 entry.
+
 **The public entrance is verified as of today**, under the renamed hosts:
 `verify-public-entrance.sh` passes 9 of 9. What remains there is three items
 the script does not cover — explicit A records (the names are still
@@ -205,6 +215,203 @@ That needs the browser, admin API, Postgres, gateway and a controllable runtime
 in one harness. The current policy path proves the management UI contract; the
 existing backend integration tests prove persistence; their behavioural join
 remains the Phase 3 increment.
+
+---
+
+## 2026-08-14
+
+### The SSD is measured, and the number yesterday's entry rests on was a ceiling
+
+**Measured on this host. Nothing was deployed or changed.** The 2026-08-05 open
+decision asked for this machine's cold sequential SSD read and the 2026-08-05
+attempt failed because the pages were already resident. Yesterday's entry priced
+an entire trade on the ~7 GB/s specification claim and said so plainly. It is
+now measured, and the headline is not the number.
+
+The machine is an M4 Max with 64 GB and an `APPLE SSD AP4096Z`, 4 TB. Capacity
+matters here for a reason capacity usually does not: Mac Studio storage modules
+carry four NAND chips, and a 4 TB is two modules, so this configuration has
+eight channels where a 1 TB has four. Above 7 GB/s is only reached on the
+eight-channel parts. **The specification claim was the right claim for this
+machine, and it is the top of the range rather than the middle.**
+
+`purge` needs root and reading a file larger than RAM would evict the model
+weights and pay the 19-minute re-residency tail measured on 2026-08-07, so the
+probe uses `F_NOCACHE` (fcntl 48), which takes one descriptor out of the unified
+buffer cache without privileges.
+
+**Two attempts were wrong before this one, and the thing that caught them was
+not the code.** The first reported 11.30 GB/s; the second reported **72.96
+GB/s** for parallel reads, against a device whose ceiling is 7-8 GB/s. No
+storage does that, so those reads were being answered from memory. `F_NOCACHE`
+stops macOS *caching* what it reads and does not stop it *answering* from pages
+already resident, which the earlier passes over the same file had made them. The
+fix is that no configuration reads any byte twice: one file, disjoint regions,
+each configuration given a region nothing has touched, and random offsets drawn
+as a shuffled permutation rather than independently.
+
+Measured that way, on first touch:
+
+| access shape | GB/s | who reads like this |
+|---|---:|---|
+| 8 threads x 1 MiB, random permutation | **7.31** | a purpose-built expert cache |
+| 8 threads x 256 KiB | 7.16 | the same |
+| single reader, 16 MiB sequential | 6.47 | loading a model |
+| single reader, 1 MiB sequential | 2.50 | |
+| **mmap page faults, every 16 KiB page** | **0.89** | **Ollama on a model that does not fit** |
+| single reader, 16 KiB, no readahead | 0.34 | the floor |
+
+The control read one region twice: 4.58 GB/s on first touch against 5.79 on
+re-read, a ratio of 1.26. Had `F_NOCACHE` been failing the way it failed in
+attempt two, that ratio would have been several times larger.
+
+**The finding is the 21x spread, not any row in it.** "The SSD does N GB/s" is
+not an input to a per-token cost model without saying how it is read, and which
+row applies is a property of the *runtime* rather than of the disk.
+
+### What that does to yesterday's entry, which merged the day before this one
+
+2026-08-13 built its model on 372 / 7 = 53x. For the runtime this deployment
+actually runs, the ratio is **372 / 0.89 = 418x**. Three of its conclusions move:
+
+- **"Roughly 1.2x oversubscription is survivable and 2x is not"** is wrong in the
+  direction that matters. Measured below: at 1.29x, prompt evaluation collapses
+  by two orders of magnitude. **No oversubscription is survivable through this
+  runtime.**
+- **The 53x ratio** is reachable only by a runtime doing bounded parallel reads
+  at 256 KiB or above -- which is exactly the TurboFieldfare design that entry
+  praised and then correctly ruled out as unusable here.
+- **"Sparsity beats streaming"** survives, and understates itself: the gain
+  needs no SSD at all, and the streaming half of the argument is dead.
+
+ROADMAP has been corrected in both places rather than left to be read together.
+
+### Oversubscription, measured on a real model instead of derived
+
+`qwen3.6:35b-a3b` ships at both `q8_0` (38 GB, fits) and `bf16` (71 GB, 1.29x
+over the 51.2 GiB budget). Same weights, two residency regimes, so the
+oversubscription penalty is isolated from every other difference -- the shape
+2026-08-07 wanted when it found its own "stronger than glm" comparison invalid
+for having varied quantisation at the same time.
+
+Both at `num_ctx=8192`, median of two interleaved rounds:
+
+| | generation | prompt eval @4434 | resident |
+|---|---:|---:|---:|
+| `35b-a3b-q8_0` | 65.25 tok/s | **1528.8 tok/s** | 37 GB |
+| `35b-a3b-bf16` | 4.45 tok/s | **10.2 tok/s** | 71 GB |
+
+Generation falls 14.6x. **Prompt evaluation falls 150x.** A full
+`MAX_CONTEXT_LENGTH` prompt would take 6425 seconds of prefill against the
+600-second `request_timeout_seconds`, over by **10.7x** -- and raising
+`generation_deadline_seconds` cannot touch it, because prefill emits no bytes
+and is bounded by the per-read timeout instead.
+
+**The mechanism is not the one predicted.** `ollama ps` reports the bf16 model as
+**27%/73% CPU/GPU**: Ollama splits layers rather than streaming experts. On
+unified memory that frees no memory at all, it only moves computation to the
+slower side. The derived figure from the page-fault rate was 0.76 tok/s for
+generation; the measured 4.45 is better, and the measured prefill is far worse
+than anything derived here. **The derivation was wrong in both directions and
+right about the conclusion**, which is the weakest kind of correct.
+
+### The candidate worth switching to does not use the SSD at all
+
+Same run, all q8, `num_ctx=8192`, median of two interleaved rounds, prompt depth
+4434 tokens:
+
+| | generation | prompt eval | resident |
+|---|---:|---:|---:|
+| `gemma4:31b-it-q8_0` (deployed, dense) | 12.83 | 198.5 | 34 GB |
+| `qwen3.6:27b-q8_0` (dense) | 15.09 | 247.6 | 28 GB |
+| **`qwen3.6:35b-a3b-q8_0`** (MoE, 3B active) | **65.25** | **1528.8** | 37 GB |
+| `qwen3.6:35b-a3b-bf16` (1.29x over) | 4.45 | 10.2 | 71 GB |
+
+**5.1x generation and 7.7x prompt evaluation over what is deployed, for 3 GB
+more resident, entirely in memory.** The premise this work started from -- trade
+response time for a stronger model -- has no trade in it: the SSD route costs
+1/15th the generation and 1/150th the prefill, while the sparse model that fits
+is faster on both axes and carries more total parameters.
+
+### Capability: three models, and no measurement here tells them apart
+
+Speed is not the question, so the same three were scored on tasks a program
+checks: six code tasks passed or failed by running the model's function against
+tests it never saw, six with one exact answer. Nothing scored by reading it.
+Quantisation matched at q8, order rotated per round, three samples per task, and
+the scorer itself validated first -- six reference solutions had to pass and
+three deliberately wrong answers had to fail before any model was run.
+
+**The first attempt produced a false result and it looked like a finding.** Both
+Qwen candidates scored 0/18 on code. Qwen3.6 returns reasoning in `thinking` and
+the answer in `response`; at `num_predict` 900 the reasoning alone exhausted the
+budget, `done_reason` came back `length`, and `response` was empty every time.
+Scoring an empty string is scoring the budget. What caught it was not the
+harness but the implausibility of a 2026 model scoring zero on six code tasks.
+
+**`gemma4` was being truncated too**, which the first attempt hid by failing it
+less: 5/12 became 11/12 once deliberation was off and the budget raised. So all
+three had been measured under different rules, which is the same defect as
+2026-08-07's q4-against-q8 comparison wearing different clothes. `think: False`
+is now used throughout -- it is also what ROADMAP records for the `code` policy
+here -- and a truncated answer returns no result rather than a wrong one.
+
+Corrected, over three rounds:
+
+| | code | exact | total | wall clock per round |
+|---|---:|---:|---:|---:|
+| `gemma4:31b-it-q8_0` | 15/18 | 18/18 | 33/36 (92%) | 213-227 s |
+| `qwen3.6:27b-q8_0` | 17/18 | 18/18 | 35/36 (97%) | 261-312 s |
+| `qwen3.6:35b-a3b-q8_0` | **18/18** | 16/18 | 34/36 (94%) | **66-86 s** |
+
+**Ten of the twelve tasks saturated**, so the totals separate nothing at 36
+samples. Two tasks carried signal: `gemma4` failed the INI parser **0/3**, which
+is reproducible rather than noise, and `35b-a3b` managed the ordering puzzle only
+1/3. **The honest reading is parity**, and the same sentence 2026-08-07 had to
+write applies again -- this harness has no resolution at the level where these
+three differ.
+
+What is not parity is the wall clock: the same score in **a third of the time**,
+and `27b` is slowest of all despite a higher token rate, because it spends more
+tokens per answer.
+
+### The 2026-08-07 table cannot be compared against, and this is why
+
+Calibrating the harness against that entry reproduced `gemma4:31b-it-q8_0` at
+12.47 tok/s against its 13.6, and `glm-4.7-flash:q8_0` at **28.16 against its
+61.0**, with round-to-round spread under 0.1%. The instrument was not the
+problem. `config.py` names it: throughput "decays from 60.8 to 23.5 tok/s across
+a single generation". **Generation rate is a function of context depth, and that
+table records one number per model without saying at what depth.** A dense model
+barely moves across it (8%); a sparse one halves. Its `61.0` and `13.6` are not
+comparable with each other, and the 2026-08-13 entry compared them.
+
+Every figure in this entry carries its `num_ctx` and its measured prompt depth,
+and each model is probed at two depths so the decay is visible rather than
+averaged away.
+
+### Not measured, and what each would take
+
+- **Whether any of these three is actually better.** The task set saturated at
+  ten of twelve. A set that separates 27-35B models of this generation is the
+  work, and it is not a bigger version of this one -- it is tasks with more
+  steps that can still be checked by a program. **Designed the same day and not
+  run**: sixteen tasks in [model-evaluation.md](./model-evaluation.md), built on
+  the one thing that did discriminate here -- specifications that deviate from
+  the famous algorithm, where a model that pattern-matches fails and a model that
+  reads passes -- plus a calibration protocol, since this set's saturation was
+  discovered from its results rather than before them.
+- **Deliberation on.** Everything above runs with it off, matching the `code`
+  policy. It is where these models are strongest and where the wall-clock gap
+  would widen, since `35b-a3b` generates its reasoning 5x faster.
+- **A runtime that reads the SSD in the shape that pays.** The 8x between 0.89
+  and 7.31 GB/s is the whole difference between streaming being dead and being
+  viable, and nothing off the shelf collects it for an arbitrary checkpoint.
+- **128 GB.** Every wall in this entry is the 64 GiB, not the disk. The M4 Max
+  supports twice this, which would hold a 105 GB candidate at q4 resident and
+  need neither streaming nor a new runtime.
+- **The candidates under real work**, still the open item from 2026-08-07 and
+  untouched by any of this.
 
 ---
 

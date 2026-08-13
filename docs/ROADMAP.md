@@ -258,9 +258,23 @@ No open decisions block Phase 1.
   Prompt evaluation is compute-bound (q4 and q8 measured identical), so a
   low-active-parameter model should improve the 556-second worst case rather
   than threaten it. Full derivation, the two blockers, and what is still
-  unmeasured in [PROGRESS.md](./PROGRESS.md) 2026-08-13. **The number the whole
-  model rests on is still a specification claim**: nobody has measured this
-  machine's cold sequential SSD read, and the one attempt hit resident pages.
+  unmeasured in [PROGRESS.md](./PROGRESS.md) 2026-08-13.
+
+  **Closed 2026-08-14 by measuring both halves, and the streaming half of the
+  paragraph above is wrong.** The SSD is not one number: 7.31 GB/s with eight
+  parallel readers at 1 MiB, but **0.89 GB/s through the mmap page faults Ollama
+  actually uses**, a 21x spread where the applicable row is a property of the
+  runtime rather than the disk. So the ratio for this deployment is 418x rather
+  than 53x, and **"roughly 1.2x oversubscription is survivable" is wrong**: at a
+  measured 1.29x, on the same weights at two precisions, generation fell 14.6x
+  and **prompt evaluation fell 150x** (1528.8 to 10.2 tok/s), putting a full
+  context 10.7x past `request_timeout_seconds`. Ollama does not stream experts at
+  all -- it splits layers 27%/73% CPU/GPU, which frees no memory on a unified
+  architecture. **No oversubscription is viable through this runtime.** What
+  survives, and understates itself, is dense-to-sparse: `qwen3.6:35b-a3b-q8_0`
+  fits in 37 GB and measures 5.1x the generation and 7.7x the prompt evaluation
+  of what is deployed, needing no SSD whatsoever. See
+  [PROGRESS.md](./PROGRESS.md) 2026-08-14.
 
 - **Whether a sparse model exists in the size class this machine can nearly
   hold, and whether it is any better.** Raised 2026-08-13 by the entry above,
@@ -276,6 +290,27 @@ No open decisions block Phase 1.
   model choice are one decision. Capability is separate from arithmetic: the
   ten-rung harness already has no resolution at the level where q4 and q8
   differ, so it will not settle this either.
+
+  **Half-answered 2026-08-14, and the half that matters is still open.** The
+  arithmetic question is settled and the answer needed no oversubscription:
+  `qwen3.6:35b-a3b-q8_0` is 35B total on 3B active, fits in 37 GB, and measures
+  5.1x the generation and 7.7x the prompt evaluation of `gemma4:31b-it-q8_0`.
+  `assert_can_load` never comes into it, so the §4.3 change is no longer on this
+  path. **Whether it is any better is still unanswered, and now measured to be
+  unanswered**: scored against `gemma4:31b-it-q8_0` and `qwen3.6:27b-q8_0` on
+  twelve programmatically-checked tasks over three interleaved rounds, the three
+  landed at 92%, 97% and 94%, with ten of the twelve saturated. Parity at this
+  difficulty, three months of model generation apart -- and the same sentence
+  2026-08-07 had to write about q4 against q8. The switch is worth making on the
+  wall clock alone -- identical scores in a third of the time -- but it should
+  not be made on a claim of being smarter, because nothing here demonstrates one.
+
+  **A replacement task set is designed and NOT YET RUN**, in
+  [model-evaluation.md](./model-evaluation.md): sixteen tasks built to separate
+  models of this class rather than to be harder, with a calibration protocol that
+  pilots against the incumbent first and targets 40-70% instead of discovering
+  saturation from the results. Running it is the next piece of work on this
+  decision.
 
 Settled:
 
