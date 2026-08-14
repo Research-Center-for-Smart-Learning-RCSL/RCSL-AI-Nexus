@@ -323,7 +323,9 @@ The admin API uses a plainer shape:
 
 **There is a third shape, and it is not ours.** `install_error_handlers` registers a handler for `DomainError` and nothing else, so a request the schema rejects never reaches it: FastAPI answers 422 with its own `{"detail": [...]}`. That is a reasonable place to stop — the body is about the request's structure, not about the platform, and it leaks nothing. But it means "every error carries `code`" is false, and a client written to that rule throws on the one failure it is most likely to hit while being written. The public API page documents the exception explicitly for that reason; anything else claiming the envelope is universal is wrong.
 
-**Two statuses carry two codes each, which is why clients must branch on the code.** 403 is both `not_authorized` (the key is valid but was not issued for this capability) and `country_not_allowed` (the geo filter, §4.1a); 429 is both `rate_limited` (retry, `Retry-After` is set) and `quota_exceeded` (retrying inside the same day cannot succeed). Treating either pair as one condition produces a client that retries forever or reissues keys forever.
+**Two statuses carry several codes each, which is why clients must branch on the code.** 403 is `capability_not_issued` (the `model` field named a capability this key may not call — the message names the ones it may), `not_authorized` (the key may not perform the action at all) and `country_not_allowed` (the geo filter, §4.1a); 429 is both `rate_limited` (retry, `Retry-After` is set) and `quota_exceeded` (retrying inside the same day cannot succeed). Treating any of these as one condition produces a client that retries forever or reissues keys forever.
+
+`capability_not_issued` split off from `not_authorized` on 2026-08-14, on the rule the `no_available_model` split follows: a separate remedy earns a separate code. It is also the one refusal here that names what it refused, which it can afford because the capability came from the caller and the list is what `GET /v1/models` already returns them.
 
 ## 6. The Streaming Contract
 

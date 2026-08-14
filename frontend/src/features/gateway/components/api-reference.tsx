@@ -677,10 +677,23 @@ data: [DONE]`}
               </tr>
               <tr>
                 <td>403</td>
+                <td className="font-mono text-xs">capability_not_issued</td>
+                <td>
+                  The <code>model</code> field named something this key may not
+                  call — most often a client&apos;s own default model name
+                  rather than a capability. The message names what you asked for
+                  and what you may ask for instead; <code>GET /v1/models</code>{" "}
+                  is the same list. Retrying will not help.
+                </td>
+              </tr>
+              <tr>
+                <td>403</td>
                 <td className="font-mono text-xs">not_authorized</td>
                 <td>
-                  The key is valid but was not issued for the capability you
-                  asked for. Reissue or edit the key; retrying will not help.
+                  The key may not perform this action at all — it holds none of
+                  the scopes the endpoint requires. Distinct from the row above,
+                  which is about <em>which</em> capability was asked for; this
+                  one is not fixed by changing the <code>model</code> field.
                 </td>
               </tr>
               <tr>
