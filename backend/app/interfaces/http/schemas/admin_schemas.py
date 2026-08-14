@@ -490,7 +490,13 @@ class CreateApiKeyRequest(BaseModel):
     quota_tokens_per_day: int = Field(ge=1)
     """Same reasoning, plus the two verbs disagreed: on create the router
     mapped `0` to `None` (no quota at all), while on update `0` was stored
-    literally and refused every request forever. Zero is now inexpressible."""
+    literally and refused every request forever. Zero is now inexpressible.
+
+    `_per_day` names the size of the window, not a reset time: it is the
+    trailing 24 hours, so nothing about it happens at midnight. Sizing it needs
+    the prompt in mind, because that is what it mostly meters — an agent
+    resends its whole conversation every turn, so a session ending on a 60k
+    context has spent roughly 60k on each of its late turns rather than once."""
     allowed_cidrs: list[str] = Field(default_factory=list)
     expires_at: UtcDatetime
     """Mandatory, with no "never" option, so that rotation is forced rather

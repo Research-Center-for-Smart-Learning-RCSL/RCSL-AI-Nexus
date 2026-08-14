@@ -560,6 +560,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   // is the index, so this includes just opening the app) is sent to the one
   // screen everybody can use, rather than left on a page whose data 403s. The
   // nav already hides these links; this covers the URL bar and bookmarks.
+  //
+  // The redirect is an effect, so it cannot stop the forbidden page mounting
+  // first — and mounting is what fires its queries. See `<main>` below, which
+  // is the half that keeps them from being sent.
   const onForbiddenRoute =
     status === 'authenticated' &&
     NAV.some(
@@ -812,7 +816,24 @@ export function AppShell({ children }: { children: ReactNode }) {
           {/* A flex column, so a page that wants the remaining height can ask
               for it with `flex-1` instead of guessing at the chrome above it in
               viewport units. */}
-          <main className="flex min-w-0 flex-1 flex-col p-4">{children}</main>
+          {/* The chrome stays; only the page is withheld. A screen's data
+              hooks fire on mount, and a refusal on this API is an
+              `authz.denied` audit row — so letting a forbidden page render for
+              the one frame before the effect above redirects was not a
+              cosmetic flash. Opening the app as a `user` lands on the
+              dashboard, which asks for `/admin/dashboard` and `/admin/usage`,
+              and every such sign-in wrote two denials naming scopes the reader
+              was never shown a link to and had not reached for. That is noise
+              in the one record §9.2 keeps for reading deliberate attempts, and
+              on 2026-08-14 it was read as exactly that: those rows are what
+              suggested the operator of key 68953ceb could not see their own
+              usage, which they can — `/usage` serves `usage:read_own` from
+              `/usage/me`. Rendering nothing here is not a second access
+              control; the server refuses these calls whatever the client
+              does. */}
+          <main className="flex min-w-0 flex-1 flex-col p-4">
+            {onForbiddenRoute ? null : children}
+          </main>
         </div>
       </div>
 

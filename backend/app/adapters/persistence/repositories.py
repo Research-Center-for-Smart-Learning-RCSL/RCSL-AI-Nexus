@@ -657,6 +657,42 @@ class PostgresUsageRepository(_TenantScoped):
         )
         return int(total or 0)
 
+    async def quota_recovers_at(
+        self, api_key_id: str, *, tokens_to_release: int
+    ) -> datetime | None:
+        """When enough spend will have aged out for the key to be admitted again.
+
+        The window `tokens_used_today` reads is rolling, not a calendar day, so
+        an exhausted quota does not clear at midnight and it does not clear all
+        at once: it clears one past request at a time, as each falls out of the
+        trailing 24 hours. This walks the same rows in order and returns the
+        moment the oldest `tokens_to_release` tokens have gone.
+
+        Returns None when the window holds less than that, which can only mean
+        the caller's arithmetic disagrees with the table — the quota check that
+        prompts this call reads both figures from the same rows.
+        """
+        since = datetime.now(UTC) - timedelta(days=1)
+        running = (
+            func.sum(UsageRecordRow.tokens + UsageRecordRow.prompt_tokens)
+            .over(order_by=UsageRecordRow.at)
+            .label("released")
+        )
+        window = self._scope(
+            select(UsageRecordRow.at.label("at"), running).where(
+                UsageRecordRow.api_key_id == api_key_id,
+                UsageRecordRow.at >= since,
+            ),
+            UsageRecordRow.tenant_id,
+        ).subquery()
+
+        # The row that tips the running total past what has to be released; it
+        # is still inside the window until 24 hours after it was written.
+        oldest = await self._session.scalar(
+            select(func.min(window.c.at)).where(window.c.released >= tokens_to_release)
+        )
+        return oldest + timedelta(days=1) if oldest is not None else None
+
     async def last_used_by_key(self) -> dict[str, datetime]:
         """One aggregate for every key, not one query per key.
 

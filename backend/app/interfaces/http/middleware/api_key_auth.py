@@ -90,12 +90,46 @@ async def _assert_within_rate_limit(key: ApiKey, cache: CachePort) -> None:
         raise RateLimitedError(retry_after_seconds=60)
 
 
-async def authenticate_api_key(
+async def _assert_within_quota(key: ApiKey, usage: PostgresUsageRepository) -> None:
+    """Rolling 24-hour token budget, both halves of the work counted.
+
+    The window trails the current moment rather than resetting at midnight, so
+    a caller that exhausts it is not waiting for a date to change; it is
+    waiting for its own past requests to age out one by one. That distinction
+    is invisible from outside, which is why the refusal carries the wait rather
+    than leaving the caller to infer it from the field's name.
+    """
+    if key.quota_tokens_per_day is None:
+        return
+
+    used = await usage.tokens_used_today(key.key_id)
+    if used < key.quota_tokens_per_day:
+        return
+
+    # One token of headroom is enough to be admitted, hence the `+ 1`: the
+    # check above refuses on `>=`, so releasing exactly the overshoot would
+    # land back on the boundary and refuse again.
+    recovers_at = await usage.quota_recovers_at(
+        key.key_id, tokens_to_release=used - key.quota_tokens_per_day + 1
+    )
+    wait = None
+    if recovers_at is not None:
+        wait = max(1, int((recovers_at - datetime.now(UTC)).total_seconds()))
+
+    raise QuotaExceededError(
+        detail=f"key {key.key_id} used {used} of {key.quota_tokens_per_day}",
+        retry_after_seconds=wait,
+    )
+
+
+async def _authenticate(
     request: Request,
-    service: Annotated[ApiKeyService, Depends(get_api_key_service)],
-    keys: Annotated[PostgresApiKeyRepository, Depends(get_api_key_repository)],
-    usage: Annotated[PostgresUsageRepository, Depends(get_usage_repository)],
-    cache: Annotated[CachePort, Depends(get_cache)],
+    service: ApiKeyService,
+    keys: PostgresApiKeyRepository,
+    usage: PostgresUsageRepository,
+    cache: CachePort,
+    *,
+    enforce_quota: bool,
 ) -> Actor:
     header = request.headers.get("authorization", "")
     if not header.lower().startswith(BEARER):
@@ -129,10 +163,8 @@ async def authenticate_api_key(
 
     await _assert_within_rate_limit(key, cache)
 
-    if key.quota_tokens_per_day is not None:
-        used = await usage.tokens_used_today(key.key_id)
-        if used >= key.quota_tokens_per_day:
-            raise QuotaExceededError(detail=f"key {key_id} used {used}")
+    if enforce_quota:
+        await _assert_within_quota(key, usage)
 
     return Actor(
         id=key.owner_id,
@@ -165,3 +197,37 @@ async def authenticate_api_key(
         # dependency the hexagon exists to hold. See §9.2.
         debug_logging_until=key.debug_logging_until,
     )
+
+
+async def authenticate_api_key(
+    request: Request,
+    service: Annotated[ApiKeyService, Depends(get_api_key_service)],
+    keys: Annotated[PostgresApiKeyRepository, Depends(get_api_key_repository)],
+    usage: Annotated[PostgresUsageRepository, Depends(get_usage_repository)],
+    cache: Annotated[CachePort, Depends(get_cache)],
+) -> Actor:
+    """Every check, for every endpoint that spends the hardware."""
+    return await _authenticate(request, service, keys, usage, cache, enforce_quota=True)
+
+
+async def authenticate_api_key_without_quota(
+    request: Request,
+    service: Annotated[ApiKeyService, Depends(get_api_key_service)],
+    keys: Annotated[PostgresApiKeyRepository, Depends(get_api_key_repository)],
+    usage: Annotated[PostgresUsageRepository, Depends(get_usage_repository)],
+    cache: Annotated[CachePort, Depends(get_cache)],
+) -> Actor:
+    """The same checks minus the token budget, for endpoints that spend none.
+
+    A token quota is a limit on inference, and applying it to a call that runs
+    no model refuses a request whose cost is a database read. The harm is not
+    the refusal itself but where it lands: every OpenAI-compatible client asks
+    for the model list at startup, so an exhausted quota stopped an agent from
+    starting rather than from generating, and the operator saw a client that
+    could not connect instead of a key that had run out.
+
+    Everything that protects the platform still runs — the key must be valid,
+    active, within its per-minute rate limit, and from a permitted address and
+    country. Only the budget that this call cannot consume is skipped.
+    """
+    return await _authenticate(request, service, keys, usage, cache, enforce_quota=False)

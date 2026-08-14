@@ -175,6 +175,7 @@ export function EditApiKeyDialog({
                 name="quota_tokens_per_day"
                 label="Daily token quota"
                 type="number"
+                description="Rolling 24 hours, prompt included. Raising it takes effect on the next request; it does not clear spend already in the window."
               />
             </div>
 

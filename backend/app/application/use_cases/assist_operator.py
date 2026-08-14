@@ -149,10 +149,27 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
   rather than guessing; on Windows PowerShell may refuse to run `npm` until
   `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` is run once.
 
-  A `429` in the middle of a task is usually the client retrying after a
-  failure rather than the key's own limit. Check the Usage screen before
-  raising `rate_limit_rpm`: an agent makes roughly one request per step, and
-  even a long task rarely exceeds twenty in a minute.
+  **A `429` is two different problems and the body says which.** Read
+  `error.code`. `rate_limited` is the per-minute limit, which an agent rarely
+  reaches — roughly one request per step, seldom twenty in a minute — so it
+  usually means the client is retrying after some other failure, and raising
+  `rate_limit_rpm` would not have been the fix. `quota_exceeded` is the token
+  budget, and that one an agent reaches easily: every turn resends the whole
+  conversation, so a session that grows to a 60,000-token context spends
+  60,000 tokens on each of its remaining turns. Twenty turns of that is over a
+  million. Size `quota_tokens_per_day` against the session length the operator
+  expects, not against a per-request figure.
+
+  The refusal states its own wait now, in the message and in `Retry-After`.
+  The window is a rolling 24 hours rather than a calendar day, so the budget
+  returns gradually rather than at midnight — if an operator asks when their
+  key comes back, that projection is the answer, not "tomorrow".
+
+  An older Codex will still report only `exceeded retry limit, last status:
+  429` without the body. Ask them for the request id it prints. It will not be
+  on the Prompt Logs screen — a quota refusal is decided before the request
+  reaches inference, so nothing is logged there — but it is in the gateway's
+  application log, which an administrator can search.
 
   **Every local Codex surface reads `~/.codex/config.toml`** — the CLI, the IDE
   extension, and the Codex inside the ChatGPT desktop app. So configuring the
@@ -217,9 +234,11 @@ the platform supports in general — a key issued for it would be refused.
   {max_lifetime_days} days away. There is no "never expires" option; rotation
   is the point of the field.
 - `rate_limit_rpm` is requests per minute, from 1 to 100000.
-- `quota_tokens_per_day` is a daily token ceiling and must be at least 1. Zero
-  is not expressible in either direction, deliberately: it used to mean "no
-  quota" on one path and "refuse everything" on the other.
+- `quota_tokens_per_day` is a token ceiling over a rolling 24 hours — it does
+  not reset at midnight — and must be at least 1. It counts the prompt as well
+  as the answer, which for an agent is nearly all of it. Zero is not
+  expressible in either direction, deliberately: it used to mean "no quota" on
+  one path and "refuse everything" on the other.
 - `allowed_cidrs` restricts which source addresses may use the key. An empty
   list means unrestricted. It is the defence against a leaked key, so
   recommend it whenever the caller has a stable address.

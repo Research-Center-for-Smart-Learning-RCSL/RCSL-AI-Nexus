@@ -220,7 +220,101 @@ remains the Phase 3 increment.
 
 ## 2026-08-14
 
-### The SSD is measured, and the number yesterday's entry rests on was a ceiling
+### A user reported eleven characters, and all four defects were in what the platform said rather than in what it did
+
+The whole report was `exceeded retry limit, last status: 429 Too Many Requests,
+request id: req_8bd99618b79e4c73`. The request id did its job — one grep of the
+gateway log named the code, the key and the figure:
+
+```
+14:42:53 WARNING domain_error code=quota_exceeded status=429
+         path=/v1/responses request_id=req_8bd99618b79e4c73
+         detail=key 68953ceba2169efd used 1030804
+```
+
+Key `68953ceb` had spent 1,030,804 tokens against a quota of 1,000,000. The
+per-minute limit was 240 and the peak was three. **Nothing malfunctioned.** The
+quota did exactly what it was configured to do, and every layer between that
+decision and the person reading the error described it wrongly.
+
+**Twenty requests spent the million, and 99.6% of it was prompt.** Sixteen of
+them were one Codex session across eleven minutes: the context grew from 38,738
+tokens to 61,920 as the transcript accumulated, and every turn was charged the
+whole of it. Generated output over the entire day came to 4,564 tokens. The
+`/agent-setup` warning about "quadratic quota growth" written on 2026-08-07 was
+correct and was too abstract to size a field by; it now carries these numbers,
+and the sentence that matters is that **a one-million quota is one session, not
+one day**.
+
+**The `type` field said retry, and the client believed it.** `backend.md` has
+said since the gateway shipped that 429 carries two conditions and clients must
+branch on `code`. No OpenAI client library reads `code` — they select an error
+class from `type`, and `type` was derived from the status alone, so an
+exhausted quota introduced itself as `rate_limit_error`. Codex did the only
+thing that classification permits, and reported its own backoff running out
+rather than the quota. `insufficient_quota` is now set from the condition
+through `OPENAI_ERROR_TYPE_OVERRIDES`, walked over the MRO like the status map
+beside it. **A contract that only the documentation implements is not a
+contract**, and the place to look for others is anywhere a doc tells integrators
+to read a field the libraries do not.
+
+**`Retry-After: 3600` was a guess presented as a measurement.** The window is a
+rolling 24 hours — `tokens_used_today` sums `at >= now() - interval '1 day'` —
+so an exhausted key recovers request by request as each ages out, not at
+midnight and not all at once. For this key the first 37,921 tokens came back at
+13:33 the next day and the last at 14:42, and the header said one hour
+throughout. It is now projected from the same rows the quota is summed from
+(`quota_recovers_at`), stated in the public message in round units, and
+**omitted rather than guessed** when it cannot be projected. A wrong header is
+worse than none: it has the authority of a measurement and sends the caller
+back twenty-three hours early.
+
+**The model list was gated by a budget it cannot spend.** `GET /v1/models`
+shared `authenticate_api_key` with inference, so once the quota was gone the
+startup probe every OpenAI-compatible client makes returned 429 too — the log
+alternates `/v1/models` and `/v1/responses` refusals for five minutes. The
+operator's symptom was an agent that would not connect, which points at the
+network rather than at a key. It now authenticates through
+`authenticate_api_key_without_quota`, which keeps validity, expiry, rate limit,
+CIDR and country and drops only the token budget. A test asserts the list still
+refuses an invalid key, because the way an exemption expressed as a second
+dependency fails is by skipping more than it meant to.
+
+### Measured while diagnosing the above: the quota charges for work the machine does not do
+
+Ollama's `prompt_eval_count` is the full prompt length whether or not the
+prefix cache served it. Probed directly on this host, same 12,421-token prompt
+twice:
+
+| | `prompt_eval_count` | `prompt_eval_duration` | implied rate |
+|---|---|---|---|
+| cold | 12,421 | 18.096 s | 686 tok/s |
+| warm | 12,421 | 0.029 s | 434,301 tok/s |
+
+The count does not move; only the duration tells the truth. The same signature
+is in the incident's own rows: the first request evaluated 37,919 tokens in 268
+seconds (141 tok/s, the honest cold rate for `gemma4-31b-q8` here), while a
+later turn was charged 54,086 tokens and took 16 seconds — which at that rate
+would be 380 seconds of prefill. **Roughly 6% of the prompt tokens billed for
+that session were evaluated; the rest were cache hits that cost the hardware
+nothing.**
+
+That contradicts the premise `usage.py` records for charging prompt tokens at
+all — "the caller asked the hardware to do both halves of the work", and "on
+this machine prompt evaluation is most of the wait". It is most of the wait
+exactly once per conversation. `exceptions.py` has known the other half since
+2026-08-05: `RuntimeTimeoutError` tells callers to retry immediately *because*
+the prompt is already in the prefix cache.
+
+**Deliberately not changed.** Billing evaluated tokens rather than sent ones is
+a metering policy, it needs a column to keep `prompt_tokens` meaning what it has
+meant since 2026-08-04, and Ollama 0.32.4 reports no cached-token figure to
+derive it from — the duration is a three-order-of-magnitude signal but converting
+it to a count needs a per-model prefill rate this platform does not hold. The
+gateway could instead charge conversation growth, which needs no runtime
+cooperation, and that is a design to decide rather than to assume: the ROADMAP
+records this same decision being taken deliberately and then reversed on request
+once already.
 
 **Measured on this host. Nothing was deployed or changed.** The 2026-08-05 open
 decision asked for this machine's cold sequential SSD read and the 2026-08-05

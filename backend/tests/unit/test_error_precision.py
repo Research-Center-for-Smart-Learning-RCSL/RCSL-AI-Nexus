@@ -16,6 +16,7 @@ remedy must be stated truthfully:
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import aclosing
 from datetime import UTC, datetime, timedelta
 
@@ -33,6 +34,7 @@ from app.domain.entities.chat import Message, MessageRole
 from app.domain.entities.user import User
 from app.domain.exceptions import (
     NoAvailableModelError,
+    QuotaExceededError,
     RuntimeTimeoutError,
     ServerOverloadedError,
     StreamInterruptedError,
@@ -40,7 +42,7 @@ from app.domain.exceptions import (
 from app.infrastructure.concurrency import SemaphoreConcurrencyLimiter
 from app.infrastructure.config import get_settings
 from app.interfaces.http import request_context
-from app.interfaces.http.errors import install_error_handlers
+from app.interfaces.http.errors import error_response, install_error_handlers
 from app.interfaces.http.middleware.identity import resolve_tailnet_actor
 from app.interfaces.http.request_context import RequestContextMiddleware
 from tests.unit.fakes import FakeUsers
@@ -208,6 +210,56 @@ def test_a_500_is_json_with_an_envelope_and_the_id() -> None:
     assert body["error"]["code"] == "internal_error"
     assert body["error"]["request_id"].startswith("req_")
     assert response.headers["X-Request-Id"] == body["error"]["request_id"]
+
+
+def _quota_body(**kwargs: object) -> tuple[dict, dict]:
+    """Rendered through `error_response` rather than a route, because that is
+    the seam middleware uses and it is the one a route would exercise anyway."""
+    exc = QuotaExceededError(detail="key k used 9", **kwargs)
+    response = error_response(exc, envelope="openai")
+    return json.loads(bytes(response.body)), dict(response.headers)
+
+
+def test_a_spent_quota_is_not_typed_as_a_rate_limit() -> None:
+    """429 carries two conditions with opposite remedies. `code` has always
+    distinguished them and `type` did not, which left every OpenAI client
+    library — they select their error class from `type` — retrying a budget
+    that no amount of waiting inside the hour would return."""
+    body, _ = _quota_body(retry_after_seconds=3000)
+    assert body["error"]["type"] == "insufficient_quota"
+    # The code is the stable half of the pair and must not move with the type.
+    assert body["error"]["code"] == "quota_exceeded"
+
+
+def test_a_spent_quota_carries_the_wait_the_window_actually_implies() -> None:
+    body, headers = _quota_body(retry_after_seconds=61_200)
+    assert headers["retry-after"] == "61200"
+    assert "about 17 hours" in body["error"]["message"]
+
+
+def test_an_unprojectable_wait_sends_no_retry_after_at_all() -> None:
+    """The fixed hour this replaced was worse than nothing: a client that
+    believed it retried eleven times too early and learned nothing each time."""
+    body, headers = _quota_body()
+    assert "retry-after" not in headers
+    assert body["error"]["message"] == QuotaExceededError.public_message
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (45, "a moment"),
+        (600, "about 10 minutes"),
+        (3540, "about 59 minutes"),
+        (3600, "about an hour"),
+        (86_400, "about 24 hours"),
+    ],
+)
+def test_the_wait_is_rounded_to_something_a_person_can_act_on(seconds: int, expected: str) -> None:
+    """A projection off a rolling window is not precise, and quoting it to the
+    second would claim it is. The next request against the same key moves it."""
+    message = QuotaExceededError(retry_after_seconds=seconds).public_message
+    assert message.endswith(f"It recovers in {expected}.")
 
 
 def test_detail_stays_out_of_the_body_without_a_debug_window() -> None:
