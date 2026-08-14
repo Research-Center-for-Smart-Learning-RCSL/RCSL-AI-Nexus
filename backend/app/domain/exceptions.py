@@ -296,6 +296,51 @@ class NotAuthorizedError(DomainError):
     # Does not reveal whether the target resource exists.
 
 
+class CapabilityNotIssuedError(NotAuthorizedError):
+    code = "capability_not_issued"
+    public_message = "That capability is not available to this key."
+    """The one refusal in this family that names what it refused.
+
+    A subclass rather than a looser message on the parent: `not_authorized` is
+    deliberately opaque about whether the target exists, and every refusal on
+    every entrance shares it. Widening that to help one case would widen it for
+    all of them.
+
+    This case can afford to be specific because it discloses nothing the caller
+    does not already hold. The capability asked for is the one they just sent,
+    and the list is the same answer `GET /v1/models` returns to the same key —
+    so the message says out loud what one extra request would have said anyway.
+
+    What that buys is a caller who can fix it. On 2026-08-14 two integrators
+    sent the model name their client had picked for itself, and the only place
+    the reason existed was this deployment's log: the operator had to read it
+    for them, twice. The `model` field taking a capability rather than a model
+    name is this platform's one real divergence from every other provider, and
+    the refusal is exactly where somebody finds that out.
+    """
+
+    def __init__(
+        self,
+        *,
+        capability: str,
+        available: list[str],
+        detail: str | None = None,
+    ) -> None:
+        self.capability = capability
+        self.available = available
+        # Assigned before `super().__init__`, which reads `public_message` when
+        # no operator detail was given.
+        self.public_message = (
+            f"'{capability}' is not a capability this key may use. "
+            f"Available: {', '.join(available)}. "
+            "This platform's `model` field takes a capability, not a model name."
+            if available
+            else f"'{capability}' is not a capability this key may use, and this key "
+            "has been issued none. An administrator must reissue it."
+        )
+        super().__init__(detail)
+
+
 class InvalidCredentialsError(DomainError):
     code = "invalid_credentials"
     public_message = "Login or password is incorrect."

@@ -221,6 +221,7 @@ you about. Try a different model before touching anything else.
 |---|---|
 | `413 context_too_long` mid-task | The conversation grew past `MAX_CONTEXT_LENGTH`. Tool definitions and replayed calls count towards it, so a long agent session reaches it by accumulation. Start a fresh conversation, or raise the setting knowing what section 4.3 of security.md says about it |
 | `400 runtime_capability_unsupported` | The client sent `tool_choice: "required"` or named a function. Neither runtime can constrain decoding, so it is refused rather than quietly served as `auto`. Configure the client to send `auto` |
+| `403 capability_not_issued` | The `model` field named something this key may not call — most often the client's own default model name rather than a capability. The message names what you asked for and what you may ask for instead; `GET /v1/models` is the same list. See section 3 |
 | `429` early in a task | The key's requests-per-minute limit. See section 2 |
 | `503 runtime_timeout` on long conversations | Prompt evaluation outran the platform's read timeout. Retry immediately, once — the prompt is now in the runtime's prefix cache and the retry is nearly free. If the agent's SDK timeout is shorter than ~1600s it will kill the connection first and you will never see this code; size it up (see `/api-docs`, Timeouts) |
 | `503 overloaded` | Every inference slot was busy for the whole two-minute queue wait. The deployment is full, not broken; back off for `Retry-After` |

@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.adapters.authz.role_authorization import RoleAuthorization
+from app.application.use_cases.list_capabilities import ListCapabilities
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.entities.chat import (
@@ -169,10 +170,15 @@ def build(
     usage = RecordingUsage()
     limiter = SemaphoreConcurrencyLimiter(limit)
 
+    policies = FakePolicies(
+        RoutingPolicy(capability="chat", candidates=(RoutingCandidate("primary", 100),))
+    )
     use_case = RouteChatRequest(
-        policies=FakePolicies(
-            RoutingPolicy(capability="chat", candidates=(RoutingCandidate("primary", 100),))
-        ),
+        policies=policies,
+        # Only reached when refusing a capability the key was not issued, which
+        # none of these tests do; wired from the same fake so it would answer
+        # honestly if one did.
+        capabilities=ListCapabilities(policies=policies, authz=RoleAuthorization()),
         models=FakeRepo([model]),
         nodes=FakeRepo([node]),
         usage=usage,

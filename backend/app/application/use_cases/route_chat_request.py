@@ -27,6 +27,7 @@ import uuid
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
 
+from app.application.use_cases.list_capabilities import ListCapabilities
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.chat import (
     CompletionChunk,
@@ -38,7 +39,11 @@ from app.domain.entities.chat import (
 from app.domain.entities.model import Model, RuntimeKind
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.usage import UsageRecord
-from app.domain.exceptions import ContextTooLongError, NoAvailableModelError, NotAuthorizedError
+from app.domain.exceptions import (
+    CapabilityNotIssuedError,
+    ContextTooLongError,
+    NoAvailableModelError,
+)
 from app.domain.ports.infrastructure_ports import ConcurrencyLimiterPort
 from app.domain.ports.model_runtime_port import ModelRuntimePort
 from app.domain.ports.repositories import (
@@ -98,6 +103,7 @@ class RouteChatRequest:
         authz: AuthorizationPort,
         clock: Clock,
         max_tokens_ceiling: int,
+        capabilities: ListCapabilities,
         prompt_logs: PromptLogWriterPort | None = None,
         request_id: Callable[[], str | None] = lambda: None,
         max_context_chars: int = 4 * 32768,
@@ -140,6 +146,15 @@ class RouteChatRequest:
         self._runtimes = runtimes
         self._routing = routing
         self._concurrency = concurrency
+        self._capabilities = capabilities
+        """Read only when refusing, to tell the caller what they may ask for.
+
+        The use case rather than a second query over `policies`: the answer is
+        `servable ∩ issuable ∩ this key's own list`, and `list_capabilities.py`
+        says in as many words that deriving it twice is how the two come to
+        disagree. It costs one read on a path that is already ending, and
+        nothing at all on the path that succeeds.
+        """
         self._authz = authz
         self._clock = clock
         self._max_tokens_ceiling = max_tokens_ceiling
@@ -189,7 +204,17 @@ class RouteChatRequest:
         # the "no available model" answer below: the caller can fix this one,
         # and telling them it is a capacity problem sends them nowhere.
         if not actor.may_use(capability):
-            raise NotAuthorizedError(detail=f"key {actor.display} is not issued for {capability}")
+            # Named in the response, unlike every other refusal here. The
+            # caller sent this value and the list is what `GET /v1/models`
+            # already returns them, so nothing is disclosed that they could not
+            # have asked for directly — and without it the reason exists only
+            # in this deployment's log, where an integrator cannot reach it.
+            # See `CapabilityNotIssuedError`.
+            raise CapabilityNotIssuedError(
+                capability=capability,
+                available=await self._capabilities.execute(actor),
+                detail=f"key {actor.display} is not issued for {capability}",
+            )
 
         # A ceiling on input as well as output. Context cost grows faster than
         # linearly on unified memory, so a single enormous prompt is a
