@@ -19,11 +19,13 @@ The shapes translated below were captured from `codex-cli 0.147.0` on
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncGenerator
+import re
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import aclosing
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import StreamingResponse
 
 from app.domain.entities.actor import Actor
@@ -88,6 +90,41 @@ unknown item is dropped rather than refused — see `UnknownInputItem` — and
 dropping part of a caller's conversation without saying so is precisely the
 kind of quiet loss the tools header was added to prevent.
 """
+
+_UNSAFE_IN_HEADER = re.compile(r"[^A-Za-z0-9_.:-]")
+_MAX_TOKEN_CHARS = 64
+_MAX_HEADER_CHARS = 512
+
+
+def _header_list(values: Sequence[str]) -> str:
+    """Render client-supplied names into a value a header can actually carry.
+
+    Both headers above name things the *client* typed: an unknown tool's `type`
+    and an unknown item's `type` are arbitrary strings from the request body.
+    Putting one straight into a header is how a request that this code was
+    deliberately choosing to serve turns into a 500 instead — Starlette encodes
+    header values as latin-1, so `{"type": "你好"}` raises `UnicodeEncodeError`
+    on the response, after the work succeeded. A carriage return would be worse
+    in kind if a downstream layer were ever the only thing rejecting it.
+
+    So: a conservative charset, a bound per name, and a bound on the whole
+    value, since the number of names is the client's choice too. A name that
+    survives none of that is reported as `unprintable` rather than omitted — the
+    point of the header is that the caller learns something was dropped, and
+    that is still true when its name could not be repeated back.
+    """
+    tokens = [
+        _UNSAFE_IN_HEADER.sub("", value)[:_MAX_TOKEN_CHARS] or "unprintable" for value in values
+    ]
+    rendered: list[str] = []
+    length = 0
+    for token in dict.fromkeys(tokens):
+        if length + len(token) + 1 > _MAX_HEADER_CHARS:
+            rendered.append("...")
+            break
+        rendered.append(token)
+        length += len(token) + 1
+    return ",".join(rendered)
 
 
 def _text_of(content: str | list[InputTextPart]) -> str:
@@ -241,7 +278,15 @@ def _tools(request: ResponsesRequest) -> tuple[list[ToolDefinition], list[str]]:
         # `additional_tools` item is not an error, but handing a runtime two
         # entries under one name is a list no model can choose from. The first
         # declaration wins, which keeps the documented field authoritative.
+        #
+        # Reported rather than merely suppressed, because the benign reading is
+        # not the only one: two tools can share a name without being the same
+        # tool — a client's own `send_input` beside `multi_agent_v1.send_input`
+        # — and then the model is offered the first one's schema for the second
+        # one's job. That is a narrowing, and an unreported narrowing is the
+        # thing this header exists to prevent.
         if tool.name in seen:
+            dropped.append(f"duplicate:{tool.name}")
             return
         seen.add(tool.name)
         definitions.append(
@@ -266,6 +311,34 @@ def _tools(request: ResponsesRequest) -> tuple[list[ToolDefinition], list[str]]:
             dropped.append(getattr(tool, "type", "unknown"))
 
     return definitions, dropped
+
+
+def _assert_something_to_send(messages: list[Message]) -> None:
+    """Refuse a request that translated to no conversation at all.
+
+    `chat_schemas.py` states this as `min_length=1` on `messages`, which the
+    schema can enforce because nothing there disappears between parsing and
+    sending. Here it can't: `reasoning` and unrecognised items are accepted and
+    dropped by design, so an `input` that was not empty on the wire can be empty
+    by the time it reaches a runtime.
+
+    Before this, such a request was forwarded as a prompt with no turns and the
+    caller got whatever the runtime made of that — a paid-for answer to nothing,
+    or an adapter error attributed to the platform. A 422 in the same shape the
+    other endpoint gives is both truthful and the one the caller can act on.
+    """
+    if messages:
+        return
+    raise RequestValidationError(
+        [
+            {
+                "type": "too_short",
+                "loc": ("body", "input"),
+                "msg": "no message survived translation; every item was of a type this "
+                "gateway does not send",
+            }
+        ]
+    )
 
 
 def _assert_no_server_side_tools(request: ResponsesRequest) -> None:
@@ -314,14 +387,15 @@ async def create_response(
     response_id = responses_sse.new_response_id()
     created = responses_sse.created_now()
     messages = _to_domain(body)
+    _assert_something_to_send(messages)
     tools, dropped = _tools(body)
     tool_choice = _tool_choice(body)
     sampling = _sampling(body)
 
-    headers = {DROPPED_TOOLS_HEADER: ",".join(dropped)} if dropped else {}
+    headers = {DROPPED_TOOLS_HEADER: _header_list(dropped)} if dropped else {}
     dropped_items = _dropped_input_items(body)
     if dropped_items:
-        headers[DROPPED_INPUT_HEADER] = ",".join(dropped_items)
+        headers[DROPPED_INPUT_HEADER] = _header_list(dropped_items)
 
     # The same two features the chat endpoint carries, applied in the same
     # order and for the same reasons: the operator's template is the outermost

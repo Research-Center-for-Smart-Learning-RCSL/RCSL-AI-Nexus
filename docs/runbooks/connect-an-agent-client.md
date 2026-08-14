@@ -127,7 +127,7 @@ wire_api = "responses"
 
 Then export the key: `export RCSL_API_KEY=nx_live_...`
 
-Three things are easy to get wrong:
+Four things are easy to get wrong:
 
 - **`model` takes a capability, not a model name.** `code`, not
   `qwen2.5-coder:32b`. This is the platform's one real divergence from other
@@ -138,7 +138,33 @@ Three things are easy to get wrong:
   `/v1/responses` on 2026-08-07 to meet it. A client old enough to accept
   `"chat"` can still use `/v1/chat/completions`, which is unchanged and remains
   the documented interface for everything else.
-- **`base_url` ends in `/v1`.** The client appends `/chat/completions`.
+- **`base_url` ends in `/v1`.** The client appends the path for the wire API it
+  speaks — `/responses` under the setting above, `/chat/completions` under
+  `"chat"`. This line said `/chat/completions` unconditionally until
+  2026-08-14, which had been wrong since the line above it changed: it told
+  anyone debugging a `responses` client to go looking at the wrong endpoint's
+  logs. `/models` is appended the same way.
+- **Do not choose a model in the client's own picker.** It overrides the `model`
+  line above, and every model it offers is one this deployment refuses. Codex
+  `0.148.0` fills that list from `GET /v1/models` in a shape of its own —
+  `{"models": [...]}`, carrying its per-model metadata — while this gateway
+  answers in OpenAI's `{"object": "list", "data": [...]}`, which every client
+  library reads and its picker does not. Finding nothing it recognises, the
+  picker falls back to Codex's built-in models, so `code` is not among the
+  choices and anything chosen there produces `403 capability_not_issued`. This
+  cost two integrators an evening on 2026-08-14, and the printout of a script
+  that had correctly written `model = "code"` was what made it hard to see.
+  `codex -c model=code` overrides a selection already made.
+
+  The gateway does not answer in Codex's shape, and that is a decision rather
+  than a gap. `construct_model_info_from_candidates` takes a matched remote
+  entry **whole**, so a slug we advertise no longer falls back to the client's
+  local metadata — and that metadata is where the agent's entire system prompt
+  comes from. Advertising `code` without also serving some 20,000 characters of
+  Codex's own instructions, re-checked against every client release, would
+  leave the agent running with none: no sandbox rules, no tool protocol, and no
+  error. An unknown slug reaching the local fallback is what makes `model =
+  "code"` work today.
 
 **Every local Codex surface reads this one file**: the CLI, the IDE extension,
 and the Codex built into the ChatGPT desktop app. Configuring the CLI therefore

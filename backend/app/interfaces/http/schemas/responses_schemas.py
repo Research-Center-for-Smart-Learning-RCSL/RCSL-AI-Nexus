@@ -186,7 +186,14 @@ class InputAdditionalTools(BaseModel):
     """
 
     type: Literal["additional_tools"] = "additional_tools"
-    role: str
+    role: str | None = None
+    """Required in `codex-rs/protocol` and optional here, deliberately.
+
+    Nothing reads it, so demanding it would let a client build that renamed or
+    dropped a field this gateway ignores take every request down again — the
+    exact outage this class was added to end, reintroduced by the one field
+    with nothing depending on it.
+    """
     tools: list[ToolItem] = Field(default_factory=list)
     id: str | None = None
 
@@ -227,9 +234,18 @@ def _input_item_tag(value: object) -> str:
     missing its `call_id` is *malformed*, and an ordered union would quietly
     match it as an unknown item and drop it. Here it still gets the 422 that
     names the field, and only a genuinely unrecognised tag falls through.
+
+    `isinstance(tag, str)` before the membership test, and not for tidiness: a
+    `type` holding a dict or a list raises `TypeError: unhashable type` out of
+    `in`, which is not a `ValidationError`, so it escapes the handler that
+    turns bad requests into 422s and becomes a 500. A malformed body taking the
+    server down that path is the opposite of what this fuse is for. A non-string
+    tag routes to `UnknownInputItem`, whose `type: str` refuses it properly.
     """
     tag = value.get("type") if isinstance(value, dict) else getattr(value, "type", None)
-    return tag if tag in _KNOWN_INPUT_TYPES else UNKNOWN_INPUT_TAG
+    if isinstance(tag, str) and tag in _KNOWN_INPUT_TYPES:
+        return tag
+    return UNKNOWN_INPUT_TAG
 
 
 InputItem = Annotated[

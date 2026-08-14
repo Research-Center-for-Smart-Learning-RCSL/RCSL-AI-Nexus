@@ -335,8 +335,15 @@ class CapabilityNotIssuedError(NotAuthorizedError):
             f"Available: {', '.join(available)}. "
             "This platform's `model` field takes a capability, not a model name."
             if available
+            # Says what is true — nothing is callable — without naming a cause.
+            # An empty list has two of them: a key issued no capabilities, and a
+            # key whose capabilities no routing policy currently serves, since
+            # this list is `servable ∩ issuable ∩ the key's own`. Telling the
+            # second case to reissue the key sends them to change the one thing
+            # that is already right.
             else f"'{capability}' is not a capability this key may use, and this key "
-            "has been issued none. An administrator must reissue it."
+            "can call nothing at present. An administrator can say whether that is "
+            "the key's capabilities or the routing policies behind them."
         )
         super().__init__(detail)
 
