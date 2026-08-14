@@ -47,6 +47,7 @@ from app.interfaces.http import responses_sse, sse
 from app.interfaces.http.middleware.api_key_auth import authenticate_api_key
 from app.interfaces.http.schemas.responses_schemas import (
     FunctionTool,
+    InputAdditionalTools,
     InputFunctionCall,
     InputFunctionCallOutput,
     InputMessage,
@@ -60,6 +61,8 @@ from app.interfaces.http.schemas.responses_schemas import (
     ResponsesRequest,
     ResponseUsage,
     ToolChoiceFunction,
+    ToolItem,
+    UnknownInputItem,
     WebSearchTool,
 )
 
@@ -75,6 +78,15 @@ DROPPED_TOOLS_HEADER = "X-Dropped-Tools"
 
 Silently narrowing what a caller asked for is the failure this platform keeps
 finding; a header is the one channel available before the body is committed.
+"""
+
+DROPPED_INPUT_HEADER = "X-Dropped-Input-Items"
+"""Input item types this gateway did not understand and therefore did not send.
+
+The same channel and the same reason, for the other half of the request. An
+unknown item is dropped rather than refused — see `UnknownInputItem` — and
+dropping part of a caller's conversation without saying so is precisely the
+kind of quiet loss the tools header was added to prevent.
 """
 
 
@@ -158,12 +170,56 @@ def _to_domain(request: ResponsesRequest) -> list[Message]:
             # Discarded. A model's deliberation is never replayed into a
             # prompt; see `CompletionChunk.reasoning`.
             continue
+        elif isinstance(item, InputAdditionalTools):
+            # Not conversation at all: it declares tools, which `_tools`
+            # collects from here. Nothing in it is a turn, so nothing in it
+            # belongs in the message list.
+            continue
+        elif isinstance(item, UnknownInputItem):
+            # An item type newer than this gateway. Dropped so that the rest of
+            # the conversation still reaches the model, and named in
+            # `DROPPED_INPUT_HEADER` so the loss is not silent.
+            continue
 
     return messages
 
 
+def _dropped_input_items(request: ResponsesRequest) -> list[str]:
+    """The unrecognised item types, each named once.
+
+    Deduplicated because a long conversation replays its history every turn: an
+    unknown type appearing forty times would put forty copies into a header,
+    and the one thing a header must not do is grow with the transcript.
+    """
+    if not isinstance(request.input, list):
+        return []
+    return list(
+        dict.fromkeys(item.type for item in request.input if isinstance(item, UnknownInputItem))
+    )
+
+
+def _declared_tools(request: ResponsesRequest) -> list[ToolItem]:
+    """Every tool the client declared, from both places it can declare one.
+
+    `tools` is the documented field and an `additional_tools` item inside
+    `input` is the second; a client that uses the latter puts ordinary function
+    tools there and expects the model to be able to call them. Both are read
+    through this one function so that the guardrail below and the translation
+    above can never disagree about what was actually offered.
+    """
+    declared = list(request.tools)
+    if isinstance(request.input, list):
+        for item in request.input:
+            if isinstance(item, InputAdditionalTools):
+                declared.extend(item.tools)
+    return declared
+
+
 def _tools(request: ResponsesRequest) -> tuple[list[ToolDefinition], list[str]]:
     """Flatten what the platform can serve, and name what it dropped.
+
+    Reads from `_declared_tools`, so a tool declared in an `additional_tools`
+    input item is offered exactly like one declared in `tools`.
 
     A `namespace` is a container of ordinary function tools — Codex sends
     `multi_agent_v1` holding five, every one executed by the *client* — so
@@ -178,8 +234,16 @@ def _tools(request: ResponsesRequest) -> tuple[list[ToolDefinition], list[str]]:
     """
     definitions: list[ToolDefinition] = []
     dropped: list[str] = []
+    seen: set[str] = set()
 
     def add(tool: FunctionTool) -> None:
+        # A client declaring the same tool in `tools` and again in an
+        # `additional_tools` item is not an error, but handing a runtime two
+        # entries under one name is a list no model can choose from. The first
+        # declaration wins, which keeps the documented field authoritative.
+        if tool.name in seen:
+            return
+        seen.add(tool.name)
         definitions.append(
             ToolDefinition(
                 name=tool.name,
@@ -190,7 +254,7 @@ def _tools(request: ResponsesRequest) -> tuple[list[ToolDefinition], list[str]]:
             )
         )
 
-    for tool in request.tools:
+    for tool in _declared_tools(request):
         if isinstance(tool, FunctionTool):
             add(tool)
         elif isinstance(tool, NamespaceTool):
@@ -216,7 +280,7 @@ def _assert_no_server_side_tools(request: ResponsesRequest) -> None:
     reason to fail at the moment the switch is turned on rather than three
     hours into a task.
     """
-    for tool in request.tools:
+    for tool in _declared_tools(request):
         if isinstance(tool, WebSearchTool) and tool.external_web_access:
             raise RuntimeCapabilityError(
                 detail="web_search with external_web_access is not served by this deployment"
@@ -255,6 +319,9 @@ async def create_response(
     sampling = _sampling(body)
 
     headers = {DROPPED_TOOLS_HEADER: ",".join(dropped)} if dropped else {}
+    dropped_items = _dropped_input_items(body)
+    if dropped_items:
+        headers[DROPPED_INPUT_HEADER] = ",".join(dropped_items)
 
     # The same two features the chat endpoint carries, applied in the same
     # order and for the same reasons: the operator's template is the outermost
