@@ -7,6 +7,7 @@ unbilled usage only shows up as a quota that never triggers.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import aclosing
 from datetime import UTC, datetime
@@ -15,7 +16,7 @@ import pytest
 
 from app.adapters.authz.role_authorization import RoleAuthorization
 from app.application.use_cases.list_capabilities import ListCapabilities
-from app.application.use_cases.route_chat_request import RouteChatRequest
+from app.application.use_cases.route_chat_request import RouteChatRequest, _estimated_tokens
 from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.entities.chat import (
     CompletionChunk,
@@ -29,6 +30,7 @@ from app.domain.entities.model import Model, ModelState, ResourceProfile, Runtim
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import RoutingCandidate, RoutingPolicy
 from app.domain.entities.usage import UsageRecord
+from app.domain.exceptions import ContextTooLongError
 from app.domain.services.routing_service import RoutingService
 from app.infrastructure.concurrency import SemaphoreConcurrencyLimiter
 from app.shared.clock import FixedClock
@@ -46,9 +48,10 @@ MESSAGES = [Message(role=MessageRole.USER, content="hello")]
 class FakeRuntime:
     """Yields a fixed sequence, and records whether it was closed early."""
 
-    def __init__(self, chunks: int = 3, fail_at: int | None = None) -> None:
+    def __init__(self, chunks: int = 3, fail_at: int | None = None, prompt_tokens: int = 0) -> None:
         self._chunks = chunks
         self._fail_at = fail_at
+        self._prompt_tokens = prompt_tokens
         self.cleaned_up = False
         self.seen_context_length: int | None = None
 
@@ -69,6 +72,15 @@ class FakeRuntime:
                 if self._fail_at is not None and i == self._fail_at:
                     raise RuntimeError("upstream exploded")
                 yield CompletionChunk(delta=f"tok{i} ", token_count=1)
+            if self._prompt_tokens:
+                # The terminal chunk, which is the only place a real adapter
+                # reports the figure.
+                yield CompletionChunk(
+                    delta="",
+                    finish_reason="stop",
+                    token_count=0,
+                    prompt_tokens=self._prompt_tokens,
+                )
         finally:
             # A real adapter closes its upstream HTTP stream here. Without it
             # the runtime keeps generating for a client that already left.
@@ -153,6 +165,7 @@ def build(
     deadline: int = 600,
     thinking_default: bool = True,
     monotonic: Callable[[], float] | None = None,
+    max_context_tokens: int = 32768,
 ):
     model = Model(
         id="m1",
@@ -190,6 +203,7 @@ def build(
         max_tokens_ceiling=ceiling,
         generation_deadline_seconds=deadline,
         thinking_default=thinking_default,
+        max_context_tokens=max_context_tokens,
         **({"monotonic": monotonic} if monotonic is not None else {}),
     )
     return use_case, usage, limiter
@@ -505,8 +519,10 @@ class ThinkingRecordingRuntime:
         yield CompletionChunk(delta="hi", token_count=1, finish_reason="stop")
 
 
-async def _run(use_case, **kwargs) -> None:
-    async with aclosing(use_case.execute(ACTOR, "chat", MESSAGES, **kwargs)) as stream:
+async def _run(use_case, messages: Sequence[Message] | None = None, **kwargs) -> None:
+    async with aclosing(
+        use_case.execute(ACTOR, "chat", messages if messages is not None else MESSAGES, **kwargs)
+    ) as stream:
         async for _ in stream:
             pass
 
@@ -550,3 +566,98 @@ async def test_thinking_is_not_clamped_the_way_max_tokens_is() -> None:
 
     await _run(use_case, max_tokens=10**9, thinking=False)
     assert runtime.seen == [False]
+
+
+# --- The input ceiling, and what it is counted in -------------------------
+
+
+def _cjk(chars: int) -> str:
+    return "中" * chars
+
+
+async def test_the_input_ceiling_counts_cjk_at_its_real_density() -> None:
+    """The ceiling was applied as a flat four characters per token until
+    2026-08-14, which is right for English prose and wrong for everything else.
+
+    Measured against the tokenizer that day: Traditional Chinese runs at 1.38
+    characters per token, so 4.0 admitted 2.9x the configured ceiling. That is
+    how a Codex session was let past 65,536 tokens on a limit of 65,536 — and
+    the runtime, which truncates rather than refuses, would have answered
+    without the start of the conversation.
+    """
+    runtime = FakeRuntime(chunks=1)
+    use_case, _, _ = build(runtime, max_context_tokens=1000)
+
+    # 1500 CJK characters is ~1360 real tokens and was ~375 under the old rule.
+    with pytest.raises(ContextTooLongError):
+        await _run(use_case, messages=[Message(role=MessageRole.USER, content=_cjk(1500))])
+
+
+async def test_the_input_ceiling_still_admits_the_prose_it_always_did() -> None:
+    """The correction must not pay for CJK by charging English four times over:
+    ASCII is weighted separately, so ordinary prose keeps roughly the capacity
+    it had."""
+    runtime = FakeRuntime(chunks=1)
+    use_case, _, _ = build(runtime, max_context_tokens=1000)
+
+    await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 500)])
+
+
+async def test_the_refusal_names_the_unit_it_judged_in() -> None:
+    """`characters exceeds the configured limit` against a limit expressed in
+    tokens left the reader to guess at the factor between them, and the factor
+    was the part that was wrong."""
+    runtime = FakeRuntime(chunks=1)
+    use_case, _, _ = build(runtime, max_context_tokens=1000)
+
+    with pytest.raises(ContextTooLongError) as caught:
+        await _run(use_case, messages=[Message(role=MessageRole.USER, content=_cjk(4000))])
+
+    assert "estimated tokens" in (caught.value.detail or "")
+    assert "1000" in (caught.value.detail or "")
+
+
+async def test_a_prompt_the_runtime_truncated_is_reported_to_the_operator(caplog) -> None:
+    """The backstop for the estimate being wrong in the unsafe direction.
+
+    Ollama evaluates at most `num_ctx / 2` and drops the rest silently, under a
+    `done_reason` that a full generation also uses. Nothing downstream can tell
+    the two apart, so the caller gets a fluent answer to a conversation the
+    model only half read. Reaching that boundary means the estimator
+    under-counted, which is an operator's problem rather than a caller's.
+    """
+    # The fake model's context_length is 8192, so the runtime's own cap is 4096.
+    runtime = FakeRuntime(chunks=1, prompt_tokens=4096)
+    use_case, _, _ = build(runtime)
+
+    with caplog.at_level(logging.WARNING):
+        await _run(use_case)
+
+    assert "prompt likely truncated" in caplog.text
+    assert "num_ctx/2=4096" in caplog.text
+
+
+async def test_an_ordinary_prompt_says_nothing(caplog) -> None:
+    """The warning has to stay rare enough to mean something."""
+    runtime = FakeRuntime(chunks=1, prompt_tokens=4095)
+    use_case, _, _ = build(runtime)
+
+    with caplog.at_level(logging.WARNING):
+        await _run(use_case)
+
+    assert "prompt likely truncated" not in caplog.text
+
+
+def test_the_estimator_weights_wide_characters_far_above_ascii() -> None:
+    """Pinned because the failure mode is a later simplification back to one
+    constant, which is what was wrong. The measured spread on 2026-08-14 was
+    4.57 characters per token for English against 1.38 for Traditional Chinese,
+    so the two classes cannot share a divisor and stay honest for either.
+    """
+    ascii_estimate = _estimated_tokens("a" * 3000)
+    wide_estimate = _estimated_tokens(_cjk(3000))
+
+    assert wide_estimate > ascii_estimate * 2.5
+    # And neither may be optimistic enough to reintroduce the old rule, under
+    # which 3000 characters of anything counted as 750 tokens.
+    assert ascii_estimate > 750
