@@ -134,12 +134,40 @@ OPENAI_ERROR_TYPES: dict[int, str] = {
     503: "service_unavailable",
 }
 
+OPENAI_ERROR_TYPE_OVERRIDES: dict[type[DomainError], str] = {
+    # Status is the wrong key for this one. 429 carries two conditions whose
+    # remedies are opposite — back off and retry, or stop and ask for more
+    # budget — and `backend.md` §5 has said since the gateway shipped that
+    # clients must branch on the code to tell them apart. The `type` field is
+    # the only half of that a client library reads: OpenAI's own error classes
+    # are selected from it, and `insufficient_quota` is where they put "this
+    # will not succeed by waiting".
+    #
+    # Sending `rate_limit_error` for an exhausted quota therefore asked every
+    # OpenAI-compatible client to do the one thing that could not work. On
+    # 2026-08-14 a Codex session did exactly that against key 68953ceb and
+    # reported `exceeded retry limit, last status: 429` — a message about its
+    # own backoff, naming neither the quota nor the key, to an operator with no
+    # way to reach either from it.
+    QuotaExceededError: "insufficient_quota",
+}
+
 
 def _status_for(exc: DomainError) -> int:
     for klass in type(exc).__mro__:
         if klass in STATUS_MAP:
             return STATUS_MAP[klass]
     return 500
+
+
+def _openai_type_for(exc: DomainError, status: int) -> str:
+    """Walked over the MRO for the same reason `_status_for` is: a subclass
+    added later inherits the classification its parent was given, rather than
+    silently falling back to the status map."""
+    for klass in type(exc).__mro__:
+        if klass in OPENAI_ERROR_TYPE_OVERRIDES:
+            return OPENAI_ERROR_TYPE_OVERRIDES[klass]
+    return OPENAI_ERROR_TYPES.get(status, "api_error")
 
 
 def _log(request: Request, exc: DomainError, status: int) -> None:
@@ -221,7 +249,18 @@ def error_response(
     if isinstance(exc, RateLimitedError):
         headers["Retry-After"] = str(exc.retry_after_seconds)
     elif isinstance(exc, QuotaExceededError):
-        headers["Retry-After"] = "3600"
+        # A fixed hour here until 2026-08-14, which was not a rounding error
+        # but a wrong model of the window: it trails 24 hours behind the
+        # current moment, so the wait after exhausting a quota is anything up
+        # to a full day and was an hour only by coincidence. A client that
+        # believed the header retried twelve times too early, and the header
+        # is the only thing that could have told it otherwise.
+        #
+        # Omitted rather than guessed when the middleware could not project a
+        # recovery time. No header at all leaves a client to its own backoff,
+        # which is what a wrong one did anyway, minus the false authority.
+        if exc.retry_after_seconds is not None:
+            headers["Retry-After"] = str(exc.retry_after_seconds)
     elif isinstance(exc, ServerOverloadedError):
         headers["Retry-After"] = str(exc.retry_after_seconds)
 
@@ -229,7 +268,7 @@ def error_response(
 
     if envelope == "openai":
         error: dict[str, object] = {
-            "type": OPENAI_ERROR_TYPES.get(status, "api_error"),
+            "type": _openai_type_for(exc, status),
             "code": exc.code,
             "message": exc.public_message,
         }

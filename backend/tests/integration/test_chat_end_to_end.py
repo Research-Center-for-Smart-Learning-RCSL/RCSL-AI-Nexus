@@ -507,6 +507,62 @@ async def test_quota_is_enforced(client) -> None:
     assert second.headers["Retry-After"]
 
 
+async def test_an_exhausted_quota_does_not_present_itself_as_a_rate_limit(client) -> None:
+    """The two conditions that share 429 have opposite remedies, and a client
+    library reads `type` rather than `code` to decide which it is looking at.
+    Announcing a spent quota as `rate_limit_error` asks for a retry that cannot
+    succeed; that is how a Codex session against key 68953ceb on 2026-08-14
+    turned an exhausted budget into `exceeded retry limit, last status: 429`.
+
+    `Retry-After` is asserted against the window rather than merely for its
+    presence, because the value it used to carry — a fixed hour — was present
+    and wrong. The window trails 24 hours, so the single usage row written by
+    the request above leaves it roughly a day from now.
+    """
+    test_client, _, _ = client
+    token = await issue_key(quota_tokens_per_day=2)
+    test_client.headers["Authorization"] = f"Bearer {token}"
+
+    body = {"model": "chat", "messages": [{"role": "user", "content": "hi"}]}
+    assert test_client.post("/v1/chat/completions", json=body).status_code == 200
+
+    refused = test_client.post("/v1/chat/completions", json=body)
+    assert refused.status_code == 429
+    assert refused.json()["error"]["type"] == "insufficient_quota"
+    assert 86_000 < int(refused.headers["Retry-After"]) <= 86_400
+    assert "recovers in about 24 hours" in refused.json()["error"]["message"]
+
+
+async def test_the_model_list_survives_an_exhausted_quota(client) -> None:
+    """A token quota has nothing to charge for a call that runs no model, and
+    every OpenAI-compatible client asks for this list before it can send its
+    first request. Refusing it turned "this key is out of budget" into "this
+    agent cannot connect", which is a different problem to debug and points at
+    the wrong half of the system.
+    """
+    test_client, _, _ = client
+    token = await issue_key(quota_tokens_per_day=2)
+    test_client.headers["Authorization"] = f"Bearer {token}"
+
+    body = {"model": "chat", "messages": [{"role": "user", "content": "hi"}]}
+    assert test_client.post("/v1/chat/completions", json=body).status_code == 200
+    assert test_client.post("/v1/chat/completions", json=body).status_code == 429
+
+    listed = test_client.get("/v1/models")
+    assert listed.status_code == 200
+    assert listed.json()["data"], "the list is the point; an empty one is no better than a 429"
+
+
+async def test_the_model_list_still_refuses_an_invalid_key(client) -> None:
+    """The quota is the only check the metadata path drops. Asserted here
+    because the exemption is expressed as a second dependency, and the way that
+    fails is by quietly skipping more than it meant to."""
+    test_client, _, _ = client
+    test_client.headers["Authorization"] = "Bearer nx_live_deadbeefdeadbeef.notarealsecret"
+
+    assert test_client.get("/v1/models").status_code == 401
+
+
 async def test_the_envelope_reports_prompt_tokens(client) -> None:
     """`prompt_tokens` was the schema default of 0 on every response until
     2026-08-04, while the runtime was reporting a real figure all along. An

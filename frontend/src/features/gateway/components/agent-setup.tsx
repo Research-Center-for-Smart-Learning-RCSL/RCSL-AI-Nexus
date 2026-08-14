@@ -114,7 +114,11 @@ export function AgentSetup() {
                 <strong>Daily token quota.</strong> An agent replays the whole
                 conversation every turn, and prompt tokens count. Consumption
                 grows roughly with the square of a task&apos;s length, not
-                linearly. Size it generously.
+                linearly. Size it generously — a measured Codex session on
+                2026-08-14 ran twenty requests in eleven minutes and spent{' '}
+                <strong>1.03 million tokens</strong>, of which 99.6% was prompt:
+                the context grew from 38k to 62k and every turn paid for all of
+                it. A one-million quota is one session, not one day.
               </li>
             </ul>
             <p>
@@ -394,7 +398,17 @@ wire_api = "responses"`}
           <dt className="font-mono text-xs text-muted-foreground">
             429 part way through a task
           </dt>
-          <dd>Step 1. The per-minute limit or the daily quota.</dd>
+          <dd>
+            Step 1 — but read <code>error.code</code> first, because the two
+            limits sharing this status have opposite fixes.{' '}
+            <code>rate_limited</code> is the per-minute one and is usually the
+            client retrying after some other failure. <code>quota_exceeded</code>{' '}
+            is the token budget, which says how long it needs and does not come
+            back by retrying. If your client only reports{' '}
+            <em>exceeded retry limit, last status: 429</em>, it has swallowed
+            the body; quote the request id it prints and an administrator can
+            find the refusal in the gateway log.
+          </dd>
 
           <dt className="font-mono text-xs text-muted-foreground">
             503 no_available_model

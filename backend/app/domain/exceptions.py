@@ -213,9 +213,49 @@ class DocumentStateConflictError(DomainError):
 # --- Quota and rate limiting ---------------------------------------------
 
 
+def _approximate_wait(seconds: int) -> str:
+    """A duration a human can act on, not a number they must divide.
+
+    Deliberately coarse. The figure it describes is a projection from the
+    current contents of a rolling window, and quoting "8 hours 41 minutes"
+    would claim a precision that the next request to the same key destroys.
+    """
+    if seconds < 90:
+        return "a moment"
+    minutes = round(seconds / 60)
+    if minutes < 60:
+        return f"about {minutes} minutes"
+    hours = round(seconds / 3600)
+    return "about an hour" if hours == 1 else f"about {hours} hours"
+
+
 class QuotaExceededError(DomainError):
     code = "quota_exceeded"
     public_message = "The daily token quota for this key has been exhausted."
+
+    def __init__(
+        self, detail: str | None = None, *, retry_after_seconds: int | None = None
+    ) -> None:
+        super().__init__(detail)
+        self.retry_after_seconds = retry_after_seconds
+        """Seconds until the quota admits another request, or None when that
+        could not be determined. Unlike `RateLimitedError` this has no sensible
+        default: the window is 24 hours long and rolling, so the wait is
+        anything from a minute to a day, and a guess is what the caller was
+        already given — see the `Retry-After` note in interfaces/http/errors.py.
+        """
+
+        if retry_after_seconds is not None:
+            # Set on the instance, so the class constant stays the answer when
+            # the wait is unknown. Telling callers when their own key recovers
+            # discloses nothing they could not measure by retrying, and it is
+            # the one fact that turns this refusal into something they can act
+            # on: an agent CLI reports the status line, and "429" alone sent
+            # the operator of key 68953ceb to a maintainer on 2026-08-14.
+            self.public_message = (
+                f"{QuotaExceededError.public_message} "
+                f"It recovers in {_approximate_wait(retry_after_seconds)}."
+            )
 
 
 class RateLimitedError(DomainError):

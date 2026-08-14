@@ -241,6 +241,7 @@ export function CreateApiKeyDialog({
                     name="quota_tokens_per_day"
                     label="Daily token quota"
                     type="number"
+                    description="Rolling 24 hours, prompt included. An agent resends its whole conversation each turn, so a coding session costs far more than its replies suggest."
                   />
                 </div>
 

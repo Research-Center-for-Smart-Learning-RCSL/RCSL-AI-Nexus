@@ -265,6 +265,25 @@ describe('a URL the account has no scope for', () => {
 
     expect(replace).not.toHaveBeenCalled();
   });
+
+  it('does not render the screen it is redirecting away from', () => {
+    // The redirect is an effect, so it cannot pre-empt the mount; only not
+    // rendering the children can. What mounts sends its queries, and each
+    // refusal is an `authz.denied` audit row — so before this, every sign-in
+    // by a member wrote two, for scopes they were never shown a link to.
+    signedInWith(SCOPES.user, '/');
+    render(<AppShell>content</AppShell>);
+
+    expect(replace).toHaveBeenCalledWith('/chat');
+    expect(screen.queryByText('content')).not.toBeInTheDocument();
+  });
+
+  it('still renders a permitted screen', () => {
+    signedInWith(SCOPES.user, '/usage');
+    render(<AppShell>content</AppShell>);
+
+    expect(screen.getByText('content')).toBeInTheDocument();
+  });
 });
 
 describe('the collapsible groups', () => {

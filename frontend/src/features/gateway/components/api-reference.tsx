@@ -571,11 +571,14 @@ data: [DONE]`}
           <code>
             {'{"error": {"type": "...", "code": "...", "message": "..."}}'}
           </code>
-          . <code>type</code> is OpenAI&apos;s coarse classification, derived
-          from the status; <code>code</code> is this platform&apos;s and is the
-          one to branch on. Branch on it rather than on the status: 429, 403 and
-          400 each cover two different conditions, and each needs different
-          handling.
+          . <code>type</code> is OpenAI&apos;s coarse classification, usually
+          derived from the status; <code>code</code> is this platform&apos;s and
+          is the more precise of the two. Branch on one of them rather than on
+          the status: 429, 403 and 400 each cover two different conditions, and
+          each needs different handling. Where the status would classify two
+          remedies alike, <code>type</code> is set from the condition instead —
+          a spent quota is <code>insufficient_quota</code> rather than the{' '}
+          <code>rate_limit_error</code> its 429 would otherwise imply.
         </p>
         <p className="text-sm text-muted-foreground">
           <strong>
@@ -746,11 +749,13 @@ data: [DONE]`}
                 <td>429</td>
                 <td className="font-mono text-xs">quota_exceeded</td>
                 <td>
-                  The daily token quota is spent. <code>Retry-After</code> is
-                  set here too, but unlike the row above it is a fixed hour
-                  rather than a measured wait — retrying inside the same day
-                  cannot succeed, so back off until the quota resets rather than
-                  looping.
+                  The key&apos;s token budget is spent. Carries{' '}
+                  <code>type: &quot;insufficient_quota&quot;</code>, not{' '}
+                  <code>rate_limit_error</code> — retrying cannot succeed, and
+                  an OpenAI client library branching on <code>type</code> will
+                  stop rather than exhaust its backoff. <code>Retry-After</code>{' '}
+                  is a measured wait (see below); it is often many hours, so
+                  treat it as a stop rather than a sleep.
                 </td>
               </tr>
               <tr>
@@ -880,6 +885,24 @@ data: [DONE]`}
           limit is reached, each with <code>Retry-After</code>. A client that
           paces itself from the headers will simply not pace itself — listed
           rather than left to be discovered.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          <strong>The token quota is a rolling 24 hours, not a calendar day.</strong>{' '}
+          Nothing resets at midnight, and an exhausted key does not come back
+          all at once: each past request stops counting 24 hours after it was
+          made, so the budget returns in the pieces it was spent in. The{' '}
+          <code>Retry-After</code> on <code>quota_exceeded</code> is the
+          projected moment enough of that spend has aged out, and the message
+          states the same wait in round hours.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          <strong>
+            An exhausted quota does not stop <code>GET /v1/models</code>.
+          </strong>{' '}
+          It runs no model, so there is nothing for a token budget to charge,
+          and every OpenAI-compatible client lists models before it can send
+          anything. Gating it made a spent quota look like a broken connection.
+          Every other check still applies to that call.
         </p>
       </section>
       </div>

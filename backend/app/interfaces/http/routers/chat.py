@@ -32,7 +32,10 @@ from app.infrastructure.di import (
     RouteChatRequestDep,
 )
 from app.interfaces.http import sse
-from app.interfaces.http.middleware.api_key_auth import authenticate_api_key
+from app.interfaces.http.middleware.api_key_auth import (
+    authenticate_api_key,
+    authenticate_api_key_without_quota,
+)
 from app.interfaces.http.schemas.chat_schemas import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -51,11 +54,12 @@ from app.interfaces.http.schemas.chat_schemas import (
 router = APIRouter(prefix="/v1", tags=["inference"])
 
 ActorDep = Annotated[Actor, Depends(authenticate_api_key)]
+MetadataActorDep = Annotated[Actor, Depends(authenticate_api_key_without_quota)]
 
 
 @router.get("/models")
 async def list_models(
-    actor: ActorDep,
+    actor: MetadataActorDep,
     capabilities: ListCapabilitiesDep,
 ) -> ModelListResponse:
     """What to put in the `model` field.
@@ -70,6 +74,9 @@ async def list_models(
     Authenticated like any other call, so it is subject to the same key
     checks, source restriction and rate limit. An unauthenticated caller
     learning what a deployment serves is a free reconnaissance answer.
+
+    The one check it is exempt from is the token quota, because it consumes no
+    tokens; `authenticate_api_key_without_quota` says why that mattered.
     """
     return ModelListResponse(
         data=[ModelCard(id=name) for name in await capabilities.execute(actor)]
