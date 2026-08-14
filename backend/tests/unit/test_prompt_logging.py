@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.adapters.authz.role_authorization import RoleAuthorization
+from app.application.use_cases.list_capabilities import ListCapabilities
 from app.application.use_cases.read_prompt_logs import ReadPromptLogs
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.domain.entities.actor import Actor, Role, Scope
@@ -179,8 +180,12 @@ def build(
     node = Node(
         id="n1", name="n1", address="100.64.0.1", status=NodeStatus.ONLINE, total_memory_gb=64.0
     )
+    policies = FakePolicies()
     return RouteChatRequest(
-        policies=FakePolicies(),
+        policies=policies,
+        # Unused here: nothing in this file refuses a capability. Wired from the
+        # same fake so it would answer honestly if something did.
+        capabilities=ListCapabilities(policies=policies, authz=RoleAuthorization()),
         models=FakeRepo([model]),
         nodes=FakeRepo([node]),
         usage=NullUsage(),

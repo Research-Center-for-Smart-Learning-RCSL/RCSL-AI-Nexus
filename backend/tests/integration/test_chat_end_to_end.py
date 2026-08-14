@@ -407,7 +407,11 @@ async def test_a_key_cannot_reach_a_capability_it_was_not_issued_for(client) -> 
     )
 
     assert response.status_code == 403
-    assert response.json()["error"]["code"] == "not_authorized"
+    # Its own code since 2026-08-14, on the rule the `no_available_model` split
+    # already followed: a separate remedy earns a separate code. This one means
+    # "change the `model` field", where a bare `not_authorized` means "you may
+    # not do this at all", and a client cannot give both pieces of advice.
+    assert response.json()["error"]["code"] == "capability_not_issued"
     # Not reported as a capacity problem: this one the caller can fix.
     assert response.json()["error"]["code"] != "no_available_model"
 
@@ -431,6 +435,40 @@ async def test_a_key_issued_for_one_capability_can_use_it(client) -> None:
         json={"model": "chat", "messages": [{"role": "user", "content": "hi"}]},
     )
     assert refused.status_code == 403
+
+
+async def test_a_capability_refusal_names_what_the_key_may_call(client) -> None:
+    """The refusal an integrator can act on without reading our logs.
+
+    On 2026-08-14 two Codex users sent the model name their own client had
+    picked — `gpt-5.6-sol` — and got "You do not have permission to perform
+    this action.", while the reason sat in the gateway log where they could not
+    reach it. The `model` field taking a capability is this platform's one real
+    divergence from every other provider, and this refusal is where somebody
+    meets it.
+
+    Safe to say because it is not new information: the caller sent the
+    capability, and the list is what `GET /v1/models` already returns to the
+    same key.
+    """
+    test_client, _, _ = client
+
+    token = await issue_key(scopes=frozenset({"code"}))
+    test_client.headers["Authorization"] = f"Bearer {token}"
+
+    refused = test_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert refused.status_code == 403
+    error = refused.json()["error"]
+    assert error["code"] == "capability_not_issued"
+    assert "gpt-5.6-sol" in error["message"]
+    assert "code" in error["message"]
+    # The wider rule still holds: which model serves a capability is not
+    # disclosed, and naming the capability does not start naming the model.
+    assert "primary" not in json.dumps(refused.json())
 
 
 async def test_streaming_usage_is_persisted(client) -> None:

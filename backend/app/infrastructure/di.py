@@ -342,6 +342,13 @@ def build_route_chat_request(
         authz=request.app.state.authz,
         clock=SystemClock(),
         max_tokens_ceiling=settings.max_tokens_ceiling,
+        # The same use case `GET /v1/models` answers from, so a refusal names
+        # exactly the list that endpoint would have returned. Read only when
+        # refusing a capability the key was not issued.
+        capabilities=ListCapabilities(
+            policies=PostgresRoutingPolicyRepository(session),
+            authz=request.app.state.authz,
+        ),
         # A session *factory*, not the request's session. The transcript is
         # written in a `finally` that runs when the request has failed, and a
         # failed request rolls its session back — which would discard exactly
