@@ -226,6 +226,7 @@ you about. Try a different model before touching anything else.
 | `503 overloaded` | Every inference slot was busy for the whole two-minute queue wait. The deployment is full, not broken; back off for `Retry-After` |
 | `400 runtime_capability_unsupported` on a replayed conversation | An assistant turn in the history carries `arguments` that are not valid JSON, and Ollama takes arguments as an object, so the platform refuses before sending. Repair or drop that turn — retrying replays the failure |
 | `422` naming `functions` or `function_call` | The client sent the deprecated OpenAI spellings, which are refused rather than silently ignored (before 2026-08-05 they were dropped, and the client stalled with prose and no error). Configure it to send `tools` / `tool_choice` |
+| `422` on **every** request, naming an `input` tag that "does not match any of the expected tags" | A Codex newer than the shapes this endpoint was built against sent an input item the gateway did not know. `additional_tools` did this on 2026-08-14, before the fix that accepted it and offered the tools it carries. Any *other* unknown tag now costs that item alone, so this should no longer be a total failure — report the tag if you see it, and check `X-Dropped-Input-Items` on the response |
 | Very slow first token on every step | Deliberation is still on for the capability. See section 1, step 3 |
 | Tool calls never happen, no error | The model does not do function calling. See section 4 |
 | The reply stops mid-sentence, no error | The conversation has crowded the answer out of the model's context window. See 5.1 |
@@ -236,6 +237,12 @@ Two behaviours that are correct but surprising:
 - **`parallel_tool_calls` is accepted and ignored.** Neither runtime offers a
   way to bound how many calls a model emits in one turn, and dropping the
   extras here would discard output the model produced and the caller paid for.
+- **An input item the gateway does not recognise is dropped, not refused.** It
+  is named once in `X-Dropped-Input-Items`; a tool type it does not recognise
+  is named in `X-Dropped-Tools`. Both headers exist because the alternative to
+  a narrowed request is a failed one, and the alternative to a header is
+  narrowing it in silence. Tools declared in an `additional_tools` item are
+  *not* in that category — they are offered to the model like any other.
 
 ### 5.1 The reply that stops mid-sentence
 

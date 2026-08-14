@@ -19,13 +19,87 @@ wrong:
   beside `input` rather than inside it.
 - A tool is **flat** — `{"type": "function", "name": ..., "parameters": ...}` —
   where Chat Completions nests it under a `function` key.
+- Tools do not all arrive in `tools`. An `additional_tools` **input item**
+  carries more of them, which is the shape that 422'd every request from a
+  post-capture client on 2026-08-14; see `InputAdditionalTools`.
+
+**A subset is not a licence to refuse the rest.** The capture is where the
+shapes come from, but a tag absent from it is a client this gateway has not
+seen yet, not a client in the wrong — so an unrecognised input item costs the
+caller that item and a header, never the whole request. `UnknownInputItem`.
 """
 
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag
+
+# --- tools -------------------------------------------------------------------
+#
+# Declared before the input items because a tool declaration can arrive *inside*
+# `input`; see `InputAdditionalTools`.
+
+
+class FunctionTool(BaseModel):
+    """Flat, unlike Chat Completions' nested `{"function": {...}}`."""
+
+    type: Literal["function"] = "function"
+    name: str
+    description: str | None = None
+    parameters: dict[str, object] = Field(default_factory=dict)
+    strict: bool | None = None
+
+
+class NamespaceTool(BaseModel):
+    """A container of ordinary function tools, not a capability of its own.
+
+    Codex sends `multi_agent_v1` this way, holding `spawn_agent`, `wait_agent`,
+    `send_input`, `resume_agent` and `close_agent`. Every one is executed by the
+    *client*, exactly like `exec_command`, so supporting this needs nothing from
+    the platform beyond flattening it — which is why these are not refused.
+    """
+
+    type: Literal["namespace"] = "namespace"
+    name: str
+    description: str | None = None
+    tools: list[FunctionTool] = Field(default_factory=list)
+
+
+class WebSearchTool(BaseModel):
+    """A **server-side** tool: the provider performs the search.
+
+    This is the one thing in a Codex request the platform genuinely cannot do.
+    Supporting it would mean the gateway making outbound web requests, which is
+    a new capability and a direct conflict with the data plane's network
+    segmentation (security.md §6) and its SSRF stance (§7.2).
+
+    `external_web_access` decides whether that matters. Codex sends `false` by
+    default, which is the client saying the tool is off; dropping something
+    already declared disabled is equivalent to honouring it. `true` is a real
+    request for a real capability, and is refused rather than served silently —
+    the rule `MLX_TOOL_CALLING_VERIFIED` established for tool calling itself.
+    """
+
+    type: Literal["web_search"] = "web_search"
+    external_web_access: bool = False
+
+
+class UnknownTool(BaseModel):
+    """Anything else the client offers.
+
+    Kept rather than rejected so that a future Codex adding a tool type does not
+    turn every request into a 422. It is dropped with the others and reported in
+    the `X-Dropped-Tools` header, so a capability the model never sees is
+    visible to whoever is wondering why.
+    """
+
+    model_config = ConfigDict(extra="allow")
+    type: str
+
+
+ToolItem = FunctionTool | NamespaceTool | WebSearchTool | UnknownTool
+
 
 # --- input items -------------------------------------------------------------
 
@@ -90,73 +164,83 @@ class InputReasoning(BaseModel):
     id: str | None = None
 
 
-InputItem = Annotated[
-    InputMessage | InputFunctionCall | InputFunctionCallOutput | InputReasoning,
-    Field(discriminator="type"),
-]
+class InputAdditionalTools(BaseModel):
+    """Tool declarations that arrive **inside `input`**, not beside it.
 
+    This is the item that took the integration down on 2026-08-14: a client
+    newer than the 0.147.0 capture puts it first in `input`, the discriminated
+    union below had no tag for it, and pydantic answered every single request
+    with a 422 before any of the work here ran.
 
-# --- tools -------------------------------------------------------------------
+    The shape is `ResponseItem::AdditionalTools` in `codex-rs/protocol`: a
+    `role` scoping the declaration, and `tools` holding the same flat tool
+    objects the top-level `tools` field carries.
 
-
-class FunctionTool(BaseModel):
-    """Flat, unlike Chat Completions' nested `{"function": {...}}`."""
-
-    type: Literal["function"] = "function"
-    name: str
-    description: str | None = None
-    parameters: dict[str, object] = Field(default_factory=dict)
-    strict: bool | None = None
-
-
-class NamespaceTool(BaseModel):
-    """A container of ordinary function tools, not a capability of its own.
-
-    Codex sends `multi_agent_v1` this way, holding `spawn_agent`, `wait_agent`,
-    `send_input`, `resume_agent` and `close_agent`. Every one is executed by the
-    *client*, exactly like `exec_command`, so supporting this needs nothing from
-    the platform beyond flattening it — which is why these are not refused.
+    It is **merged into the offered tools**, not discarded. `role` has no
+    counterpart in the domain, which scopes nothing below a request, so it is
+    read and dropped — but the tools themselves are ones the client expects the
+    model to be able to call, and accepting the item while throwing them away
+    would leave an agent waiting on a capability the model was never shown.
+    That silent narrowing is the failure `X-Dropped-Tools` exists to make
+    visible, and it is not one to introduce deliberately.
     """
 
-    type: Literal["namespace"] = "namespace"
-    name: str
-    description: str | None = None
-    tools: list[FunctionTool] = Field(default_factory=list)
+    type: Literal["additional_tools"] = "additional_tools"
+    role: str
+    tools: list[ToolItem] = Field(default_factory=list)
+    id: str | None = None
 
 
-class WebSearchTool(BaseModel):
-    """A **server-side** tool: the provider performs the search.
+class UnknownInputItem(BaseModel):
+    """Any item type this gateway has not seen, kept rather than refused.
 
-    This is the one thing in a Codex request the platform genuinely cannot do.
-    Supporting it would mean the gateway making outbound web requests, which is
-    a new capability and a direct conflict with the data plane's network
-    segmentation (security.md §6) and its SSRF stance (§7.2).
+    `tools` has had `UnknownTool` since 2026-08-05 for exactly this reason; the
+    input union had no counterpart, so one unrecognised item — not a malformed
+    one, simply a newer one — turned the entire request into a 422 rather than
+    costing the caller that item. `additional_tools` is what proved the
+    asymmetry mattered, and `ResponseItem` in `codex-rs/protocol` currently
+    holds a dozen more variants no capture here has exercised.
 
-    `external_web_access` decides whether that matters. Codex sends `false` by
-    default, which is the client saying the tool is off; dropping something
-    already declared disabled is equivalent to honouring it. `true` is a real
-    request for a real capability, and is refused rather than served silently —
-    the rule `MLX_TOOL_CALLING_VERIFIED` established for tool calling itself.
-    """
-
-    type: Literal["web_search"] = "web_search"
-    external_web_access: bool = False
-
-
-class UnknownTool(BaseModel):
-    """Anything else the client offers.
-
-    Kept rather than rejected so that a future Codex adding a tool type does not
-    turn every request into a 422. It is dropped with the others and reported in
-    the `X-Dropped-Tools` header, so a capability the model never sees is
-    visible to whoever is wondering why.
+    Dropped and reported in `X-Dropped-Input-Items`. That is a real loss when
+    the item carried content, which is why it is named in a header instead of
+    being swallowed: an operator asking why a turn read oddly can find it.
     """
 
     model_config = ConfigDict(extra="allow")
     type: str
 
 
-ToolItem = FunctionTool | NamespaceTool | WebSearchTool | UnknownTool
+_KNOWN_INPUT_TYPES = frozenset(
+    {"message", "function_call", "function_call_output", "reasoning", "additional_tools"}
+)
+
+UNKNOWN_INPUT_TAG = "__unknown__"
+"""Not a wire value. It cannot collide with one: the tag is only ever chosen
+for a `type` that is *not* in `_KNOWN_INPUT_TYPES`."""
+
+
+def _input_item_tag(value: object) -> str:
+    """Route a known `type` to its model and everything else to the fallback.
+
+    A callable discriminator rather than a plain union with `UnknownInputItem`
+    last, because the two differ on the case that matters: a `function_call`
+    missing its `call_id` is *malformed*, and an ordered union would quietly
+    match it as an unknown item and drop it. Here it still gets the 422 that
+    names the field, and only a genuinely unrecognised tag falls through.
+    """
+    tag = value.get("type") if isinstance(value, dict) else getattr(value, "type", None)
+    return tag if tag in _KNOWN_INPUT_TYPES else UNKNOWN_INPUT_TAG
+
+
+InputItem = Annotated[
+    Annotated[InputMessage, Tag("message")]
+    | Annotated[InputFunctionCall, Tag("function_call")]
+    | Annotated[InputFunctionCallOutput, Tag("function_call_output")]
+    | Annotated[InputReasoning, Tag("reasoning")]
+    | Annotated[InputAdditionalTools, Tag("additional_tools")]
+    | Annotated[UnknownInputItem, Tag(UNKNOWN_INPUT_TAG)],
+    Discriminator(_input_item_tag),
+]
 
 
 # --- request -----------------------------------------------------------------

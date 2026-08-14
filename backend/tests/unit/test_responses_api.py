@@ -203,6 +203,140 @@ def test_an_unknown_tool_type_does_not_break_the_request() -> None:
     assert dropped == ["computer_use_preview"]
 
 
+# --- tools declared inside `input` -------------------------------------------
+
+
+def test_additional_tools_are_offered_to_the_model_not_dropped() -> None:
+    """The item that 422'd every request from a post-capture client.
+
+    A Codex newer than 0.147.0 puts `additional_tools` first in `input`, and it
+    is a tool declaration rather than a turn — `role` scoping it, `tools`
+    holding the same flat function objects the top-level field carries. The
+    union had no tag for it, so pydantic refused the whole request before any
+    of this ran.
+
+    Accepting the item is only half of it. The tools inside are ones the client
+    expects the model to be able to call, so they are offered; accepting the
+    item and discarding its contents would have turned a loud 422 into an agent
+    quietly missing tools it was told it had.
+    """
+    request = ResponsesRequest(
+        model="code",
+        input=[
+            {
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "lookup",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            },
+            {"type": "message", "role": "user", "content": "find it"},
+        ],
+        tools=[{"type": "function", "name": "exec_command", "parameters": {}}],
+    )
+
+    tools, dropped = _tools(request)
+    messages = _to_domain(request)
+
+    assert [t.name for t in tools] == ["exec_command", "lookup"]
+    assert tools[1].parameters == {"type": "object", "properties": {}}
+    assert dropped == []
+    # It declares tools; it is not a turn, so it contributes no message.
+    assert [m.role for m in messages] == [MessageRole.USER]
+
+
+def test_a_tool_declared_in_both_places_is_offered_once() -> None:
+    """Two entries under one name is a list no model can choose from."""
+    request = ResponsesRequest(
+        model="code",
+        input=[
+            {
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [{"type": "function", "name": "exec_command", "description": "second"}],
+            }
+        ],
+        tools=[{"type": "function", "name": "exec_command", "description": "first"}],
+    )
+
+    tools, _ = _tools(request)
+
+    assert [t.name for t in tools] == ["exec_command"]
+    # The documented field stays authoritative.
+    assert tools[0].description == "first"
+
+
+def test_web_search_inside_additional_tools_is_still_refused() -> None:
+    """The guardrail reads both declaration sites or it reads neither.
+
+    A capability check that only looks at `tools` is one an unchanged client
+    walks straight past by declaring the same tool one field over.
+    """
+    from app.domain.exceptions import RuntimeCapabilityError
+    from app.interfaces.http.routers.responses import _assert_no_server_side_tools
+
+    request = ResponsesRequest(
+        model="code",
+        input=[
+            {
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [{"type": "web_search", "external_web_access": True}],
+            }
+        ],
+    )
+
+    with pytest.raises(RuntimeCapabilityError):
+        _assert_no_server_side_tools(request)
+
+
+def test_an_unknown_input_item_costs_the_item_not_the_request() -> None:
+    """`tools` has had this fuse since 2026-08-05; `input` had none.
+
+    `ResponseItem` in `codex-rs/protocol` carries a dozen variants no capture
+    here has exercised. Any one of them arriving must cost the caller that
+    item, not every request they make.
+    """
+    from app.interfaces.http.routers.responses import _dropped_input_items
+
+    request = ResponsesRequest(
+        model="code",
+        input=[
+            {"type": "local_shell_call", "id": "lsc_1", "action": {"command": ["ls"]}},
+            {"type": "message", "role": "user", "content": "hi"},
+            {"type": "local_shell_call", "id": "lsc_2", "action": {"command": ["pwd"]}},
+        ],
+    )
+
+    messages = _to_domain(request)
+
+    assert [m.role for m in messages] == [MessageRole.USER]
+    # Named once, however often history replays it: a header must not grow with
+    # the transcript.
+    assert _dropped_input_items(request) == ["local_shell_call"]
+
+
+def test_a_malformed_known_item_is_still_refused() -> None:
+    """The fuse must not become a place for broken requests to hide.
+
+    A `function_call` without its `call_id` is malformed, not unrecognised. An
+    ordered union would have matched it as an unknown item and dropped it
+    silently; the callable discriminator sends it to the model that names the
+    missing field.
+    """
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="call_id"):
+        ResponsesRequest(
+            model="code",
+            input=[{"type": "function_call", "name": "exec_command", "arguments": "{}"}],
+        )
+
+
 # --- streaming ---------------------------------------------------------------
 
 
