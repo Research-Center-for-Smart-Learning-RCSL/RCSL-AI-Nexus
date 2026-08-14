@@ -47,14 +47,27 @@ class NoAvailableModelError(DomainError):
 class RuntimeTimeoutError(NoAvailableModelError):
     code = "runtime_timeout"
     public_message = (
-        "The runtime did not respond within the time allowed. An immediate retry usually succeeds."
+        "The runtime did not respond within the time allowed. "
+        "Retrying the same request unchanged is unlikely to help; send less."
     )
     # A subclass, so anything catching NoAvailableModelError (routing tries the
-    # next candidate) keeps working. The public message states the measured
-    # property that makes this code worth its own name: after a prompt-
-    # evaluation timeout the prompt sits in the runtime's prefix cache, so the
-    # retry that was pointless for a missing routing policy is nearly free and
-    # nearly certain here.
+    # next candidate) keeps working.
+    #
+    # **The advice was the opposite of this until 2026-08-14, and it was
+    # wrong.** It said an immediate retry usually succeeds, on the stated
+    # ground that a prompt evaluated up to the timeout sits in the runtime's
+    # prefix cache and so costs nothing the second time. Measured that day, by
+    # aborting a cold prefill part way and re-sending it: the retry evaluated
+    # 20,919 tokens in 33.5 seconds, the full cold rate, having kept nothing.
+    # A cancelled prefill is discarded.
+    #
+    # So the one case this code exists to name — a prompt too long to evaluate
+    # inside `request_timeout_seconds` — is precisely the case where retrying
+    # fails again, identically, after the same wait. Telling an agent client to
+    # retry it bought the caller another ten minutes per attempt and a
+    # conversation it could never send. The prefix cache is real and does make
+    # an agent's *next turn* nearly free; it just does not survive a
+    # cancellation, which is the only way this error is reached.
 
 
 class StreamInterruptedError(NoAvailableModelError):

@@ -763,12 +763,21 @@ data: [DONE]`}
                 <td className="font-mono text-xs">context_too_long</td>
                 <td>
                   The prompt exceeds the configured input ceiling. Shorten it;
-                  the limit is about memory, not policy. To budget for it
-                  yourself: the platform counts <strong>4 characters as one
-                  token</strong>, over everything the model will read — your
-                  tool definitions and replayed tool calls included — so an
-                  agent conversation reaches this through accumulation rather
-                  than through one large message.
+                  the limit is about memory, not policy, and retrying unchanged
+                  cannot succeed. To budget for it yourself: the ceiling is{' '}
+                  <strong>98,304 tokens</strong> over everything the model will
+                  read — your tool definitions and replayed tool calls included
+                  — so an agent conversation reaches this through accumulation
+                  rather than through one large message.
+                  <br />
+                  Tokens are estimated from the text, weighting characters
+                  outside ASCII far more heavily, because they cost far more:
+                  measured on this deployment, English prose runs about 4.6
+                  characters per token and Traditional Chinese about 1.4. A
+                  conversation in Chinese therefore reaches the ceiling in
+                  roughly a third of the characters an English one does. Until
+                  2026-08-14 a flat four-per-token rule applied to both, which
+                  admitted CJK conversations well past the stated limit.
                 </td>
               </tr>
               <tr>

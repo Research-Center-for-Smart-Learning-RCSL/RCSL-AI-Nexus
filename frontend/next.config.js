@@ -47,15 +47,16 @@ const nextConfig = {
     // deadline alone.** Since 2026-08-05 the deadline is counted from the first
     // chunk rather than from the request, so a long prompt may spend up to the
     // read timeout being evaluated *before* the deadline's clock even starts.
-    // The two compose: 600 + 900 = 1500s. Comparing against 900 alone left the
+    // The two compose: 1200 + 900 = 2100s. Comparing against 900 alone left the
     // proxy cutting at 960s, which is the original silent reset moved from 30
     // seconds to 16 minutes. `test_config_failfast.py` reads both files and
     // fails if this drops below the sum, because a comment cannot enforce an
-    // invariant that spans two languages.
+    // invariant that spans two languages — and it is what caught this value
+    // being left behind when the read timeout went 600 → 1200 on 2026-08-14.
     //
     // A static value, unlike ADMIN_API_URL, so baking it in at build time is
     // safe — that distinction is why the proxy itself lives in middleware.ts.
-    proxyTimeout: 1_560_000,
+    proxyTimeout: 2_160_000,
 
     // The same class of defect as proxyTimeout above, found on 2026-08-07 and
     // present since the middleware proxy was written: a limit inside Next's

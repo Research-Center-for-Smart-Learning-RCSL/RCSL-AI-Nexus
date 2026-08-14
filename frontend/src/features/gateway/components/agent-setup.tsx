@@ -411,6 +411,23 @@ wire_api = "responses"`}
           </dd>
 
           <dt className="font-mono text-xs text-muted-foreground">
+            413 context_too_long
+          </dt>
+          <dd>
+            The conversation outgrew the input ceiling — 98,304 tokens, counting
+            your tool definitions and every replayed turn. It is not a quota and
+            waiting does not clear it: <strong>start a new conversation</strong>
+            , or have the agent summarise and continue from the summary. Codex
+            reports it as <em>unexpected status 413 Payload Too Large</em> and
+            will retry it several times first, which changes nothing.
+            <br />
+            Reached sooner than the character count suggests if you work in
+            Chinese: measured here, Traditional Chinese costs about one token
+            per 1.4 characters against 4.6 for English, and a token is what the
+            ceiling counts.
+          </dd>
+
+          <dt className="font-mono text-xs text-muted-foreground">
             503 no_available_model
           </dt>
           <dd>

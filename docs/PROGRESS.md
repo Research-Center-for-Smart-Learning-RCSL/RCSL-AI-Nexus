@@ -220,6 +220,90 @@ remains the Phase 3 increment.
 
 ## 2026-08-14
 
+### The context ceiling was enforced in the wrong unit, and two harder limits sat above it unrecorded
+
+The same user, an hour after the quota entry below, hit `413 Payload Too Large`
+two work items into a coding task — `req_b72383c071a84eac`, 270,182 characters
+against a limit of 262,144. Their own assessment named the platform rather than
+the model as the risk, and it was right, though not for the reason either of us
+assumed: the ceiling was not too low. It was not being applied in the unit it
+was written in.
+
+**`MAX_CONTEXT_LENGTH` is tokens; the guardrail counted characters at a flat
+four per token.** Measured against the tokenizer itself, by sending samples
+through `gemma4-31b-q8` and reading `prompt_eval_count`:
+
+| content | chars/token |
+|---|---|
+| English prose | 4.57 |
+| JavaScript and HTML | 3.59 |
+| JSON tool schema | 2.31 |
+| Chinese with code | 2.27 |
+| Traditional Chinese | 1.38 |
+| Minified JavaScript | **1.15** |
+
+So a limit of 65,536 tokens admitted 65,536 of English and roughly 190,000 of
+Traditional Chinese. This user writes Chinese instructions around JavaScript, at
+2.27 — their 413 arrived at about **119,000 real tokens against a ceiling of
+65,536**, and every request before it had been over the limit too.
+
+**No single constant fixes it.** Minified JavaScript is denser than Chinese;
+punctuation and short identifiers each cost a token. A divisor safe for that
+case prices English prose at a quarter of its real capacity. The estimator now
+weights ASCII and non-ASCII separately, which is honest for prose, source and
+CJK and knowingly optimistic for a pathological payload — and the residual is
+covered by a backstop rather than by pretending the estimate is exact.
+
+**The backstop exists because the runtime truncates rather than refuses.**
+Ollama evaluates at most `num_ctx / 2` prompt tokens and silently drops the
+rest: `num_ctx=4096` evaluated 2051 of an 8506-token prompt, `num_ctx=16384`
+evaluated all 8506. It reports `done_reason: "length"` — the same value a
+generation that filled its budget reports, so nothing downstream can tell them
+apart. **This was the real danger and it is worse than a 413**: between 65,536
+and roughly 115,000 tokens this deployment was one turn away from answering a
+conversation whose beginning the model had never read, fluently and with no
+signal anywhere. `_warn_if_prompt_was_truncated` now logs it against the request
+id when `prompt_eval_count` reaches that boundary.
+
+**`RuntimeTimeoutError` told callers the opposite of the truth.** Its message
+said an immediate retry usually succeeds, on the stated ground that a prompt
+evaluated up to the timeout sits in the prefix cache. Tested by aborting a cold
+prefill part way and re-sending: the retry evaluated 20,919 tokens in 33.5
+seconds, the full cold rate, having kept nothing. A cancelled prefill is
+discarded. So the one case the code exists to name — a prompt too long to
+evaluate inside `request_timeout_seconds` — is exactly the case where the retry
+fails again, identically, after the same wait. The prefix cache is real and does
+make an agent's *next* turn nearly free; it just does not survive cancellation,
+which is the only way this error is reached.
+
+**What was raised, and what the raise actually cost.** 65,536 → 98,304 tokens,
+read timeout 600 → 1200 s, and `gemma4-31b-q8`'s registered `context_length`
+131,072 → 196,608 — the smallest value that puts the runtime's truncation point
+at or above the new ceiling, rather than the 262,144 that doubling suggests.
+That choice was worth measuring: `llama-server`'s resident size is 37.34 GiB at
+131,072, **40.40 at 196,608 and 42.93 at 262,144**, so the minimum viable value
+saved 2.5 GiB over the obvious one.
+
+**Ollama's own `size_vram` reports 31.58 GiB at all three**, which is the
+weights alone. The registry's `memory_gb` for this model was 32 and had never
+counted the KV cache at all; `observed_memory_gb`, which the memory budget
+prefers where it exists, is written from that same blind figure. Corrected to 41
+GiB, putting the three loaded models at 47 of the 51.2 GiB budget. This closes
+the second of the two questions security.md §4.3 left open — and answers it
+against the assumption in the row: KV cost is **linear** in context here, about
+44 KiB per token, not superlinear.
+
+**The invariant test caught the change halfway.** `MAX_CONTEXT_LENGTH` and
+`REQUEST_TIMEOUT_SECONDS` were raised in `config.py` and left alone in
+`.env.example`, and `test_config_failfast.py` — which reads both files plus
+`next.config.js` and fails when the frontend's `proxyTimeout` drops below
+`read + deadline` — refused the suite until all three moved together. That test
+was written for exactly this and it is the reason `proxyTimeout` went to
+2,160,000 ms rather than being discovered at 1,560,000 by a user. The upstream
+`proxy_read_timeout` needed nothing: it is 3600 s, sized against the class of
+bound rather than the number, which is the whole argument deployment.md §7
+makes for it.
+
 ### A user reported eleven characters, and all four defects were in what the platform said rather than in what it did
 
 The whole report was `exceeded retry limit, last status: 429 Too Many Requests,

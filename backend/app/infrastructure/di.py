@@ -362,7 +362,7 @@ def build_route_chat_request(
         # rebuilt that gap one layer down.
         prompt_logs=PostgresPromptLogWriter(get_session_factory()),
         request_id=current_request_id,
-        max_context_chars=settings.max_context_length * 4,
+        max_context_tokens=settings.max_context_length,
         generation_deadline_seconds=settings.generation_deadline_seconds,
         thinking_default=settings.ollama_thinking,
     )

@@ -265,29 +265,43 @@ class Settings(BaseSettings):
     does not support it. Graded values are not offered — `think: "low"` is
     accepted by Ollama and measurably changes nothing.
     """
-    max_context_length: int = 65536
-    """Ceiling on a request's input, in tokens, applied as four characters per
-    token (`di.py`) before any hardware is committed.
+    max_context_length: int = 98304
+    """Ceiling on a request's input, in tokens, estimated from the text
+    (`RouteChatRequest._estimated_prompt_tokens`) before any hardware is
+    committed.
 
     32768 → 65536 on 2026-08-05, for agent clients. An agent replays the whole
     conversation on every turn and grows it with file contents and tool output,
     so it crossed the old ceiling within a few rounds and the 413 arrived in the
-    middle of a task rather than at the start of one.
+    middle of a task rather than at the start of one. 65536 → 98304 on
+    2026-08-14 for the same reason, after a Codex session reached the ceiling
+    two work items into a task.
 
-    **This value, `request_timeout_seconds` and `generation_deadline_seconds`
-    are one decision and have to be changed together.** Prompt evaluation
-    produces no bytes, so what bounds it is the per-read timeout, and the
-    arithmetic that ties the three is measured rather than assumed: prompt
-    evaluation on the largest model this machine holds runs at 117.9 tok/s
-    (PROGRESS.md 2026-07-27), so a full context costs
+    **This value, `request_timeout_seconds` and the model's registered
+    `context_length` are one decision and have to be changed together.** Two
+    separate limits sit above this one and neither announces itself:
 
-        65536 / 117.9 = 556 seconds
+    - *The runtime truncates rather than refuses.* Ollama evaluates at most
+      `num_ctx / 2` prompt tokens and silently drops the rest, reporting
+      `done_reason: "length"` — the same value a generation that ran out of
+      room reports. Measured on 2026-08-14: `num_ctx=4096` evaluated 2051 of a
+      8506-token prompt, `num_ctx=16384` evaluated all 8506. So this ceiling
+      must stay below half the registered `context_length` of every model that
+      serves a capability, or the guardrail's remedy becomes an answer given
+      without the beginning of the conversation. gemma4-31b-q8 was raised to
+      262144 with this change, putting its truncation point at 131072.
+    - *Prompt evaluation produces no bytes*, so what bounds it in transit is
+      the per-read timeout. Measured on this hardware from real traffic on
+      2026-08-14 — 105.5 to 141.5 tok/s across four cold requests — so a full
+      context costs
 
-    against a 600 second read timeout. Raising this without raising that gives
-    a ceiling the guardrail admits and the transport then kills — not as a 413,
-    which a client can act on, but as a read timeout part way through. It was
-    briefly set to 131072 against a 300 second timeout, which is that gap 96,000
-    tokens wide.
+          98304 / 105.5 = 932 seconds
+
+      against a 1200 second read timeout. Raising this without raising that
+      gives a ceiling the guardrail admits and the transport then kills. That
+      failure does not heal: a prefill killed part way is **not** kept in the
+      runtime's prefix cache (measured the same day), so the retry re-evaluates
+      from nothing and times out again.
 
     This is one of the six resource guardrails security.md section 4.3 counts
     on, so raising it costs something real: context is superlinear on unified
@@ -295,21 +309,28 @@ class Settings(BaseSettings):
     across a single generation. The other five are unchanged.
 
     A caller cannot smuggle past it through `tools`: tool definitions and prior
-    tool calls are counted too (`RouteChatRequest._context_chars`).
+    tool calls are counted too.
     """
 
-    request_timeout_seconds: int = 600
+    request_timeout_seconds: int = 1200
     """Per-read HTTP timeout on a runtime call: the longest gap between bytes.
 
     **This is what bounds prompt evaluation**, because a runtime reading a long
     prompt sends nothing at all while it does so. Sized from `max_context_length`
-    above, with room over the 556 seconds a full context costs; the two move
+    above, with room over the 932 seconds a full context costs; the two move
     together or the larger one is unreachable.
 
-    300 → 600 on 2026-08-05 with the context ceiling. The cost is paid by a
-    *hung* runtime rather than a busy one, since a stream that is producing
-    resets this on every chunk: a runtime that has stopped answering now holds
-    one of `max_concurrent_inference` slots for ten minutes instead of five.
+    300 → 600 on 2026-08-05 with the context ceiling, and 600 → 1200 on
+    2026-08-14 with it again. The cost is paid by a *hung* runtime rather than a
+    busy one, since a stream that is producing resets this on every chunk: a
+    runtime that has stopped answering now holds one of
+    `max_concurrent_inference` slots for twenty minutes instead of ten.
+
+    That cost is worth naming, because the case it buys is the cold one. A
+    conversation an agent is part way through prefills in seconds — the runtime
+    holds its prefix — and only the first turn of a long one, or the first after
+    an eviction, pays the full 932 seconds. Sizing this to the warm case would
+    make the cold one unreachable rather than slow.
     """
 
     generation_deadline_seconds: int = 900

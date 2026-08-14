@@ -26,6 +26,7 @@ import time
 import uuid
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
+from math import ceil
 
 from app.application.use_cases.list_capabilities import ListCapabilities
 from app.domain.entities.actor import Actor, Scope
@@ -70,8 +71,51 @@ so the request cannot be held open by one that keeps streaming. Small on
 purpose: it is a guard, not a budget."""
 
 
-def _context_chars(messages: Sequence[Message], tools: Sequence[ToolDefinition]) -> int:
-    """Everything the model will read, in characters.
+ASCII_CHARS_PER_TOKEN = 3.0
+WIDE_CHARS_PER_TOKEN = 1.1
+"""How many characters of each kind one token is assumed to hold.
+
+Measured against the tokenizer itself on 2026-08-14, by sending samples through
+gemma4-31b-q8 and reading `prompt_eval_count`:
+
+| content              | chars/token |
+|----------------------|-------------|
+| English prose        | 4.57        |
+| JavaScript and HTML  | 3.59        |
+| JSON tool schema     | 2.31        |
+| Chinese with code    | 2.27        |
+| Traditional Chinese  | 1.38        |
+| Minified JavaScript  | **1.15**    |
+
+The single figure of 4.0 this replaced was measured on none of it. It held for
+English prose and under-counted everything else — a Traditional Chinese
+conversation by 2.9x, which is why a Codex session on 2026-08-14 was admitted
+at roughly 115,000 tokens against a ceiling of 65,536 and would have been
+silently truncated by the runtime a few turns later.
+
+**Two characters per token is not a safe floor either, and no single number
+is.** Minified JavaScript is denser than Chinese; punctuation and short
+identifiers each cost a token. A constant safe for that case would price
+ordinary prose at a quarter of its real capacity, so these values are chosen to
+be honest for the content this platform actually serves — prose, source, and
+CJK — and are knowingly optimistic for a pathological payload. What keeps that
+from becoming a silent truncation is `_warn_if_prompt_was_truncated` below, not
+this estimate.
+"""
+
+
+def _estimated_tokens(text: str) -> int:
+    """Characters weighted by width, which is the cheapest signal that
+    correlates with tokenizer density: scripts outside ASCII are near one token
+    per character in every tokenizer this platform will meet, and ASCII is not.
+    """
+    ascii_chars = sum(1 for c in text if c.isascii())
+    wide_chars = len(text) - ascii_chars
+    return ceil(ascii_chars / ASCII_CHARS_PER_TOKEN + wide_chars / WIDE_CHARS_PER_TOKEN)
+
+
+def _estimated_prompt_tokens(messages: Sequence[Message], tools: Sequence[ToolDefinition]) -> int:
+    """Everything the model will read, in estimated tokens.
 
     A tool definition's `parameters` is arbitrary JSON, so it is measured by
     serialising it rather than by walking it: the length of the text the adapter
@@ -80,12 +124,62 @@ def _context_chars(messages: Sequence[Message], tools: Sequence[ToolDefinition])
     serialises again a few lines later, against a guardrail that runs before any
     hardware is committed.
     """
-    total = sum(len(m.content) for m in messages)
+    total = sum(_estimated_tokens(m.content) for m in messages)
     for message in messages:
-        total += sum(len(c.name) + len(c.arguments) for c in message.tool_calls)
+        total += sum(
+            _estimated_tokens(c.name) + _estimated_tokens(c.arguments) for c in message.tool_calls
+        )
     for tool in tools:
-        total += len(tool.name) + len(tool.description) + len(json.dumps(tool.parameters))
+        total += (
+            _estimated_tokens(tool.name)
+            + _estimated_tokens(tool.description)
+            + _estimated_tokens(json.dumps(tool.parameters))
+        )
     return total
+
+
+def _warn_if_prompt_was_truncated(
+    prompt_tokens: int,
+    context_length: int,
+    *,
+    estimated: int,
+    request_id: str | None,
+    actor: str,
+) -> None:
+    """The backstop for the estimate above being wrong in the unsafe direction.
+
+    Ollama evaluates at most `num_ctx / 2` prompt tokens and drops the rest
+    without saying so — `done_reason` is `length`, which is also what a
+    generation that filled its budget reports, so nothing downstream can tell
+    the two apart. The caller gets a fluent answer to a conversation whose
+    beginning the model never saw, and the only thing wrong with the response
+    is that it is wrong.
+
+    `max_context_length` is configured below half the smallest registered
+    context precisely so this cannot happen, which means reaching the boundary
+    is not a caller's problem to solve but a signal that the estimator
+    under-counted their content. Logged rather than raised: the answer has
+    already been produced and generated tokens have already been paid for, so
+    refusing here would bill for work and return nothing. The request id makes
+    it correlate with the caller's report, which is how the 2026-08-14 incident
+    was diagnosed in the first place.
+    """
+    if not prompt_tokens or context_length <= 0:
+        # Zero means the stream never reached its terminal chunk, so there is
+        # no figure to judge — not that nothing was read.
+        return
+    if prompt_tokens < context_length // 2:
+        return
+    logger.warning(
+        "prompt likely truncated by the runtime: prompt_tokens=%s reached num_ctx/2=%s "
+        "(estimated %s) request_id=%s actor=%s — the token estimate under-counted this "
+        "content and the model did not see the whole conversation",
+        prompt_tokens,
+        context_length // 2,
+        estimated,
+        request_id,
+        actor,
+    )
 
 
 class RouteChatRequest:
@@ -106,7 +200,7 @@ class RouteChatRequest:
         capabilities: ListCapabilities,
         prompt_logs: PromptLogWriterPort | None = None,
         request_id: Callable[[], str | None] = lambda: None,
-        max_context_chars: int = 4 * 32768,
+        max_context_tokens: int = 32768,
         generation_deadline_seconds: int = 600,
         thinking_default: bool = True,
         monotonic: Callable[[], float] = time.monotonic,
@@ -158,7 +252,7 @@ class RouteChatRequest:
         self._authz = authz
         self._clock = clock
         self._max_tokens_ceiling = max_tokens_ceiling
-        self._max_context_chars = max_context_chars
+        self._max_context_tokens = max_context_tokens
         """Characters, not tokens: counting tokens would mean loading the
         model's tokeniser here, and a rough bound applied before any work
         starts is worth more than an exact one applied later."""
@@ -226,10 +320,13 @@ class RouteChatRequest:
         # client grows without bound: leaving them out would have let a caller
         # carry an arbitrary payload past the guardrail in `tools`, which is
         # the one field of an agent request that no person ever types.
-        total_chars = _context_chars(messages, tools)
-        if total_chars > self._max_context_chars:
+        estimated = _estimated_prompt_tokens(messages, tools)
+        if estimated > self._max_context_tokens:
             raise ContextTooLongError(
-                detail=f"{total_chars} characters exceeds the configured limit"
+                detail=(
+                    f"~{estimated} estimated tokens exceeds the configured limit "
+                    f"of {self._max_context_tokens}"
+                )
             )
 
         # The concurrency slot is taken before any database work. Doing the
@@ -274,6 +371,10 @@ class RouteChatRequest:
                     tools,
                     tool_choice,
                     sampling,
+                    # Carried rather than recomputed: it is one pass over the
+                    # whole prompt, and the only reader is the truncation
+                    # backstop, which needs the figure the guardrail judged.
+                    estimated,
                 )
             ) as generation:
                 async for chunk in generation:
@@ -298,6 +399,7 @@ class RouteChatRequest:
         tools: Sequence[ToolDefinition] = (),
         tool_choice: ToolChoice | None = None,
         sampling: SamplingOptions | None = None,
+        estimated_prompt_tokens: int = 0,
     ) -> AsyncGenerator[CompletionChunk, None]:
         # The caller's request is honoured only where it is stricter than ours.
         # An unbounded generation is a hardware problem, not a client choice.
@@ -485,6 +587,13 @@ class RouteChatRequest:
                 finish_reason = "length"
             completed = not truncated
         finally:
+            _warn_if_prompt_was_truncated(
+                prompt_tokens,
+                target.resource_profile.context_length,
+                estimated=estimated_prompt_tokens,
+                request_id=self._request_id(),
+                actor=actor.display,
+            )
             # Runs on normal completion, on client disconnect, and on error.
             # Recording here is what makes partial output billable.
             #
