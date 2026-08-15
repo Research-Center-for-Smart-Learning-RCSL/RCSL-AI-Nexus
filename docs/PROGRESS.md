@@ -27,13 +27,19 @@ and nothing else answers "what is the state of this, right now".
 **Running.** Eleven containers on the Mac Studio: three ASGI apps (gateway, two
 admin entrances), two frontends, Postgres, Redis, Qdrant, the isolated parser,
 Prometheus and Grafana, with `migrate` exiting 0 ahead of them. Ollama runs
-natively and holds `gemma4:31b-it-q8_0`, `qwen2.5:7b` and `nomic-embed-text` —
-36.3 GiB resident against a 51.2 GiB budget. Four routing policies: `chat` and
-`code` (deliberation off) on `gemma4-31b-q8`, `assist` on `qwen7b`, `embedding`
-on `embedder`. Two former main models stay registered at `downloaded` and make
-the switch reversible in either direction: `glm-4.7-flash:q8_0`, which held the
-role until 2026-08-07, and `gemma4:31b-it-qat`, the q4 this ran on for part of
-the same day.
+natively and holds `qwen3.6:35b-a3b-q8_0`, `qwen2.5:7b` and `nomic-embed-text` —
+45.3 GB resident against a 51.2 GB budget. Four routing policies: `chat` and
+`code` (deliberation off) on `qwen36-35b-a3b-q8`, `assist` on `qwen7b`,
+`embedding` on `embedder`. Three former main models stay registered at
+`downloaded` and make the switch reversible in either direction:
+`gemma4:31b-it-q8_0`, which held the role from 2026-08-07 until 2026-08-16,
+`glm-4.7-flash:q8_0` before it, and `gemma4:31b-it-qat`, the q4 this ran on for
+part of a day.
+
+**Those five lines were corrected on 2026-08-16 and nothing else in this block
+was re-checked.** They named `gemma4-31b-q8` and a 36.3 GiB figure, both made
+untrue that day by the entry at the top of this file. The rule above still
+applies to every other sentence here.
 
 **Built.** Phase 1 is complete, including the five Playwright paths described
 below.
@@ -250,6 +256,58 @@ All four capabilities resolve through the real `RoutingService` against the real
 database: `chat` and `code` to the new model, `code` still with `thinking:
 false`, `assist` to `qwen7b`, `embedding` to `embedder`. The runtime answers at
 72.7 tok/s at that context against the incumbent's 13.6.
+
+### The ten-rung harness on the new `code` policy: nine passes, and the tenth is the one that matters
+
+Run the same day through the gateway, `NEXUS_MODEL=code`, no `think` field so
+the policy decides — which is what a real client sends.
+
+Rungs 1-7 and 9 pass. **Rung 10 passes well**: six turns, 7.0 s, trace
+`run_tests → read_file + search_code → read_file → write_file → run_tests`, the
+subtraction-for-addition bug correctly named and fixed. `gemma4` needed 21.4 s
+for the same six turns on 2026-08-07.
+
+**Rung 8 fails, five runs out of five.** It hands the model a tool error that
+names its own fix — `unknown city "Taipei". Try the official name, e.g. "Taipei
+City"` — and the pass condition is a second call with a different argument. The
+model never makes one. It answers "approximately 2.5 million people" from its
+weights and stops, with `attempts=['Taipei']` every time.
+
+This is not the assertion being brittle. `uses()` was loosened once already
+because a correct answer was marked FAIL for writing the figure another way, and
+the note in that helper says so; the condition that fails here is `len(attempts)
+>= 2`, which no rendering affects.
+
+**It is the 2026-08-15 `insufficient_data` finding, in the place where it costs
+something.** That task showed all three candidates inventing a confident number
+rather than reporting that the data did not determine one, and the entry below
+called it model-independent and unrelated to picking a model. Rung 8 shows what
+it does inside an agent loop: **a tool call that fails does not stop this model,
+it makes it guess.** For `code`, the capability whose whole purpose is driving
+agent clients, that is the worst rung to lose — and the switch was made on the
+wall clock, which rung 10 confirms and rung 8 does not touch.
+
+The comparison against `gemma4` rests on this file's 2026-08-07 record of ten
+passes, **not on a same-day re-measurement**; the two models do not fit in
+memory together, so re-checking means another eviction, a temporary policy edit
+and a second outage. Worth doing before this is called a regression rather than
+a difference.
+
+### Minting the harness key found a control that is actually in force
+
+The harness needs a key scoped to `code`. Two live ones exist and neither
+plaintext is recoverable — HMAC with a pepper, shown once at issue, working as
+designed — so a new one was minted, by the operator's instruction, the same way
+the policy edit was: straight into the table, no audit row.
+
+Doing it through the gateway container failed with `permission denied for table
+api_keys`. **The least-privilege database split is live, not merely asserted by
+`tests/integration/test_db_role_grants.py`**: the account the data plane runs as
+cannot mint a credential, which is exactly the property section 6 of
+[security.md](./architecture/security.md) claims. The admin container's account
+can, and did. The key was scoped to `code` alone, expired in six hours, revoked
+immediately after the run, and its plaintext deleted; `GET /v1/models` advertised
+`["code"]` and nothing else while it lived.
 
 **Written straight to Postgres, and that is a real gap.** Every earlier policy
 edit went through the admin API and left an `audit_log` row. This one did not,
