@@ -218,6 +218,53 @@ remains the Phase 3 increment.
 
 ---
 
+## 2026-08-16
+
+### `code` and `chat` both moved to `qwen36-35b-a3b-q8`, and the control plane could not be reached from the machine it runs on
+
+Acting on the 2026-08-15 evaluation. `code` was asked to move; `chat` had to move
+with it, and the reason is the memory budget rather than a preference.
+
+**The three prerequisites the request did not mention.** The model was not in the
+registry at all — six rows now, five before. It cannot be co-resident with
+`gemma4-31b-q8`: the budget is `64 x 0.8 = 51.2 GB`, the incumbent was observed
+at 31.5 GB and the candidate measures **40.0 GB resident at `num_ctx=196608`**,
+so `assert_can_load` refuses the pair. And `chat` preferred `gemma4-31b-q8`, so
+evicting it moved `chat` whether or not anyone asked.
+
+**A wrong reading of that third point, corrected before it was acted on.** The
+`chat` policy carries `qwen7b` as a fallback and the first reading was that
+`chat` would quietly degrade to the 7B model. It would not have: `qwen7b` showed
+`state = loaded` and `observed_state = downloaded`, and routing follows the
+observation where one exists, so the fallback was inert and `chat` would have
+returned 503. `embedder` was in the same condition, which means `embedding` had
+been unavailable for some time before any of this — visible in the registry the
+whole while, and not noticed until something else forced a look at that column.
+Both are resident again, so `chat`'s fallback and `assist` and `embedding` are
+real rather than declared.
+
+Registered at `memory_gb = 42` against 40.0 measured, and `context_length =
+196608`, which is the floor `MAX_CONTEXT_LENGTH = 98304` sets under the
+Ollama `num_ctx / 2` rule. Resident total is 45.3 GB of the 51.2 GB budget.
+All four capabilities resolve through the real `RoutingService` against the real
+database: `chat` and `code` to the new model, `code` still with `thinking:
+false`, `assist` to `qwen7b`, `embedding` to `embedder`. The runtime answers at
+72.7 tok/s at that context against the incumbent's 13.6.
+
+**Written straight to Postgres, and that is a real gap.** Every earlier policy
+edit went through the admin API and left an `audit_log` row. This one did not,
+because there is no authenticated path to the control plane from this host: the
+tailnet entrance derives identity from the header `tailscale serve` injects, and
+it does not inject one for a request the machine makes to itself — the same
+property that stopped the administrator enrolling here on 2026-08-02, working as
+designed. Setting that header by hand against `127.0.0.1:8001` is the
+[security.md](./architecture/security.md) §15.5 forgery and was not done. So the
+change is validated by nothing and audited by nothing, and the only record that
+it happened is this entry. Re-applying the same edit through the UI from a
+tailnet device would close it.
+
+---
+
 ## 2026-08-15
 
 ### The sixteen-task set ran, and it separates the candidates the twelve-task set could not
