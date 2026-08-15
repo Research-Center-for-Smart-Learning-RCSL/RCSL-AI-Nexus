@@ -24,7 +24,11 @@ INCUMBENT = "gemma4:31b-it-q8_0"
 CANDIDATES = [INCUMBENT, "qwen3.6:27b-q8_0", "qwen3.6:35b-a3b-q8_0"]
 
 # Restored at the end: what the deployment was serving before this run, and how.
-DEPLOYED = [(INCUMBENT, -1)]
+# The num_ctx matters as much as the model does. Ollama keys a loaded instance by
+# its options, so restoring at a different context length leaves a model that is
+# resident but wrong, and the first real request pays a reload to correct it.
+# 196608 is what `gemma4-31b-q8` is registered with (deployment.md, MAX_CONTEXT_LENGTH).
+DEPLOYED = [(INCUMBENT, -1, 196608)]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results.jsonl")
@@ -93,7 +97,10 @@ def rotate(seq: list, n: int) -> list:
     return seq[n:] + seq[:n]
 
 
-def run(phase: str, models: list[str], rounds: int) -> None:
+def run(phase: str, models: list[str], rounds: int, only: list[str] | None = None) -> None:
+    global TASKS
+    if only:
+        TASKS = [t for t in TASKS if t["id"] in only]
     already = done_keys()
     total = len(models) * rounds * len(TASKS)
     left = total - sum(1 for k in already if k[0] == phase)
@@ -131,15 +138,15 @@ def run(phase: str, models: list[str], rounds: int) -> None:
 def restore() -> None:
     print("restoring the deployment, largest model first (5)")
     for other in resident():
-        if other not in [m for m, _ in DEPLOYED]:
+        if other not in [m for m, _, _ in DEPLOYED]:
             print(f"  evicting {other}")
             unload(other)
-    for model, ka in DEPLOYED:
-        print(f"  loading {model} (keep_alive={ka}) ...", flush=True)
+    for model, ka, ctx in DEPLOYED:
+        print(f"  loading {model} (keep_alive={ka}, num_ctx={ctx}) ...", flush=True)
         t0 = time.time()
         _post("/api/generate", {"model": model, "prompt": "ok", "stream": False,
                                 "think": False, "keep_alive": ka,
-                                "options": {"num_predict": 8}})
+                                "options": {"num_predict": 8, "num_ctx": ctx}})
         print(f"  {model} resident in {time.time()-t0:.1f}s")
     print("resident now:", resident())
 
@@ -155,6 +162,14 @@ if __name__ == "__main__":
         run("pilot2", [INCUMBENT], 3)
     elif cmd == "full":
         run("full", CANDIDATES, 3)
+    elif cmd == "repair":
+        # The three prompts that carried a `def f(...): ...` stub. qwen3.6:27b
+        # copied the stub and indented a body under it in all three rounds of
+        # retry_deadline, scoring 0.00 on an IndentationError -- a measurement of
+        # the prompt's formatting, not of the retrying it was asked about. The
+        # stub is gone from all three; these re-runs replace their `full` figures.
+        run("repair", CANDIDATES, 3,
+            only=["retry_deadline", "rate_limiter", "range_sum_updates"])
     elif cmd == "restore":
         restore()
     else:
