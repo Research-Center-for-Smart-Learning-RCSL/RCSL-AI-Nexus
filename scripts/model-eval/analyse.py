@@ -132,13 +132,19 @@ def main(phase: str) -> None:
             "ABOVE the band - the set will saturate again" if pct > 70
             else "BELOW the band - differences drown in the failure rate")
         print(f"{m:26s} {pct:5.1f}%  {band}")
-    print(f"\nsaturated high (every candidate, every sample): "
-          f"{', '.join(saturated_high) or 'none'}")
-    print(f"saturated low  (every candidate, every sample): "
-          f"{', '.join(saturated_low) or 'none'}")
+    # 4.4 replaces a task that carries no signal *across the candidates*. With one
+    # model on the bench that test cannot be run, and calling the result saturation
+    # would be the same overreach as reading one model's score as a comparison.
+    scope = "every candidate" if len(models) > 1 else f"the one model here ({models[0]})"
+    print(f"\nalways 1.00 for {scope}: {', '.join(saturated_high) or 'none'}")
+    print(f"always 0.00 for {scope}: {', '.join(saturated_low) or 'none'}")
     print(f"carries signal: {', '.join(discriminating) or 'none'}")
     n_sat = len(saturated_high) + len(saturated_low)
-    print(f"\n{n_sat} of {len(tasks)} tasks carry no signal and are replaceable under 4.4")
+    if len(models) > 1:
+        print(f"\n{n_sat} of {len(tasks)} tasks carry no signal and are replaceable under 4.4")
+    else:
+        print(f"\n{n_sat} of {len(tasks)} tasks were never missed by this model. That is the 4.3 "
+              f"band read;\nthe 4.4 replacement test needs the other candidates on the bench.")
 
     # ------------------------------------------------------------ no results
     bad = [r for r in rows if r["score"] is None]
