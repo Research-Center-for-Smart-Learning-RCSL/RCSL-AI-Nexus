@@ -218,6 +218,136 @@ remains the Phase 3 increment.
 
 ---
 
+## 2026-08-15
+
+### The sixteen-task set ran, and it separates the candidates the twelve-task set could not
+
+[model-evaluation.md](./model-evaluation.md) designed the set on 2026-08-14 and
+nothing had run it. It has now run, on this host, against all three candidates.
+The harness is committed at [`scripts/model-eval/`](../scripts/model-eval/) —
+which is the first thing to record, because the twelve-task harness behind the
+2026-08-14 table never was, its figures cannot be reproduced, and its two anchor
+tasks had to be rebuilt here from a prose description rather than carried over.
+**The bridge between the two sets is gone and this run could not rebuild it.**
+
+280 samples across four phases, all at `num_ctx=16384`, q8 throughout,
+deliberation off and confirmed off per sample (`thinking` came back empty every
+time), model and task order rotated per round. Corrected result:
+
+| | score | gen tok/s | depth | wall clock per round |
+|---|---:|---:|---:|---:|
+| `gemma4:31b-it-q8_0` | **94.4%** | 13.6 | 701 | 551-615 s |
+| `qwen3.6:35b-a3b-q8_0` | 89.8% | **67.5** | 714 | **246-285 s** |
+| `qwen3.6:27b-q8_0` | 87.5% | 15.4 | 714 | 907-1060 s |
+
+**This is not the 2026-08-14 result wearing new clothes.** That set produced
+92/97/94 with ten of twelve tasks saturated, and the honest reading was parity.
+This one spreads the three across 6.9 points, the order held in all three
+rounds, and **`gemma4` is not merely highest on the mean — it is never beaten on
+a single task.** What changed is resolution, not difficulty: scoring is
+per-check, 82 checks per model-round against the old set's 36 pass/fail samples,
+so a model that drops one constraint of six loses a sixth of a task rather than
+a coin flip.
+
+The three prompt depths are within 13 tokens of each other, so for the first
+time in this file **the generation rates can be compared with each other**. The
+5.0x of `35b-a3b` over the incumbent is real and matches the 5.1x measured on
+2026-08-14. The wall clock is the more useful figure and it is smaller: 2.2x,
+because the faster model writes more. `27b` is the cautionary case — a higher
+token rate than `gemma4` and nearly twice the wall clock.
+
+### The calibration gate failed twice, and it was the task set that was wrong
+
+Section 4.3 wants the incumbent between 40% and 70%. The set as first
+implemented scored **100%, thirty-seven samples, every one of them 1.00.**
+
+The cause was not the scorer. Section 4.1's both-directions validation ran
+before any model did and it earned its place immediately, catching two defects
+that would have produced numbers: `logic_order` admitted four orderings and the
+answer key was not among them, and the naive `range_sum_updates` answer finished
+in 1.2 s, so the complexity requirement that task exists to enforce was not
+being enforced at all — slice-summing 500 elements is C-speed, and the fix was
+ranges that run to the whole array. The deliberately wrong answers scored 0.57
+to 0.88 against the checks. The checks discriminate.
+
+The cause was that **the prompts announced their own traps.** `merge_disjoint`
+supplied the worked example of the deviation, the complexity tasks named the
+asymptotics required, `cache_decorator` listed the three properties to fix. A
+signposted trap is a reading comprehension exercise. Rewritten to state the same
+requirements without flagging which one is load-bearing, the incumbent came in
+at **94.2%** — still above the band.
+
+**So the design's central bet does not hold at this scale.** Section 2 is built
+on the premise that a model which pattern-matches to the canonical algorithm
+fails where a model that reads passes. Across 18 tasks exactly one caught that
+behaviour: `search_last_rotated`, where `gemma4` reached for the famous rotated
+binary search, argued with itself in the comments, and emitted a loop that never
+terminates — on a task a linear scan solves. The other seventeen it simply read.
+These models are not mostly pattern-matching, and no amount of un-signposting
+changes that. A set that lands in the band is not a better-worded version of
+this one.
+
+### A prompt's formatting was measured and reported as a model's capability
+
+`qwen3.6:27b` scored **0.00 on `retry_deadline` in all three rounds**, and all
+three were the same `IndentationError`: the prompt showed the signature as
+`def retry_with_deadline(...): ...` and the model copied the stub, then indented
+a body under it. That zero measured this repository's formatting, not retrying,
+and it was worth 5.6 points of that model's total — larger than the gap between
+second and third place.
+
+Three prompts carried that stub. All three were rewritten to describe the
+signature in prose and re-run for every candidate, and the numbers above are the
+corrected ones. `retry_deadline` for that model went **0% to 79%**;
+`range_sum_updates` went 80% to 100%. Load failures fell from 3-in-99 to
+1-in-27, and the survivor is an unrelated syntax error from a different model.
+The report now counts code that never imported separately from code that
+answered badly, because in a score column they are indistinguishable.
+
+This is the same defect as 2026-08-07's q4-against-q8 and 2026-08-14's
+`num_predict` truncation, in a third costume: **a property of the measurement
+read as a property of the model.** It was caught only because a reproducible
+0.00 from a 2026-generation model on a routine task was not believable — the
+same instinct that caught the truncation, and again not the harness.
+
+### Every candidate fabricates rather than refusing, and nothing else here would show it
+
+`insufficient_data` gives three tenants' request, error and token counts and
+asks for mean output tokens per **successful** request. The data does not carry
+tokens by outcome, so it does not determine the answer. **All three models, nine
+samples out of nine, scored 0.00.** Each silently assumed the failed requests
+produced no output, divided total tokens by successful requests, and returned a
+tidy confident number — `gemma4` answered 130 with the arithmetic laid out in
+four numbered steps.
+
+This is the only task in the set that measures something the deployment cares
+about beyond correctness, it is model-independent, and it is red. It does not
+bear on which model to run. It bears on what the platform tells a caller who
+asks a question its data cannot answer, and it is the finding here with the
+shortest path to a user.
+
+### What the run does not settle
+
+Section 4.4 replaces a task carrying no signal across the candidates. **Eleven
+of eighteen qualify** — ten every candidate passes every time, plus
+`insufficient_data`, which every candidate fails every time. The 6.9-point
+spread rests on four tasks: `retry_deadline`, `cache_decorator`, `ini_parse` and
+the pair in group A. A set this thin at separating them is a weak instrument
+even when its verdict is stable across three rounds.
+
+Two truncations are on the record rather than scored, both on
+`spec_contradiction`, both `done_reason: length` at 4096 tokens with
+deliberation off and no `FINAL:` line — 15,320 characters of response in one
+case. Section 5's rule returned no result rather than a zero, which is why
+`35b-a3b` is scored over 52 samples and not 54. `gemma4` answers the same task
+in 309 tokens, so the budget was not the constraint; that model rambles.
+
+And the boundary from section 6 is where it was. Eighteen checkable tasks
+measure whether a model follows a specification it has not memorised. Whether
+its code is worth reading is still only answerable by real work.
+
+---
+
 ## 2026-08-14
 
 ### The context ceiling was enforced in the wrong unit, and two harder limits sat above it unrecorded
