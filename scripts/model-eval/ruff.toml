@@ -1,0 +1,25 @@
+# scripts/ is outside the CI lint paths (`ruff check app tests alembic`, run from
+# backend/). This file is here so that a future decision to widen those paths
+# does not arrive with 122 findings and no explanation for any of them.
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "S"]
+
+[lint.per-file-ignores]
+# specdoc.py is a corpus, not logic: 126 numbered policy clauses whose wording is
+# the thing being measured. Reflowing them to fit a column changes the token
+# count group E's prompt depth is reported against.
+"specdoc.py" = ["E501"]
+
+# tasks.py embeds each check as source text that runs against the model's code.
+# Those strings are assertions read by a human comparing them to the task
+# description; wrapping them hides what is being asserted.
+"tasks.py" = ["E501"]
+
+# harness.py talks to the runtime at OLLAMA_HOST, a loopback address from the
+# environment, and runs the candidate's own code as a subprocess with an
+# argument list. Both are the point of the file, and the README says so.
+"harness.py" = ["S310", "S603"]
+"run.py" = ["S310"]
