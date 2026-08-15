@@ -172,13 +172,9 @@ task(
     group="B",
     kind="code",
     prompt=(
-        "Write a Python class `RateLimiter` with this exact interface:\n\n"
-        "```python\n"
-        "class RateLimiter:\n"
-        "    def __init__(self, rate, window, burst, clock, idle_ttl): ...\n"
-        "    def allow(self, key): ...      # -> bool\n"
-        "    def key_count(self): ...       # -> int\n"
-        "```\n\n"
+        "Write a Python class `RateLimiter`. Its constructor takes `rate`, `window`, `burst`, "
+        "`clock` and `idle_ttl`, in that order. It has two methods: `allow(key)`, returning a "
+        "bool, and `key_count()`, returning an int.\n\n"
         "`clock` is a callable returning the current time as a float number of seconds; it is "
         "the only source of time this class may consult. `allow(key)` decides whether one call "
         "against `key` is permitted, and each key is accounted for independently of the others. "
@@ -356,11 +352,9 @@ task(
     group="B",
     kind="code",
     prompt=(
-        "Write a Python function with this exact signature:\n\n"
-        "```python\n"
-        "def retry_with_deadline(fn, retry_on, total_deadline, base_delay, clock, sleep, rand): ...\n"
-        "```\n\n"
-        "It calls `fn()` and returns its return value.\n\n"
+        "Write a Python function named `retry_with_deadline` taking, in this order, the "
+        "parameters `fn`, `retry_on`, `total_deadline`, `base_delay`, `clock`, `sleep` and "
+        "`rand`. It calls `fn()` and returns its return value.\n\n"
         "`clock` returns the current time as a float number of seconds and `sleep(delay)` waits; "
         "they are the only clock and the only wait this function may use. `retry_on` is a tuple "
         "of exception classes, and an exception that is not an instance of one of them is not "
@@ -619,13 +613,9 @@ task(
     group="C",
     kind="code",
     prompt=(
-        "Write a Python class `RangeSum` with this exact interface:\n\n"
-        "```python\n"
-        "class RangeSum:\n"
-        "    def __init__(self, nums): ...          # nums is a list of ints\n"
-        "    def update(self, i, value): ...        # set nums[i] = value\n"
-        "    def range_sum(self, left, right): ...  # sum of nums[left..right], inclusive\n"
-        "```\n\n"
+        "Write a Python class `RangeSum`. Its constructor takes `nums`, a list of integers. "
+        "`update(i, value)` sets `nums[i]` to `value`. `range_sum(left, right)` returns the sum "
+        "of `nums[left]` through `nums[right]`, inclusive of both ends.\n\n"
         "It is built over an array of 100,000 integers and then driven with 100,000 updates "
         "interleaved with 100,000 range queries, whose ranges run to any length up to the whole "
         "array. That whole sequence must finish within 5 seconds on CPython." + CODE_SUFFIX
