@@ -146,6 +146,24 @@ def main(phase: str) -> None:
         print(f"\n{n_sat} of {len(tasks)} tasks were never missed by this model. That is the 4.3 "
               f"band read;\nthe 4.4 replacement test needs the other candidates on the bench.")
 
+    # --------------------------------------------------- code that never ran
+    # A candidate whose file does not import scores zero on every check, which
+    # looks identical to a candidate that answered badly. Counted separately so
+    # a syntax slip is not read as an inability to do the task.
+    loadfail = defaultdict(list)
+    for r in rows:
+        for _, passed, msg in r.get("detail", []):
+            if not passed and msg.startswith("did not load"):
+                loadfail[r["model"]].append((r["task"], r["round"]))
+                break
+    n_code = sum(1 for r in rows if r["kind"] == "code")
+    if loadfail:
+        print(f"\n=== {phase}: candidates whose code did not import "
+              f"({sum(len(v) for v in loadfail.values())} of {n_code} code samples) ===\n")
+        for m, hits in loadfail.items():
+            shown = ", ".join(f"{t} r{rd}" for t, rd in hits)
+            print(f"  {m:26s} {shown}")
+
     # ------------------------------------------------------------ no results
     bad = [r for r in rows if r["score"] is None]
     if bad:
