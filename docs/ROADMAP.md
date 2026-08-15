@@ -305,12 +305,38 @@ No open decisions block Phase 1.
   wall clock alone -- identical scores in a third of the time -- but it should
   not be made on a claim of being smarter, because nothing here demonstrates one.
 
-  **A replacement task set is designed and NOT YET RUN**, in
-  [model-evaluation.md](./model-evaluation.md): sixteen tasks built to separate
-  models of this class rather than to be harder, with a calibration protocol that
-  pilots against the incumbent first and targets 40-70% instead of discovering
-  saturation from the results. Running it is the next piece of work on this
-  decision.
+  **Answered 2026-08-15, and the answer is that the incumbent is the better
+  model and should be replaced anyway.** The sixteen-task set in
+  [model-evaluation.md](./model-evaluation.md) ran against all three candidates,
+  three interleaved rounds, 280 samples, harness committed at
+  [`scripts/model-eval/`](../scripts/model-eval/):
+
+  | | score | gen tok/s at depth ~710 | wall clock per round |
+  |---|---:|---:|---:|
+  | `gemma4:31b-it-q8_0` | **94.4%** | 13.6 | 551-615 s |
+  | `qwen3.6:35b-a3b-q8_0` | 89.8% | **67.5** | **246-285 s** |
+  | `qwen3.6:27b-q8_0` | 87.5% | 15.4 | 907-1060 s |
+
+  Unlike 2026-08-14's 92/97/94 this separates them and the order held every
+  round; `gemma4` is never beaten on a single task. So the switch to
+  `35b-a3b` costs 4.6 points of capability and buys a round in 45% of the wall
+  clock. **For the `code` capability that trade is worth making** — an agent
+  loop pays the latency once per turn and the deficit sits in four tasks — and
+  the sentence this file has been carrying since 2026-08-14 stands with evidence
+  behind it now rather than an absence: it is worth switching on the wall clock,
+  and it is not a smarter model. `qwen3.6:27b-q8_0` is out on both axes.
+
+  **What the number is worth.** Eleven of the eighteen tasks carry no signal
+  across the candidates, so the 6.9-point spread rests on four of them; the
+  instrument is thin even where its verdict is stable. The set never reached its
+  own 40-70% calibration band, in two attempts. And it says nothing about
+  whether the code is any good, which remains the open item below.
+
+  **Model-independent and unrelated to this decision: every candidate fabricated
+  rather than refusing**, nine samples out of nine, on the one task whose right
+  answer is "the data does not determine this". That belongs to what the
+  platform tells a caller, not to which model serves them ([PROGRESS.md](./PROGRESS.md)
+  2026-08-15).
 
 Settled:
 

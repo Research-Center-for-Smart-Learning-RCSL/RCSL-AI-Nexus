@@ -1,9 +1,21 @@
 # Comparing candidate models
 
-**Status: designed 2026-08-14, not run.** Nothing in the task set below has been
-executed against any model. The results that exist are from the *previous* set,
-recorded in [PROGRESS.md](./PROGRESS.md) 2026-08-14, and the reason this document
-exists is that they answered nothing.
+**Status: designed 2026-08-14, run 2026-08-15.** The harness is
+[`scripts/model-eval/`](../scripts/model-eval/) — committed, unlike the one
+behind the previous set — and the results are in [PROGRESS.md](./PROGRESS.md)
+2026-08-15. Three candidates, three interleaved rounds, 280 samples:
+`gemma4:31b-it-q8_0` 94.4%, `qwen3.6:35b-a3b-q8_0` 89.8%, `qwen3.6:27b-q8_0`
+87.5%. **It separates them, which is the one thing the twelve-task set could not
+do**, and the order held across all three rounds.
+
+**Two things below are now known to be wrong, and are left standing with this
+note rather than quietly edited.** Section 4's calibration gate failed twice —
+the set scored 100% against the incumbent as first written and 94.2% after the
+prompts were rewritten to stop signposting their own traps, against a target
+band of 40-70%. And section 2's central bet, that a model which pattern-matches
+to the canonical algorithm fails where a model that reads passes, held for
+exactly one task in eighteen. These models mostly read. A set that lands in the
+band is not a better-worded version of this one; see PROGRESS.md 2026-08-15.
 
 This is the instrument, not a conclusion. [ROADMAP.md](./ROADMAP.md) carries the
 open decision it is meant to settle.
@@ -139,6 +151,14 @@ comparable rather than merely sequential.
 
 The first set was not piloted, which is why its saturation was discovered from
 the results rather than before them.
+
+**Run 2026-08-15, and rule 1 was the one that paid.** Validating the scorer in
+both directions caught two defects before a model ran: `logic_order` admitted
+four orderings with the answer key among none of them, and the naive
+`range_sum_updates` answer completed in 1.2 s, so the complexity requirement in
+rule C was not being enforced at all. Both would have produced numbers. Rules 3
+and 4 were not met and could not be met by editing wording — see the status note
+at the head of this document.
 
 1. **Validate the scorer in both directions.** Reference solutions must pass and
    deliberately wrong answers must fail, for every task, before a model runs. A
