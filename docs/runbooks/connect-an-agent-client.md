@@ -171,19 +171,26 @@ Four things are easy to get wrong:
   `capability_not_issued` names it — before believing any other explanation of a
   blocked write.
 
-  **A second slug, `gpt-5.6-luna`, appears only after a 413.** On 2026-08-17 one
-  key was refused for it 78 times in four bursts, and every burst began within
-  minutes of a `context_too_long` cluster: 16:51 → 16:57, 19:16 → 19:20, 19:28 →
-  19:28. `model = "code"` was in effect throughout — the same sessions' ordinary
-  turns routed to `code` and were served before and after each burst — so this is
-  another slot that ignores it. **What sends it is not established.** The timing
-  fits an automatic compaction step, and nothing here confirms that: the key's
-  debug window was shut, so no transcript was captured, and this paragraph records
-  the correlation rather than the mechanism. Whatever the slot is, the consequence
-  is the same and is worth knowing at the console: once the conversation is over
-  the ceiling it can neither be sent (413) nor, apparently, be shrunk (403), so
-  starting a new conversation is the only way out. That operator started three in
-  one evening and read the result as the platform degrading.
+  **`codex-auto-review` is a real slot; `gpt-5.6-luna` was the picker again.**
+  On 2026-08-17 one key was refused for `gpt-5.6-luna` 78 times in four bursts,
+  each beginning within minutes of a `context_too_long` cluster, and the entry
+  written that evening guessed at an automatic compaction step while saying the
+  mechanism was not established. It was not compaction. A `models_cache.json`
+  read from a client machine later the same night lists the picker's own models
+  — `gpt-5.6-sol` at priority 1, `gpt-5.6-terra` at 2, **`gpt-5.6-luna` at 3** —
+  so luna is an ordinary user-selectable model and those bursts are the picker
+  trap in the bullet above, recurring: refused by the ceiling, somebody reached
+  for another model, and every model the picker offers is one this deployment
+  turns away. The correlation with the 413s was real and the inference from it
+  was wrong.
+
+  The same file separates the two cases cleanly. `codex-auto-review` is in it at
+  priority 43 carrying `"visibility": "hide"` — a model the picker will not show
+  and the client selects on its own — which is what makes it an auxiliary slot
+  and luna not one. **Read `models_cache.json` before theorising about a slug**:
+  it is the client's own list, it says which slugs are selectable and which are
+  hidden, and it settled in one read a question two evenings of gateway logs
+  could not.
 
   The gateway does not answer in Codex's shape, and that is a decision rather
   than a gap. `construct_model_info_from_candidates` takes a matched remote
@@ -201,6 +208,8 @@ configures all three, which is a correction — this file and the `/agent-setup`
 page both said the desktop app could not be pointed here, and on 2026-08-09 an
 operator connected the CLI and watched the app switch over with nothing
 configured inside it. Neither document had tested it; both stated it anyway.
+**The sharing runs the other way too, and that direction breaks the connection
+outright — see 3.2 before connecting a machine that has the desktop app.**
 
 What remains true is narrower: **Codex on the web** (`chatgpt.com/codex`) runs
 on OpenAI's machines, reads no file on yours, and cannot be pointed at a custom
@@ -239,6 +248,61 @@ with an integrator about that. They are settings on a machine you control, and
 a copy of the configuration elsewhere keeps working. The disconnect this
 platform enforces is **revoking the key** (section 2), which is also the only
 one that helps if the key has reached somewhere you did not intend.
+
+### 3.2 The same sharing, in the direction that breaks it
+
+**A machine with the ChatGPT desktop app installed cannot be connected through
+`~/.codex` at all**, and the reason is the shared file the section above treats
+as a convenience. The app does not only *follow* the CLI's configuration; it
+*owns* that directory, rewrites it, and hands the CLI its own tool surface.
+
+Measured on 2026-08-17 against a teacher's Windows machine, app build
+`26.810.52044`, client `0.148.0`. Every request carried **286 tool definitions
+estimated at 122,870 tokens** — more than the entire 98,304 ceiling on its own,
+so no conversation of any length could be sent. The conversation was 17,000
+tokens across four messages, seven per cent of the payload. Four attempts over
+twenty minutes produced a byte-identical tool figure while the message count
+moved, which is the signature to recognise: **a share that does not change when
+the conversation does is not a conversation problem.**
+
+The source was `[mcp_servers.node_repl]` — the app's computer-use and browser
+runtime — plus five bundled plugins: `chrome`, `sites`, `browser`,
+`computer-use`, `visualize`.
+
+**Three things kept that out of sight for an hour, and each looked like
+evidence of innocence:**
+
+- `codex mcp list` answered `No MCP servers configured yet` while
+  `[mcp_servers.node_repl]` was in `config.toml`.
+- `config.toml` read clean of plugins, then read with one plugin, then with
+  five, `[marketplaces.openai-bundled].last_updated` moving twice inside fifteen
+  minutes.
+- Quitting the app changed nothing, because what the CLI reads is the file the
+  app already wrote.
+
+**The app rewrites `config.toml` continuously**, so every read is a snapshot
+between two rewrites and any hand-written block is temporary — the
+`[model_providers.rcsl]` block written that evening was gone by the next read,
+replaced by the app's own `model = "gpt-5.6-sol"`. Do not diagnose from one
+read of that file, and do not expect a provider block to survive in it.
+
+**The remedy is a separate `CODEX_HOME`**, holding nothing but the eight lines
+of section 3:
+
+```powershell
+$env:CODEX_HOME = "C:\Users\<user>\codex-nexus"
+codex
+```
+
+The app cannot reach that directory, so the CLI starts with its own native tool
+set instead of inheriting the desktop surface. Set it per shell rather than with
+`setx`: a machine-wide `CODEX_HOME` moves the app too.
+
+**Reverting needs one more step than it looks.** Deleting `model` and
+`model_provider` leaves the app erroring at startup that the provider is not
+found, because a conversation created against that provider still references it.
+Deleting that conversation cleared it; the state file was renamed aside first
+and turned out not to be the cause.
 
 ## 4. Check it end to end
 

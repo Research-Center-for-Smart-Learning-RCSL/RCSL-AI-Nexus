@@ -21,6 +21,14 @@
  * app had not. An operator connected the CLI and the app followed it across on
  * its own, because both read `~/.codex/config.toml`. **What is written here as
  * a limit needs testing at least as much as what is written here as a step.**
+ *
+ * And on 2026-08-17 the same line cut a third way: what is written here as
+ * *working* goes stale too. "Works, and needs no second setup" was true of the
+ * direction that had been tested and false of the machine in front of us,
+ * where the app's own tool surface reached the CLI through that shared file and
+ * made every request too large to send before a word of it was typed. One
+ * sentence of good news had been carrying an untested claim about the
+ * conditions under which it holds.
  */
 
 import { useRef } from 'react';
@@ -346,16 +354,36 @@ wire_api = "responses"`}
             Codex in the ChatGPT app
           </dt>
           <dd>
-            <strong>Works, and needs no second setup.</strong> The desktop app
-            reads the same <code>~/.codex/config.toml</code> the CLI does, so
-            finishing step 3 points the app at this gateway as well —{' '}
             <strong>
-              observed on macOS on 2026-08-09: the app switched over on its own,
-              with nothing configured inside it
-            </strong>
-            . An earlier version of this page called that impossible, having
-            tested only the CLI. Confirm it the same way as anything else, on
-            Usage.
+              The app follows the CLI across, and on a machine where it is
+              installed that is the problem rather than the convenience.
+            </strong>{' '}
+            Both read <code>~/.codex/config.toml</code>, so finishing step 3
+            points the app here too — observed on macOS on 2026-08-09, after an
+            earlier version of this page called it impossible.{' '}
+            <strong>The sharing runs the other way as well.</strong> The app
+            owns that directory: it rewrites the file, and it hands the CLI its
+            own tool surface. Measured on Windows on 2026-08-17, app build
+            26.810.52044: every request carried{' '}
+            <strong>286 tool definitions, an estimated 122,870 tokens</strong> —
+            more than this whole ceiling on its own, so nothing could be sent at
+            any conversation length. The source was the app&apos;s computer-use
+            and browser runtime plus five bundled plugins.
+            <br />
+            It hid well, and each clue read as innocence:{' '}
+            <code>codex mcp list</code> reported none while the server was in
+            the file, the file read clean and then read with five plugins
+            fifteen minutes later, and quitting the app changed nothing because
+            the CLI reads what the app already wrote. A provider block written
+            by hand was gone by the next read.
+            <br />
+            <strong>Give the CLI its own directory instead.</strong> Point{' '}
+            <code>CODEX_HOME</code> at a folder holding only the step 3
+            configuration, per shell rather than machine-wide — a global one
+            moves the app too. Undoing it also takes one more step than it
+            looks: after removing those lines the app can still fail at startup
+            on a conversation created against the old provider, and deleting
+            that conversation is what clears it.
           </dd>
           <dt className="font-mono text-muted-foreground">
             Codex on the web
@@ -429,7 +457,10 @@ wire_api = "responses"`}
             file in. Tool definitions taking most of it:{' '}
             <strong>trim your client&apos;s tool list</strong> — they are resent
             on every turn, so a new conversation gets the identical 413 on its
-            first request.
+            first request. A share that stays identical while your message count
+            moves is this case, and on a machine with the ChatGPT desktop app it
+            is usually the app&apos;s own tools arriving through the shared
+            configuration directory; see Codex in the ChatGPT app above.
             <br />
             The count is an estimate from character widths, and a deliberately
             careful one — it can refuse a conversation that would have fitted.

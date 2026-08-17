@@ -226,6 +226,140 @@ remains the Phase 3 increment.
 
 ## 2026-08-17
 
+### The fix sat undeployed for five hours while the incident it fixed repeated
+
+`9a22007` and `ef62f96` were committed at 17:49 against a 413 that had refused a
+Codex session six times that afternoon. The gateway was still running the image
+built at 12:19. Between the commit and the deploy at 19:55 the same refusal
+fired three more times -- 19:16, 19:27, 19:28, six retries each -- carrying the
+old message, and the operator driving it opened three new conversations and
+reported the platform as degrading.
+
+**Nothing in the repository said so.** The working tree was clean, the commits
+were on `main`, and every local check passed. What settled it was comparing one
+string in the running container against the same string on disk:
+
+```
+container  "The conversation is longer than this platform accepts."
+disk       "The input is longer than this platform accepts, counting tool ..."
+```
+
+The user had pasted the container's sentence verbatim four hours after the
+commit that replaced it. **A deployed-version check belongs in the first minute
+of an incident, not the fortieth** -- and it is one `docker exec ... grep` when
+the fix changes a literal.
+
+Deployed after 836 unit tests: build, `up -d`, `migrate` clean at
+`d3f5b81a04c7`, `/readyz` with database, cache and runtime all true.
+
+**The deploy did not move the wall, and it was important to say that plainly.**
+`code` routes to `qwen36-35b-a3b-q8`, whose `num_ctx / 2` is 98304 -- identical
+to the global ceiling -- so `_refuse_what_this_target_would_truncate` changes
+nothing for the capability that keeps hitting it. What moved is that the refusal
+now says what filled the payload. The wall itself sits at roughly 80,000 real
+tokens rather than 98,304, because the estimator runs about 1.22x on real
+content: the turn before one refusal measured **79,274** by `prompt_eval_count`,
+and the refusal that followed it estimated **99,357**.
+
+### The capability the truncation rule was actually protecting was `assist`
+
+Both docstrings introduced the per-target check with `chat`'s fallback to
+`qwen7b`. `chat` falls back rarely, so that was the hypothetical case. **The one
+being served truncated every day was `assist`**, which routes to `qwen7b` alone.
+
+Measured against the deployed check: the management assistant's own system
+prompt estimates 3490-3551 tokens across its six surfaces, against a `num_ctx /
+2` of 4096. That leaves 545 for the operator's question and the whole history,
+against a 1536-token reply budget -- so the second turn refuses as soon as the
+first reply passes roughly 500 tokens. Before the check, that same conversation
+was answered from a prompt Ollama had cut the front off, and the front is where
+the instructions and the nonce-delimited data boundary live. **Deploying a
+correctness fix turned a silent wrong answer into a visible refusal, which is
+the right direction and still left a feature unusable.**
+
+`qwen7b` was raised to its native 32768, so the half is 16384 -- about ten
+full-length exchanges. Measured: 5.7 GB resident against 4.9 GB at 8192, and all
+three models co-resident at 45.07 GB of the 51.2 GB budget.
+
+Three things about that change are worth having written down.
+
+**Loading it evicted the other two.** Ollama made room before loading rather
+than after, so `qwen3.6` and `nomic-embed-text` left residence for about two
+minutes and were not restored on their own. Reloading in size order brought all
+three back and they co-exist; the eviction was the load, not the ceiling.
+
+**The registry edit went in as SQL on the host**, with an audit row written by
+hand naming itself as out-of-band. The script that would have gone through
+`ManageModels.update` was declined by the harness twice. The audit row records
+`actor_source = "local"` rather than borrowing `tailnet`, because the operator
+authorised it and did not perform it.
+
+**`memory_gb` is still the 5 declared for the 8192 profile**, against 5.32
+observed. `ManageModels.update` refuses that field while a model is loaded --
+the budget reads it for resident models and editing it underneath them is the
+guardrail bypass the rule exists to stop -- so correcting it needs an
+unload/edit/load. What is stale is the admission estimate for a future load; the
+live accounting uses the observed figure.
+
+### A client that could not send an empty conversation, and a slug I got wrong
+
+A teacher's Windows machine, 20:44 to 21:21. The platform half verified at 20:51
+-- `finish_reason: tool_calls`, 264 prompt tokens, 1.1 seconds -- and then every
+request was refused at about 140,000 estimated tokens, of which **122,870 was
+286 tool definitions**. Eighty-eight per cent of the payload, more than the
+whole ceiling on its own: no conversation of any length could be sent.
+
+**The composition line earned itself in its first hour.** On the previous
+message that operator would have been told the conversation was too long, would
+have started a new one, and would have received the identical 413 on its first
+request, because tool definitions are resent every turn. Instead the first
+refusal named the share.
+
+The signature to remember: **the tool figure was byte-identical across four
+attempts over twenty minutes while the message count moved.** A share that does
+not change when the conversation does is not a conversation problem.
+
+The source was the ChatGPT desktop app -- `[mcp_servers.node_repl]`, its
+computer-use and browser runtime, plus five bundled plugins -- reaching the CLI
+through the `~/.codex` both read. Three clues each read as innocence: `codex mcp
+list` reported none while the server was in `config.toml`; the file read clean,
+then with one plugin, then with five, `last_updated` moving twice inside fifteen
+minutes; and quitting the app changed nothing, because the CLI reads what the
+app already wrote. **The app owns that directory.** A hand-written provider
+block was gone by the next read, replaced by the app's own `model`. Written up
+as section 3.2 of the agent runbook, with `CODEX_HOME` as the remedy, and the
+`/agent-setup` page corrected -- it had said "Works, and needs no second setup",
+which was true of the direction that had been tested.
+
+**And the correction to my own entry from four hours earlier.** `ef503dc`
+recorded 78 refusals of `gpt-5.6-luna` clustering after each 413, said the
+mechanism was not established, and then guessed at automatic compaction -- and
+built the entry's emphasis on that guess. `models_cache.json`, read off the
+client machine later the same night, lists **luna at priority 3 among the
+selectable models**, with `codex-auto-review` at 43 carrying `"visibility":
+"hide"`. Luna is an ordinary picker entry. The bursts were the model-picker
+trap this runbook has documented since 2026-08-14, recurring after each
+refusal. The correlation was real and the inference from it was wrong, and the
+disclaimer did not stop the guess doing the work of a finding.
+
+### The key that would not save, and why it looked like the wrong field
+
+Before any of that, the same key was misconfigured twice. It was issued for
+`chat` only, so `code` would have answered `403`; and each attempt to save an
+expiry beyond the 365-day maximum returned `409` with
+
+```
+detail = expiry 2029-11-15 is beyond the 365 day maximum
+```
+
+`detail` does not leave the process, so what the operator saw was a save that
+failed with no subject, immediately after editing the capability list -- and
+read it as the capability edit being rejected. The capability had in fact saved.
+**This is the same shape as the 413 that started the day**: a refusal that is
+correct, permanent, and silent about which of the several things just changed
+caused it. The 413 got figures and a remedy; this one has not, and neither has
+anything else on the admin surface.
+
 ### The evaluation is a screen now, and the caveats are stored with the numbers
 
 The 2026-08-15 result lived in this file and in `scripts/model-eval/`, which is
