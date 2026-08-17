@@ -284,6 +284,7 @@ def error_response(
             # process: an administrator opened a time-boxed debug window on
             # this credential. See request_context.grant_debug_detail.
             error["detail"] = exc.detail
+        error.update(_context_fields(exc))
         body: dict[str, object] = {"error": error}
     else:
         body = {"code": exc.code, "message": exc.public_message}
@@ -305,8 +306,35 @@ def error_response(
             # caller's own file: an operator who is told only "this file cannot
             # be accepted" has no way to tell a size limit from a type one.
             body["details"] = {"reason": exc.public_detail}
+        elif fields := _context_fields(exc):
+            body["details"] = fields
 
     return JSONResponse(status_code=status, content=body, headers=headers)
+
+
+def _context_fields(exc: DomainError) -> dict[str, object]:
+    """The figures on a `context_too_long`, for whichever envelope asked.
+
+    Flat inside the OpenAI `error` object and nested under `details` on the
+    admin one, because that is where each envelope already puts its extras —
+    `request_id` on one, `InsufficientMemoryError`'s two numbers on the other.
+    OpenAI client libraries ignore keys they do not know, so the flat placement
+    costs a caller nothing and reads correctly when a body is pasted into a
+    report.
+
+    See `ContextTooLongError.__init__` for why these leave the process at all
+    when `detail` does not.
+    """
+    if not isinstance(exc, ContextTooLongError):
+        return {}
+    fields: dict[str, object] = {}
+    if exc.estimated is not None:
+        fields["estimated"] = exc.estimated
+    if exc.limit is not None:
+        fields["limit"] = exc.limit
+    if exc.composition is not None:
+        fields["composition"] = exc.composition
+    return fields
 
 
 def install_error_handlers(

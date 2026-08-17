@@ -130,9 +130,76 @@ class InvalidModelReferenceError(DomainError):
     public_message = "The model reference is not valid."
 
 
+CONTEXT_REMEDY = (
+    "Retrying it unchanged cannot succeed and waiting does not clear it: send less "
+    "— start a new conversation, continue from a summary of this one, or stop "
+    "reading large files into it."
+)
+
+
 class ContextTooLongError(DomainError):
     code = "context_too_long"
-    public_message = "The conversation is longer than this platform accepts."
+    public_message = (
+        "The input is longer than this platform accepts, counting tool definitions "
+        f"and every replayed turn. {CONTEXT_REMEDY}"
+    )
+    # Carried a remedy from 2026-08-17, having been the one 413 without one.
+    # `RuntimeTimeoutError` below has said "send less" since the gateway
+    # shipped, and this — where sending less is the *only* thing that works —
+    # said only that the conversation was too long, to a caller with no way to
+    # tell a permanent refusal from a transient one. A Codex session that day
+    # retried it six times in seven seconds, which is what a message with no
+    # remedy invites.
+    #
+    # "Input", not "conversation": tool definitions alone can exceed the
+    # ceiling, and a caller told to start a new conversation over definitions
+    # their client resends every turn would be following advice that cannot
+    # work.
+
+    def __init__(
+        self,
+        detail: str | None = None,
+        *,
+        estimated: int | None = None,
+        limit: int | None = None,
+        composition: str | None = None,
+    ) -> None:
+        """The figures a caller needs to act, which reach them unlike `detail`.
+
+        This is the second deliberate exception to "no internal detail in
+        responses" (§9.2's debug window is the first), decided on 2026-08-17
+        and narrower than it looks. `composition` and `estimated` describe the
+        caller's own payload back to them and disclose nothing they did not
+        send — the argument `_validation_message` and
+        `UploadRejectedError.public_detail` already make in
+        `interfaces/http/errors.py`.
+
+        `limit` is the part that discloses something, and it was weighed rather
+        than assumed harmless: the deployment ceiling is already published to
+        every integrator on the Agents page, but the per-target ceiling added
+        the same day is half a specific model's registered context, so a caller
+        who provokes one on a fallback learns roughly how large that model is.
+        That was accepted because the alternative is worse — a caller refused at
+        a number they cannot see, on a capability that served them yesterday,
+        has nothing to act on. The model's *name* is still withheld; see
+        `RouteChatRequest._refuse_what_this_target_would_truncate`.
+
+        Woven into `public_message` as well as carried as fields, because the
+        fields are only read by code that knows to look and `message` is what
+        every OpenAI client library prints. Codex swallows the body on this path
+        entirely, which is why the runbook and the log line exist too; this is
+        for the clients that do not.
+        """
+        super().__init__(detail)
+        self.estimated = estimated
+        self.limit = limit
+        self.composition = composition
+        if estimated is not None and limit is not None:
+            self.public_message = (
+                f"This input is an estimated {estimated:,} tokens against a limit of "
+                f"{limit:,}, counting tool definitions and every replayed turn. "
+                f"{CONTEXT_REMEDY}"
+            )
 
 
 class RequestTooLargeError(DomainError):

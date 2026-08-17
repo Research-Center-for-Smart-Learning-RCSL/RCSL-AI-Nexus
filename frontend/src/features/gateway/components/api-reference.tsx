@@ -814,19 +814,41 @@ data: [DONE]`}
                   The prompt exceeds the configured input ceiling. Shorten it;
                   the limit is about memory, not policy, and retrying unchanged
                   cannot succeed. To budget for it yourself: the ceiling is{' '}
-                  <strong>98,304 tokens</strong> over everything the model will
-                  read — your tool definitions and replayed tool calls included
-                  — so an agent conversation reaches this through accumulation
-                  rather than through one large message.
+                  <strong>at most 98,304 tokens</strong> over everything the
+                  model will read — your tool definitions and replayed tool
+                  calls included — so an agent conversation reaches this through
+                  accumulation rather than through one large message. It is
+                  lower when a smaller model is serving your capability, which
+                  is why the response states the figure it judged against rather
+                  than leaving you to assume the maximum.
+                  <br />
+                  Unlike every other error here, this one carries its own
+                  arithmetic: <code>estimated</code> and <code>limit</code> as
+                  numbers, and <code>composition</code>, which splits your
+                  estimate across messages, prior tool calls and tool
+                  definitions and names the largest single message&apos;s share.
+                  The three have different remedies — a conversation that grew
+                  is fixed by starting a new one, one enormous message by not
+                  reading that file in, and tool definitions that dominate by
+                  trimming the client&apos;s tool list, which starting a new
+                  conversation does nothing about. The same figures are repeated
+                  in <code>message</code> for clients that print only that.
                   <br />
                   Tokens are estimated from the text, weighting characters
                   outside ASCII far more heavily, because they cost far more:
-                  measured on this deployment, English prose runs about 4.6
-                  characters per token and Traditional Chinese about 1.4. A
-                  conversation in Chinese therefore reaches the ceiling in
-                  roughly a third of the characters an English one does. Until
-                  2026-08-14 a flat four-per-token rule applied to both, which
-                  admitted CJK conversations well past the stated limit.
+                  measured against the model now serving this deployment,
+                  English prose runs about 4.4 characters per token and
+                  Traditional Chinese about 1.5. A conversation in Chinese
+                  therefore reaches the ceiling in roughly a third of the
+                  characters an English one does. Until 2026-08-14 a flat
+                  four-per-token rule applied to both, which admitted CJK
+                  conversations well past the stated limit.
+                  <br />
+                  The estimate is deliberately careful and is not the figure the
+                  model charges: measured across prose, source and CJK it runs
+                  20% to 50% above the real count, so a refusal can name a number
+                  larger than what your input would actually have cost. Budget
+                  against the estimate rather than against a tokenizer.
                 </td>
               </tr>
               <tr>
