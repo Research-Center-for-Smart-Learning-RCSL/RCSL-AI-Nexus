@@ -413,17 +413,41 @@ wire_api = "responses"`}
             413 context_too_long
           </dt>
           <dd>
-            The conversation outgrew the input ceiling — 98,304 tokens, counting
-            your tool definitions and every replayed turn. It is not a quota and
-            waiting does not clear it: <strong>start a new conversation</strong>
-            , or have the agent summarise and continue from the summary. Codex
-            reports it as <em>unexpected status 413 Payload Too Large</em> and
-            will retry it several times first, which changes nothing.
+            Your input outgrew the ceiling — at most 98,304 tokens, counting
+            your tool definitions and every replayed turn, and lower when a
+            smaller model is serving your capability. The refusal names the
+            figure it judged against. It is not a quota and waiting does not
+            clear it. Codex reports it as{' '}
+            <em>unexpected status 413 Payload Too Large</em> and will retry it
+            several times first, which changes nothing.
+            <br />
+            <strong>Read the composition before choosing a fix</strong>, because
+            the three parts have different remedies and only one of them is
+            &quot;start again&quot;. A conversation that accumulated:{' '}
+            <strong>start a new one</strong>, or have the agent summarise and
+            continue from the summary. One enormous message: stop reading that
+            file in. Tool definitions taking most of it:{' '}
+            <strong>trim your client&apos;s tool list</strong> — they are resent
+            on every turn, so a new conversation gets the identical 413 on its
+            first request.
+            <br />
+            The count is an estimate from character widths, and a deliberately
+            careful one — it can refuse a conversation that would have fitted.
+            Reading one large file repeatedly is what usually reaches it.
+            <br />
+            <strong>Codex hides the body, so read the error yourself.</strong>{' '}
+            The response carries <code>composition</code>, which says how the
+            estimate split across your messages, prior tool calls and tool
+            definitions, and what share the largest single turn took — the
+            fastest way to tell &quot;the conversation grew&quot; from &quot;one
+            file is 97% of it&quot;. If your client has swallowed it, quote the
+            request id it printed and an administrator can read the same
+            breakdown from the gateway log.
             <br />
             Reached sooner than the character count suggests if you work in
-            Chinese: measured here, Traditional Chinese costs about one token
-            per 1.4 characters against 4.6 for English, and a token is what the
-            ceiling counts.
+            Chinese: measured against the model now serving this deployment,
+            Traditional Chinese costs about one token per 1.5 characters against
+            4.4 for English, and a token is what the ceiling counts.
           </dd>
 
           <dt className="font-mono text-xs text-muted-foreground">

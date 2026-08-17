@@ -33,6 +33,7 @@ from app.domain.entities.actor import Role
 from app.domain.entities.chat import Message, MessageRole
 from app.domain.entities.user import User
 from app.domain.exceptions import (
+    ContextTooLongError,
     NoAvailableModelError,
     QuotaExceededError,
     RuntimeTimeoutError,
@@ -461,3 +462,102 @@ class _NoBootstrap:
 
     async def claim(self, tailscale_login: str, display_name: str) -> User | None:
         return None
+
+
+# --- the figures on a 413 -------------------------------------------------
+#
+# The second deliberate exception to "no internal detail in responses", decided
+# 2026-08-17. Until then a caller refused for length was told only that their
+# conversation was too long: no size, no ceiling, no indication of which part of
+# the payload was large, and — because `detail` never leaves the process — no
+# way to find out without an administrator reading the log.
+
+
+def _too_long() -> ContextTooLongError:
+    return ContextTooLongError(
+        detail="operator-facing context",
+        estimated=99429,
+        limit=98304,
+        composition="~97800 in 132 messages (largest ~60005, 60% of the whole)",
+    )
+
+
+def test_the_gateway_puts_the_figures_where_a_client_library_finds_them() -> None:
+    """Flat inside `error`, beside `request_id`, which set the precedent for an
+    extra key: OpenAI client libraries ignore what they do not recognise."""
+    app = _app("openai")
+
+    @app.get("/too-long")
+    async def too_long() -> None:
+        raise _too_long()
+
+    error = TestClient(app).get("/too-long").json()["error"]
+
+    assert error["estimated"] == 99429
+    assert error["limit"] == 98304
+    assert "60% of the whole" in error["composition"]
+
+
+def test_the_admin_entrances_nest_them_where_that_envelope_puts_extras() -> None:
+    """`InsufficientMemoryError`'s two numbers already go under `details`."""
+    app = _app("admin")
+
+    @app.get("/too-long")
+    async def too_long() -> None:
+        raise _too_long()
+
+    body = TestClient(app).get("/too-long").json()
+
+    assert body["details"]["limit"] == 98304
+
+
+def test_the_figures_travel_in_the_message_too() -> None:
+    """The fields are read only by code that knows to look for them, and the
+    clients that most need this print `message` and nothing else."""
+    assert "99,429" in _too_long().public_message
+    assert "98,304" in _too_long().public_message
+
+
+def test_a_refusal_without_figures_still_states_the_remedy() -> None:
+    """The figures are optional; the remedy is not. Anything raising this
+    without them must not degrade to a bare statement of fact."""
+    message = ContextTooLongError().public_message
+
+    assert "Retrying it unchanged cannot succeed" in message
+    assert "99,429" not in message
+
+
+def test_the_operator_detail_still_does_not_leave_the_process() -> None:
+    """Widening what a 413 discloses must not widen `detail`, which is the
+    channel the debug window exists to open deliberately."""
+    app = _app("openai")
+
+    @app.get("/too-long")
+    async def too_long() -> None:
+        raise _too_long()
+
+    assert "operator-facing context" not in str(TestClient(app).get("/too-long").json())
+
+
+def test_the_model_serving_the_request_is_still_not_named() -> None:
+    """`limit` discloses roughly how large the model is; its identity is a
+    separate question and the answer stayed no."""
+    app = _app("openai")
+
+    @app.get("/too-long")
+    async def too_long() -> None:
+        raise ContextTooLongError(
+            detail="~9000 estimated tokens exceeds the 4096 qwen7b can read",
+            estimated=9000,
+            limit=4096,
+            composition="~9000 in 3 messages",
+        )
+
+    assert "qwen7b" not in str(TestClient(app).get("/too-long").json())
+
+
+def test_another_error_gains_no_such_fields() -> None:
+    """The widening is scoped to the one error it was argued for."""
+    body = TestClient(_app("openai")).get("/fails").json()
+
+    assert "composition" not in body["error"]

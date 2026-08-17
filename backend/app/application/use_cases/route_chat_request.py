@@ -93,6 +93,37 @@ conversation by 2.9x, which is why a Codex session on 2026-08-14 was admitted
 at roughly 115,000 tokens against a ceiling of 65,536 and would have been
 silently truncated by the runtime a few turns later.
 
+**That table describes a model this deployment no longer routes to.** gemma4-31b-q8
+is registered but serves no capability; `chat` and `code` both reach
+qwen36-35b-a3b-q8, whose tokenizer is a different one. Re-measured against it on
+2026-08-17, the same way:
+
+| content              | chars/token | estimate runs |
+|----------------------|-------------|---------------|
+| English prose        | 4.40        | 1.47x high    |
+| Python source        | 4.33        | 1.45x high    |
+| TypeScript source    | 4.03        | 1.34x high    |
+| Markdown             | 3.88        | 1.29x high    |
+| JSON tool schema     | 3.67        | 1.22x high    |
+| Traditional Chinese  | 1.49        | 1.36x high    |
+| Minified JavaScript  | 2.72        | 0.91x         |
+| base64 blob          | 1.39        | 0.46x         |
+| git sha table        | 1.21        | 0.40x         |
+| UUID list            | **1.02**    | **0.34x**     |
+
+The constants are not retuned to it, and the second table is why: qwen36 is
+*both* more efficient than gemma4 on everything this platform serves and more
+fragmented on dense identifiers, so the gap between the honest case and the
+pathological one grew rather than shrank. 3.0 cannot sit inside it. Raising it
+to recover the 1.2x-1.5x over-count would deepen the 0.34x under-count, and the
+under-count is the direction that ends in a silent truncation.
+
+What the over-count costs is real and was paid on 2026-08-17: a Codex session at
+roughly 82,000 real tokens estimated at 99,429 and was refused by a 98,304
+ceiling the model would have served. The fix for that is a ceiling that knows
+which model it is protecting, not a constant that pretends one number fits every
+payload — see `RouteChatRequest._refuse_what_this_target_would_truncate`.
+
 **Two characters per token is not a safe floor either, and no single number
 is.** Minified JavaScript is denser than Chinese; punctuation and short
 identifiers each cost a token. A constant safe for that case would price
@@ -138,6 +169,62 @@ def _estimated_prompt_tokens(messages: Sequence[Message], tools: Sequence[ToolDe
     return total
 
 
+def _describe_prompt_composition(
+    messages: Sequence[Message], tools: Sequence[ToolDefinition]
+) -> str:
+    """Where a refused prompt's tokens actually went.
+
+    "Too long" is a fact about a request; this is the part a caller can act on.
+    The three shares have three different remedies and nothing else distinguishes
+    them: a conversation that grew is fixed by starting a new one, one enormous
+    message by not reading that file into it, and tool definitions that dominate
+    by trimming the client's tool list — for which starting a new conversation
+    does nothing at all, since the definitions are resent every turn.
+
+    On 2026-08-17 an agent was refused while re-reading a single large HTML file
+    on every turn. The refusal said only that ~99429 exceeded 98304, so what
+    reached the person driving it was a number with no subject, and the session
+    was restarted several times before the file was recognised as the cause.
+
+    Walked a second time rather than returned alongside the total, because this
+    runs only on the refusal path: the guardrail admits far more requests than
+    it turns away, and the common path should not pay for the rare one.
+    """
+    message_tokens = sum(_estimated_tokens(m.content) for m in messages)
+    call_tokens = sum(
+        _estimated_tokens(c.name) + _estimated_tokens(c.arguments)
+        for m in messages
+        for c in m.tool_calls
+    )
+    tool_tokens = sum(
+        _estimated_tokens(t.name)
+        + _estimated_tokens(t.description)
+        + _estimated_tokens(json.dumps(t.parameters))
+        for t in tools
+    )
+    # Content *and* the turn's own tool calls. An agent writing a file puts the
+    # body in `tool_calls[].arguments` and leaves `content` empty, so measuring
+    # content alone reported "largest ~40, 0% of the whole" for a conversation
+    # that was one 60000-token patch — the exact case the share exists to name.
+    largest = max(
+        (
+            _estimated_tokens(m.content)
+            + sum(_estimated_tokens(c.name) + _estimated_tokens(c.arguments) for c in m.tool_calls)
+            for m in messages
+        ),
+        default=0,
+    )
+    total = message_tokens + call_tokens + tool_tokens
+    # Guarded because a request can consist entirely of empty strings, and a
+    # share of nothing is not a number worth printing.
+    share = f", {100 * largest // total}% of the whole" if total else ""
+    return (
+        f"~{message_tokens} in {len(messages)} messages (largest turn ~{largest}{share}), "
+        f"~{call_tokens} in prior tool calls, "
+        f"~{tool_tokens} in {len(tools)} tool definitions"
+    )
+
+
 def _warn_if_prompt_was_truncated(
     prompt_tokens: int,
     context_length: int,
@@ -155,20 +242,35 @@ def _warn_if_prompt_was_truncated(
     beginning the model never saw, and the only thing wrong with the response
     is that it is wrong.
 
-    `max_context_length` is configured below half the smallest registered
-    context precisely so this cannot happen, which means reaching the boundary
-    is not a caller's problem to solve but a signal that the estimator
-    under-counted their content. Logged rather than raised: the answer has
-    already been produced and generated tokens have already been paid for, so
-    refusing here would bill for work and return nothing. The request id makes
-    it correlate with the caller's report, which is how the 2026-08-14 incident
-    was diagnosed in the first place.
+    `RouteChatRequest._refuse_what_this_target_would_truncate` refuses against
+    this same boundary before any hardware is committed, which means reaching it
+    here is not a caller's problem to solve but a signal that the estimator
+    under-counted their content: the refusal judged an estimate, and this judges
+    what the tokenizer actually charged. Logged rather than raised: the answer
+    has already been produced and generated tokens have already been paid for,
+    so refusing here would bill for work and return nothing. The request id
+    makes it correlate with the caller's report, which is how the 2026-08-14
+    incident was diagnosed in the first place.
+
+    The drift line below fires far more often and refuses nothing. It exists
+    because the estimate was, until 2026-08-17, visible only when it refused a
+    request or when this warning fired — so an estimator that was wrong in the
+    *safe* direction was invisible, and being wrong in the safe direction still
+    costs a caller their context. Measuring that took reconstructing it by hand
+    from `usage_records` after the fact.
     """
     if not prompt_tokens or context_length <= 0:
         # Zero means the stream never reached its terminal chunk, so there is
         # no figure to judge — not that nothing was read.
         return
     if prompt_tokens < context_length // 2:
+        # Only here. Past the boundary `prompt_eval_count` reports what the
+        # runtime *evaluated*, which saturates at num_ctx/2, so the ratio below
+        # would divide by a number that stopped tracking the prompt: a 115000
+        # prompt estimated at 100000 and cut to 4096 reads as a 24x over-count
+        # when the estimator in fact under-counted. That is the one direction
+        # this signal exists to catch, inverted.
+        _log_estimate_drift(prompt_tokens, estimated=estimated, request_id=request_id, actor=actor)
         return
     logger.warning(
         "prompt likely truncated by the runtime: prompt_tokens=%s reached num_ctx/2=%s "
@@ -179,6 +281,64 @@ def _warn_if_prompt_was_truncated(
         estimated,
         request_id,
         actor,
+    )
+
+
+ESTIMATE_DRIFT_BAND = (0.9, 1.5)
+"""The estimate-to-actual ratios already known to be normal, which are not news.
+
+A symmetric tolerance was the wrong shape for this. The estimator does not sit
+near 1.0 and is not meant to: measured against qwen36 on 2026-08-17 it runs
+1.22x to 1.47x high on every kind of content this platform serves, and 0.34x to
+0.91x on dense ASCII. Any threshold tight enough to call 1.2x a deviation fires
+on essentially every request, and one loose enough to stay quiet says nothing
+about the direction that matters.
+
+So the band is the measured spread, and a line is logged only outside it. Below
+0.9 the estimator is under-counting by more than any sample did, which is what
+precedes a silent truncation. Above 1.5 it is over-counting by more than any
+sample did, which costs callers capacity they paid for.
+
+**This would not have fired on 2026-08-17, and should not have.** That refusal
+was at 1.21x — ordinary calibration, not drift. What was wrong that day was a
+ceiling with no margin for a known over-count, and the fix for it is
+`RouteChatRequest._refuse_what_this_target_would_truncate`, not this line. An
+earlier draft of this docstring claimed the incident as its motivation while the
+threshold it set would have stayed silent through it.
+"""
+
+
+def _log_estimate_drift(
+    prompt_tokens: int, *, estimated: int, request_id: str | None, actor: str
+) -> None:
+    """One line when the estimate leaves the spread it was measured to have.
+
+    INFO rather than WARNING: on its own it is a calibration observation, not a
+    fault, and the fault it precedes has its own warning above. The caller is
+    told nothing — by the time this runs their answer has already been produced.
+
+    Only reached for prompts the runtime read whole; see the caller for why a
+    truncated one cannot be judged this way.
+    """
+    if not estimated:
+        return
+    ratio = estimated / prompt_tokens
+    low, high = ESTIMATE_DRIFT_BAND
+    if low <= ratio <= high:
+        return
+    logger.info(
+        "token estimate outside its measured band: estimated=%s actual=%s ratio=%.2f "
+        "(expected %.2f-%.2f) request_id=%s actor=%s — %s",
+        estimated,
+        prompt_tokens,
+        ratio,
+        low,
+        high,
+        request_id,
+        actor,
+        "under-counting, which is what precedes a silent truncation"
+        if ratio < low
+        else "over-counting, which refuses requests the model would have served",
     )
 
 
@@ -322,11 +482,15 @@ class RouteChatRequest:
         # the one field of an agent request that no person ever types.
         estimated = _estimated_prompt_tokens(messages, tools)
         if estimated > self._max_context_tokens:
+            composition = _describe_prompt_composition(messages, tools)
             raise ContextTooLongError(
                 detail=(
                     f"~{estimated} estimated tokens exceeds the configured limit "
-                    f"of {self._max_context_tokens}"
-                )
+                    f"of {self._max_context_tokens}: {composition}"
+                ),
+                estimated=estimated,
+                limit=self._max_context_tokens,
+                composition=composition,
             )
 
         # The concurrency slot is taken before any database work. Doing the
@@ -345,6 +509,17 @@ class RouteChatRequest:
             runtime = self._runtimes.get(target.runtime)
             if runtime is None:
                 raise NoAvailableModelError(detail=f"no adapter for runtime={target.runtime}")
+
+            # Inside the slot, and not by preference: the check needs `target`,
+            # routing needs the reads above, and the comment at the top of this
+            # block is why those reads may not happen before the slot is held.
+            # So a request too long for the model that would serve it waits for
+            # a slot in order to be told so — and a client retrying a permanent
+            # 413 (six times in seven seconds, 2026-08-17) contends for one each
+            # time. The refusal itself does no I/O and releases immediately, so
+            # what it costs is the wait, not the slot; the global ceiling still
+            # turns away the largest prompts before any of this.
+            self._refuse_what_this_target_would_truncate(estimated, target, actor, messages, tools)
 
             # `aclosing` again, for the same reason it is needed one layer
             # down: a bare `async for` over a generator leaves it for the
@@ -379,6 +554,74 @@ class RouteChatRequest:
             ) as generation:
                 async for chunk in generation:
                     yield chunk
+
+    def _refuse_what_this_target_would_truncate(
+        self,
+        estimated: int,
+        target: Model,
+        actor: Actor,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+    ) -> None:
+        """The input ceiling again, against the model that will actually serve it.
+
+        `max_context_length` is one number for the whole deployment, and its
+        docstring asks an operator to keep it below half the registered
+        `context_length` of *every* model that serves a capability — by hand,
+        across three values that live in three different places. On 2026-08-17
+        that invariant was not holding: the global ceiling was 98304 and exactly
+        half of `qwen36-35b-a3b-q8`'s registered 196608, so it sat *at* the
+        truncation point rather than below it, and `chat` still falls back to
+        `qwen7b`, whose 8192 puts the same point at 4096 — twenty-four times
+        under the ceiling that admitted the request.
+
+        Checked here because this is the first line where the target is known.
+        A fallback to a smaller model now refuses rather than answering from a
+        prompt whose beginning it never read, which is the failure the global
+        ceiling exists to prevent and the one an operator cannot see: the reply
+        is fluent, and only wrong.
+
+        **Only Ollama halves.** MLX serves its full registered context (see
+        `mlx_adapter.load`), so a target on any other runtime is bounded by the
+        global ceiling alone rather than by a rule that does not describe it.
+
+        A zero `context_length` is a row registered before the profile was
+        required, not a model that can serve nothing; `_set_num_ctx` declines to
+        send it for the same reason, and this declines to judge against it.
+        """
+        if target.runtime is not RuntimeKind.OLLAMA:
+            return
+        servable = target.resource_profile.context_length // 2
+        if servable <= 0 or estimated <= servable:
+            return
+        # The alias is named to the operator and not to the caller. A refusal
+        # that named it would disclose the model inventory to anyone who could
+        # provoke one, which is the disclosure `NoAvailableModelError` is
+        # careful about a few lines above.
+        logger.warning(
+            "refusing ~%s estimated tokens: %s would evaluate at most num_ctx/2=%s of "
+            "them and drop the rest request_id=%s actor=%s",
+            estimated,
+            target.alias,
+            servable,
+            self._request_id(),
+            actor.display,
+        )
+        composition = _describe_prompt_composition(messages, tools)
+        # `limit` reaches the caller and is half this model's registered
+        # context, so a fallback refusal tells them roughly how large the model
+        # standing in is. Weighed and accepted on 2026-08-17 — a number they
+        # cannot see is a refusal they cannot act on — and the alias still is
+        # not sent. See `ContextTooLongError.__init__`.
+        raise ContextTooLongError(
+            detail=(
+                f"~{estimated} estimated tokens exceeds the {servable} the model "
+                f"serving this capability can read: {composition}"
+            ),
+            estimated=estimated,
+            limit=servable,
+            composition=composition,
+        )
 
     def _resolve_thinking(self, requested: bool | None, policy: RoutingPolicy) -> bool:
         if requested is not None:

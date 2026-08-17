@@ -23,6 +23,7 @@ from app.domain.entities.chat import (
     Message,
     MessageRole,
     SamplingOptions,
+    ToolCall,
     ToolChoice,
     ToolDefinition,
 )
@@ -166,16 +167,18 @@ def build(
     thinking_default: bool = True,
     monotonic: Callable[[], float] | None = None,
     max_context_tokens: int = 32768,
+    context_length: int = 8192,
+    runtime_kind: RuntimeKind = RuntimeKind.OLLAMA,
 ):
     model = Model(
         id="m1",
         alias="primary",
         ref="primary:latest",
-        runtime=RuntimeKind.OLLAMA,
+        runtime=runtime_kind,
         node_id="n1",
         state=ModelState.LOADED,
         capabilities=frozenset({"chat"}),
-        resource_profile=ResourceProfile(memory_gb=8.0, context_length=8192),
+        resource_profile=ResourceProfile(memory_gb=8.0, context_length=context_length),
     )
     node = Node(
         id="n1", name="n1", address="100.64.0.1", status=NodeStatus.ONLINE, total_memory_gb=64.0
@@ -195,7 +198,7 @@ def build(
         models=FakeRepo([model]),
         nodes=FakeRepo([node]),
         usage=usage,
-        runtimes={RuntimeKind.OLLAMA: runtime},
+        runtimes={runtime_kind: runtime},
         routing=RoutingService(),
         concurrency=limiter,
         authz=RoleAuthorization(),
@@ -646,6 +649,240 @@ async def test_an_ordinary_prompt_says_nothing(caplog) -> None:
         await _run(use_case)
 
     assert "prompt likely truncated" not in caplog.text
+
+
+async def test_a_prompt_the_target_would_truncate_is_refused_before_generating() -> None:
+    """The global ceiling is one number; the model that serves the request has
+    its own, and on 2026-08-17 the two disagreed by 24x.
+
+    `chat` falls back to a smaller model deliberately — a smaller answer beats
+    no answer for a person. An answer from a prompt the runtime silently cut in
+    half is neither, so the fallback refuses at its own boundary rather than
+    inheriting a ceiling sized for the model it is standing in for.
+    """
+    runtime = FakeRuntime(chunks=1)
+    # Admitted by the deployment ceiling, far past what a 8192-token model reads.
+    use_case, _, _ = build(runtime, max_context_tokens=32768, context_length=8192)
+
+    with pytest.raises(ContextTooLongError) as caught:
+        await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 3000)])
+
+    assert "4096" in (caught.value.detail or "")
+
+
+async def test_that_refusal_does_not_name_the_model_to_the_caller() -> None:
+    """`NoAvailableModelError` is careful not to disclose the inventory a few
+    lines above, and a refusal anyone can provoke by pasting a long file would
+    otherwise enumerate it."""
+    runtime = FakeRuntime(chunks=1)
+    use_case, _, _ = build(runtime, max_context_tokens=32768, context_length=8192)
+
+    with pytest.raises(ContextTooLongError) as caught:
+        await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 3000)])
+
+    assert "primary" not in (caught.value.detail or "")
+
+
+async def test_the_target_ceiling_admits_what_the_model_can_actually_read() -> None:
+    """The refusal is the model's real boundary, not a margin below it: the
+    2026-08-17 incident was a request refused at 82,000 real tokens by a
+    ceiling the model would have served."""
+    runtime = FakeRuntime(chunks=1)
+    use_case, _, _ = build(runtime, max_context_tokens=32768, context_length=8192)
+
+    # ~1000 estimated tokens, comfortably inside num_ctx/2 = 4096.
+    await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 600)])
+
+
+async def test_only_ollama_is_held_to_the_half_context_rule() -> None:
+    """`num_ctx / 2` is Ollama's behaviour, not a property of runtimes. MLX
+    serves its full registered context, so applying the rule there would refuse
+    requests it would have answered whole."""
+    runtime = FakeRuntime(chunks=1)
+    use_case, _, _ = build(
+        runtime, max_context_tokens=32768, context_length=8192, runtime_kind=RuntimeKind.MLX
+    )
+
+    await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 3000)])
+
+
+async def test_a_model_registered_before_profiles_were_required_is_not_judged() -> None:
+    """The column defaults to 0, which is a row written before the profile was
+    required rather than a model that can read nothing. `_set_num_ctx` declines
+    to send that value for the same reason."""
+    runtime = FakeRuntime(chunks=1)
+    use_case, _, _ = build(runtime, max_context_tokens=32768, context_length=0)
+
+    await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 3000)])
+
+
+async def test_an_estimate_that_disagrees_with_the_tokenizer_is_logged(caplog) -> None:
+    """Until 2026-08-17 the estimate was visible only when it refused a request.
+    An estimator wrong in the safe direction was therefore invisible, and being
+    wrong in the safe direction still costs a caller the context they paid for:
+    the incident that day was reconstructed by hand from `usage_records`.
+    """
+    runtime = FakeRuntime(chunks=1, prompt_tokens=100)
+    use_case, _, _ = build(runtime)
+
+    with caplog.at_level(logging.INFO):
+        # ~200 estimated against 100 actual: 2.0x, past the top of the band.
+        await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 120)])
+
+    assert "outside its measured band" in caplog.text
+    assert "over-counting" in caplog.text
+
+
+async def test_the_known_calibration_is_not_reported_as_drift(caplog) -> None:
+    """The estimator runs 1.2x-1.5x high on everything this platform serves, so
+    a threshold that called 1.2x a deviation would fire on every request and
+    measure nothing. 2026-08-17's refusal was at 1.21x and belongs inside the
+    band; what was wrong that day was the ceiling, not the calibration."""
+    runtime = FakeRuntime(chunks=1, prompt_tokens=165)
+    use_case, _, _ = build(runtime)
+
+    with caplog.at_level(logging.INFO):
+        # ~200 estimated against 165 actual, i.e. 1.21x.
+        await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 120)])
+
+    assert "outside its measured band" not in caplog.text
+
+
+async def test_an_under_counting_estimate_is_named_as_such(caplog) -> None:
+    """The two directions are not equally bad and the line says which it saw:
+    under-counting is what precedes a silent truncation."""
+    runtime = FakeRuntime(chunks=1, prompt_tokens=1000)
+    use_case, _, _ = build(runtime, context_length=8192)
+
+    with caplog.at_level(logging.INFO):
+        # ~200 estimated against 1000 actual: 0.2x, below the band.
+        await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 120)])
+
+    assert "under-counting" in caplog.text
+
+
+async def test_a_truncated_prompt_is_not_judged_for_drift(caplog) -> None:
+    """`prompt_eval_count` reports what the runtime evaluated, which saturates
+    at num_ctx/2. Dividing the estimate by a saturated figure reports a large
+    *over*-count for a prompt the estimator in fact under-counted — inverting
+    the one direction this signal exists to catch."""
+    # 4096 is exactly num_ctx/2 for the 8192-token model, so this is truncated.
+    runtime = FakeRuntime(chunks=1, prompt_tokens=4096)
+    use_case, _, _ = build(runtime, context_length=8192, max_context_tokens=32768)
+
+    with caplog.at_level(logging.INFO):
+        await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 600)])
+
+    assert "prompt likely truncated" in caplog.text
+    assert "outside its measured band" not in caplog.text
+
+
+async def test_an_estimate_close_enough_to_the_tokenizer_says_nothing(caplog) -> None:
+    """It is a heuristic on character widths and is expected to be loose. A line
+    on every request would be noise, and noise is not measurement."""
+    runtime = FakeRuntime(chunks=1, prompt_tokens=200)
+    use_case, _, _ = build(runtime)
+
+    with caplog.at_level(logging.INFO):
+        await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 120)])
+
+    assert "outside its measured band" not in caplog.text
+
+
+async def test_the_refusal_says_which_part_of_the_prompt_was_large() -> None:
+    """ "Too long" is a fact; the share is the part a caller can act on.
+
+    The three shares have three different remedies, and on 2026-08-17 a refusal
+    that carried only the total sent an operator looking at the conversation
+    length when one re-read file was most of it.
+    """
+    runtime = FakeRuntime(chunks=1)
+    use_case, _, _ = build(runtime, max_context_tokens=1000)
+
+    with pytest.raises(ContextTooLongError) as caught:
+        await _run(
+            use_case,
+            messages=[
+                Message(role=MessageRole.USER, content="short"),
+                Message(role=MessageRole.USER, content="word " * 2000),
+            ],
+        )
+
+    detail = caught.value.detail or ""
+    assert "2 messages" in detail
+    assert "tool definitions" in detail
+    # The one re-read file dominating the conversation is the case this exists
+    # for, so the share has to be legible and not merely present.
+    assert "% of the whole" in detail
+
+
+async def test_the_refusal_counts_tool_definitions_as_their_own_share() -> None:
+    """A client whose tool list alone fills the ceiling cannot fix it by
+    starting a new conversation: the definitions are resent every turn. That is
+    only visible if they are attributed separately from the messages."""
+    runtime = FakeRuntime(chunks=1)
+    use_case, _, _ = build(runtime, max_context_tokens=1000)
+
+    with pytest.raises(ContextTooLongError) as caught:
+        await _run(
+            use_case,
+            messages=[Message(role=MessageRole.USER, content="hello")],
+            tools=[
+                ToolDefinition(
+                    name=f"tool_{i}",
+                    description="d" * 400,
+                    parameters={"type": "object", "properties": {}},
+                )
+                for i in range(10)
+            ],
+        )
+
+    assert "10 tool definitions" in (caught.value.detail or "")
+
+
+def test_a_prompt_of_empty_strings_does_not_divide_by_zero() -> None:
+    """The share is a percentage of the total, and a request can consist
+    entirely of empty content."""
+    from app.application.use_cases.route_chat_request import _describe_prompt_composition
+
+    described = _describe_prompt_composition([Message(role=MessageRole.USER, content="")], [])
+
+    assert "% of the whole" not in described
+
+
+def test_the_caller_facing_message_carries_a_remedy_that_can_work() -> None:
+    """The one 413 that had no remedy until 2026-08-17, on the error where
+    sending less is the only thing that works. `detail` never leaves the
+    process, so this string is the whole of what a caller is told."""
+    message = ContextTooLongError().public_message
+
+    assert "Retrying it unchanged cannot succeed" in message
+    # "conversation", not "input", would be advice a caller whose tool
+    # definitions fill the ceiling cannot act on.
+    assert message.startswith("The input is longer")
+
+
+async def test_a_large_tool_call_argument_counts_towards_the_largest_turn() -> None:
+    """An agent writing a file puts the body in `tool_calls[].arguments` and
+    leaves `content` empty. Measuring content alone reported that turn as 0% of
+    a conversation it was almost all of — the share exists to name exactly that
+    payload, so it has to see it."""
+    from app.application.use_cases.route_chat_request import _describe_prompt_composition
+
+    described = _describe_prompt_composition(
+        [
+            Message(role=MessageRole.USER, content="short"),
+            Message(
+                role=MessageRole.ASSISTANT,
+                content="",
+                tool_calls=(ToolCall(id="c1", name="apply_patch", arguments="x" * 60000),),
+            ),
+        ],
+        [],
+    )
+
+    # Content alone made this "largest turn ~2, 0% of the whole".
+    assert "99% of the whole" in described
 
 
 def test_the_estimator_weights_wide_characters_far_above_ascii() -> None:

@@ -290,8 +290,18 @@ class Settings(BaseSettings):
       8506-token prompt, `num_ctx=16384` evaluated all 8506. So this ceiling
       must stay below half the registered `context_length` of every model that
       serves a capability, or the guardrail's remedy becomes an answer given
-      without the beginning of the conversation. gemma4-31b-q8 was raised to
-      262144 with this change, putting its truncation point at 131072.
+      without the beginning of the conversation.
+
+      **That is no longer maintained here by hand, because it was not being
+      maintained.** On 2026-08-17 this value was 98304 and exactly half of
+      qwen36-35b-a3b-q8's registered 196608 — at the truncation point rather
+      than below it — while `chat` still fell back to qwen7b, whose 8192 puts
+      the same point at 4096. Only the absence of long `chat` traffic had kept
+      that from being served. `RouteChatRequest._refuse_what_this_target_would_truncate`
+      now applies the rule against whichever model routing actually picked, so
+      this value bounds hardware cost and that one bounds correctness. Keep
+      them consistent anyway: a global ceiling above a target's half turns what
+      should be a start-of-task refusal into a mid-task one.
     - *Prompt evaluation produces no bytes*, so what bounds it in transit is
       the per-read timeout. Measured on this hardware from real traffic on
       2026-08-14 — 105.5 to 141.5 tok/s across four cold requests — so a full
