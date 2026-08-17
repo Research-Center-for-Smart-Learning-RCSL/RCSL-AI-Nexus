@@ -735,7 +735,10 @@ data: [DONE]`}
                   call — most often a client&apos;s own default model name
                   rather than a capability. The message names what you asked for
                   and what you may ask for instead; <code>GET /v1/models</code>{" "}
-                  is the same list. Retrying will not help.
+                  is the same list, and since 2026-08-18 the two are fields as
+                  well as prose — <code>capability</code> and{' '}
+                  <code>available</code> — so a client can branch on them
+                  instead of parsing a sentence. Retrying will not help.
                 </td>
               </tr>
               <tr>
@@ -792,6 +795,9 @@ data: [DONE]`}
                 <td>
                   Requests per minute exceeded. <code>Retry-After</code> is
                   set; the window is short and retrying is the right response.
+                  The same figure is in the body as{' '}
+                  <code>retry_after_seconds</code>, for a client that reads
+                  bodies and not headers.
                 </td>
               </tr>
               <tr>
@@ -804,7 +810,10 @@ data: [DONE]`}
                   an OpenAI client library branching on <code>type</code> will
                   stop rather than exhaust its backoff. <code>Retry-After</code>{' '}
                   is a measured wait (see below); it is often many hours, so
-                  treat it as a stop rather than a sleep.
+                  treat it as a stop rather than a sleep. It is in the body too,
+                  as <code>retry_after_seconds</code>, and omitted from both
+                  rather than guessed at when the recovery time cannot be
+                  projected.
                 </td>
               </tr>
               <tr>
@@ -822,8 +831,7 @@ data: [DONE]`}
                   is why the response states the figure it judged against rather
                   than leaving you to assume the maximum.
                   <br />
-                  Unlike every other error here, this one carries its own
-                  arithmetic: <code>estimated</code> and <code>limit</code> as
+                  It carries its own arithmetic: <code>estimated</code> and <code>limit</code> as
                   numbers, <code>composition</code>, which splits the figure
                   across messages, prior tool calls and tool definitions and
                   names the largest single message&apos;s share, and{' '}
@@ -859,6 +867,17 @@ data: [DONE]`}
                   payload of about 99,000 real ones, which the model serving it
                   could have read. That is why the field exists rather than
                   being left to be inferred.
+                  <br />
+                  <strong>
+                    Every refusal is stored, and an administrator can read yours
+                    back.
+                  </strong>{' '}
+                  Since 2026-08-18 the code, the status, the message and these
+                  figures are kept for thirty days against the{' '}
+                  <code>request_id</code> in the body — so a client that
+                  swallows the response leaves an operator something better to
+                  read than a container log. Nothing about your request is
+                  stored: no messages, no tool definitions, no model name.
                 </td>
               </tr>
               <tr>

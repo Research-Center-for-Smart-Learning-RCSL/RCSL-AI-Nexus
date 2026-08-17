@@ -117,6 +117,10 @@ backend/
         vllm_adapter.py             # Phase 2
         mlx_adapter.py              # Phase 2
         validation.py               # Model reference validation, see security.md §7.1
+      tokenizer/
+        gguf.py                     # Reads a GGUF's metadata header, nothing else
+        ollama_blobs.py             # `ref` -> manifest -> the weights file it resolves to
+        gguf_token_counter.py       # Implements TokenCounterPort
       persistence/
         sqlalchemy_models.py        # ORM models, deliberately separate from domain entities
         postgres_model_repository.py
