@@ -43,9 +43,10 @@ with telling them apart.
 The value `scripts/model-eval/analyse.py` uses, and it is duplicated here
 deliberately rather than imported: that script is a developer tool outside the
 application image, and a number the platform renders a verdict from has to be
-in the platform. `test_evaluation_aggregate.py` pins the two together by
-asserting the verdicts this module produces against the published 2026-08-15
-reading.
+in the platform. `test_evaluation_aggregate.py` reads the literal back out of
+that script and asserts it equals this constant, so the copy cannot drift
+silently -- a claim this docstring made from the day it was written and which
+nothing did until 2026-08-17.
 """
 
 
