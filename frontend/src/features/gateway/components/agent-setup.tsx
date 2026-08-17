@@ -519,8 +519,10 @@ wire_api = "responses"`}
             prompt of 32231 tokens and a reply of 537, against a 32768-token
             window. The reply was exactly what was left, and the platform
             reported it as a normal completion, so the client had nothing to
-            show. The window is now 196608 tokens — twice what a caller may
-            send — and a truncated reply now ends as{' '}
+            show. The window is now 262144 tokens against a 122880-token
+            ceiling on what you may send, so the room to answer in is what is
+            left of more than twice your largest possible prompt — and a
+            truncated reply now ends as{' '}
             <code>response.incomplete</code>. If you still see this, it is the
             output ceiling rather than the window, and the response says so.
           </dd>
