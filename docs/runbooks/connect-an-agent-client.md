@@ -156,6 +156,21 @@ Four things are easy to get wrong:
   that had correctly written `model = "code"` was what made it hard to see.
   `codex -c model=code` overrides a selection already made.
 
+- **Codex's auxiliary model slots read their own slug, not `model`.** The one
+  seen so far is `codex-auto-review`, which the client sends before running a
+  command it wants to escalate. It is a built-in slug like any other, so it
+  answers `403 capability_not_issued` no matter what `model` says — and because
+  the refused call is the *review*, what the user sees is the escalated command
+  failing, not a model error. On 2026-08-17 an agent read that 403 as a
+  filesystem permission problem and spent four rounds trying PowerShell, then
+  Node, then Python to write one file, none of which could have worked.
+
+  Nothing needs granting: `codex-auto-review` is not a capability, so there is
+  no capability to issue. Turn the auto-review off, or point that slot at `code`
+  if your version exposes a setting for it. Check the gateway log for the slug —
+  `capability_not_issued` names it — before believing any other explanation of a
+  blocked write.
+
   The gateway does not answer in Codex's shape, and that is a decision rather
   than a gap. `construct_model_info_from_candidates` takes a matched remote
   entry **whole**, so a slug we advertise no longer falls back to the client's
