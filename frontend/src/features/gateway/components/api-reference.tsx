@@ -814,7 +814,7 @@ data: [DONE]`}
                   The prompt exceeds the configured input ceiling. Shorten it;
                   the limit is about memory, not policy, and retrying unchanged
                   cannot succeed. To budget for it yourself: the ceiling is{' '}
-                  <strong>at most 98,304 tokens</strong> over everything the
+                  <strong>at most 122,880 tokens</strong> over everything the
                   model will read — your tool definitions and replayed tool
                   calls included — so an agent conversation reaches this through
                   accumulation rather than through one large message. It is
