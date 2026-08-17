@@ -145,8 +145,8 @@ def _estimated_tokens(text: str) -> int:
     return ceil(ascii_chars / ASCII_CHARS_PER_TOKEN + wide_chars / WIDE_CHARS_PER_TOKEN)
 
 
-def _estimated_prompt_tokens(messages: Sequence[Message], tools: Sequence[ToolDefinition]) -> int:
-    """Everything the model will read, in estimated tokens.
+def _estimated_tool_tokens(tools: Sequence[ToolDefinition]) -> int:
+    """What the client's tool list costs, on its own.
 
     A tool definition's `parameters` is arbitrary JSON, so it is measured by
     serialising it rather than by walking it: the length of the text the adapter
@@ -154,19 +154,37 @@ def _estimated_prompt_tokens(messages: Sequence[Message], tools: Sequence[ToolDe
     honest measure. The cost is one serialisation of a payload the adapter
     serialises again a few lines later, against a guardrail that runs before any
     hardware is committed.
+
+    Separate from the total because this share behaves unlike the rest of the
+    prompt: it is resent whole on every turn and does not shrink when the
+    conversation is restarted, so it is the one part whose remedy is not "send
+    a shorter conversation".
+    """
+    return sum(
+        _estimated_tokens(tool.name)
+        + _estimated_tokens(tool.description)
+        + _estimated_tokens(json.dumps(tool.parameters))
+        for tool in tools
+    )
+
+
+def _estimated_prompt_tokens(
+    messages: Sequence[Message], tools: Sequence[ToolDefinition]
+) -> tuple[int, int]:
+    """Everything the model will read, as (total, tool definitions).
+
+    The tool share is returned rather than recomputed because the guardrail
+    needs the total and `_warn_if_tools_dominate` needs the part, and walking
+    the tools twice on the common path is the cost this file already declined
+    to pay in `_describe_prompt_composition`.
     """
     total = sum(_estimated_tokens(m.content) for m in messages)
     for message in messages:
         total += sum(
             _estimated_tokens(c.name) + _estimated_tokens(c.arguments) for c in message.tool_calls
         )
-    for tool in tools:
-        total += (
-            _estimated_tokens(tool.name)
-            + _estimated_tokens(tool.description)
-            + _estimated_tokens(json.dumps(tool.parameters))
-        )
-    return total
+    tool_tokens = _estimated_tool_tokens(tools)
+    return total + tool_tokens, tool_tokens
 
 
 def _describe_prompt_composition(
@@ -196,12 +214,7 @@ def _describe_prompt_composition(
         for m in messages
         for c in m.tool_calls
     )
-    tool_tokens = sum(
-        _estimated_tokens(t.name)
-        + _estimated_tokens(t.description)
-        + _estimated_tokens(json.dumps(t.parameters))
-        for t in tools
-    )
+    tool_tokens = _estimated_tool_tokens(tools)
     # Content *and* the turn's own tool calls. An agent writing a file puts the
     # body in `tool_calls[].arguments` and leaves `content` empty, so measuring
     # content alone reported "largest ~40, 0% of the whole" for a conversation
@@ -306,6 +319,58 @@ ceiling with no margin for a known over-count, and the fix for it is
 earlier draft of this docstring claimed the incident as its motivation while the
 threshold it set would have stayed silent through it.
 """
+
+
+TOOL_SHARE_WARNING = 0.5
+"""When a client's tool definitions are worth warning about, as a share of the
+estimate. Half, because below that the conversation is still the thing that will
+reach the ceiling and the ordinary remedies apply."""
+
+
+def _warn_if_tools_dominate(
+    estimated: int,
+    tool_tokens: int,
+    tool_count: int,
+    ceiling: int,
+    request_id: str | None,
+    actor: Actor,
+) -> None:
+    """Say so *before* the client hits the ceiling, not when it does.
+
+    A tool list is fixed for a session, resent whole on every turn, and invisible
+    to the person driving the agent -- so a client spending most of its window on
+    tool definitions looks, from the outside, like a platform that refuses short
+    conversations. On 2026-08-17 one arrived with 286 definitions worth an
+    estimated 122870 tokens, more than the whole ceiling on its own, and could
+    not send a four-message conversation. The refusal named the share, which is
+    what solved it; nothing had named it on the many requests that succeeded
+    first.
+
+    **Both conditions, not either.** A short request can be 90% tools and cost
+    nothing, so the share alone fires on requests nobody needs to hear about. The
+    absolute floor is a tenth of the ceiling, which is the point at which the
+    list is spending real window rather than merely most of a small request.
+
+    This logs on every turn while the condition holds, which for an agent loop is
+    every request in the task. That is deliberate: the alternative is per-process
+    state to deduplicate a line that stops the moment the client is fixed, and
+    the drift log above already made the same trade.
+    """
+    if tool_count == 0 or estimated <= 0:
+        return
+    share = tool_tokens / estimated
+    if share < TOOL_SHARE_WARNING or tool_tokens < ceiling // 10:
+        return
+    logger.warning(
+        "tool definitions are %.0f%% of this prompt: ~%s estimated tokens in %s definitions "
+        "against a ceiling of %s, resent every turn request_id=%s actor=%s",
+        share * 100,
+        tool_tokens,
+        tool_count,
+        ceiling,
+        request_id,
+        actor.display,
+    )
 
 
 def _log_estimate_drift(
@@ -480,7 +545,15 @@ class RouteChatRequest:
         # client grows without bound: leaving them out would have let a caller
         # carry an arbitrary payload past the guardrail in `tools`, which is
         # the one field of an agent request that no person ever types.
-        estimated = _estimated_prompt_tokens(messages, tools)
+        estimated, tool_tokens = _estimated_prompt_tokens(messages, tools)
+        _warn_if_tools_dominate(
+            estimated,
+            tool_tokens,
+            len(tools),
+            self._max_context_tokens,
+            self._request_id(),
+            actor,
+        )
         if estimated > self._max_context_tokens:
             composition = _describe_prompt_composition(messages, tools)
             raise ContextTooLongError(

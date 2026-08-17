@@ -898,3 +898,53 @@ def test_the_estimator_weights_wide_characters_far_above_ascii() -> None:
     # And neither may be optimistic enough to reintroduce the old rule, under
     # which 3000 characters of anything counted as 750 tokens.
     assert ascii_estimate > 750
+
+
+async def test_a_client_spending_its_window_on_tool_definitions_is_told(caplog) -> None:
+    """Said before the ceiling refuses, not when it does.
+
+    On 2026-08-17 a client arrived with 286 definitions worth an estimated
+    122870 tokens and could not send a four-message conversation. What made that
+    diagnosable was the refusal naming the share -- and nothing had named it on
+    any of the requests that succeeded first, on that client or on the two
+    others connected the same week.
+    """
+    runtime = FakeRuntime(chunks=1)
+    use_case, _, _ = build(runtime, max_context_tokens=4096)
+
+    with caplog.at_level(logging.WARNING):
+        await _run(
+            use_case,
+            messages=[Message(role=MessageRole.USER, content="hello")],
+            tools=[
+                ToolDefinition(
+                    name=f"a_tool_with_a_long_enough_name_{i}",
+                    description="A description of the sort a real client sends. " * 8,
+                    parameters={"type": "object", "properties": {"q": {"type": "string"}}},
+                )
+                for i in range(12)
+            ],
+        )
+
+    assert "tool definitions are" in caplog.text
+    assert "resent every turn" in caplog.text
+
+
+async def test_a_small_request_that_is_mostly_tools_says_nothing(caplog) -> None:
+    """The share alone would fire on requests nobody needs to hear about: two
+    tools and a one-word question is 90% tools and costs nothing. The absolute
+    floor is what makes this a signal rather than a per-request footer."""
+    runtime = FakeRuntime(chunks=1)
+    use_case, _, _ = build(runtime, max_context_tokens=1_000_000)
+
+    with caplog.at_level(logging.WARNING):
+        await _run(
+            use_case,
+            messages=[Message(role=MessageRole.USER, content="hi")],
+            tools=[
+                ToolDefinition(name="one", description="short", parameters={}),
+                ToolDefinition(name="two", description="short", parameters={}),
+            ],
+        )
+
+    assert "tool definitions are" not in caplog.text
