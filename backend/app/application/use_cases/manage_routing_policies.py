@@ -19,7 +19,7 @@ from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.audit import AuditAction
 from app.domain.entities.capability import ROUTABLE_CAPABILITIES
 from app.domain.entities.routing_policy import RoutingCandidate, RoutingPolicy
-from app.domain.exceptions import ModelNotFoundError, ModelStateConflictError
+from app.domain.exceptions import ModelNotFoundError, RoutingPolicyStateConflictError
 from app.domain.ports.repositories import ModelRepositoryPort, RoutingPolicyRepositoryPort
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
 
@@ -79,13 +79,13 @@ class ManageRoutingPolicies:
         # unknown capability, so nothing could ever route to it and it was
         # advertised as servable by `GET /v1/models` to every caller.
         if capability not in ROUTABLE_CAPABILITIES:
-            raise ModelStateConflictError(
+            raise RoutingPolicyStateConflictError(
                 detail=f"unknown capability {capability!r}; expected one of "
                 f"{sorted(ROUTABLE_CAPABILITIES)}"
             )
 
         if not candidates:
-            raise ModelStateConflictError(detail=f"policy {capability} has no candidates")
+            raise RoutingPolicyStateConflictError(detail=f"policy {capability} has no candidates")
 
         for candidate in candidates:
             if await self._models.get_by_alias(candidate.model_alias) is None:

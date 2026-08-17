@@ -14,7 +14,7 @@ from app.application.use_cases.issue_invitation import IssueInvitation
 from app.application.use_cases.manage_tenants import ManageTenants
 from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.entities.tenant import Tenant
-from app.domain.exceptions import ModelStateConflictError, NotAuthorizedError
+from app.domain.exceptions import NotAuthorizedError, TenantStateConflictError
 from app.domain.services.token_service import TokenService
 from app.shared.clock import SystemClock
 from tests.unit.fakes import FakeAudit, FakeInvitations, FakeTenants, FakeUsers
@@ -69,7 +69,7 @@ async def test_create_bootstraps_a_first_admin_into_the_new_tenant() -> None:
 async def test_create_refuses_a_duplicate_name() -> None:
     tenants, _, _ = build(tenants=[Tenant(id="t1", name="Existing")])
 
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(TenantStateConflictError):
         await tenants.create(
             ADMIN,
             name="Existing",

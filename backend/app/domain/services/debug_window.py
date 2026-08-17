@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from app.domain.exceptions import ModelStateConflictError
+from app.domain.exceptions import DebugWindowError
 
 MAX_DEBUG_WINDOW_MINUTES = 24 * 60
 """A day. Long enough to span a working session, short enough that forgetting
@@ -37,7 +37,5 @@ def debug_window_until(now: datetime, minutes: int) -> datetime | None:
     closing are the same verb and the audit trail carries both.
     """
     if not 0 <= minutes <= MAX_DEBUG_WINDOW_MINUTES:
-        raise ModelStateConflictError(
-            detail=f"debug window must be 0..{MAX_DEBUG_WINDOW_MINUTES} minutes"
-        )
+        raise DebugWindowError(detail=f"debug window must be 0..{MAX_DEBUG_WINDOW_MINUTES} minutes")
     return now + timedelta(minutes=minutes) if minutes else None

@@ -24,9 +24,9 @@ from app.domain.entities.audit import AuditAction
 from app.domain.entities.user import User
 from app.domain.exceptions import (
     LastAdministratorError,
-    ModelStateConflictError,
     NotAuthorizedError,
     UserNotFoundError,
+    UserStateConflictError,
 )
 from app.domain.ports.repositories import (
     ApiKeyRepositoryPort,
@@ -170,7 +170,7 @@ class ManageUsers:
             # account that no longer exists goes looking for the wrong thing,
             # and this string is written to explain a failure, which is the one
             # job it must not do badly.
-            raise ModelStateConflictError(
+            raise UserStateConflictError(
                 detail=(
                     f"debug window not set for user {user_id}: no enabled row matched. "
                     "The account was disabled or removed, possibly concurrently"

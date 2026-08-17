@@ -25,9 +25,9 @@ from app.domain.entities.knowledge import (
 )
 from app.domain.exceptions import (
     CollectionNotFoundError,
+    CollectionStateConflictError,
     DocumentNotFoundError,
     DocumentStateConflictError,
-    ModelStateConflictError,
 )
 from app.domain.ports.knowledge_ports import DocumentStoragePort, VectorStorePort
 from app.domain.ports.repositories import KnowledgeRepositoryPort
@@ -93,7 +93,7 @@ class ManageKnowledge:
         # lookup is tenant-scoped, so this cannot report another tenant's name
         # as taken.
         if await self._knowledge.get_collection_by_name(name) is not None:
-            raise ModelStateConflictError(detail=f"a collection named {name!r} already exists")
+            raise CollectionStateConflictError(detail=f"a collection named {name!r} already exists")
 
         collection = KnowledgeCollection(
             id=str(uuid.uuid4()),

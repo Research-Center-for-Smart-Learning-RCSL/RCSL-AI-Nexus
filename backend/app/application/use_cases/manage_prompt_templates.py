@@ -20,8 +20,8 @@ from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.audit import AuditAction
 from app.domain.entities.prompt_template import MAX_SYSTEM_PROMPT_CHARS, PromptTemplate
 from app.domain.exceptions import (
-    ModelStateConflictError,
     PromptTemplateNotFoundError,
+    PromptTemplateStateConflictError,
 )
 from app.domain.ports.repositories import PromptTemplateRepositoryPort
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
@@ -64,7 +64,9 @@ class ManagePromptTemplates:
             # Checked here as well as by the unique index, so the caller gets a
             # 409 naming the collision instead of a constraint violation that
             # surfaces as a 500 at commit, after the response is on its way.
-            raise ModelStateConflictError(detail=f"a template named {name!r} already exists")
+            raise PromptTemplateStateConflictError(
+                detail=f"a template named {name!r} already exists"
+            )
 
         template = PromptTemplate(
             id=str(uuid.uuid4()),
@@ -102,7 +104,9 @@ class ManagePromptTemplates:
             name = self._validated_name(name)
             existing = await self._templates.get_by_name(name)
             if existing is not None and existing.id != template.id:
-                raise ModelStateConflictError(detail=f"a template named {name!r} already exists")
+                raise PromptTemplateStateConflictError(
+                    detail=f"a template named {name!r} already exists"
+                )
 
         updated = replace(
             template,
@@ -146,9 +150,9 @@ class ManagePromptTemplates:
     def _validated_name(self, name: str) -> str:
         name = name.strip()
         if not name:
-            raise ModelStateConflictError(detail="a template needs a name")
+            raise PromptTemplateStateConflictError(detail="a template needs a name")
         if len(name) > MAX_NAME_CHARS:
-            raise ModelStateConflictError(
+            raise PromptTemplateStateConflictError(
                 detail=f"a template name is at most {MAX_NAME_CHARS} characters"
             )
         return name
@@ -159,9 +163,9 @@ class ManagePromptTemplates:
             # An empty template is worse than none: it is selectable, costs a
             # round trip, and does nothing, so the operator concludes selection
             # is broken rather than that the template is empty.
-            raise ModelStateConflictError(detail="a template needs a system prompt")
+            raise PromptTemplateStateConflictError(detail="a template needs a system prompt")
         if len(system_prompt) > MAX_SYSTEM_PROMPT_CHARS:
-            raise ModelStateConflictError(
+            raise PromptTemplateStateConflictError(
                 detail=(
                     f"a system prompt is at most {MAX_SYSTEM_PROMPT_CHARS} characters; "
                     f"this one is {len(system_prompt)}"
