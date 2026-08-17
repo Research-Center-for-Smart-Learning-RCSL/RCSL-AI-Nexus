@@ -224,6 +224,77 @@ remains the Phase 3 increment.
 
 ---
 
+## 2026-08-17
+
+### The evaluation is a screen now, and the caveats are stored with the numbers
+
+The 2026-08-15 result lived in this file and in `scripts/model-eval/`, which is
+the wrong place for it: the people who ask which model is better are the ones
+reading the management UI, and neither of those is reachable from a browser.
+It is now a table in the database, an endpoint, and a screen under a new
+**Evidence** group in the sidebar.
+
+**The design decision worth recording is that the caveats are data.** A run
+carries its own list of what it does not establish -- eleven of eighteen tasks
+carrying no signal, the 6.9-point spread resting on four of them, the bridge to
+the older set being gone -- and the screen renders that list *above* the
+ranking. Written into the page instead, those sentences would keep being
+asserted about the next run, whose limits will be different ones; written
+nowhere, the screen would show a ranking the run does not support. This is the
+same rule `host-numbers-explainer.tsx` follows for the figures it explains.
+
+**The API takes samples, not scores.** Accepting a pre-computed score would let
+two importers disagree about what one means -- mean over scored samples or over
+all of them -- and nothing in the stored row would say which had been used. So
+the platform does the arithmetic, in `domain/entities/evaluation.py`, against
+the definitions `analyse.py` already uses: a sample that returned no result
+lowers the sample count rather than the score, wall clock is summed within a
+round and reported as a range across rounds, and a generation rate is always
+carried with the prompt depth it was measured at.
+
+**A task's verdict is a property of the field, not of a model.** Saturated
+high, saturated low, separates, undecided -- computed over every model in the
+run and shown per task, because a reader who counts eighteen tasks and believes
+eighteen of them contributed has read the table backwards. `insufficient_data`
+is the saturated-low case and the reason the distinction is on the screen at
+all: every candidate failed it, which says something about the models and
+nothing about which to run.
+
+**No new scopes.** Reading takes `model:read` and importing takes
+`model:write`, because an evaluation's audience is exactly the model registry's
+and a dedicated `evaluation:read` would have been granted to the same four
+roles and withheld from the same two -- a name with no decision behind it. The
+cost is stated rather than hidden: whoever may register a model may also
+replace the evidence about it, which is what the audit row on every import is
+for. `test_manage_evaluations.py` pins the split, because a reused scope is the
+kind that gets attached to the wrong verb quietly.
+
+### The importer resolves an administrator rather than writing to Postgres
+
+The 2026-08-16 entry below records a policy edit written straight into the
+table, and calls it a real gap: no authenticated path to the control plane
+exists from the machine the platform runs on, so the change was validated by
+nothing and audited by nothing. The same shortcut was available here and is
+deliberately not taken. `app/infrastructure/import_evaluation.py` runs inside
+the admin container, reads the harness's JSONL from stdin, and looks up the
+`--actor` login it is given -- so the import goes through `ManageEvaluations`
+with that person's real scopes, is refused without `model:write`, and leaves an
+`evaluation.imported` row under their name. What it costs is that nobody can
+import anonymously, which is the point.
+
+### And the fabrication finding reached a user-facing screen
+
+2026-08-15 called `insufficient_data` "the finding here with the shortest path
+to a user" and then left it in this file for two days. It is now on Chat and in
+the API reference: every model tested answered a question its data could not
+answer, nine samples out of nine, with the working shown. Both say it is a
+property of the models rather than of the platform, that no capability or
+request field addresses it, and -- on the API reference, where the reader is
+writing a client -- that a fabricated answer arrives well-formed under
+`finish_reason: "stop"` and offers nothing to branch on.
+
+---
+
 ## 2026-08-16
 
 ### `code` and `chat` both moved to `qwen36-35b-a3b-q8`, and the control plane could not be reached from the machine it runs on

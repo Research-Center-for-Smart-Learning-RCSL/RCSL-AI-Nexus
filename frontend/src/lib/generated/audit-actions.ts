@@ -22,6 +22,8 @@ export const AUDIT_ACTIONS = [
   'api_key.updated',
   'authz.denied',
   'bootstrap.first_admin',
+  'evaluation.deleted',
+  'evaluation.imported',
   'knowledge.collection_created',
   'knowledge.collection_deleted',
   'knowledge.document_deleted',

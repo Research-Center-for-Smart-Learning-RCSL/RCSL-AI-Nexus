@@ -119,8 +119,8 @@ describe('the links a role can see', () => {
     signedInWith(SCOPES.admin);
     render(<AppShell>content</AppShell>);
 
-    // Chat is pinned above every group; then Integration, Fleet, Content,
-    // Insight, Administration.
+    // Chat is pinned above every group; then Integration, Fleet, Evidence,
+    // Content, Insight, Administration.
     expect(sidebarLinks()).toEqual([
       'Chat',
       'API keys',
@@ -129,6 +129,7 @@ describe('the links a role can see', () => {
       'Models',
       'Routing policies',
       'Nodes',
+      'Model evaluation',
       'Prompt templates',
       'Knowledge',
       'Dashboard',
@@ -151,7 +152,9 @@ describe('the links a role can see', () => {
     // `Prompt templates` is the whole of what a member sees under Content, and
     // the reason that group is not called Fleet: they hold none of
     // `model:read`, `routing:read` or `node:read`, so a Fleet group would have
-    // shown them one content entry under an infrastructure heading.
+    // shown them one content entry under an infrastructure heading. The same
+    // scope is why no Evidence group appears here: a group whose every entry is
+    // filtered out is not rendered at all.
     expect(sidebarLinks()).toEqual([
       'Chat',
       'API keys',
@@ -205,8 +208,12 @@ describe('the links a role can see', () => {
     render(<AppShell>content</AppShell>);
 
     // 14 since 2026-08-09: Prompt templates, which an auditor has always been
-    // able to open and which this file's scope map did not know they held.
-    expect(sidebarLinks()).toHaveLength(14);
+    // able to open and which this file's scope map did not know they held. 15
+    // since 2026-08-17: Model evaluation, which is gated on `model:read` and
+    // therefore reaches this role — an auditor reading the evidence behind a
+    // routing decision is the role working as intended.
+    expect(sidebarLinks()).toHaveLength(15);
+    expect(sidebarLinks()).toContain('Model evaluation');
     expect(sidebarLinks()).not.toContain('Retention');
   });
 

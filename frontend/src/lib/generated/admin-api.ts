@@ -172,6 +172,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/evaluations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Evaluation Runs
+         * @description Every stored run, newest first, without its scores.
+         */
+        get: operations["list_evaluation_runs_admin_evaluations_get"];
+        put?: never;
+        /**
+         * Import Evaluation
+         * @description Load a run from its samples, replacing any run with the same label.
+         *
+         *     The aggregation happens here rather than in the caller, through the same
+         *     domain function the importer uses, so the screen's numbers are the
+         *     platform's arithmetic over what was measured rather than a client's.
+         */
+        post: operations["import_evaluation_admin_evaluations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/evaluations/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Evaluation
+         * @description The newest run, or null on a deployment that has never run the set.
+         *
+         *     Null rather than a 404, and declared above `/{run_id}` so that `latest` is
+         *     not read as an id. A deployment with no evaluation is in a normal state —
+         *     running the task set is an afternoon's work nobody owes anyone — and a 404
+         *     would have the screen report that as a failure.
+         */
+        get: operations["latest_evaluation_admin_evaluations_latest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/evaluations/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Evaluation */
+        get: operations["get_evaluation_admin_evaluations__run_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Evaluation */
+        delete: operations["delete_evaluation_admin_evaluations__run_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/gateway": {
         parameters: {
             query?: never;
@@ -1635,6 +1706,113 @@ export interface components {
             /** Secret */
             secret: string;
         };
+        /** EvaluationModelScoreResponse */
+        EvaluationModelScoreResponse: {
+            /** Generation Tokens Per Second */
+            generation_tokens_per_second: number | null;
+            /** Model Ref */
+            model_ref: string;
+            /** No Result Samples */
+            no_result_samples: number;
+            /** Prompt Depth Tokens */
+            prompt_depth_tokens: number | null;
+            /** Score */
+            score: number | null;
+            /** Scored Samples */
+            scored_samples: number;
+            /** Seconds Per Round Max */
+            seconds_per_round_max: number | null;
+            /** Seconds Per Round Min */
+            seconds_per_round_min: number | null;
+        };
+        /**
+         * EvaluationReportResponse
+         * @description A run and everything derived from its samples.
+         *
+         *     `verdicts` is computed rather than stored (see `EvaluationReport.verdicts`)
+         *     and is carried here rather than left to the client, for the reason it is
+         *     computed in the aggregate at all: it is a property of the whole field of
+         *     models, and a screen deriving it from the rows it happens to have rendered
+         *     would get it wrong the moment a filter existed.
+         */
+        EvaluationReportResponse: {
+            /** Models */
+            models: components["schemas"]["EvaluationModelScoreResponse"][];
+            run: components["schemas"]["EvaluationRunResponse"];
+            /** Tasks */
+            tasks: components["schemas"]["EvaluationTaskScoreResponse"][];
+            /** Verdicts */
+            verdicts: {
+                [key: string]: string;
+            };
+        };
+        /**
+         * EvaluationRunResponse
+         * @description One stored run, without its scores. What the run list is made of.
+         */
+        EvaluationRunResponse: {
+            /** Caveats */
+            caveats: string[];
+            /** Harness Ref */
+            harness_ref: string;
+            /** Id */
+            id: string;
+            /** Imported At */
+            imported_at: string | null;
+            /** Imported By */
+            imported_by: string | null;
+            /** Label */
+            label: string;
+            /** Note */
+            note: string;
+            /** Phase */
+            phase: string;
+            /**
+             * Ran At
+             * Format: date-time
+             */
+            ran_at: string;
+            /** Sample Count */
+            sample_count: number;
+        };
+        /**
+         * EvaluationSampleRequest
+         * @description One model's attempt at one task in one round, as the harness wrote it.
+         */
+        EvaluationSampleRequest: {
+            /** Generation Tokens Per Second */
+            generation_tokens_per_second?: number | null;
+            /**
+             * Group
+             * @default
+             */
+            group: string;
+            /** Model Ref */
+            model_ref: string;
+            /** Prompt Tokens */
+            prompt_tokens?: number | null;
+            /** Round Index */
+            round_index: number;
+            /** Score */
+            score?: number | null;
+            /** Task */
+            task: string;
+            /** Wall Seconds */
+            wall_seconds?: number | null;
+        };
+        /** EvaluationTaskScoreResponse */
+        EvaluationTaskScoreResponse: {
+            /** Group */
+            group: string;
+            /** Model Ref */
+            model_ref: string;
+            /** Samples */
+            samples: number;
+            /** Score */
+            score: number | null;
+            /** Task */
+            task: string;
+        };
         /**
          * GatewayInfoResponse
          * @description What the UI needs in order to explain how to use a key.
@@ -1683,6 +1861,44 @@ export interface components {
             load_5m: number | null;
             /** Uptime Seconds */
             uptime_seconds: number | null;
+        };
+        /**
+         * ImportEvaluationRequest
+         * @description A whole run, as samples rather than as scores.
+         *
+         *     **The caller sends what was measured and the platform does the arithmetic.**
+         *     Accepting pre-computed scores would let two importers disagree about what a
+         *     score means — mean over scored samples or over all of them, one figure the
+         *     harness's report and the screen would then quietly differ on — and there
+         *     would be nothing in the stored row to say which had been used.
+         */
+        ImportEvaluationRequest: {
+            /** Caveats */
+            caveats?: string[];
+            /**
+             * Harness Ref
+             * @default
+             */
+            harness_ref: string;
+            /** Label */
+            label: string;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /**
+             * Phase
+             * @default full
+             */
+            phase: string;
+            /**
+             * Ran At
+             * Format: date-time
+             */
+            ran_at: string;
+            /** Samples */
+            samples: components["schemas"]["EvaluationSampleRequest"][];
         };
         /**
          * IngestionJobResponse
@@ -2526,6 +2742,157 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["DownloadJobResponse"];
                 };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    list_evaluation_runs_admin_evaluations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationRunResponse"][];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    import_evaluation_admin_evaluations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportEvaluationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationReportResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    latest_evaluation_admin_evaluations_latest_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationReportResponse"] | null;
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    get_evaluation_admin_evaluations__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationReportResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_evaluation_admin_evaluations__run_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Unprocessable Entity */
             422: {

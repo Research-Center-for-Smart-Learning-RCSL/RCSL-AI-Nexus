@@ -25,6 +25,7 @@ import {
   GaugeIcon,
   KeyIcon,
   FileTextIcon,
+  FlaskConicalIcon,
   LibraryIcon,
   LogOutIcon,
   MenuIcon,
@@ -173,6 +174,28 @@ const NAV_GROUPS: NavGroup[] = [
         label: 'Nodes',
         icon: <ServerIcon className="size-4" />,
         requires: 'node:read',
+      },
+    ],
+  },
+  {
+    id: 'evidence',
+    label: 'Evidence',
+    // Its own group rather than a fourth entry under Fleet, because it answers
+    // a different question about the same subject. Fleet is what is registered,
+    // loaded and routed right now; this is what a task set measured models
+    // doing on a day that has already passed, and filing a dated record beside
+    // three live screens invites it being read as one of them.
+    //
+    // Gated on `model:read`, the scope the endpoint requires, so the group
+    // appears for exactly the roles that can open what is in it: a `user` and a
+    // `curator` see no group at all rather than a heading with nothing behind
+    // it.
+    items: [
+      {
+        href: '/evaluations',
+        label: 'Model evaluation',
+        icon: <FlaskConicalIcon className="size-4" />,
+        requires: 'model:read',
       },
     ],
   },

@@ -485,6 +485,33 @@ export function ApiReference() {
 
       <section className="space-y-3">
         <h2 className="font-heading text-base font-semibold">
+          One measured limit of the models, not of the API
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          <strong>
+            A model here will answer a question its input cannot answer.
+          </strong>{' '}
+          Measured on this deployment on 2026-08-15, against a task whose data
+          does not determine the result: every model tested returned a confident
+          figure rather than reporting the gap — nine samples out of nine, with
+          the working shown. It is a property of the models rather than of this
+          platform, so it is not addressed by choosing a different capability,
+          by <code>use_knowledge</code>, or by any field in this document.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          It is here because it has a bearing on how you write a client. An
+          application that shows a model&apos;s answer to a person can note
+          where it came from; one that parses a number out of it and acts on it
+          has no signal to branch on, because a fabricated answer is
+          well-formed, arrives with <code>finish_reason: &quot;stop&quot;</code>{' '}
+          and looks exactly like a correct one. Where a wrong answer costs
+          something, have the model produce the inputs and do the arithmetic
+          yourself.
+        </p>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="font-heading text-base font-semibold">
           What comes back
         </h2>
         <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[10rem_1fr]">

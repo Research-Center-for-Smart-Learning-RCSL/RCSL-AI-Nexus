@@ -44,6 +44,7 @@ from app.interfaces.http.routers import (
     api_keys,
     assistant,
     dashboard,
+    evaluations,
     gateway_info,
     health,
     host,
@@ -179,6 +180,10 @@ def mount_admin_routers(app: FastAPI) -> None:
         users.router,
         invitations.router,
         models.router,
+        # Beside `models` because it is a second reading of the same
+        # subject: that screen says what is registered and loaded, this one
+        # says what a task set measured them doing.
+        evaluations.router,
         nodes.router,
         tenants.router,
         api_keys.router,

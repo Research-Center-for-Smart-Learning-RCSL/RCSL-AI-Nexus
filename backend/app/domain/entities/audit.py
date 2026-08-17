@@ -53,6 +53,17 @@ class AuditAction(StrEnum):
 
     BOOTSTRAP_FIRST_ADMIN = "bootstrap.first_admin"
 
+    EVALUATION_IMPORTED = "evaluation.imported"
+    """A capability evaluation loaded into the platform.
+
+    Audited although it changes no configuration and grants nobody anything,
+    because what it does change is the evidence a later routing decision cites.
+    A run replaces any earlier one carrying the same label, so this is the only
+    record that the numbers on that screen were once different.
+    """
+
+    EVALUATION_DELETED = "evaluation.deleted"
+
     KNOWLEDGE_COLLECTION_CREATED = "knowledge.collection_created"
     KNOWLEDGE_COLLECTION_DELETED = "knowledge.collection_deleted"
     KNOWLEDGE_DOCUMENT_UPLOADED = "knowledge.document_uploaded"
