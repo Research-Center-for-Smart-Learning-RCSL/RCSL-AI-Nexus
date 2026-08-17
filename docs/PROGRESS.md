@@ -226,6 +226,41 @@ remains the Phase 3 increment.
 
 ## 2026-08-17
 
+### The estimator, measured against the tokeniser on the payloads that were refused
+
+Ground truth is Ollama's own `prompt_eval_count` through the resident runner,
+reusing its `num_ctx` so the 40 GB model is not reloaded, with the ten-token
+chat-template overhead measured once and subtracted.
+
+| content                                  | chars  | estimated | real   | ratio |
+|------------------------------------------|--------|-----------|--------|-------|
+| OpenAI function tools (JSON schema)      | 60,392 | 20,131    | 14,233 | 1.41  |
+| generated TypeScript                     | 40,000 | 13,337    | 9,584  | 1.39  |
+| Python source                            | 40,000 | 13,354    | 9,040  | 1.48  |
+| English prose                            | 40,000 | 13,373    | 9,951  | 1.34  |
+| Chinese runbook (CJK + shell + paths)    | 20,000 | 11,781    | 11,728 | 1.00  |
+| uuid list                                | 55,499 | 18,500    | 52,099 | **0.36** |
+
+**The one number worth carrying out of this is 99,000.** The client refused at
+140,059 estimated that evening was really about 99,000 tokens: inside the
+131,072 the model can now read, outside the 122,880 the estimate is judged
+against. It was refused by the estimator rather than by the hardware, and an
+exact count would have let it through. That is the concrete case for a
+tokeniser, and it is stronger than the 1.2x-1.5x general over-count because it
+names a request that failed.
+
+**The Chinese row is not the good news it looks like.** 1.00 is a mixed
+operational document -- CJK prose with shell blocks and paths -- where the ASCII
+over-count and the CJK under-count happen to cancel. Pure Traditional Chinese
+measured 1.36x high this morning. Nothing here says the two-divisor scheme is
+accurate; it says this particular mixture is, by coincidence.
+
+**And the uuid row is why the constants still cannot be retuned.** 0.36 is a
+2.8x under-count, and an under-count is the direction that ends in a prompt the
+runtime truncates in silence. Dividing the estimator by 1.4 to recover the
+over-count would take that to 0.26. No single constant sits inside a gap that
+runs from 0.36 to 1.48; a tokeniser does.
+
 ### The fix sat undeployed for five hours while the incident it fixed repeated
 
 `9a22007` and `ef62f96` were committed at 17:49 against a 413 that had refused a

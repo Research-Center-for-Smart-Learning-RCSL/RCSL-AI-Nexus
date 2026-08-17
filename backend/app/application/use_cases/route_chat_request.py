@@ -118,11 +118,33 @@ pathological one grew rather than shrank. 3.0 cannot sit inside it. Raising it
 to recover the 1.2x-1.5x over-count would deepen the 0.34x under-count, and the
 under-count is the direction that ends in a silent truncation.
 
-What the over-count costs is real and was paid on 2026-08-17: a Codex session at
-roughly 82,000 real tokens estimated at 99,429 and was refused by a 98,304
-ceiling the model would have served. The fix for that is a ceiling that knows
-which model it is protecting, not a constant that pretends one number fits every
-payload — see `RouteChatRequest._refuse_what_this_target_would_truncate`.
+What the over-count costs is real and was paid twice on 2026-08-17. A Codex
+session at roughly 82,000 real tokens estimated at 99,429 and was refused by a
+98,304 ceiling the model would have served. And a second client that evening was
+refused at 140,059 estimated, of which 122,870 was 286 tool definitions —
+**measured against the tokenizer the same night, that payload was about 99,000
+real tokens**, inside the 131,072 the model can now read and outside the 122,880
+the estimate is judged against. The ceiling that refused it was the estimator,
+not the hardware.
+
+Two rows measured that night, on payloads shaped like the ones that were
+refused rather than on clean samples of one content type:
+
+| content                                   | chars/token | estimate runs |
+|-------------------------------------------|-------------|---------------|
+| OpenAI function tools, long snake_case    | 4.24        | 1.41x high    |
+| Chinese runbook (CJK prose + shell + paths)| 1.71       | 1.00x         |
+
+The second is not a correction of the Traditional Chinese row above, which was
+pure prose; it is what a Chinese-speaking operator's payload actually looks like,
+and the two errors happen to cancel in it. The first says the tool definitions
+that fill an agent's window are over-counted like everything else, so the client
+that could not send an empty conversation had more room than it was told.
+
+The fix for the over-count is a real tokenizer, not a retuned constant — see the
+table above for why no constant sits inside that gap. What is fixed already is
+a ceiling that knows which model it is protecting; see
+`RouteChatRequest._refuse_what_this_target_would_truncate`.
 
 **Two characters per token is not a safe floor either, and no single number
 is.** Minified JavaScript is denser than Chinese; punctuation and short
