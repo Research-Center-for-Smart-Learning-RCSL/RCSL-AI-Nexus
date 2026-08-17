@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
 import { CheckIcon, CopyIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { useCopyToClipboard } from '@/lib/use-copy-to-clipboard';
 import { cn } from '@/lib/utils';
 
 /**
@@ -23,29 +23,11 @@ export function CodeBlock({
   /** Named when there is more than one block in view. */
   label?: string;
 }) {
-  const [copied, setCopied] = useState(false);
-  // Held so each copy restarts the two seconds rather than inheriting what was
-  // left of the previous one, and so the dialog this usually sits in can be
-  // dismissed inside that window without the timer firing on a dead component.
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (timer.current) clearTimeout(timer.current);
-    };
-  }, []);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard access can be denied; the text is selectable on screen.
-      setCopied(false);
-    }
-  }
+  // The restart-per-copy and the unmount cleanup this used to hold itself now
+  // live in the hook, which is where the other two call sites were missing
+  // them. Failure is ignored here on purpose: the snippet is on screen and
+  // selectable, so a refused clipboard needs no message.
+  const { copied, copy } = useCopyToClipboard();
 
   return (
     <div className={cn('relative', className)}>
@@ -60,7 +42,7 @@ export function CodeBlock({
         variant="ghost"
         size="xs"
         type="button"
-        onClick={copy}
+        onClick={() => void copy(code)}
         aria-label={label}
         className="absolute top-1.5 right-1.5"
       >

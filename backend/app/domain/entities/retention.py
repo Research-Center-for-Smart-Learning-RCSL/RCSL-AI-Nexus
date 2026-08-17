@@ -1,9 +1,9 @@
 """How long the append-only tables keep a row.
 
-Three tables accumulate without an upper bound: `audit_log`, `usage_records`
-and, since 2026-08-08, `prompt_logs`. Everything else in the schema is bounded
-by something a person decides — accounts, keys, models, collections — and
-shrinks when they decide otherwise. Bounding these is therefore a policy
+Four tables accumulate without an upper bound: `audit_log`, `usage_records`,
+`prompt_logs` since 2026-08-08 and `refusals` since 2026-08-18. Everything
+else in the schema is bounded by something a person decides — accounts, keys,
+models, collections — and shrinks when they decide otherwise. Bounding these is therefore a policy
 question rather than a capacity one, which is why the number lives in the
 database and not in `.env`: it is meant to be argued about and changed by an
 administrator, and every change is worth an audit entry.
@@ -58,6 +58,17 @@ class RetentionDataset(StrEnum):
     the most sensitive data the platform holds and the shortest-lived reason for
     holding it."""
 
+    REFUSALS = "refusals"
+    """What callers were refused and why, in the words they were refused in.
+
+    Carries a ceiling like `prompt_logs`, and for a weaker version of the same
+    reason. It holds no request content — only codes, statuses, the message the
+    caller received and the figures that came with it — so it is not the §9.2
+    hazard. What it does accumulate is shape: a `composition` says a
+    conversation was 97% one message, and a year of somebody's 413s is a
+    description of how they work that nobody asked to have kept.
+    """
+
 
 DEFAULT_RETENTION_DAYS = 360
 """What the two metadata datasets start at.
@@ -101,6 +112,32 @@ copy it out deliberately; nothing here should make that the default by
 inaction.
 """
 
+DEFAULT_REFUSAL_RETENTION_DAYS = 30
+"""What `refusals` starts at.
+
+A month, because the question this table answers has a long tail: "we have been
+getting this since the start of term" is asked here, and a week would already
+have deleted the beginning of it. Longer than the transcripts above by a factor
+of four and shorter than the metadata datasets by a factor of twelve, which is
+where a record that is neither content nor accounting belongs.
+"""
+
+MAXIMUM_REFUSAL_RETENTION_DAYS = 180
+"""The ceiling `refusals` may be set to.
+
+Six months is the outer edge of a diagnosis. Past it what accumulates stops
+being a record of things that went wrong and becomes a behavioural history of
+the people who provoked them, which is the thing the ceiling exists to stop
+being defaulted into.
+"""
+
+MINIMUM_REFUSAL_RETENTION_DAYS = 7
+"""And a floor, unlike `prompt_logs`, because this table is read by the person
+who was refused rather than by somebody who opened a window for an afternoon. A
+window of a day would delete a refusal before the caller who provoked it on a
+Friday came back to it on a Monday.
+"""
+
 MINIMUM_PROMPT_LOG_RETENTION_DAYS = 1
 """And a floor of a day, which is not the interesting bound but is a real one:
 `0` would mean the sweep deletes a transcript in the same hour the operator
@@ -139,6 +176,11 @@ RETENTION_BOUNDS: Mapping[RetentionDataset, RetentionBounds] = MappingProxyType(
             default_days=DEFAULT_PROMPT_LOG_RETENTION_DAYS,
             minimum_days=MINIMUM_PROMPT_LOG_RETENTION_DAYS,
             maximum_days=MAXIMUM_PROMPT_LOG_RETENTION_DAYS,
+        ),
+        RetentionDataset.REFUSALS: RetentionBounds(
+            default_days=DEFAULT_REFUSAL_RETENTION_DAYS,
+            minimum_days=MINIMUM_REFUSAL_RETENTION_DAYS,
+            maximum_days=MAXIMUM_REFUSAL_RETENTION_DAYS,
         ),
     }
 )

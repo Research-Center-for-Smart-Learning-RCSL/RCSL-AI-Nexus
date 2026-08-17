@@ -145,7 +145,7 @@ def create_app() -> FastAPI:
     # purpose is to tell the two entrances apart. This entrance is always
     # session-based whatever the deployment mode: it is the only one that
     # mounts the credential flow, below.
-    install_error_handlers(app, envelope="admin", auth_mode="local")
+    install_error_handlers(app, envelope="admin", auth_mode="local", surface="admin-public")
     mount_admin_routers(app)
     # Only this entrance mounts the credential flow. See the tailnet module.
     app.include_router(auth.router, prefix=ADMIN_PREFIX)

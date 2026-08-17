@@ -12,6 +12,7 @@ import { useState, type ReactNode } from 'react';
 import { CheckIcon, CopyIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { useCopyToClipboard } from '@/lib/use-copy-to-clipboard';
 import { cn } from '@/lib/utils';
 
 export type OneTimeSecretProps = {
@@ -33,26 +34,14 @@ export function OneTimeSecret({
   onAcknowledgedChange,
   className,
 }: OneTimeSecretProps) {
-  const [copied, setCopied] = useState(false);
-  const [copyFailed, setCopyFailed] = useState(false);
+  // `failed` is why this screen needed the shared hook to carry one. A refused
+  // clipboard used to be silent here — the button stayed reading "Copy" and
+  // nothing else changed — and on the one screen where the value will never be
+  // shown again, that is somebody ticking the acknowledgement and closing the
+  // dialog holding nothing. The unmount cleanup arrives with it: this sits in a
+  // dialog that can be dismissed inside the two seconds.
+  const { copied, failed: copyFailed, copy } = useCopyToClipboard();
   const [acknowledged, setAcknowledged] = useState(false);
-
-  async function copy() {
-    setCopyFailed(false);
-    try {
-      await navigator.clipboard.writeText(values.join('\n'));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard access can be denied — an insecure origin, or a browser
-      // permission — and the failure used to be silent: the button stayed
-      // reading "Copy" and nothing else changed. On the one screen where the
-      // value will never be shown again, that is someone ticking the
-      // acknowledgement and closing the dialog holding nothing.
-      setCopied(false);
-      setCopyFailed(true);
-    }
-  }
 
   return (
     <div className={cn('space-y-3', className)}>
@@ -81,7 +70,7 @@ export function OneTimeSecret({
           />
           {acknowledgement}
         </label>
-        <Button variant="outline" size="sm" onClick={copy} type="button">
+        <Button variant="outline" size="sm" onClick={() => void copy(values.join('\n'))} type="button">
           {copied ? <CheckIcon /> : <CopyIcon />}
           {copied ? 'Copied' : 'Copy'}
         </Button>

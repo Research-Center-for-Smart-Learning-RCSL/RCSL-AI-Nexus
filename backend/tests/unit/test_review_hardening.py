@@ -54,8 +54,8 @@ def test_a_user_holds_only_the_scopes_5_2_grants() -> None:
     scopes for models, routing and nodes were an over-grant that let a user
     enumerate the registry and read the node's tailnet address.
 
-    **`prompt:read` was added on 2026-08-05 and is the only widening this
-    assertion has admitted.** It is here rather than passed over in silence
+    **`prompt:read` (2026-08-05) and `refusal:read_own` (2026-08-18) are the
+    only widenings this assertion has admitted.** It is here rather than passed over in silence
     because the set is pinned exactly on purpose: anything added has to be
     argued for in this docstring, and a future one that is not still fails.
 
@@ -68,12 +68,21 @@ def test_a_user_holds_only_the_scopes_5_2_grants() -> None:
     guessing. The transparency runs the same way — a template shapes every
     answer the member receives, so being able to read the one applied on their
     behalf is a property worth having rather than a leak.
+
+    `refusal:read_own` reads the same way. Every row it reaches is a second copy
+    of a response this account already received — the code it branched on, the
+    status, the message it read and the figures that came with it — so it
+    discloses nothing new, and being unable to see why you were refused is the
+    condition that cost two people an evening each on 2026-08-17. It names no
+    infrastructure either: the model's alias is withheld from a refusal exactly
+    as it is from the response the refusal was.
     """
     scopes = RoleAuthorization().scopes_for("user")
 
     assert scopes == frozenset(
         {
             Scope.CHAT_USE,
+            Scope.REFUSAL_READ_OWN,
             Scope.API_KEY_READ_OWN,
             Scope.API_KEY_WRITE_OWN,
             Scope.USAGE_READ_OWN,

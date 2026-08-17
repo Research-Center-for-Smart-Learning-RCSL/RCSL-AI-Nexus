@@ -11,6 +11,7 @@ wiring stays readable in one file rather than spreading across routers.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -43,17 +44,25 @@ from app.adapters.persistence.repositories import (
     PostgresPromptLogWriter,
     PostgresPromptTemplateRepository,
     PostgresRecordPurge,
+    PostgresRefusalRepository,
+    PostgresRefusalWriter,
     PostgresRetentionPolicyRepository,
     PostgresRoutingPolicyRepository,
     PostgresTenantRepository,
     PostgresUsageRepository,
     PostgresUserRepository,
 )
-from app.adapters.persistence.sqlalchemy_models import AuditLogRow, PromptLogRow, UsageRecordRow
+from app.adapters.persistence.sqlalchemy_models import (
+    AuditLogRow,
+    PromptLogRow,
+    RefusalRow,
+    UsageRecordRow,
+)
 from app.adapters.runtime.mlx_adapter import MlxAdapter
 from app.adapters.runtime.ollama_adapter import OllamaAdapter
 from app.adapters.session.session_store import SessionData, SessionStore
 from app.adapters.storage.filesystem_documents import FilesystemDocumentStorage
+from app.adapters.tokenizer.gguf_token_counter import GgufTokenCounter
 from app.adapters.vector.qdrant_store import QdrantVectorStore
 from app.application.use_cases.accept_invitation import AcceptInvitation
 from app.application.use_cases.apply_prompt_template import ApplyPromptTemplate
@@ -82,6 +91,7 @@ from app.application.use_cases.read_audit_log import ReadAuditLog
 from app.application.use_cases.read_dashboard import ReadDashboard
 from app.application.use_cases.read_host_status import ReadHostStatus
 from app.application.use_cases.read_prompt_logs import ReadPromptLogs
+from app.application.use_cases.read_refusals import ReadRefusals
 from app.application.use_cases.read_usage_analytics import ReadUsageAnalytics
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.application.use_cases.search_knowledge import SearchKnowledge
@@ -92,6 +102,7 @@ from app.domain.ports.infrastructure_ports import CachePort
 from app.domain.ports.model_runtime_port import ModelRuntimePort
 from app.domain.ports.repositories import UsageRepositoryPort
 from app.domain.ports.security_ports import AuthorizationPort
+from app.domain.ports.token_counter_port import TokenCounterPort
 from app.domain.services.api_key_service import ApiKeyService
 from app.domain.services.login_throttle import LoginThrottle
 from app.domain.services.memory_budget_service import MemoryBudgetService
@@ -132,6 +143,41 @@ def build_runtimes(settings: Settings) -> dict[RuntimeKind, ModelRuntimePort]:
             tool_calling_verified=settings.mlx_tool_calling_verified,
         ),
     }
+
+
+def build_token_counter(settings: Settings) -> TokenCounterPort | None:
+    """One counter per process, because it holds one cache per process.
+
+    Built here and kept on `app.state` beside the runtimes and the concurrency
+    limiter, for the same reason those are: a tokeniser costs 132 MB for a
+    248320-entry vocabulary and a quarter of a second to build, and a
+    per-request instance would pay both on every request. Nothing about it is
+    per-caller.
+
+    `None` when no model store is configured, which is what a deployment that
+    has not mounted one gets. That is a supported shape rather than a
+    misconfiguration — MLX-only hosts have no GGUF to read — and it lands the
+    platform exactly where it was before 2026-08-17: counting characters, and
+    saying so in a log line on the first request to each model.
+    """
+    if not settings.ollama_models_path:
+        return None
+    return GgufTokenCounter(
+        Path(settings.ollama_models_path),
+        cache_size=settings.token_counter_cache_size,
+    )
+
+
+def build_refusal_writer() -> PostgresRefusalWriter:
+    """A session factory, not a session, and not for convenience.
+
+    Every row this writes is written while a request is failing, from the
+    exception handler that is rendering the failure. The request's own session
+    is being rolled back underneath it, so a writer sharing that session would
+    record nothing at all — the failure mode `PostgresPromptLogWriter` found on
+    a table where it cost some rows, on a table where it would cost all of them.
+    """
+    return PostgresRefusalWriter(get_session_factory())
 
 
 def build_concurrency_limiter(settings: Settings) -> SemaphoreConcurrencyLimiter:
@@ -344,6 +390,10 @@ def build_route_chat_request(
         authz=request.app.state.authz,
         clock=SystemClock(),
         max_tokens_ceiling=settings.max_tokens_ceiling,
+        # From `app.state`, not built here: see `build_token_counter`. A
+        # deployment without a model store passes `None`, and the use case
+        # falls back to the character estimate it used before this existed.
+        tokens=getattr(request.app.state, "token_counter", None),
         # The same use case `GET /v1/models` answers from, so a refusal names
         # exactly the list that endpoint would have returned. Read only when
         # refusing a capability the key was not issued.
@@ -547,6 +597,10 @@ def build_manage_models(
         state_committer=ModelStateCommitter(get_session_factory()),
         authz=request.app.state.authz,
         audit=request.app.state.audit,
+        # The same process-wide counter the chat path uses, so a model warmed
+        # here is warm for the requests that follow. A per-request instance
+        # would build a vocabulary and then throw it away.
+        tokens=getattr(request.app.state, "token_counter", None),
     )
 
 
@@ -844,6 +898,22 @@ def build_read_prompt_logs(
     )
 
 
+def build_read_refusals(request: Request, session: SessionDep, tenant: TenantIdDep) -> ReadRefusals:
+    """Tenant-scoped like every other read, and narrowed further inside.
+
+    The tenant comes from the wiring; the narrowing to one account, for a reader
+    without `refusal:read_all`, comes from the use case. Two boundaries rather
+    than one because they answer different questions — which installation's rows
+    exist, and whose rows this person may see — and collapsing them would put
+    the second one in a repository that has no idea who is asking.
+    """
+    return ReadRefusals(
+        refusals=PostgresRefusalRepository(session, tenant),
+        authz=request.app.state.authz,
+        audit=get_audit(request),
+    )
+
+
 def build_read_usage_analytics(
     request: Request, session: SessionDep, tenant: TenantIdDep
 ) -> ReadUsageAnalytics:
@@ -889,6 +959,7 @@ def build_manage_retention(request: Request, session: SessionDep) -> ManageReten
             RetentionDataset.AUDIT_LOG: PostgresRecordPurge(session, AuditLogRow),
             RetentionDataset.USAGE_RECORDS: PostgresRecordPurge(session, UsageRecordRow),
             RetentionDataset.PROMPT_LOGS: PostgresRecordPurge(session, PromptLogRow),
+            RetentionDataset.REFUSALS: PostgresRecordPurge(session, RefusalRow),
         },
         authz=request.app.state.authz,
         audit=get_audit(request),

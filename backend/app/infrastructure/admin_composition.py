@@ -30,9 +30,11 @@ from app.infrastructure.di import (
     build_job_progress,
     build_password_hasher,
     build_password_policy,
+    build_refusal_writer,
     build_runtimes,
     build_secret_box,
     build_session_store,
+    build_token_counter,
     build_token_service,
     build_totp,
 )
@@ -57,6 +59,7 @@ from app.interfaces.http.routers import (
     nodes,
     prompt_logs,
     prompt_templates,
+    refusals,
     retention,
     roles,
     routing_policies,
@@ -85,6 +88,10 @@ async def admin_lifespan(app: FastAPI, *, run_node_heartbeat: bool = True) -> As
     app.state.cache = build_cache(settings)
     app.state.sessions = build_session_store(settings, app.state.cache)
     app.state.audit = build_audit()
+    # Written from the exception handler, so it needs its own transaction: the
+    # request whose refusal it records is on its way to a rollback in every
+    # case. See `interfaces/http/errors.py` and `PostgresRefusalWriter`.
+    app.state.refusals = build_refusal_writer()
 
     # Singletons, and each for a reason worth keeping: the hasher owns the
     # semaphore that bounds how much memory concurrent login attempts occupy,
@@ -103,6 +110,7 @@ async def admin_lifespan(app: FastAPI, *, run_node_heartbeat: bool = True) -> As
     # as public traffic is.
     app.state.runtimes = build_runtimes(settings)
     app.state.concurrency = build_concurrency_limiter(settings)
+    app.state.token_counter = build_token_counter(settings)
     # After the limiter, whose saturation it reports; `/admin/chat` runs inference
     # here too, so the slot gauge is meaningful on both admin entrances.
     app.state.metrics = build_metrics(app.state.concurrency)
@@ -198,6 +206,12 @@ def mount_admin_routers(app: FastAPI) -> None:
         # has had its SELECT on it revoked, so the route would be refused
         # by Postgres there anyway (db_roles.py).
         prompt_logs.router,
+        # Beside those two for the same reason, at a third depth: `logs` shows
+        # that a request happened, `prompt_logs` shows what was said, and this
+        # shows what the platform told a caller when it would not serve them.
+        # Unlike the other two it is not an administrator's view of somebody
+        # else — every account reads its own here, which is what it is for.
+        refusals.router,
         host.router,
         retention.router,
         knowledge.router,

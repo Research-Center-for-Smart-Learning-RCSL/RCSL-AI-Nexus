@@ -28,6 +28,7 @@ is not worth buying nothing.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any, Self, cast
 
@@ -50,6 +51,7 @@ from app.adapters.persistence.sqlalchemy_models import (
     PromptLogRow,
     PromptTemplateRow,
     RecoveryCodeRow,
+    RefusalRow,
     RetentionPolicyRow,
     RoutingPolicyRow,
     TenantRow,
@@ -74,11 +76,14 @@ from app.domain.entities.model import Model, ModelState
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.prompt_log import PromptLogEntry, PromptLogSummary
 from app.domain.entities.prompt_template import PromptTemplate
+from app.domain.entities.refusal import Refusal
 from app.domain.entities.retention import RetentionDataset, RetentionPolicy
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.tenant import Tenant
 from app.domain.entities.usage import BucketUnit, UsageBucket, UsageRecord
 from app.domain.entities.user import User
+
+logger = logging.getLogger(__name__)
 
 
 class _Base:
@@ -1072,6 +1077,120 @@ class PostgresPromptLogWriter:
             await session.commit()
 
 
+class PostgresRefusalWriter:
+    """Appends a refusal in its own transaction.
+
+    **Its own session, and here that is not an asymmetry but the only way it
+    can work.** Every row this class writes is written from an exception
+    handler, so the request's session is on its way to a rollback in every
+    single case. `PostgresPromptLogWriter` learned this the hard way for a
+    table where the failing request was the *interesting* one; for this table
+    the failing request is the only one.
+
+    Swallows and logs its own failures, unlike that class, which is guarded at
+    its call site. There is no call site to guard: the caller is a handler
+    rendering an error response, and an exception raised into it would replace
+    the refusal the caller is owed with a 500 about the bookkeeping.
+    """
+
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def record(self, refusal: Refusal) -> None:
+        try:
+            async with self._sessions() as session:
+                session.add(m.refusal_to_row(refusal.truncated()))
+                await session.commit()
+        except Exception:  # noqa: BLE001
+            # The code and the request id, and nothing else. This log line
+            # exists so a missing row is explicable; repeating the message or
+            # the figures here would put a copy of the caller-facing answer in
+            # a log with ordinary retention, which is the trade the whole table
+            # is arranged to avoid.
+            logger.exception(
+                "failed to record refusal code=%s request_id=%s", refusal.code, refusal.request_id
+            )
+
+
+class PostgresRefusalRepository(_TenantScoped):
+    """Reading refusals, on the admin entrances only. The write is
+    `PostgresRefusalWriter`, which needs a transaction of its own."""
+
+    def _filtered(
+        self,
+        stmt: Any,
+        *,
+        actor_id: str | None,
+        api_key_id: str | None,
+        code: str | None,
+        request_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> Any:
+        stmt = self._scope(stmt, RefusalRow.tenant_id)
+        if actor_id:
+            stmt = stmt.where(RefusalRow.actor_id == actor_id)
+        if api_key_id:
+            stmt = stmt.where(RefusalRow.api_key_id == api_key_id)
+        if code:
+            stmt = stmt.where(RefusalRow.code == code)
+        if request_id:
+            stmt = stmt.where(RefusalRow.request_id == request_id)
+        if since is not None:
+            stmt = stmt.where(RefusalRow.at >= since)
+        if until is not None:
+            stmt = stmt.where(RefusalRow.at < until)
+        return stmt
+
+    async def list_refusals(
+        self,
+        *,
+        actor_id: str | None,
+        api_key_id: str | None,
+        code: str | None,
+        request_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> list[Refusal]:
+        stmt = self._filtered(
+            select(RefusalRow),
+            actor_id=actor_id,
+            api_key_id=api_key_id,
+            code=code,
+            request_id=request_id,
+            since=since,
+            until=until,
+        )
+        rows = await self._session.scalars(
+            stmt.order_by(RefusalRow.at.desc(), RefusalRow.id.desc()).limit(limit).offset(offset)
+        )
+        return [m.refusal_row_to_domain(row) for row in rows]
+
+    async def count_refusals(
+        self,
+        *,
+        actor_id: str | None,
+        api_key_id: str | None,
+        code: str | None,
+        request_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> int:
+        stmt = self._filtered(
+            select(func.count()).select_from(RefusalRow),
+            actor_id=actor_id,
+            api_key_id=api_key_id,
+            code=code,
+            request_id=request_id,
+            since=since,
+            until=until,
+        )
+        total = await self._session.scalar(stmt)
+        return int(total or 0)
+
+
 class PostgresPromptLogRepository(_TenantScoped):
     """Reading transcripts, on the admin entrances only. The write is
     `PostgresPromptLogWriter`, which needs a transaction of its own."""
@@ -1225,7 +1344,7 @@ class PostgresRecordPurge:
     def __init__(
         self,
         session: AsyncSession,
-        row: type[UsageRecordRow] | type[AuditLogRow] | type[PromptLogRow],
+        row: type[UsageRecordRow] | type[AuditLogRow] | type[PromptLogRow] | type[RefusalRow],
     ) -> None:
         self._session = session
         self._row = row

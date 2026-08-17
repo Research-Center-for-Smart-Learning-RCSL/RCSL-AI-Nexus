@@ -1126,6 +1126,28 @@ LaunchDaemon 放在一起——它要跑得起來，得先有 repo、有 `secret
 
 ---
 
+## 5.1 Ollama 的模型倉庫（不掛會退回估算）
+
+平台從模型 `ref` 對應到的那個 GGUF 檔裡讀出字彙表與 chat template，用它精確計算 prompt
+的 token 數，取代原本用字元寬度估的做法。只讀 metadata header（`qwen3.6:35b-a3b-q8_0`
+是 38.7 GB 權重前面的 11.9 MiB），每個模型每個 process 一次。
+
+- [ ] 確認 Ollama 的模型倉庫位置，通常是執行 Ollama 那個帳號的 `~/.ollama/models`。
+- [ ] 在 `.env` 設 `OLLAMA_MODELS_HOST_PATH=/Users/<runtime-account>/.ollama/models`。
+  compose 會把它**唯讀**掛成容器裡的 `/ollama-models`。唯讀是有原因的：那個目錄的擁有者
+  是 Ollama，能寫它的容器就能換掉主機正在服務的權重。
+
+**不掛也能跑，而且是支援的狀態**：`OLLAMA_MODELS_PATH` 留空就關掉精確計數，每個請求退回
+字元估算——也就是 2026-08-18 之前的行為——並且每個模型會留一行 log 說明。只服務 MLX 的
+主機沒有 GGUF 可讀，就是這種情況。
+
+估算錯得有多離譜值得寫下來，因為它決定了這一步該不該做：對照 runtime 量過，散文、原始碼與
+tool schema 高估 1.34x-1.48x，uuid 清單低估到 0.36x。高估會拒掉硬體本來服務得了的請求
+（2026-08-17 就發生過一次，140,059 估算、實際約 99,000）；低估則是 runtime 默默截斷提示詞
+的前奏。沒有任何單一常數落在那個區間裡。
+
+---
+
 ## 6. 取得專案並設定
 
 - [ ] 取得程式碼（用你的 git 遠端位址）：

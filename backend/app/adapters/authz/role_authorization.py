@@ -23,6 +23,10 @@ _BASE_SCOPES = frozenset(
         Scope.API_KEY_READ_OWN,
         Scope.API_KEY_WRITE_OWN,
         Scope.USAGE_READ_OWN,
+        # Being told why you were refused is not an administrative privilege.
+        # Every row it reaches is a second copy of a response this account
+        # already received; see `Scope.REFUSAL_READ_OWN`.
+        Scope.REFUSAL_READ_OWN,
         # Selecting a prompt template is part of asking a question, so seeing
         # which exist has to come with using the chat rather than with
         # administering it. Read only: authoring one is `prompt:write`.
@@ -45,6 +49,7 @@ _TENANT_ADMIN_SCOPES = _BASE_SCOPES | {
     Scope.USER_WRITE,
     Scope.API_KEY_WRITE_ANY,
     Scope.USAGE_READ_ALL,
+    Scope.REFUSAL_READ_ALL,
     Scope.LOGS_READ,
     Scope.KNOWLEDGE_READ,
     Scope.KNOWLEDGE_WRITE,
@@ -72,6 +77,7 @@ _OPERATOR_SCOPES = _BASE_SCOPES | {
     Scope.ROUTING_WRITE,
     Scope.LOGS_READ,
     Scope.USAGE_READ_ALL,
+    Scope.REFUSAL_READ_ALL,
     Scope.KNOWLEDGE_READ,
     Scope.USER_READ,
     Scope.TENANT_READ,
@@ -106,6 +112,8 @@ _AUDITOR_SCOPES = frozenset(
         Scope.API_KEY_READ_OWN,
         Scope.USAGE_READ_OWN,
         Scope.USAGE_READ_ALL,
+        Scope.REFUSAL_READ_OWN,
+        Scope.REFUSAL_READ_ALL,
         Scope.LOGS_READ,
         Scope.MODEL_READ,
         Scope.ROUTING_READ,

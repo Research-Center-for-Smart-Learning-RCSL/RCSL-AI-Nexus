@@ -38,6 +38,18 @@ dependencies = [
     # application imports them.
     "pypdf>=5.1",
     "python-docx>=1.1",
+    # Counting a prompt with the model's own vocabulary rather than estimating
+    # it from character widths, which was wrong by 1.34x-1.48x on ordinary
+    # content and 0.36x on dense identifiers. Both are imported lazily, inside
+    # the functions that build a tokeniser, so a process that never counts a
+    # prompt never pays for them: `adapters/tokenizer/gguf_token_counter.py`.
+    #
+    # Jinja2 is here for exactly one thing — rendering the chat template that
+    # ships inside the weights, so the count includes the framing the runtime
+    # wraps a conversation in. It renders in a sandboxed environment because
+    # what passes through that template is caller text.
+    "tokenizers>=0.23.1",
+    "jinja2>=3.1.6",
 ]
 
 [dependency-groups]

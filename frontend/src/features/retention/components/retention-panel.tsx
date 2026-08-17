@@ -15,9 +15,8 @@ import {
   useSetRetentionPolicy,
 } from '@/features/retention/hooks/use-retention';
 import {
-  DATASET_DESCRIPTIONS,
-  DATASET_LABELS,
-  RETENTION_BOUNDS,
+  datasetDescription,
+  datasetLabel,
   type RetentionPolicy,
 } from '@/features/retention/schema';
 
@@ -45,7 +44,9 @@ function DatasetRow({ policy }: { policy: RetentionPolicy }) {
   // shared floor of 30 applied to a dataset whose ceiling is 30 would refuse
   // every value the server accepts, in the form, so nothing would ever reach
   // the error that explains which direction was wrong.
-  const bounds = RETENTION_BOUNDS[policy.dataset];
+  // From the response, not from a table here. The two used to be mirrored and
+  // the mirror is what broke this screen when a fourth dataset arrived.
+  const bounds = { min: policy.minimum_days, max: policy.maximum_days };
   const parsed = Number(days);
   const valid =
     Number.isInteger(parsed) &&
@@ -63,10 +64,10 @@ function DatasetRow({ policy }: { policy: RetentionPolicy }) {
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <h2 className="font-heading text-sm font-semibold">
-            {DATASET_LABELS[policy.dataset]}
+            {datasetLabel(policy.dataset)}
           </h2>
           <p className="max-w-prose text-xs text-muted-foreground">
-            {DATASET_DESCRIPTIONS[policy.dataset]}
+            {datasetDescription(policy.dataset)}
           </p>
         </div>
         {policy.updated_by ? (
@@ -90,7 +91,7 @@ function DatasetRow({ policy }: { policy: RetentionPolicy }) {
             {...(bounds.max === null ? {} : { max: bounds.max })}
             value={days}
             onChange={(event) => setDays(event.target.value)}
-            aria-label={`Retention in days for ${DATASET_LABELS[policy.dataset]}`}
+            aria-label={`Retention in days for ${datasetLabel(policy.dataset)}`}
             className="mt-1 w-28"
           />
         </label>
@@ -163,7 +164,7 @@ function DatasetRow({ policy }: { policy: RetentionPolicy }) {
       <ConfirmDialog
         open={confirmingPurge}
         onOpenChange={setConfirmingPurge}
-        title={`Purge ${DATASET_LABELS[policy.dataset]}?`}
+        title={`Purge ${datasetLabel(policy.dataset)}?`}
         description={
           // The count again, because the confirm dialog is the last place it
           // can change somebody's mind, and it is the number they are agreeing

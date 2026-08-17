@@ -41,6 +41,7 @@ export const AUDIT_ACTIONS = [
   'prompt_template.created',
   'prompt_template.deleted',
   'prompt_template.updated',
+  'refusal.read_any',
   'retention.policy_set',
   'retention.purged',
   'routing_policy.deleted',

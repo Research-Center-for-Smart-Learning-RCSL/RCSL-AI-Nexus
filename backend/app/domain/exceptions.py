@@ -223,6 +223,27 @@ CONTEXT_REMEDY = (
 )
 
 
+COUNT_BY_TOKENIZER = "tokenizer"
+COUNT_BY_ESTIMATE = "estimate"
+COUNT_BY_LOWER_BOUND = "lower_bound"
+"""What produced the figure on a `context_too_long`.
+
+`tokenizer` is the model's own vocabulary and chat template, exact to within
+the runtime's framing. `estimate` is the character-width fallback, which no
+model's vocabulary has ever agreed with. `lower_bound` is the cheap guard that
+runs before a model is chosen at all: it refuses only payloads no tokeniser
+could bring under the ceiling, so the true figure is somewhere above it.
+"""
+
+
+def _count_phrase(basis: str, tokens: int) -> str:
+    if basis == COUNT_BY_TOKENIZER:
+        return f"{tokens:,} tokens"
+    if basis == COUNT_BY_LOWER_BOUND:
+        return f"at least {tokens:,} tokens"
+    return f"an estimated {tokens:,} tokens"
+
+
 class ContextTooLongError(DomainError):
     code = "context_too_long"
     public_message = (
@@ -249,6 +270,7 @@ class ContextTooLongError(DomainError):
         estimated: int | None = None,
         limit: int | None = None,
         composition: str | None = None,
+        basis: str = COUNT_BY_ESTIMATE,
     ) -> None:
         """The figures a caller needs to act, which reach them unlike `detail`.
 
@@ -280,9 +302,26 @@ class ContextTooLongError(DomainError):
         self.estimated = estimated
         self.limit = limit
         self.composition = composition
+        self.basis = basis
+        """How the figure was arrived at, which changes what the caller should
+        conclude from it.
+
+        Added 2026-08-17 with the tokeniser. Until then every refusal here was
+        an estimate that ran 1.34x-1.48x high on ordinary content, so a caller
+        refused at 140,059 could not tell whether they were near the limit or
+        nowhere near it — and one of them was not. A figure counted with the
+        model's own vocabulary is a different claim from one inferred from
+        character widths, and a lower bound is a third; a caller deciding how
+        much to trim needs to know which of the three they were handed.
+
+        The field name `estimated` outlives its accuracy on purpose. It is on
+        the wire, documented on `/api-docs`, and read by clients; renaming it
+        to `counted` would break them to fix a word. This says what it is
+        instead.
+        """
         if estimated is not None and limit is not None:
             self.public_message = (
-                f"This input is an estimated {estimated:,} tokens against a limit of "
+                f"This input is {_count_phrase(basis, estimated)} against a limit of "
                 f"{limit:,}, counting tool definitions and every replayed turn. "
                 f"{CONTEXT_REMEDY}"
             )

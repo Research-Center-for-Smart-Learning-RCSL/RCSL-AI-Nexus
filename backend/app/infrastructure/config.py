@@ -267,10 +267,53 @@ class Settings(BaseSettings):
     does not support it. Graded values are not offered — `think: "low"` is
     accepted by Ollama and measurably changes nothing.
     """
+    ollama_models_path: str = "/ollama-models"
+    """Where this host's Ollama model store is mounted, read-only, or empty.
+
+    The platform reads two things out of the GGUF a reference resolves to — the
+    vocabulary and the chat template — and counts a prompt with them instead of
+    estimating it from character widths. See
+    `adapters/tokenizer/gguf_token_counter.py` for what that is worth and
+    `adapters/tokenizer/ollama_blobs.py` for how a `ref` becomes a file.
+
+    **The mount is read-only and the reads are bounded to the header.** A GGUF
+    is tens of gigabytes of tensors behind a few megabytes of metadata, and
+    nothing here ever seeks past the metadata: 11.9 MiB and 0.14 s for
+    `qwen3.6:35b-a3b-q8_0`, once per model per process.
+
+    Empty disables exact counting, and that is a supported deployment rather
+    than a broken one: a host serving MLX has no GGUF to read, and the
+    character estimate is what every request was counted by before 2026-08-17.
+    What the platform must never do is have no answer at all — the guardrail
+    this feeds runs before any hardware is committed.
+    """
+
+    token_counter_cache_size: int = 2
+    """How many vocabularies one process keeps built at once.
+
+    Measured on the Mac Studio: 132 MB resident for the 248320-entry vocabulary
+    of `qwen3.6:35b-a3b-q8_0`, and about 25 MB more for a second one. Two is
+    what this deployment actually needs — the gateway serves `chat` and `code`
+    from one model and falls back to another, and the admin entrances serve
+    `assist` from a third — and a third entry would hold memory against a
+    budget whose headroom is the constraint the whole deployment is designed
+    around. Eviction is least-recently-used and costs a rebuild of a quarter of
+    a second, not a wrong answer.
+    """
+
     max_context_length: int = 122880
-    """Ceiling on a request's input, in tokens, estimated from the text
-    (`RouteChatRequest._estimated_prompt_tokens`) before any hardware is
-    committed.
+    """Ceiling on a request's input, in tokens, counted with the vocabulary of
+    the model that will read it — or estimated from the text when no vocabulary
+    can be resolved (`RouteChatRequest._count_prompt`).
+
+    **Where in the request it is applied moved on 2026-08-17.** Counting
+    exactly needs the target, and the target is not known until the routing
+    reads inside the concurrency slot, so this ceiling is now judged there. What
+    runs before the slot is a lower bound that no tokeniser could contradict,
+    which turns away about a megabyte of prose and nothing smaller. The reason
+    is a client refused that day at 140059 estimated tokens whose payload was
+    about 99000 real ones: it was refused by the estimator, before any model had
+    been chosen, and the model that would have served it could read 131072.
 
     32768 → 65536 on 2026-08-05, for agent clients. An agent replays the whole
     conversation on every turn and grows it with file contents and tool output,

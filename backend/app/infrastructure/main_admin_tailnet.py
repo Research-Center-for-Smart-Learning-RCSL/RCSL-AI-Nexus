@@ -89,7 +89,9 @@ def create_app() -> FastAPI:
     # perimeter middleware — carries X-Request-Id. See request_context.py.
     app.add_middleware(RequestContextMiddleware)
 
-    install_error_handlers(app, envelope="admin", auth_mode=settings.auth_mode)
+    install_error_handlers(
+        app, envelope="admin", auth_mode=settings.auth_mode, surface="admin-tailnet"
+    )
     mount_admin_routers(app)
 
     # The one line that decides this application's trust model. Without it

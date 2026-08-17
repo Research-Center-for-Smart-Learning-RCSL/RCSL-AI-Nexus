@@ -224,6 +224,471 @@ remains the Phase 3 increment.
 
 ---
 
+## 2026-08-18
+
+### Adding a retention dataset broke the Retention screen, and the mirror is why
+
+`refusals` is bounded like everything else that accumulates — 30 days by
+default, 180 at most, 7 at least, swept by the same loop. What was not checked
+is what a fourth dataset does to the screen that configures them, and the answer
+is that it took the whole page down:
+
+```
+Could not load this
+[{ "code": "invalid_value",
+   "values": ["audit_log", "usage_records", "prompt_logs"],
+   "path": [3, "dataset"], "message": "Invalid input" }]
+```
+
+The frontend held a closed enum of three dataset names and its own copy of the
+bounds table, so an unrecognised fourth value failed the parse for **every**
+policy, not just its own — an administrator could no longer see or change any
+retention window because a table they had never heard of had appeared. And the
+schema's own docstring said the opposite in as many words: *"The screen renders
+whatever the server lists rather than a hardcoded set, so a fourth dataset
+appears here without a frontend change."* It could not, and nothing failed until
+somebody opened the page.
+
+**Fixed by removing the mirror rather than by adding a fourth entry to it.**
+`RetentionPolicyResponse` now carries `minimum_days` and `maximum_days`, the
+dataset is a plain string on the frontend, and the client keeps only the prose —
+a label and a sentence per dataset, because that is a decision about how to
+explain something rather than a fact about the schema. An unrecognised dataset
+renders with its table name and the server's bounds instead of taking the page
+down with it, which is what the docstring claimed all along and now describes.
+
+Pinned from both ends: a frontend test parses a dataset this build has never
+heard of, and a backend test asserts every member of `RetentionDataset` reaches
+the response with its bounds attached.
+
+### A page of other people's refusals did not say whose
+
+`refusal:read_all` reaches `admin`, `tenant_admin`, `operator` and `auditor` —
+the same four `usage:read_all` reaches, and the placement is the same
+judgement: both are metadata about requests rather than their content, and the
+roles that investigate load are the roles that investigate refusals. What that
+scope bought, until now, was a page of uuids.
+
+**The table stored `actor_id` and no name**, so the one question the wider
+scope exists to answer — whose 413s are these? — needed a lookup per row, and
+after an account was deleted it could not be answered at all. `audit_log`
+solved this on the first day by denormalising `actor_display` onto the row, for
+the same reason both tables carry no foreign keys: the row has to outlive what
+it names. This one had taken half that decision, keeping the foreign keys out
+and the name with them.
+
+The name is on the row now — and it is still not a name a person recognises,
+which is the second half of this. `actor_display` is the *credential's*
+display: a login for somebody on an admin entrance, but the key handle for a
+gateway caller, so a page of gateway refusals is a column of hex either way. The
+screen resolves the account id against the accounts the reader can already list
+(every role holding `refusal:read_all` also holds `user:read`), shows that name,
+and keeps both handles — the id under it, because that is what an investigation
+quotes, and whatever was recorded at the time on the hover, because an account
+may since have been renamed.
+
+The column appears **only when the reader may see more than their own** — their own name repeated down every row
+of their own list is a column that says nothing. Clicking it narrows to that
+account, which is the filter the port and the repository have supported since
+they were written and the screen never offered. Every role holding
+`refusal:read_all` also holds `user:read`, so nothing is disclosed that the
+reader could not already look up.
+
+**Its own migration rather than an edit to the one written the same morning.**
+`e7b41c9d0a26` is still uncommitted, which made amending it tempting, and it
+has already run against the deployment and three real rows. Amending an applied
+revision leaves the machine that ran it without the column while a fresh clone
+gets one — the divergence between what is written down and what is in force
+that this repository keeps finding the hard way. The three existing rows carry
+an empty name, which is what they honestly hold; the screen falls back to the
+account id rather than inventing one.
+
+### The Refusals table capped four columns that could each widen it off-screen
+
+The audit log has a comment explaining that a width on a `td` is advisory under
+the automatic table layout these tables use — the column is sized from its
+content first, so a cap there is ignored and one long value widens the whole
+table until it runs past the right edge, reachable only through the wrapper's
+horizontal scrollbar. This table had repeated the mistake in four places, and it
+holds the widest values on the platform: an unbounded `path`, a `composition`
+that grows with the conversation, figures whose set is open, and a message that
+is a paragraph.
+
+Every cap now constrains a block inside the cell. **Prose wraps and identifiers
+truncate**, which is the distinction worth keeping: `composition` names which of
+three remedies applies and is the one long value here worth reading in full, so
+it wraps with `break-words` for a pathological unbroken token; a path, a request
+id, a key handle and a figure are all quoted rather than read, so they truncate
+with the whole value on the hover.
+
+### A review of the two features found seven things, and all seven were real
+
+Run against the working tree after deployment. Worth recording as a set,
+because the shape repeats: **five of the seven are two things that were
+measured differently and then compared**, which is the same defect as the
+calibration table that described a retired model, one layer down.
+
+**The one that would have taken the platform down.** `gguf.py` indexed its
+scalar-size table for an array's element type *before* checking membership, so
+a corrupt or truncated blob raised `KeyError` rather than `GgufError`.
+`GgufTokenCounter._build` catches `GgufError` and `OSError`; nothing above
+catches anything. So a bad file on the mount would have become a `500` on every
+request routed to that model — and, because a build that raises caches nothing,
+the 11 MiB header would be re-read and re-raised on each one. The port's own
+docstring says a counter may decline to answer; this was the one path where it
+could not. Both branches now raise `GgufError`, and `_build` catches
+`Exception` as the backstop for a file this platform does not own.
+
+**Substituting parameter values into a path looked like it worked.** The stored
+`path` was built by replacing each path-parameter value in the URL, which is
+positional-blind: `GET /admin/users/admin` with `user_id="admin"` stored itself
+as `/{user_id}/users/admin`, and a key named `keys` turned
+`/admin/api-keys/keys` into `/admin/api-{key_id}/keys`. The values are the
+caller's, so any caller could provoke a row naming neither the route nor their
+request. Now the prefix comes from the request and the tail from the route
+template, by position.
+
+**Every gateway `429`, `403` and country block was still being dropped.** The
+`remember_actor` fix from the deployment entry below put the call at the
+`return` — after `assert_allowed`, the CIDR check, the rate limiter and the
+quota check, all four of which refuse a caller who is *already identified*, the
+key being in hand two lines above. So the fix stored the 413s and nothing else.
+A `429` that cannot be looked up is exactly the row `retry_after_seconds` was
+added for, since the header carrying it is gone by the time anybody reads back.
+Moved to the moment the credential is known, and pinned as an ordering over the
+source rather than as a case.
+
+**Three mixed bases, in three places.**
+
+- The pre-slot refusal quoted a bound computed at 8.0 ASCII characters per
+  token above a composition computed at 3.0 — a factor of 2.7 — on the one path
+  where the caller has no exact figure to reconcile the two against.
+- The composition was counted exactly whenever a counter existed, while the
+  total fell back to the estimate for a payload shape the chat template
+  refuses. `count_parts` needs no template and would have answered; asking the
+  two independently produced an estimated headline beside tokenised shares.
+- `_warn_if_tools_dominate` divided an estimated tool figure by an exact total.
+  For the 286-definition client of 2026-08-17 that reads **"tool definitions are
+  141% of this prompt"**. The share is now estimated on both sides with the
+  exact total reported beside it, and the full estimate — the pass this path was
+  written to avoid — is paid only once the cheap absolute floor has already been
+  crossed.
+
+**And `public_details` was not what it claimed to be.** Its docstring says one
+function builds both the response body and the stored row, "the only way to
+keep that claim true". The OpenAI envelope still called `_context_fields`, so a
+gateway refusal could be stored with a figure its response had not carried —
+and "a row is a copy of the answer you already had" is the whole of why this
+table is safe to show its own subject. Both envelopes now use it, which also
+puts `retry_after_seconds` and `capability`/`available` into gateway bodies
+that only had them in a header or a sentence.
+
+Verified after redeploying, on the deployment: a valid key still answers `200`
+(the identity path was restructured, which is the risk worth checking), a
+`rate_limit_rpm=1` key gets `429` with `retry_after_seconds: 60` in the body,
+and both of those refusals are now rows. 904 unit tests, 118 integration.
+
+### The Refusals screen copies as Markdown, and three older copy buttons got fixed on the way
+
+The screen exists so somebody can find the refusal they were given; what they
+do next is send it to whoever can act on it. Selecting the rendered row loses
+the composition's structure and takes the request id truncated to fit its
+column, so there is a copy button per row and one for the page.
+
+**Built from the rows rather than from the rendered DOM, unlike
+`lib/markdown-export.ts`.** That exporter exists for two pages of authored
+prose, where a parallel Markdown template would be a second copy of the same
+sentences and would drift from them. A refusal is not prose: it is data whose
+only authored sentence is the message, and the message is stored verbatim, so
+there is no second source of truth to drift from. What the DOM would add is
+presentation nobody wants in a paste. The figures are walked rather than named,
+for the same reason the schema declines to model them — a figure added next
+month appears in the paste without anyone editing that file.
+
+**The page copy says what it left out.** Three refusals out of fifty-seven,
+pasted with no note, read as the whole of what happened — and this screen
+narrows to your own by default. The header line carries the count, the scope
+and the filter.
+
+**There were three implementations of "copy, say Copied for two seconds" and
+they had drifted.** `code-block.tsx` held its timer in a ref, restarted it per
+copy and cleared it on unmount; `one-time-secret.tsx` did none of those and was
+the only one that surfaced failure — which it must, because a refused clipboard
+there is somebody ticking "I have saved these" holding nothing;
+`export-markdown.tsx` kept the ref and forgot the unmount. One
+`useCopyToClipboard` now owns all three behaviours, and the two that were
+missing the cleanup have it. What it deliberately does not own is what to *say*
+about a failure: a snippet still on screen needs no message and a one-time
+secret needs a loud one.
+
+### Deployed, and the deployment found a defect no test would have
+
+Both features are live on the Mac Studio. What follows is what was checked on
+the machine rather than in a test, and the one thing that was wrong.
+
+**A refusal was answered correctly and stored nowhere.** The first real `413`
+through the deployed gateway — the exact refusal this table was built for —
+came back perfect: `basis: tokenizer`, an exact 125,340 against 122,880, the
+composition, the request id. `refusals` held zero rows. `actor_from_request` is
+how the exception handler says *who* was refused after the frame that
+identified them is gone, and `request_actor.py` has said since it was written
+that each resolver leaves a copy there on its way past. **The API-key resolver
+never did.** Its only consumer until now was `_audit_refusal`, which returns
+early on the gateway because that application deliberately has no `audit` on
+its state (§12) — so the one resolver that forgot was the one whose forgetting
+nothing could observe. Every gateway refusal, which is to say every refusal
+from every API key, was being dropped.
+
+Fixed in `api_key_auth.py` and pinned by a rule rather than by a case: an `ast`
+test over `interfaces/http/middleware/` requires every public function
+returning `Actor` — which is exactly what a router may `Depends` on — to reach
+`remember_actor` through its own calls. Checked against the pre-fix source, it
+reports `authenticate_api_key` and `authenticate_api_key_without_quota`. A
+test that merely drove the four resolvers that exist would have passed on the
+day a fifth arrived.
+
+**The refusal that started all of this, reproduced and served.** 530,000
+characters of prose:
+
+| | |
+|---|---|
+| character estimate | 176,667 — **1.86x the truth**, refused by a 122,880 ceiling |
+| counted | 94,903 |
+| `prompt_eval_count` | 94,901 (**+2**) |
+| outcome | `200`, 195 s of prompt evaluation, `prompt_tokens=94901` recorded |
+
+Before 2026-08-18 that payload was turned away before a model had been chosen.
+The drift instrument stayed silent, which is its pass condition: +2 is inside
+the -16/+64 window.
+
+**Everything else, in the order it was checked.** Migration `e7b41c9d0a26` at
+head with `db_roles` and `provision` clean; `/readyz` true on all three apps;
+`/ollama-models` mounted and `touch` refused with *read-only file system*; the
+gateway's own account answering `permission denied for table refusals` on
+`SELECT` and `INSERT 0 1` on write, which is the §13.0 row that had been a
+claim about a migration run only against a throwaway database; the counter
+inside the gateway container agreeing with the runtime at +2 / +2 / +12 on
+Python source, a Chinese runbook and forty tool definitions, with `prepare` at
+0.35 s; a member asking for another account's refusals getting nothing and
+`scoped_to_self: true`; reading one's own writing no audit row; and three
+unauthenticated `401`s leaving the table empty, which is the "identified caller
+only" rule holding.
+
+**Two things this verification did not do, said here rather than implied.** It
+never forged a `Tailscale-User-Login` header — that is the §15.5 attack, and it
+is why the admin API was exercised through its use cases inside the container
+rather than over HTTP. And the gateway requests presented the proxy secret and
+`X-Forwarded-For` from inside the deployment rather than traversing the real
+openresty hop, so what is verified is the gateway's behaviour behind a proxy,
+not the proxy path itself — which remains the thing this repository has said
+since Phase 1 has not been walked.
+
+The verification key was issued through `ManageApiKeys` as a named
+administrator, `chat` only, one day, and revoked at the end; both events are in
+`audit_log` and the revoked key answers `401`. The one real refusal it provoked
+is left in the table rather than deleted: it is a true row, and the retention
+sweep is what removes it.
+
+### A caller can read their own refusals now, and an administrator anyone's
+
+*The two evenings this answers are the 2026-08-17 entries below.*
+
+**55 `DomainError` subclasses and the `500` fallback, all of them stored.** The
+choice was between every error and the subset a caller can act on, and the
+subset loses on its own argument: this exists for "the next error nobody has
+thought about", and a curated allowlist reproduces exactly that failure by
+omitting the unforeseen one. A refusal that nobody predicted is the one most
+worth having a row for.
+
+**What is stored is what left the process.** The code, the status, the public
+message and the caller-facing figures — built by the same function that builds
+the response body, so the two cannot disagree by construction. `detail` is not
+read there at all, the model's alias is withheld exactly as it is from the
+response, and no request content is kept. That is the whole reason the table is
+safe to show its own subject, which is what it is for.
+
+**The write point moved, and the item's own shape is why.** It was specified as
+a row written in the same `finally` that records usage, so one write point would
+serve all three entrances the way `prompt_logs` does. That works for the
+inference path and only for it: the `409` that cost an operator an evening was
+an API key's expiry on the admin surface, which never reaches
+`RouteChatRequest`. Storing every `DomainError` forces the write into the one
+place all of them already pass through — the shared exception handler — and that
+is where it is.
+
+**Two figures were still missing and are now on the wire.** `ApiKeyLifetimeError`
+carried `maximum_days` in its sentence and in no field; `CapabilityNotIssuedError`
+carried `capability` and `available` the same way. Both are things the caller
+already holds, both are now `details` on the response as well as prose, and both
+are therefore in the store. That 409 is the one this feature was measured
+against: the operator saw a save fail with no subject immediately after editing
+a capability list, and read it as the capability edit being rejected.
+
+**Only refusals with an identified caller are kept**, which is a deliberate
+narrowing of "every `DomainError`". An anonymous refusal has no reader — the
+feature is that a caller can read their own — and it would be a row written at
+whatever rate an unauthenticated client chose to provoke one. The identity-plane
+refusals that matter are already in `audit_log` by §12: a failed sign-in, an
+authorization denial, a recovery code replayed. That table is for events about
+who somebody is; this one is for events about what they sent.
+
+**Reading your own is in the base scopes, and that is the decision the feature
+turns on.** `refusal:read_own` reaches every human role, beside
+`usage:read_own`. Being unable to look up why you were refused is precisely the
+condition that cost two people an evening, so putting the answer behind an
+administrator would have left them where they were. `refusal:read_all` is
+granted like `usage:read_all` — to `tenant_admin`, `operator` and `auditor` —
+and is deliberately **not** admin-only beside `prompt_log:read`: that one reads
+what somebody typed, this one reads only what the platform told them.
+
+**A reader without the wider scope is narrowed rather than refused**, and the
+response says so. Clearing a filter on a screen every account is expected to
+open must not answer 403, so the actor filter is overwritten with the reader's
+own id and the page carries `scoped_to_self`; the screen prints a line saying
+what it is showing. A page that quietly returns a subset of what its controls
+imply is the shape somebody mistakes for "there is nothing there".
+
+**Reading across accounts is audited; reading your own is not.**
+`refusal.read_any` fires once per request that reaches for somebody else's,
+naming whose. The judgement is `prompt_log.list`'s: an event that fires on every
+screen refresh describes no disclosure and is noise. What is worth recording is
+a reader reaching across accounts, because a month of somebody's 413s describes
+how they work even though it contains nothing they typed.
+
+**Retention carries a ceiling as well as a floor** — 30 days by default, 180 at
+most, 7 at least — where the two metadata datasets carry a floor alone. The
+ceiling for the reason above, one notch weaker than `prompt_logs`' because no
+content is involved. The floor because the reader is the person who was refused,
+and a Friday refusal has to survive until Monday; `prompt_logs` has a floor of a
+day because its reader is somebody who opened a window that afternoon.
+
+**The gateway writes this table and cannot read it.** `GATEWAY_WRITABLE_TABLES`
+gains `refusals` and `GATEWAY_DENIED_READ_TABLES` revokes its `SELECT`. The
+argument is weaker than the one for `prompt_logs` and still holds: no request
+content is involved, so a gateway reading this would not be reading anybody's
+ideas — it would be reading every tenant's refusal history from the one process
+exposed to the internet. It writes a row and has no use for any row.
+
+**The stored path is the route as declared, not the URL as sent** —
+`/admin/api-keys/{key_id}`, not the id. A thousand refusals on one endpoint
+group together instead of scattering, which is what makes "this endpoint has
+been refusing all afternoon" visible, and a path parameter is a value the caller
+chose. It is rebuilt by putting the parameter names back into the path rather
+than read off the matched route, because `scope["route"].path` is the *inner*
+route's spelling under a prefix — `/api-keys` for a request to
+`/admin/api-keys`, which stored as-is would name the wrong endpoint. Found by
+the integration test asserting the value, not by reading the framework.
+
+Verified end to end against a throwaway Postgres: the expiry refusal above
+lands in the table with `maximum_days: 365`, comes back through
+`GET /admin/refusals` with the request id the caller was given, and its
+operator-facing `detail` — which names the date they typed — is not in it. The
+migration applies and reverses cleanly. 894 unit tests, 118 integration, ruff,
+format, mypy strict; frontend 274 tests, types, lint, a real `next build`.
+
+### Prompts are counted with the model's own vocabulary now, and it is exact
+
+*Built through the night after the 2026-08-17 entries below, and the refusals
+they record are what it answers.*
+
+The estimator is gone from the decision. A request is tokenised with the
+vocabulary and the chat template read out of the GGUF that its `ref` resolves
+to, and measured against the live runtime the count is exact:
+
+| payload                          | counted | `prompt_eval_count` | estimate | estimate/actual |
+|----------------------------------|---------|---------------------|----------|-----------------|
+| Python source, one turn          | 5,026   | 5,024               | 6,676    | 1.33            |
+| Chinese runbook                  | 8,756   | 8,754               | 10,666   | 1.22            |
+| uuid list                        | 17,528  | 17,526              | 6,660    | **0.38**        |
+| English prose and 40 tool schemas| 5,829   | 5,817               | 7,238    | 1.24            |
+
+Through `/api/generate` with `raw: true`, which applies no template, the counts
+are equal on all six content types of the table below, on `qwen2.5:7b` and
+`qwen3.6:35b-a3b-q8_0` alike — six for six, exactly. What the rows above show is
+the residual once the chat template is involved: **+2 tokens without tools and
++12 with them, constant**, 12 definitions and 60 costing the same +12. Two of
+those are a `<think>` opener the template emits and Ollama does not; the rest is
+a slightly shorter tool preamble in Ollama's own renderer. At the 122,880
+ceiling that is one part in ten thousand, in the direction that over-counts.
+
+**The uuid row is the one that could not be fixed any other way.** The estimator
+reads that payload as 6,660 tokens and the model charges 17,526 — a 2.8x
+under-count, which is the direction that ends in a prompt Ollama truncates in
+silence. No retuned constant reaches it without deepening it, which is what the
+calibration tables in `route_chat_request.py` have said since 2026-08-14 and
+why they are kept.
+
+**The hard part was never the counting.** `tokenizers` encodes 300 KB in 50 ms.
+The hard part is binding a vocabulary to the model that will actually serve the
+request, and the answer is that the vocabulary is read out of the weights file
+itself: `ref` → manifest → the `application/vnd.ollama.image.model` layer → the
+GGUF's metadata header, which carries `tokenizer.ggml.tokens`,
+`tokenizer.ggml.merges` and `tokenizer.chat_template`. Ollama will hand the same
+arrays out over `/api/show` and that was the shorter road; it was not taken
+because the two fail differently. **A manifest lookup that resolves to the wrong
+blob fails to open a file. An HTTP call that resolves to the wrong model returns
+a plausible vocabulary and a silently wrong count** — which is the same shape as
+the calibration table that described a retired model and the throughput figure
+that did, both of which were invisible precisely because the wrong answer looked
+like an answer.
+
+**One thing is not read out of the file, and it is stated rather than hidden.**
+GGUF carries the *name* of a pre-tokenizer scheme (`qwen2`, `qwen35`) and not
+its regular expression, which lives in the runtime's source. The pattern this
+platform uses is the one both schemes need, and the evidence for it is the
+six-for-six agreement above — a wrong split still round-trips, so equality with
+the runtime is the only check that means anything. A model declaring a third
+scheme is refused by an allowlist and counted by the estimate instead, because
+a vocabulary that splits text the wrong way produces a confident figure nothing
+here would notice was wrong.
+
+**The ordering changed, and that is the part that fixes the refused request.**
+Counting exactly needs the target; the target needs routing reads; those reads
+may not happen before the concurrency slot is taken. So the ceiling is now
+judged *inside* the slot, and what runs before it is a lower bound — twice the
+most efficient density ever measured, so it refuses only payloads no tokeniser
+could rescue, which at the 4 MiB body limit means about a megabyte of prose and
+nothing smaller. The client refused that evening at 140,059 estimated was
+turned away by the old pre-slot check, before any model had been chosen; the
+same payload now reaches the count that says 99,000 and is served.
+
+**What a caller is told changed with it.** `ContextTooLongError` carries a
+fourth field, `basis`, which is `tokenizer`, `estimate` or `lower_bound`, and
+the message says "is 99,000 tokens" rather than "an estimated 99,000 tokens"
+when it is a count. A caller deciding how much to trim needs to know whether
+they are holding a figure the model would have charged, one that has run 1.48x
+high, or a bound. The `estimated` field keeps its name — it is on the wire and
+documented — and `basis` says what it is instead.
+
+**Measured costs, all on the Mac Studio.** Reading the 11.9 MiB metadata header
+takes 0.14 s and building the tokeniser 0.13 s, once per model per process, and
+the load path pays it so the first caller does not. The tokeniser then holds
+132 MB for a 248,320-entry vocabulary and about 25 MB more for a second; two are
+cached per process. Encoding is 2.7 ms for 20 KB and 50 ms for 300 KB, every
+one of them on a worker thread — 50 ms on the event loop is 50 ms of every other
+stream on that process stopping.
+
+**The estimator stays, and not as a courtesy.** MLX serves models this host
+holds no GGUF for, a model registered five minutes ago is not pulled yet, and a
+deployment may mount no model store at all. "No counter, no ceiling" is not an
+available state for the one check that runs before hardware is committed, so
+every one of those falls back to character widths and says so in a log line
+naming the reference. What is no longer available is falling back silently.
+
+**`_log_estimate_drift` is now the instrument that proves all of this**, and it
+is the only one that can: an exact count is exact against the vocabulary it was
+built from, and a vocabulary bound to the wrong model would be wrong in a way no
+test in this repository could catch, because the ground truth lives in the
+runtime. It compares the counted figure against `prompt_eval_count` on every
+request that completes, and judges an exact count in tokens (-16 to +64, the
+measured residual with room) rather than in the ratios an estimate is judged by.
+
+The mount is read-only. Ollama owns that directory, only the metadata header is
+ever read, and a container that could write it could replace the weights the
+host serves.
+
+---
+
 ## 2026-08-17
 
 ### Every refusal this platform can produce, sorted by what it tells the caller

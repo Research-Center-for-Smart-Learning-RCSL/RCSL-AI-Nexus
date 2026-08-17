@@ -22,7 +22,9 @@ from app.infrastructure.di import (
     build_authorization,
     build_cache,
     build_concurrency_limiter,
+    build_refusal_writer,
     build_runtimes,
+    build_token_counter,
 )
 from app.infrastructure.logging_config import configure_logging
 from app.interfaces.http.errors import install_error_handlers
@@ -41,10 +43,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # so a test can build an app with different wiring without it leaking.
     app.state.runtimes = build_runtimes(settings)
     app.state.concurrency = build_concurrency_limiter(settings)
+    app.state.token_counter = build_token_counter(settings)
     # After the limiter, whose saturation it reports at scrape time.
     app.state.metrics = build_metrics(app.state.concurrency)
     app.state.api_key_service = build_api_key_service(settings)
     app.state.authz = build_authorization()
+    # The gateway writes refusals and cannot read them: its database account
+    # holds INSERT here and has SELECT revoked (`db_roles.py`). This is the one
+    # audit-shaped table it may append to, and unlike `audit_log` that is safe
+    # precisely because a row here is a copy of what it already told the caller.
+    app.state.refusals = build_refusal_writer()
     app.state.cache = build_cache(settings)
     # Built at startup so a missing GeoLite2 database in production stops the
     # service here rather than silently disabling a documented control.
@@ -73,7 +81,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    install_error_handlers(app, envelope="openai")
+    install_error_handlers(app, envelope="openai", surface="gateway")
     # Innermost, and the only stack-level check the gateway has. Everything
     # else here — key authentication, the capability check, the geo filter it
     # applies inline — is a route dependency, and FastAPI reads and parses the

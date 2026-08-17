@@ -158,7 +158,7 @@ def _sampling_options(sampling: SamplingOptions | None) -> dict[str, Any]:
     return options
 
 
-def _tool_payload(tools: Sequence[ToolDefinition]) -> list[dict[str, Any]]:
+def tool_payload(tools: Sequence[ToolDefinition]) -> list[dict[str, Any]]:
     return [
         {
             "type": "function",
@@ -201,7 +201,16 @@ def _arguments_for_upstream(arguments: str) -> Any:
         ) from exc
 
 
-def _message_payload(message: Message) -> dict[str, Any]:
+def message_payload(message: Message) -> dict[str, Any]:
+    """One message in Ollama's spelling.
+
+    Public, unlike its MLX counterpart, because a second reader arrived that
+    has to agree with it exactly: `adapters/tokenizer/gguf_token_counter.py`
+    renders this payload through the model's chat template to count what the
+    prompt will cost. A private copy there would be a second spelling of the
+    wire shape, and the first time the two disagreed the guardrail would be
+    judging a payload the runtime never receives.
+    """
     payload: dict[str, Any] = {"role": message.role.value, "content": message.content}
     if message.tool_calls:
         # `id` goes back too. This adapter minted it, the tool message's
@@ -341,7 +350,7 @@ class OllamaAdapter:
 
         payload: dict[str, Any] = {
             "model": ref,
-            "messages": [_message_payload(m) for m in messages],
+            "messages": [message_payload(m) for m in messages],
             "stream": True,
         }
         if options:
@@ -352,7 +361,7 @@ class OllamaAdapter:
         # prose where every piece of documentation promises a 400.
         send_tools = should_send_tools(tool_choice, "ollama")
         if tools and send_tools:
-            payload["tools"] = _tool_payload(tools)
+            payload["tools"] = tool_payload(tools)
         # Sent on generation as well as on load. Ollama applies its own default
         # to any request that omits it, so a generate without this silently
         # overwrites whatever `load` asked for — which is how a 10-minute

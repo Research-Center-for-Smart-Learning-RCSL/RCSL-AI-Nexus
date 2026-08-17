@@ -23,6 +23,7 @@ from app.domain.entities.model import Model, ModelState
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.prompt_log import PromptLogEntry, PromptLogSummary
 from app.domain.entities.prompt_template import PromptTemplate
+from app.domain.entities.refusal import Refusal
 from app.domain.entities.retention import RetentionDataset, RetentionPolicy
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.tenant import Tenant
@@ -307,6 +308,63 @@ class PromptLogRepositoryPort(Protocol):
         actor_id: str | None,
         api_key_id: str | None,
         capability: str | None,
+        request_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> int: ...
+
+
+class RefusalWriterPort(Protocol):
+    """Append a refusal.
+
+    Split from the read port for the same reason `PromptLogWriterPort` is, and
+    the reason binds harder here: this write happens *while the request is
+    failing*. Every row in this table is written from an exception handler, so
+    a writer staged on the request's own session would be rolled back by the
+    very exception it exists to record — the failure mode that cost a day of
+    transcripts on 2026-08-08, reproduced on a table where it would be the only
+    outcome rather than an occasional one.
+
+    Best-effort by contract. A refusal that cannot be stored must still be
+    returned to the caller as the refusal it is, so implementations swallow and
+    log their own failures rather than raising into a handler that is already
+    rendering an error.
+    """
+
+    async def record(self, refusal: Refusal) -> None: ...
+
+
+class RefusalRepositoryPort(Protocol):
+    """Read refusals. See `RefusalWriterPort` for why the write is not here."""
+
+    async def list_refusals(
+        self,
+        *,
+        actor_id: str | None,
+        api_key_id: str | None,
+        code: str | None,
+        request_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> list[Refusal]:
+        """A page, newest first.
+
+        No summary type, unlike `prompt_logs`. There the list and the row are
+        two reads because the row is a conversation; here the row *is* the
+        summary — a code, a status, a message the caller already read and the
+        figures that came with it — so a second request to open one would
+        disclose nothing the page had not.
+        """
+        ...
+
+    async def count_refusals(
+        self,
+        *,
+        actor_id: str | None,
+        api_key_id: str | None,
+        code: str | None,
         request_id: str | None,
         since: datetime | None,
         until: datetime | None,

@@ -136,6 +136,7 @@ describe('the links a role can see', () => {
       'Usage',
       'Logs',
       'Transcripts',
+      'Refusals',
       'Users',
       'Tenants',
       'Retention',
@@ -162,6 +163,7 @@ describe('the links a role can see', () => {
       'Connect an agent',
       'Prompt templates',
       'Usage',
+      'Refusals',
     ]);
   });
 
@@ -194,6 +196,7 @@ describe('the links a role can see', () => {
       'Prompt templates',
       'Knowledge',
       'Usage',
+      'Refusals',
     ]);
   });
 
@@ -212,7 +215,7 @@ describe('the links a role can see', () => {
     // since 2026-08-17: Model evaluation, which is gated on `model:read` and
     // therefore reaches this role — an auditor reading the evidence behind a
     // routing decision is the role working as intended.
-    expect(sidebarLinks()).toHaveLength(15);
+    expect(sidebarLinks()).toHaveLength(16);
     expect(sidebarLinks()).toContain('Model evaluation');
     expect(sidebarLinks()).not.toContain('Retention');
   });

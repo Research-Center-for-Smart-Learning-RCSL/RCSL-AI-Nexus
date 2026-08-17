@@ -80,6 +80,16 @@ class AuditAction(StrEnum):
     NODE_UPDATED = "node.updated"
     NODE_REMOVED = "node.removed"
 
+    REFUSAL_READ_ANY = "refusal.read_any"
+    """Somebody read refusals that were not their own.
+
+    Only that case. Reading your own is the feature working as intended and an
+    audit row per screen refresh would be noise — the same judgement
+    `prompt_log.list` was given. What is recorded is a reader reaching across
+    accounts, because a month of somebody's 413s describes how they work even
+    though it contains nothing they typed.
+    """
+
     PROMPT_LOG_READ = "prompt_log.read"
     """Reading one transcript. Listing is deliberately not audited: the list
     carries no message content, and an event there would fire on every page

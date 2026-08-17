@@ -34,6 +34,7 @@ import {
   Building2Icon,
   RouteIcon,
   ScrollTextIcon,
+  ShieldAlertIcon,
   Trash2Icon,
   ServerIcon,
   SparklesIcon,
@@ -266,6 +267,17 @@ const NAV_GROUPS: NavGroup[] = [
         // exists to prevent — the link would appear for three roles the server
         // refuses.
         requires: 'prompt_log:read',
+      },
+      {
+        href: '/refusals',
+        label: 'Refusals',
+        icon: <ShieldAlertIcon className="size-4" />,
+        // The one entry in this group every human role sees. Reading your own
+        // refusals is in the base scopes, because being told why you were
+        // refused is not an administrative privilege — that condition is what
+        // cost two people an evening each on 2026-08-17. The screen itself says
+        // when it is showing you only your own.
+        requires: 'refusal:read_own',
       },
     ],
   },

@@ -824,31 +824,41 @@ data: [DONE]`}
                   <br />
                   Unlike every other error here, this one carries its own
                   arithmetic: <code>estimated</code> and <code>limit</code> as
-                  numbers, and <code>composition</code>, which splits your
-                  estimate across messages, prior tool calls and tool
-                  definitions and names the largest single message&apos;s share.
-                  The three have different remedies — a conversation that grew
-                  is fixed by starting a new one, one enormous message by not
-                  reading that file in, and tool definitions that dominate by
+                  numbers, <code>composition</code>, which splits the figure
+                  across messages, prior tool calls and tool definitions and
+                  names the largest single message&apos;s share, and{' '}
+                  <code>basis</code>, which says how the figure was arrived at.
+                  The three shares have different remedies — a conversation that
+                  grew is fixed by starting a new one, one enormous message by
+                  not reading that file in, and tool definitions that dominate by
                   trimming the client&apos;s tool list, which starting a new
                   conversation does nothing about. The same figures are repeated
                   in <code>message</code> for clients that print only that.
                   <br />
-                  Tokens are estimated from the text, weighting characters
-                  outside ASCII far more heavily, because they cost far more:
-                  measured against the model now serving this deployment,
-                  English prose runs about 4.4 characters per token and
-                  Traditional Chinese about 1.5. A conversation in Chinese
-                  therefore reaches the ceiling in roughly a third of the
-                  characters an English one does. Until 2026-08-14 a flat
-                  four-per-token rule applied to both, which admitted CJK
-                  conversations well past the stated limit.
+                  <code>basis</code> is one of three values and they are not
+                  interchangeable. <code>tokenizer</code> means the prompt was
+                  counted with the vocabulary and chat template of the model that
+                  would have read it, including the framing the runtime wraps
+                  each turn in; it is the figure that model would have charged,
+                  and you can budget against it directly.{' '}
+                  <code>estimate</code> means no vocabulary was available for
+                  that model and the figure was inferred from character widths,
+                  which runs 20% to 50% above the real count on prose, source and
+                  tool schemas and can run well below it on dense identifiers
+                  such as uuids or base64 — so treat it as an upper bound on
+                  ordinary content and nothing at all on the rest.{' '}
+                  <code>lower_bound</code> means the request was turned away
+                  before a model had been chosen, on a bound no tokenizer could
+                  bring under the ceiling; the true figure is above the number
+                  shown, and a payload that provokes this one is around a
+                  megabyte of text.
                   <br />
-                  The estimate is deliberately careful and is not the figure the
-                  model charges: measured across prose, source and CJK it runs
-                  20% to 50% above the real count, so a refusal can name a number
-                  larger than what your input would actually have cost. Budget
-                  against the estimate rather than against a tokenizer.
+                  Before 2026-08-17 every refusal here was an{' '}
+                  <code>estimate</code>, and one of them was wrong by enough to
+                  matter: a client was refused at 140,059 estimated tokens on a
+                  payload of about 99,000 real ones, which the model serving it
+                  could have read. That is why the field exists rather than
+                  being left to be inferred.
                 </td>
               </tr>
               <tr>
