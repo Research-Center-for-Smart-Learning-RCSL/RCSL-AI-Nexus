@@ -14,11 +14,14 @@ run's shape, which is what makes the verdicts meaningful.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
 from app.domain.entities.evaluation import (
+    DISCRIMINATION_THRESHOLD,
     EvaluationSample,
     TaskVerdict,
     aggregate,
@@ -207,3 +210,29 @@ def test_the_run_carries_its_caveats_rather_than_the_page_asserting_them() -> No
     assert report.run.caveats == ("eleven of eighteen tasks carry no signal",)
     assert report.run.note == "a note"
     assert report.run.sample_count == 1
+
+
+def test_the_threshold_matches_the_harness_script_it_was_copied_from() -> None:
+    """The duplication in `DISCRIMINATION_THRESHOLD` is guarded, not trusted.
+
+    That constant's docstring said this file "pins the two together" from the
+    day it was written, and until 2026-08-17 nothing here did: every case above
+    is synthetic and none of them had ever read `analyse.py`. A comment
+    claiming coverage that does not exist is worse than no comment, because it
+    is read as a reason not to look.
+
+    A text check rather than an import, because the script is a developer tool
+    outside the application package and has no importable constant -- the value
+    is a literal in the comparison. Rewording that comparison fails this test,
+    which is correct: it means somebody changed the definition of what it is
+    for a task to separate two models, and the platform's copy has to move with
+    it or stop agreeing with the report it was derived from.
+    """
+    analyse = Path(__file__).resolve().parents[3] / "scripts" / "model-eval" / "analyse.py"
+    if not analyse.is_file():  # pragma: no cover - the harness travels with the repo
+        pytest.skip("scripts/model-eval/analyse.py is not present")
+
+    match = re.search(r"\(max\(got\) - min\(got\)\) >= ([0-9.]+)", analyse.read_text())
+
+    assert match, "analyse.py no longer compares the spread the way this module does"
+    assert float(match.group(1)) == DISCRIMINATION_THRESHOLD
