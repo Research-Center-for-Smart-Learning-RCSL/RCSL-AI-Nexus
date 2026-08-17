@@ -1,0 +1,126 @@
+"""Reading the harness's JSONL, and the phase rule that decides the numbers.
+
+This file exists because the first import of the 2026-08-15 run produced
+`qwen3.6:27b` at 81.9% against its published 87.5%, and the table looked
+entirely plausible. The cause was not arithmetic: the harness writes every
+phase into one file, three prompts were rewritten and re-run under a `repair`
+phase after they were found to be measuring the repository's own formatting,
+and taking `full` alone puts the superseded zero back into the mean.
+
+So the rule is tested rather than trusted. A wrong answer here is not an error
+anybody sees — it is a screen of confident percentages that disagree with the
+record by five points.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+
+import pytest
+
+from app.domain.entities.evaluation import aggregate
+from app.infrastructure.import_evaluation import parse_samples
+
+RAN_AT_ARGS = {
+    "run_id": "r1",
+    "label": "l",
+    "phase": "full",
+    "harness_ref": "h",
+}
+
+
+def line(
+    *,
+    model: str,
+    task: str,
+    phase: str,
+    score: float | None = 1.0,
+    round_index: int = 0,
+) -> str:
+    return json.dumps(
+        {
+            "model": model,
+            "task": task,
+            "group": "A",
+            "phase": phase,
+            "round": round_index,
+            "score": score,
+            "gen_tok_s": 10.0,
+            "prompt_eval_count": 100,
+            "wall_s": 5.0,
+        }
+    )
+
+
+def test_a_later_phase_supersedes_an_earlier_one_task_by_task() -> None:
+    """The 2026-08-15 shape: one task re-run, the rest of the phase kept."""
+    lines = [
+        line(model="m1", task="kept", phase="full", score=1.0),
+        line(model="m1", task="repaired", phase="full", score=0.0),
+        line(model="m1", task="repaired", phase="repair", score=0.8),
+    ]
+
+    samples = parse_samples(lines, phases=["full", "repair"])
+
+    scores = {(s.task, s.round_index): s.score for s in samples}
+    assert scores[("kept", 0)] == 1.0
+    # The zero is gone rather than averaged with the re-run.
+    assert scores[("repaired", 0)] == 0.8
+    assert len(samples) == 2
+
+
+def test_the_order_of_the_arguments_decides_which_phase_wins() -> None:
+    lines = [
+        line(model="m1", task="t", phase="full", score=0.0),
+        line(model="m1", task="t", phase="repair", score=1.0),
+    ]
+
+    assert parse_samples(lines, phases=["full", "repair"])[0].score == 1.0
+    assert parse_samples(lines, phases=["repair", "full"])[0].score == 0.0
+
+
+def test_a_phase_that_is_not_named_contributes_nothing() -> None:
+    """`pilot` calibrates the task set against one model and would drag a
+    comparison read towards it."""
+    lines = [
+        line(model="m1", task="t", phase="full", score=1.0),
+        line(model="m1", task="t2", phase="pilot", score=0.0),
+    ]
+
+    samples = parse_samples(lines, phases=["full"])
+
+    assert [s.task for s in samples] == ["t"]
+
+
+def test_naming_no_phase_takes_the_file_whole() -> None:
+    lines = [
+        line(model="m1", task="t", phase="full"),
+        line(model="m1", task="t2", phase="pilot"),
+    ]
+
+    assert len(parse_samples(lines)) == 2
+
+
+def test_a_partial_last_line_costs_only_itself() -> None:
+    """The file is appended to across rounds, so a run interrupted mid-write
+    leaves one unparseable line above two hundred good ones."""
+    lines = [line(model="m1", task="t", phase="full"), '{"model": "m1", "ta']
+
+    assert len(parse_samples(lines, phases=["full"])) == 1
+
+
+def test_a_line_that_parses_but_names_nothing_stops_the_import() -> None:
+    """Distinct from the case above: this is a shape the importer does not
+    understand, and guessing at it would store something nobody measured."""
+    with pytest.raises(ValueError, match="no model or task"):
+        parse_samples(['{"phase": "full", "score": 1.0}'])
+
+
+def test_a_null_score_survives_as_a_null_rather_than_a_zero() -> None:
+    samples = parse_samples([line(model="m1", task="t", phase="full", score=None)])
+
+    assert samples[0].score is None
+    report = aggregate(samples, ran_at=datetime(2026, 8, 15, tzinfo=UTC), caveats=(), **RAN_AT_ARGS)
+    assert report.models[0].no_result_samples == 1
+    assert report.models[0].score is None
