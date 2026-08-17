@@ -189,9 +189,11 @@ export interface paths {
          * Import Evaluation
          * @description Load a run from its samples, replacing any run with the same label.
          *
-         *     The aggregation happens here rather than in the caller, through the same
-         *     domain function the importer uses, so the screen's numbers are the
-         *     platform's arithmetic over what was measured rather than a client's.
+         *     This maps the body and nothing else. The aggregation used to happen here,
+         *     which put a caller-sized calculation *in front of* the use case's scope
+         *     check -- so an account holding no evaluation scope at all could still spend
+         *     the process's CPU on a request it was always going to be refused. The
+         *     samples now travel in and the use case reduces them after refusing.
          */
         post: operations["import_evaluation_admin_evaluations_post"];
         delete?: never;
