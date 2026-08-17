@@ -54,6 +54,12 @@ import type { components } from '@/lib/generated/admin-api';
 
 import type { ApiKey, IssuedApiKey } from '@/features/api-keys/schema';
 import type { DashboardSummary } from '@/features/dashboard/schema';
+import type {
+  EvaluationModelScore,
+  EvaluationReport,
+  EvaluationRun,
+  EvaluationTaskScore,
+} from '@/features/evaluations/schema';
 import type { GatewayInfo } from '@/features/gateway/schema';
 import type { HostStatus } from '@/features/host/schema';
 import type {
@@ -175,3 +181,16 @@ const _search: Agrees<SearchResponse, Api['KnowledgeSearchResponse']> = true;
 const _retention: Agrees<RetentionPolicy, Api['RetentionPolicyResponse']> = true;
 const _retentionPreview: Agrees<RetentionPreview, Api['RetentionPreviewResponse']> = true;
 const _purge: Agrees<PurgeOutcome, Api['PurgeOutcomeResponse']> = true;
+
+// --- capability evaluations ----------------------------------------------
+const _evaluationRun: Agrees<EvaluationRun, Api['EvaluationRunResponse']> = true;
+const _evaluationModel: Agrees<
+  EvaluationModelScore,
+  Api['EvaluationModelScoreResponse']
+> = true;
+const _evaluationTask: Agrees<EvaluationTaskScore, Api['EvaluationTaskScoreResponse']> = true;
+// The envelope as well as its members, for the reason the knowledge search is
+// checked that way: `verdicts` is computed by the backend over the whole field
+// of models, and a rename of it would leave every member type correct while
+// the screen lost the column the ranking is qualified by.
+const _evaluationReport: Agrees<EvaluationReport, Api['EvaluationReportResponse']> = true;

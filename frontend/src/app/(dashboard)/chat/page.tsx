@@ -38,6 +38,18 @@ export default function ChatPage() {
           so by default a reply comes from the model alone. Prompt templates
           are not applied here — they are selected by callers using the API.
         </p>
+        <p className="mt-2 max-w-prose text-sm text-muted-foreground">
+          <strong>
+            A model will answer a question its material cannot answer.
+          </strong>{' '}
+          Measured here on 2026-08-15: given figures that did not determine the
+          result, every model tested produced a confident number instead of
+          reporting that the data was insufficient — nine attempts out of nine,
+          with the arithmetic laid out. This is a property of the models rather
+          than of this platform, it is not fixed by choosing a different
+          capability, and retrieval does not prevent it. Where an answer matters,
+          check it against the source rather than against how certain it sounds.
+        </p>
       </div>
       <div className="min-h-0 flex-1">
         <ChatPanel />

@@ -34,6 +34,7 @@ from app.adapters.persistence.model_state import ModelStateCommitter
 from app.adapters.persistence.repositories import (
     PostgresApiKeyRepository,
     PostgresAuditLogRepository,
+    PostgresEvaluationRepository,
     PostgresInvitationRepository,
     PostgresKnowledgeRepository,
     PostgresModelRepository,
@@ -66,6 +67,7 @@ from app.application.use_cases.ingest_document import IngestDocument
 from app.application.use_cases.issue_invitation import IssueInvitation
 from app.application.use_cases.list_capabilities import ListCapabilities
 from app.application.use_cases.manage_api_keys import ManageApiKeys
+from app.application.use_cases.manage_evaluations import ManageEvaluations
 from app.application.use_cases.manage_knowledge import ManageKnowledge
 from app.application.use_cases.manage_models import ManageModels
 from app.application.use_cases.manage_nodes import ManageNodes
@@ -891,6 +893,21 @@ def build_manage_retention(request: Request, session: SessionDep) -> ManageReten
         authz=request.app.state.authz,
         audit=get_audit(request),
         clock=SystemClock(),
+    )
+
+
+def build_manage_evaluations(request: Request, session: SessionDep) -> ManageEvaluations:
+    """No `TenantIdDep`, like `build_manage_retention` above and unlike most of
+    this file.
+
+    An evaluation describes the fleet rather than a tenant's content -- the same
+    reasoning that keeps models and nodes unscoped. Scoping it would mean every
+    tenant importing the same measurement of the same hardware.
+    """
+    return ManageEvaluations(
+        evaluations=PostgresEvaluationRepository(session),
+        authz=request.app.state.authz,
+        audit=get_audit(request),
     )
 
 

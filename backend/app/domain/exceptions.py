@@ -322,6 +322,14 @@ class PromptLogNotFoundError(DomainError):
     # it is absent.
 
 
+class EvaluationRunNotFoundError(DomainError):
+    code = "evaluation_run_not_found"
+    public_message = "That evaluation run does not exist."
+    # Reached by a bookmark to a run that has since been deleted, and by a
+    # re-import that replaced a label with a fresh id. Both are absences rather
+    # than refusals, so neither says anything about what else is stored.
+
+
 class RetentionWindowTooLongError(DomainError):
     code = "retention_window_too_long"
     public_message = "This record type may not be kept for that long."
