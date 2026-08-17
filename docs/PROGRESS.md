@@ -298,9 +298,23 @@ into the mean, reproducing the exact defect the re-run existed to remove.
 
 `--phase` is therefore repeatable and ordered, a later phase superseding an
 earlier one task by task, and `test_import_evaluation.py` pins the rule. **The
-stored run now reproduces the record exactly**: 94.4 / 89.8 / 87.5, sample
-counts 54 / 52 / 53, and the two truncations carried as no-result rather than
-as zero.
+stored run now reproduces the record exactly**: 94.4 / 89.8 / 87.5, over 54 /
+52 / 53 scored samples — three of the 162 returned no result and are carried as
+such rather than as zeros. (This sentence said "the two truncations" in its
+first version. Two of the three are the `spec_contradiction` truncations the
+2026-08-15 entry records; the third is `qwen3.6:27b` on the same task, which
+that entry does not mention and the sample counts in the same sentence imply.)
+
+**A second figure in that entry is a `full`-only reading and the screen
+disagrees with it.** It says eleven of eighteen tasks carry no signal and that
+the spread rests on four. Those are `analyse.py full`; the stored run is `full`
+with `repair` superseding it, and `verdicts()` over the corrected scores gives
+**twelve saturated high, one saturated low — thirteen carrying no signal — and
+three that separate the candidates**, with two more scored but too close to
+decide. The scores in that entry were already the corrected ones, so the entry
+mixes a post-repair table with a pre-repair saturation count. The screen prints
+what it computes; the caveats loaded with the run were rewritten to match, and
+this paragraph is the record that they once did not.
 
 **One figure legitimately differs from the table above and is not a defect.**
 Wall clock per round is 523-580 s for `gemma4` where this file records 551-615,

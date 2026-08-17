@@ -31,7 +31,6 @@ import asyncio
 import json
 import logging
 import sys
-import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
@@ -43,7 +42,7 @@ from app.adapters.persistence.repositories import (
 )
 from app.application.use_cases.manage_evaluations import ManageEvaluations
 from app.domain.entities.actor import Actor
-from app.domain.entities.evaluation import EvaluationSample, aggregate
+from app.domain.entities.evaluation import EvaluationSample
 from app.infrastructure.config import get_settings
 from app.infrastructure.db import (
     dispose_engine,
@@ -116,15 +115,39 @@ def parse_samples(lines: Sequence[str], *, phases: Sequence[str] = ()) -> list[E
             )
         )
 
-    ordered = list(phases) if phases else list(by_phase)
-    superseded: set[str] = set()
-    # Walked backwards, so the last phase named keeps every task it covers and
-    # each earlier one contributes only the tasks nothing later re-ran.
+    if not phases:
+        # Everything, in file order, with nothing superseded. Superseding here
+        # would make precedence a property of where a block happens to sit in
+        # the file: a `pilot` run appended after a `full` one would override the
+        # comparison read with a single-model calibration read, silently. The
+        # rule only means something when a caller has named the order.
+        return [sample for entries in by_phase.values() for _, sample in entries]
+
+    missing = [phase for phase in phases if phase not in by_phase]
+    if missing:
+        # Raised rather than ignored, because the failure is silent and
+        # expensive: `--phase full --phase repiar` imported `full` alone, which
+        # puts the superseded zero back into the mean, and filed the run under
+        # the name that matched nothing.
+        raise ValueError(
+            f"no samples for phase(s) {', '.join(missing)}; "
+            f"the file has {', '.join(sorted(by_phase))}"
+        )
+
+    # Keyed on the pair, not on the task. A repair phase may re-run one task for
+    # only the model it went wrong for, and keying on the task alone would drop
+    # the other models' samples for that task: superseded out of the earlier
+    # phase, and absent from the later one.
+    superseded: set[tuple[str, str]] = set()
     kept: list[list[EvaluationSample]] = []
-    for phase in reversed(ordered):
-        entries = by_phase.get(phase, [])
-        kept.append([sample for task, sample in entries if task not in superseded])
-        superseded.update(task for task, _ in entries)
+    # Walked backwards, so the last phase named keeps everything it covers and
+    # each earlier one contributes only what nothing later re-ran.
+    for phase in reversed(phases):
+        entries = by_phase[phase]
+        kept.append(
+            [sample for task, sample in entries if (task, sample.model_ref) not in superseded]
+        )
+        superseded.update((task, sample.model_ref) for task, sample in entries)
     return [sample for block in reversed(kept) for sample in block]
 
 
@@ -197,27 +220,26 @@ async def run(args: argparse.Namespace) -> int:
         if not samples:
             raise SystemExit("no samples on stdin")
 
-        report = aggregate(
-            samples,
-            run_id=str(uuid.uuid4()),
-            label=args.label,
-            # The last phase named is the one the run is filed under, since
-            # it is the one whose numbers survive superseding.
-            phase=args.phase[-1] if args.phase else "full",
-            ran_at=_parse_ran_at(args.ran_at),
-            harness_ref=args.harness_ref,
-            caveats=args.caveat,
-            note=args.note,
-        )
-
         actor = await _resolve_actor(args.actor)
         async with session_scope() as session:
             use_case = ManageEvaluations(
                 evaluations=PostgresEvaluationRepository(session),
                 authz=RoleAuthorization(),
                 audit=PostgresAudit(get_session_factory(), SystemClock()),
+                clock=SystemClock(),
             )
-            stored = await use_case.import_run(actor, report)
+            stored = await use_case.import_run(
+                actor,
+                samples,
+                label=args.label,
+                # The last phase named is what the run is filed under, since it
+                # is the one whose numbers survive superseding.
+                phase=args.phase[-1] if args.phase else "full",
+                ran_at=_parse_ran_at(args.ran_at),
+                harness_ref=args.harness_ref,
+                caveats=args.caveat,
+                note=args.note,
+            )
 
         logger.info(
             "imported %s: %s samples, %s model(s), as %s",

@@ -5,15 +5,21 @@ This module is the shape those samples are reduced to before anything reads
 them: a run, a row per model, a row per model and task, and the caveats that
 have to travel with the numbers.
 
-**The caveats are data, not prose on a page.** The 2026-08-15 run's own record
-says eleven of eighteen tasks carry no signal across the candidates, that the
-6.9-point spread rests on four of them, and that the bridge to the previous
-task set is gone. A screen that showed the table without those sentences would
-be showing a ranking the run does not support, and a page that carried them as
-hardcoded copy would keep asserting them about the next run, which will have
-different ones. So they are stored against the run that earned them and
-rendered from it -- the same rule `host-numbers-explainer` follows for the
-figures it explains, for the same reason.
+**The caveats are data, not prose on a page.** A run's own record says things
+the table cannot: which tasks carried no signal, how few the spread rests on,
+whether it is comparable with the run before it. A screen that showed the
+scores without those sentences would be showing a ranking the run does not
+support, and a page that carried them as hardcoded copy would keep asserting
+them about the *next* run, whose limits are different ones. So they are stored
+against the run that earned them and rendered from it -- the same rule
+`host-numbers-explainer` follows for the figures it explains.
+
+Deliberately no counts in this docstring, for the reason the rule exists. An
+earlier version quoted "eleven of eighteen carry no signal" from the
+2026-08-15 entry, which is that day's `full`-phase reading; the stored run is
+`full` with `repair` superseding it, and `verdicts()` computes thirteen. A
+comment that restates a figure the module derives is a second source of truth
+for it.
 
 **Nothing here is a live measurement.** A run is a record of one execution on
 one day against one set of models; the platform does not re-run it and cannot
@@ -248,22 +254,29 @@ def aggregate(
 
     model_refs = sorted({sample.model_ref for sample in samples})
 
-    tasks: list[EvaluationTaskScore] = []
+    # Bucketed in one pass rather than re-scanned per cell. The grid is models
+    # by tasks, so filtering the whole sample list inside a double loop is
+    # O(models x tasks x samples): at a hundred models and a hundred tasks that
+    # is seconds of arithmetic on an input a caller chooses the size of, in a
+    # process that serves every other admin request.
+    by_model: dict[str, list[EvaluationSample]] = {}
+    by_model_task: dict[tuple[str, str], list[EvaluationSample]] = {}
     # Task order follows first appearance rather than the alphabet: the harness
     # emits them in the order the set is meant to be read, and groups A-H mean
     # something in that order.
     task_order: list[tuple[str, str]] = []
+    seen_tasks: set[str] = set()
     for sample in samples:
-        if (sample.task, sample.group) not in task_order:
+        by_model.setdefault(sample.model_ref, []).append(sample)
+        by_model_task.setdefault((sample.model_ref, sample.task), []).append(sample)
+        if sample.task not in seen_tasks:
+            seen_tasks.add(sample.task)
             task_order.append((sample.task, sample.group))
 
+    tasks: list[EvaluationTaskScore] = []
     for model_ref in model_refs:
         for task, group in task_order:
-            of_task = [
-                sample
-                for sample in samples
-                if sample.model_ref == model_ref and sample.task == task
-            ]
+            of_task = by_model_task.get((model_ref, task), [])
             scored = [sample.score for sample in of_task if sample.score is not None]
             tasks.append(
                 EvaluationTaskScore(
@@ -277,7 +290,7 @@ def aggregate(
 
     models: list[EvaluationModelScore] = []
     for model_ref in model_refs:
-        of_model = [sample for sample in samples if sample.model_ref == model_ref]
+        of_model = by_model[model_ref]
         answered = [sample for sample in of_model if sample.score is not None]
         per_round: dict[int, float] = {}
         for sample in of_model:

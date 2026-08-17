@@ -16,18 +16,35 @@ refresh -- the same reasoning `ReadPromptLogs` uses for not auditing its list.
 The import replaces what a later routing decision will cite, and a run arriving
 with a label that already exists overwrites the earlier numbers, so the audit
 row is the only place the previous reading is recorded as having existed.
+
+**`import_run` takes samples and does the arithmetic itself, after the scope
+check.** It took a finished `EvaluationReport` first, which meant the router
+aggregated the request body *before* this class had refused anybody: a caller
+with no evaluation scopes at all -- any account with a session -- could spend
+the admin process's CPU on a body it was never going to be allowed to store.
+Reducing samples is cheap per sample and unbounded in aggregate, so it belongs
+behind the check rather than in front of it.
 """
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import Sequence
 from dataclasses import replace
+from datetime import datetime
 
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.audit import AuditAction
-from app.domain.entities.evaluation import EvaluationReport, EvaluationRun
+from app.domain.entities.evaluation import (
+    EvaluationReport,
+    EvaluationRun,
+    EvaluationSample,
+    aggregate,
+)
 from app.domain.exceptions import EvaluationRunNotFoundError
 from app.domain.ports.repositories import EvaluationRepositoryPort
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
+from app.shared.clock import Clock
 
 
 class ManageEvaluations:
@@ -36,10 +53,12 @@ class ManageEvaluations:
         evaluations: EvaluationRepositoryPort,
         authz: AuthorizationPort,
         audit: AuditPort,
+        clock: Clock,
     ) -> None:
         self._evaluations = evaluations
         self._authz = authz
         self._audit = audit
+        self._clock = clock
 
     async def list_runs(self, actor: Actor) -> list[EvaluationRun]:
         self._authz.require(actor, Scope.MODEL_READ)
@@ -63,21 +82,53 @@ class ManageEvaluations:
             raise EvaluationRunNotFoundError(detail=f"no evaluation run {run_id}")
         return report
 
-    async def import_run(self, actor: Actor, report: EvaluationReport) -> EvaluationReport:
-        """Store a run, replacing any earlier one with the same label.
+    async def import_run(
+        self,
+        actor: Actor,
+        samples: Sequence[EvaluationSample],
+        *,
+        label: str,
+        phase: str,
+        ran_at: datetime,
+        harness_ref: str,
+        caveats: Sequence[str] = (),
+        note: str = "",
+    ) -> EvaluationReport:
+        """Reduce a run's samples to scores and store it, replacing its label.
 
-        The report arrives already aggregated. Reducing samples to scores is a
-        domain function (`entities/evaluation.aggregate`) and deliberately not
-        done here: it is a pure calculation with a published reading to match,
-        and it is tested against that reading rather than through a use case
-        holding a repository and an audit port.
+        The scope check is the first statement for the reason in this module's
+        docstring. The arithmetic itself stays in the domain
+        (`entities/evaluation.aggregate`) rather than moving here: it is a pure
+        calculation with a published reading to match, and it is tested against
+        that reading rather than through a use case holding a repository and an
+        audit port.
+
+        `imported_at` is stamped from the clock rather than left to the column's
+        default, so the report this returns carries the same timestamp the row
+        does. Left to the default, the `201` from an import always said the run
+        had never been loaded.
         """
         self._authz.require(actor, Scope.MODEL_WRITE)
+
+        report = aggregate(
+            samples,
+            run_id=str(uuid.uuid4()),
+            label=label,
+            phase=phase,
+            ran_at=ran_at,
+            harness_ref=harness_ref,
+            caveats=caveats,
+            note=note,
+        )
         stored = EvaluationReport(
-            # `imported_by` is the actor's display name, taken here rather than
-            # trusted from the caller: a field naming who loaded something is
-            # worth nothing if the loader fills it in.
-            run=replace(report.run, imported_by=actor.display),
+            # Both fields are taken here rather than trusted from the caller: a
+            # field naming who loaded something, and when, is worth nothing if
+            # the loader fills it in.
+            run=replace(
+                report.run,
+                imported_by=actor.display,
+                imported_at=self._clock.now(),
+            ),
             models=report.models,
             tasks=report.tasks,
         )

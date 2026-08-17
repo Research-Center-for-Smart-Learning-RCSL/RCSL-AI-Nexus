@@ -16,11 +16,12 @@ import pytest
 from app.adapters.authz.role_authorization import RoleAuthorization
 from app.application.use_cases.manage_evaluations import ManageEvaluations
 from app.domain.entities.actor import Actor, Role, Scope
-from app.domain.entities.evaluation import EvaluationReport, EvaluationSample, aggregate
+from app.domain.entities.evaluation import EvaluationReport, EvaluationSample
 from app.domain.exceptions import EvaluationRunNotFoundError, NotAuthorizedError
 from tests.unit.fakes import FakeAudit
 
 RAN_AT = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+IMPORTED_AT = datetime(2026, 8, 17, 9, 0, tzinfo=UTC)
 
 
 def actor(*scopes: Scope) -> Actor:
@@ -34,15 +35,23 @@ def actor(*scopes: Scope) -> Actor:
     )
 
 
-def report(label: str = "a run") -> EvaluationReport:
-    return aggregate(
-        [EvaluationSample(model_ref="m1", task="t1", group="A", round_index=0, score=1.0)],
-        run_id="run-1",
+SAMPLES = [EvaluationSample(model_ref="m1", task="t1", group="A", round_index=0, score=1.0)]
+
+
+async def do_import(use_case: ManageEvaluations, actor_: Actor, label: str = "a run"):
+    return await use_case.import_run(
+        actor_,
+        SAMPLES,
         label=label,
         phase="full",
         ran_at=RAN_AT,
         harness_ref="scripts/model-eval",
     )
+
+
+class FrozenClock:
+    def now(self) -> datetime:
+        return IMPORTED_AT
 
 
 class FakeEvaluations:
@@ -81,7 +90,12 @@ class FakeEvaluations:
 def build() -> tuple[ManageEvaluations, FakeEvaluations, FakeAudit]:
     store, audit = FakeEvaluations(), FakeAudit()
     return (
-        ManageEvaluations(evaluations=store, authz=RoleAuthorization(), audit=audit),
+        ManageEvaluations(
+            evaluations=store,
+            authz=RoleAuthorization(),
+            audit=audit,
+            clock=FrozenClock(),
+        ),
         store,
         audit,
     )
@@ -89,8 +103,8 @@ def build() -> tuple[ManageEvaluations, FakeEvaluations, FakeAudit]:
 
 @pytest.mark.asyncio
 async def test_reading_needs_model_read_and_not_the_write() -> None:
-    use_case, store, _ = build()
-    await store.save_report(report())
+    use_case, _, _ = build()
+    await do_import(use_case, actor(Scope.MODEL_WRITE))
 
     assert await use_case.list_runs(actor(Scope.MODEL_READ)) != []
     assert await use_case.latest(actor(Scope.MODEL_READ)) is not None
@@ -110,18 +124,18 @@ async def test_importing_is_refused_to_a_reader() -> None:
     to read."""
     use_case, _, _ = build()
     with pytest.raises(NotAuthorizedError):
-        await use_case.import_run(actor(Scope.MODEL_READ), report())
+        await do_import(use_case, actor(Scope.MODEL_READ))
 
 
 @pytest.mark.asyncio
 async def test_an_import_is_audited_and_names_what_it_loaded() -> None:
     use_case, _, audit = build()
-    await use_case.import_run(actor(Scope.MODEL_WRITE), report())
+    stored = await do_import(use_case, actor(Scope.MODEL_WRITE))
 
     (row,) = audit.rows
     _, action, target, outcome, detail = row
     assert action == "evaluation.imported"
-    assert target == "run-1"
+    assert target == stored.run.id
     assert outcome == "success"
     assert detail["label"] == "a run"
     assert detail["models"] == "m1"
@@ -132,10 +146,14 @@ async def test_the_importer_is_recorded_from_the_actor_not_from_the_payload() ->
     """A field naming who loaded something is worth nothing if the loader
     fills it in."""
     use_case, store, _ = build()
-    stored = await use_case.import_run(actor(Scope.MODEL_WRITE), report())
+    stored = await do_import(use_case, actor(Scope.MODEL_WRITE))
 
     assert stored.run.imported_by == "operator@example.test"
     assert store.by_label["a run"].run.imported_by == "operator@example.test"
+    # And the timestamp, which used to be left to the column's default: the
+    # report returned by an import then always said the run had never been
+    # loaded, however the row read afterwards.
+    assert stored.run.imported_at == IMPORTED_AT
 
 
 @pytest.mark.asyncio
@@ -164,7 +182,41 @@ async def test_deleting_a_run_that_is_not_there_is_refused_rather_than_silent() 
 @pytest.mark.asyncio
 async def test_a_delete_is_audited() -> None:
     use_case, _, audit = build()
-    await use_case.import_run(actor(Scope.MODEL_WRITE), report())
-    await use_case.delete_run(actor(Scope.MODEL_WRITE), "run-1")
+    stored = await do_import(use_case, actor(Scope.MODEL_WRITE))
+    await use_case.delete_run(actor(Scope.MODEL_WRITE), stored.run.id)
 
     assert audit.actions() == ["evaluation.imported", "evaluation.deleted"]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_import_does_no_arithmetic_first() -> None:
+    """The scope check is the first statement, and this is what says so.
+
+    Reducing samples costs a caller-chosen amount of CPU in a process that
+    serves every other admin request, so a body from somebody who may not store
+    it must not be reduced. Asserting on the audit and the store is not enough
+    -- both stay empty whichever order the two run in -- so this counts the
+    samples the use case actually looked at.
+    """
+    use_case, store, audit = build()
+    seen = 0
+
+    class CountingSequence(list):
+        def __iter__(self):
+            nonlocal seen
+            seen += 1
+            return super().__iter__()
+
+    with pytest.raises(NotAuthorizedError):
+        await use_case.import_run(
+            actor(Scope.MODEL_READ),
+            CountingSequence(SAMPLES),
+            label="a run",
+            phase="full",
+            ran_at=RAN_AT,
+            harness_ref="h",
+        )
+
+    assert seen == 0, "the samples were walked before the caller was refused"
+    assert store.by_label == {}
+    assert audit.rows == []
