@@ -267,7 +267,7 @@ class Settings(BaseSettings):
     does not support it. Graded values are not offered — `think: "low"` is
     accepted by Ollama and measurably changes nothing.
     """
-    max_context_length: int = 98304
+    max_context_length: int = 122880
     """Ceiling on a request's input, in tokens, estimated from the text
     (`RouteChatRequest._estimated_prompt_tokens`) before any hardware is
     committed.
@@ -277,7 +277,10 @@ class Settings(BaseSettings):
     so it crossed the old ceiling within a few rounds and the 413 arrived in the
     middle of a task rather than at the start of one. 65536 → 98304 on
     2026-08-14 for the same reason, after a Codex session reached the ceiling
-    two work items into a task.
+    two work items into a task. 98304 → 122880 on 2026-08-17, after
+    `qwen36-35b-a3b-q8` was registered at its native 262144 rather than 196608:
+    the truncation point below moved to 131072, and this now sits under it
+    rather than on it, which is the error the next paragraph records.
 
     **This value, `request_timeout_seconds` and the model's registered
     `context_length` are one decision and have to be changed together.** Two
@@ -307,17 +310,27 @@ class Settings(BaseSettings):
       them consistent anyway: a global ceiling above a target's half turns what
       should be a start-of-task refusal into a mid-task one.
     - *Prompt evaluation produces no bytes*, so what bounds it in transit is
-      the per-read timeout. Measured on this hardware from real traffic on
-      2026-08-14 — 105.5 to 141.5 tok/s across four cold requests — so a full
-      context costs
+      the per-read timeout. **The rate this was sized against belonged to a
+      model that now serves nothing.** 105.5 to 141.5 tok/s was measured on
+      2026-08-14 across four cold requests to the dense model then deployed,
+      giving
 
           98304 / 105.5 = 932 seconds
 
-      against a 1200 second read timeout. Raising this without raising that
-      gives a ceiling the guardrail admits and the transport then kills. That
-      failure does not heal: a prefill killed part way is **not** kept in the
-      runtime's prefix cache (measured the same day), so the retry re-evaluates
-      from nothing and times out again.
+      against a 1200 second read timeout — close enough that the coupling read
+      as tight, and it was quoted as tight in three places. Re-measured on
+      2026-08-17 from three cold session starts on `qwen36-35b-a3b-q8`, the MoE
+      now serving `code`: 711, 725 and 730 tok/s, so the same calculation is
+
+          122880 / 711 = 173 seconds
+
+      Raising this without raising that still gives a ceiling the guardrail
+      admits and the transport then kills, and that failure does not heal: a
+      prefill killed part way is **not** kept in the runtime's prefix cache
+      (measured 2026-08-14), so the retry re-evaluates from nothing and times
+      out again. What changed is the headroom rather than the rule — the read
+      timeout stopped being the binding constraint when the dense model was
+      replaced, and nothing had gone back to check.
 
     This is one of the six resource guardrails security.md section 4.3 counts
     on, so raising it costs something real: context is superlinear on unified

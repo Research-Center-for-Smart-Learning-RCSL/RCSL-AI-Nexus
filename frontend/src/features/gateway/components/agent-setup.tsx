@@ -441,7 +441,7 @@ wire_api = "responses"`}
             413 context_too_long
           </dt>
           <dd>
-            Your input outgrew the ceiling — at most 98,304 tokens, counting
+            Your input outgrew the ceiling — at most 122,880 tokens, counting
             your tool definitions and every replayed turn, and lower when a
             smaller model is serving your capability. The refusal names the
             figure it judged against. It is not a quota and waiting does not
