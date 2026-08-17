@@ -94,12 +94,53 @@ def test_a_phase_that_is_not_named_contributes_nothing() -> None:
 
 
 def test_naming_no_phase_takes_the_file_whole() -> None:
+    """Including phases that cover the same task.
+
+    The first version of this test used two phases with disjoint tasks, so it
+    passed while the code was quietly superseding — and the precedence it used
+    was dict-insertion order, which is where a block happens to sit in the
+    file. A `pilot` run appended after a `full` one would have overridden the
+    comparison read with a single-model calibration read, and nothing would
+    have said so.
+    """
     lines = [
-        line(model="m1", task="t", phase="full"),
-        line(model="m1", task="t2", phase="pilot"),
+        line(model="m1", task="t", phase="full", score=1.0),
+        line(model="m1", task="t", phase="pilot", score=0.0),
+        line(model="m1", task="t2", phase="pilot", score=0.5),
     ]
 
-    assert len(parse_samples(lines)) == 2
+    assert len(parse_samples(lines)) == 3
+
+
+def test_a_repair_that_re_runs_one_model_keeps_the_others() -> None:
+    """Supersession is keyed on the pair, not on the task.
+
+    Keyed on the task alone, a repair phase covering one model would drop the
+    other models' samples for that task entirely: superseded out of the earlier
+    phase, and absent from the later one. The 2026-08-15 file does not show it
+    because that repair re-ran all three tasks for all three candidates.
+    """
+    lines = [
+        line(model="m1", task="t", phase="full", score=0.0),
+        line(model="m2", task="t", phase="full", score=0.9),
+        line(model="m1", task="t", phase="repair", score=0.8),
+    ]
+
+    samples = parse_samples(lines, phases=["full", "repair"])
+
+    scores = {(s.model_ref, s.task): s.score for s in samples}
+    assert scores[("m1", "t")] == 0.8, "the re-run replaced the model it covered"
+    assert scores[("m2", "t")] == 0.9, "the model it did not cover kept its sample"
+
+
+def test_a_named_phase_the_file_does_not_have_stops_the_import() -> None:
+    """`--phase full --phase repiar` used to import `full` alone -- putting the
+    superseded zero straight back into the mean -- and file the run under the
+    name that matched nothing. Silent, and five points wrong."""
+    lines = [line(model="m1", task="t", phase="full")]
+
+    with pytest.raises(ValueError, match="repiar"):
+        parse_samples(lines, phases=["full", "repiar"])
 
 
 def test_a_partial_last_line_costs_only_itself() -> None:

@@ -11,14 +11,13 @@ so the route would exist there only to refuse everyone who could reach it.
 
 from __future__ import annotations
 
-import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
 
 from app.application.use_cases.manage_evaluations import ManageEvaluations
 from app.domain.entities.actor import Actor
-from app.domain.entities.evaluation import EvaluationSample, aggregate
+from app.domain.entities.evaluation import EvaluationSample
 from app.infrastructure.di import build_manage_evaluations
 from app.interfaces.http.middleware.identity import current_actor
 from app.interfaces.http.schemas.admin_schemas import (
@@ -74,33 +73,36 @@ async def import_evaluation(
 ) -> EvaluationReportResponse:
     """Load a run from its samples, replacing any run with the same label.
 
-    The aggregation happens here rather than in the caller, through the same
-    domain function the importer uses, so the screen's numbers are the
-    platform's arithmetic over what was measured rather than a client's.
+    This maps the body and nothing else. The aggregation used to happen here,
+    which put a caller-sized calculation *in front of* the use case's scope
+    check -- so an account holding no evaluation scope at all could still spend
+    the process's CPU on a request it was always going to be refused. The
+    samples now travel in and the use case reduces them after refusing.
     """
-    report = aggregate(
-        [
-            EvaluationSample(
-                model_ref=sample.model_ref,
-                task=sample.task,
-                group=sample.group,
-                round_index=sample.round_index,
-                score=sample.score,
-                generation_tokens_per_second=sample.generation_tokens_per_second,
-                prompt_tokens=sample.prompt_tokens,
-                wall_seconds=sample.wall_seconds,
-            )
-            for sample in body.samples
-        ],
-        run_id=str(uuid.uuid4()),
-        label=body.label,
-        phase=body.phase,
-        ran_at=body.ran_at,
-        harness_ref=body.harness_ref,
-        caveats=body.caveats,
-        note=body.note,
+    return EvaluationReportResponse.of(
+        await use_case.import_run(
+            actor,
+            [
+                EvaluationSample(
+                    model_ref=sample.model_ref,
+                    task=sample.task,
+                    group=sample.group,
+                    round_index=sample.round_index,
+                    score=sample.score,
+                    generation_tokens_per_second=sample.generation_tokens_per_second,
+                    prompt_tokens=sample.prompt_tokens,
+                    wall_seconds=sample.wall_seconds,
+                )
+                for sample in body.samples
+            ],
+            label=body.label,
+            phase=body.phase,
+            ran_at=body.ran_at,
+            harness_ref=body.harness_ref,
+            caveats=body.caveats,
+            note=body.note,
+        )
     )
-    return EvaluationReportResponse.of(await use_case.import_run(actor, report))
 
 
 @router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)

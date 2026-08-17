@@ -1395,6 +1395,15 @@ class PostgresEvaluationRepository(_Base):
                 caveats=list(report.run.caveats),
                 note=report.run.note,
                 imported_by=report.run.imported_by or "",
+                # Written rather than left to the column default, so the row
+                # and the response the importer just returned carry the same
+                # timestamp. `None` falls back to the default for the paths
+                # that do not stamp one.
+                **(
+                    {"imported_at": report.run.imported_at}
+                    if report.run.imported_at is not None
+                    else {}
+                ),
             )
         )
         # Flushed before the children, not with them. There is no ORM

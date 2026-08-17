@@ -1243,6 +1243,15 @@ class EvaluationReportResponse(BaseModel):
         )
 
 
+MAX_EVALUATION_SAMPLES = 20_000
+"""Samples one import may carry.
+
+Two orders of magnitude above any run this project has produced (280 lines for
+eighteen tasks, three models and three rounds) and low enough that the
+aggregation behind it stays imperceptible. Stated as a number rather than left
+to `admin_max_body_bytes`, which bounds the bytes and not the work."""
+
+
 class EvaluationSampleRequest(BaseModel):
     """One model's attempt at one task in one round, as the harness wrote it."""
 
@@ -1278,7 +1287,13 @@ class ImportEvaluationRequest(BaseModel):
     harness_ref: str = Field(default="", max_length=255)
     caveats: list[str] = Field(default_factory=list)
     note: str = Field(default="", max_length=8192)
-    samples: list[EvaluationSampleRequest] = Field(min_length=1)
+    samples: list[EvaluationSampleRequest] = Field(min_length=1, max_length=MAX_EVALUATION_SAMPLES)
     """At least one: a run with no samples is an import that read the wrong
     file, and an empty table on this screen is indistinguishable from a run
-    where every model failed."""
+    where every model failed.
+
+    And a ceiling, because reducing samples is arithmetic a caller chooses the
+    size of, in a process that serves every other admin request. The bound is
+    generous against real runs -- the sixteen-task set is 280 lines -- and the
+    body-size limit alone was not one: at 40 MiB it admits several hundred
+    thousand minimal sample objects."""

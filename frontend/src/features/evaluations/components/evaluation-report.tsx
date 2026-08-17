@@ -6,9 +6,13 @@
  * **The caveats are rendered before the tables, not after them.** They come
  * from the run rather than from this file (`EvaluationRun.caveats`), and the
  * order is the argument: a reader who sees a ranking first has already formed
- * a view by the time the limits arrive. The run's own record leads with
- * eleven of eighteen tasks carrying no signal, and that sentence decides how
- * much the ranking under it is worth.
+ * a view by the time the limits arrive. How many tasks carried no signal is
+ * the sentence that decides how much the ranking under it is worth, and on
+ * these runs it is most of them.
+ *
+ * The count itself is computed from the report rather than written here. An
+ * earlier version of this comment quoted the figure from the progress log,
+ * which was that run's pre-repair reading and two off what the table prints.
  *
  * Every figure is read from the report. Nothing here restates a number, which
  * is the rule `host-numbers-explainer` follows for the same reason: a page that
@@ -185,8 +189,14 @@ export function EvaluationReportView({ report }: { report: EvaluationReport }) {
                 <th className="py-2 pr-4 font-medium">Task</th>
                 {models.map((model) => (
                   <th key={model.model_ref} className="py-2 pr-4 font-medium">
-                    <span className="font-mono text-xs">
-                      {model.model_ref.split(':')[0]}
+                    {/* The whole reference. Truncating at the colon collapsed
+                        `qwen3.6:27b-q8_0` and `qwen3.6:35b-a3b-q8_0` into two
+                        adjacent columns both headed `qwen3.6`, on the one run
+                        this screen was built to show — and the tag is exactly
+                        the part that was measured, since an alias is a name an
+                        operator may repoint at different weights. */}
+                    <span className="font-mono text-xs break-all">
+                      {model.model_ref}
                     </span>
                   </th>
                 ))}

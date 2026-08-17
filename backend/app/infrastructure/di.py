@@ -908,6 +908,7 @@ def build_manage_evaluations(request: Request, session: SessionDep) -> ManageEva
         evaluations=PostgresEvaluationRepository(session),
         authz=request.app.state.authz,
         audit=get_audit(request),
+        clock=SystemClock(),
     )
 
 

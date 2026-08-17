@@ -48,9 +48,13 @@ export function EvaluationView() {
       <ErrorState
         title="Could not load the evaluations"
         error={error}
+        // All three, including the chosen run: the failure being reported
+        // may be that query's, and refetching the two that already succeeded
+        // left Retry visibly doing nothing.
         onRetry={() => {
           void runs.refetch();
           void latest.refetch();
+          if (chosen) void chosenReport.refetch();
         }}
       />
     );
