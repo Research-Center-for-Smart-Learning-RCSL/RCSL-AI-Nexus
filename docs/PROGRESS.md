@@ -329,6 +329,17 @@ message is eighteen. One row stood four times taller than its neighbours, and
 the remedy is advice per *code* rather than per row, so a page of fifty 413s
 printed the same paragraph fifty times.
 
+**And the tooltip that was carrying the overflow had the same problem.** Every
+tooltip here is the native one — no library, no portal, nothing to style — and
+a browser renders a `title` as a single line however long the string is. So the
+287-character message, moved out of the cell and into a hover, came back as a
+strip of text wider than the window, clipped at the screen edge with the end of
+the sentence off it. A `title` does honour newlines, so `lib/wrap-tooltip.ts`
+wraps at 72 characters on word boundaries and hard-breaks a token longer than
+that — a path, a base64 blob, a uuid list, the case where wrapping on spaces
+achieves nothing. Applied to the audit log's `detail` and `target` too, which
+are the same shape and were the same length.
+
 So a row is collapsed until somebody opens it: the message clamps to two lines,
 the composition to the one line it is scanned on, and the remedy is not in the
 document at all. The figures stay, because they are short, they are what a

@@ -103,6 +103,24 @@ describe('a row whose content is longer than the row', () => {
     expect(screen.queryByText(REMEDY)).toBeNull();
   });
 
+  it('wraps the tooltip, because a native title renders on one line however long it is', () => {
+    /**
+     * The helper is unit-tested on its own; what this pins is that the cell
+     * actually uses it. A `title` carrying the 287-character message renders
+     * as a strip of text wider than the window, clipped by the screen edge,
+     * with the end of the sentence somewhere off it — and passing the raw
+     * string here reads as the obvious thing to do.
+     */
+    render(<RefusalsTable />);
+
+    const title = paragraphHolding('This input is 125,340 tokens').getAttribute('title');
+
+    expect(title).toContain('\n');
+    for (const line of title!.split('\n')) expect(line.length).toBeLessThanOrEqual(72);
+    // Wrapped, not shortened.
+    expect(title!.replace(/\n/g, ' ')).toBe(LONG.message);
+  });
+
   it('caps the wide columns on a block inside the cell, not on the cell', () => {
     // The same defect the audit log records, which this table had repeated in
     // four columns: a `max-width` on a `td` is advisory under the automatic

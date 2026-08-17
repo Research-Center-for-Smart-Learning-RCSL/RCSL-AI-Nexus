@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 
+import { wrapTooltip } from '@/lib/wrap-tooltip';
+
 /**
  * Why a disabled control is disabled, in a place that actually reaches someone.
  *
@@ -25,7 +27,7 @@ export function DisabledReason({
   if (!reason) return <>{children}</>;
 
   return (
-    <span title={reason} className="inline-flex items-center">
+    <span title={wrapTooltip(reason)} className="inline-flex items-center">
       {children}
       <span className="sr-only">{reason}</span>
     </span>

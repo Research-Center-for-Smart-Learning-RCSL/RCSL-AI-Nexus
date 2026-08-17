@@ -19,6 +19,7 @@ import { EmptyState } from '@/components/composed/empty-state';
 import { ErrorState } from '@/components/composed/error-state';
 import { useLogs } from '@/features/logs/hooks/use-logs';
 import { AUDIT_ACTIONS, type AuditEntry, type KnownAuditAction } from '@/features/logs/schema';
+import { wrapTooltip } from '@/lib/wrap-tooltip';
 
 const PAGE_SIZE = 50;
 // The three values the backend writes, and the filter is an exact match on the
@@ -216,7 +217,7 @@ export function LogsTable() {
                       and only reachable through the wrapper's horizontal
                       scrollbar. An inner div is an ordinary block box and
                       honours the cap. */}
-                  <TableCell title={entry.target ?? undefined}>
+                  <TableCell title={wrapTooltip(entry.target)}>
                     <div className="max-w-[16rem] truncate">
                       {entry.target ?? '-'}
                     </div>
@@ -226,7 +227,7 @@ export function LogsTable() {
                   </TableCell>
                   <TableCell
                     className="text-xs text-muted-foreground"
-                    title={detailText(entry.detail)}
+                    title={wrapTooltip(detailText(entry.detail))}
                   >
                     {/* The widest column in practice and the one that showed
                         the defect: `detail` is every key and value of an audit

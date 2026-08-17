@@ -30,6 +30,7 @@ import { FIGURE_LABELS, remedyFor, type Refusal } from '@/features/refusals/sche
 import { useUsers } from '@/features/users/hooks/use-users';
 import { useCopyToClipboard } from '@/lib/use-copy-to-clipboard';
 import { cn } from '@/lib/utils';
+import { wrapTooltip } from '@/lib/wrap-tooltip';
 
 const PAGE_SIZE = 50;
 const BASE_COLUMNS = ['When', 'Code', 'What you were told', 'Where', 'Request', ''];
@@ -82,7 +83,7 @@ function Figures({
             <span
               key={key}
               className="inline-flex max-w-[18rem] gap-1 tabular-nums"
-              title={`${FIGURE_LABELS[key] ?? key}: ${figureText(figures[key])}`}
+              title={wrapTooltip(`${FIGURE_LABELS[key] ?? key}: ${figureText(figures[key])}`)}
             >
               <span className="text-muted-foreground/70">{FIGURE_LABELS[key] ?? key}:</span>
               <span className="truncate">{figureText(figures[key])}</span>
@@ -100,7 +101,7 @@ function Figures({
             'max-w-[34rem] font-mono text-[0.7rem] leading-relaxed break-words text-muted-foreground',
             expanded ? '' : 'line-clamp-1',
           )}
-          title={composition}
+          title={wrapTooltip(composition)}
         >
           {composition}
         </p>
@@ -318,7 +319,7 @@ export function RefusalsTable() {
                       {new Date(entry.at).toLocaleString()}
                     </TableCell>
                     {showAccount ? (
-                      <TableCell title={account_.title}>
+                      <TableCell title={wrapTooltip(account_.title)}>
                         {/* A name first, the handle under it. Neither of the
                             two values the row stores is a name a person
                             recognises — the account id is a uuid and
@@ -372,7 +373,7 @@ export function RefusalsTable() {
                       <div className="max-w-[34rem] space-y-1">
                         <p
                           className={cn('text-sm break-words', isOpen ? '' : 'line-clamp-2')}
-                          title={entry.message}
+                          title={wrapTooltip(entry.message)}
                         >
                           {entry.message}
                         </p>
@@ -391,7 +392,7 @@ export function RefusalsTable() {
                     </TableCell>
                     <TableCell
                       className="text-xs text-muted-foreground"
-                      title={`${entry.method} ${entry.path}`}
+                      title={wrapTooltip(`${entry.method} ${entry.path}`)}
                     >
                       {/* `path` is an unbounded column: a query-shaped route or
                           a long collection name would otherwise set this
@@ -403,9 +404,11 @@ export function RefusalsTable() {
                     </TableCell>
                     <TableCell
                       className="font-mono text-xs text-muted-foreground"
-                      title={[entry.request_id, entry.api_key_id && `key ${entry.api_key_id}`]
-                        .filter(Boolean)
-                        .join('\n')}
+                      title={wrapTooltip(
+                        [entry.request_id, entry.api_key_id && `key ${entry.api_key_id}`]
+                          .filter(Boolean)
+                          .join('\n'),
+                      )}
                     >
                       {/* The ellipsis is what tells anyone there is more to
                           hover over, which is the whole reason these carry a
