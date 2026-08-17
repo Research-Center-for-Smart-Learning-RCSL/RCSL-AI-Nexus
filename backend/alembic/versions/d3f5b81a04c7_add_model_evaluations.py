@@ -85,9 +85,7 @@ def upgrade() -> None:
         sa.Column("seconds_per_round_min", sa.Float(), nullable=True),
         sa.Column("seconds_per_round_max", sa.Float(), nullable=True),
     )
-    op.create_index(
-        "ix_evaluation_model_scores_run_id", "evaluation_model_scores", ["run_id"]
-    )
+    op.create_index("ix_evaluation_model_scores_run_id", "evaluation_model_scores", ["run_id"])
 
     op.create_table(
         "evaluation_task_scores",
@@ -107,9 +105,7 @@ def upgrade() -> None:
         sa.Column("score", sa.Float(), nullable=True),
         sa.Column("samples", sa.Integer(), nullable=False, server_default="0"),
     )
-    op.create_index(
-        "ix_evaluation_task_scores_run_id", "evaluation_task_scores", ["run_id"]
-    )
+    op.create_index("ix_evaluation_task_scores_run_id", "evaluation_task_scores", ["run_id"])
     # The read is always "every task score for this run", assembled into a
     # grid, so the run is the filter and the pair is the sort.
     op.create_index(
