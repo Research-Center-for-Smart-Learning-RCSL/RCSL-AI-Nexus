@@ -171,6 +171,20 @@ Four things are easy to get wrong:
   `capability_not_issued` names it — before believing any other explanation of a
   blocked write.
 
+  **A second slug, `gpt-5.6-luna`, appears only after a 413.** On 2026-08-17 one
+  key was refused for it 78 times in four bursts, and every burst began within
+  minutes of a `context_too_long` cluster: 16:51 → 16:57, 19:16 → 19:20, 19:28 →
+  19:28. `model = "code"` was in effect throughout — the same sessions' ordinary
+  turns routed to `code` and were served before and after each burst — so this is
+  another slot that ignores it. **What sends it is not established.** The timing
+  fits an automatic compaction step, and nothing here confirms that: the key's
+  debug window was shut, so no transcript was captured, and this paragraph records
+  the correlation rather than the mechanism. Whatever the slot is, the consequence
+  is the same and is worth knowing at the console: once the conversation is over
+  the ceiling it can neither be sent (413) nor, apparently, be shrunk (403), so
+  starting a new conversation is the only way out. That operator started three in
+  one evening and read the result as the platform degrading.
+
   The gateway does not answer in Codex's shape, and that is a decision rather
   than a gap. `construct_model_info_from_candidates` takes a matched remote
   entry **whole**, so a slug we advertise no longer falls back to the client's
