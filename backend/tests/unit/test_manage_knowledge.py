@@ -24,9 +24,9 @@ from app.domain.entities.knowledge import (
 )
 from app.domain.exceptions import (
     CollectionNotFoundError,
+    CollectionStateConflictError,
     DocumentParseError,
     DocumentStateConflictError,
-    ModelStateConflictError,
     NoAvailableModelError,
     NotAuthorizedError,
     UploadRejectedError,
@@ -138,7 +138,7 @@ async def test_the_job_progress_check_refuses_the_same_user() -> None:
 
 async def test_a_duplicate_collection_name_is_a_conflict_not_a_constraint_violation() -> None:
     use_case, *_ = build()
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(CollectionStateConflictError):
         await use_case.create_collection(ADMIN, name="Papers")
 
 

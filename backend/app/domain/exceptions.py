@@ -97,9 +97,95 @@ class ServerOverloadedError(DomainError):
         self.retry_after_seconds = retry_after_seconds
 
 
-class ModelStateConflictError(DomainError):
+class StateConflictError(DomainError):
+    """409 — the thing being edited is not in a state that allows this.
+
+    **Subclassed per subject because the message names the subject, and for
+    most of this platform's history it named the wrong one.** Until 2026-08-17
+    `ModelStateConflictError` was the general 409: 34 raises across eleven
+    modules, only eleven of them about models, every one of them answering
+    "The model is not in a state that allows this operation." An operator
+    editing an API key's expiry was told about models, in a UI that renders
+    `public_message` verbatim, while the reason — a 365-day maximum — sat in
+    `detail`, which never leaves the process. They read it as the capability
+    edit being rejected, tried seven times, and the capability had in fact
+    saved. A refusal that names the wrong noun is worse than one that names
+    nothing: it sends the reader somewhere.
+
+    The status lives here rather than on each subclass because `_status_for`
+    walks the MRO, so a subject added later is a 409 without anybody
+    remembering to say so.
+    """
+
+    code = "state_conflict"
+    public_message = "That change is not allowed in the current state."
+
+
+class ModelStateConflictError(StateConflictError):
     code = "model_state_conflict"
     public_message = "The model is not in a state that allows this operation."
+
+
+class ApiKeyStateConflictError(StateConflictError):
+    code = "api_key_state_conflict"
+    public_message = "That change to the key is not allowed."
+
+
+class ApiKeyLifetimeError(ApiKeyStateConflictError):
+    """The one that cost an evening, and the one figure that ends it.
+
+    `maximum_days` reaches the caller for the reason `ContextTooLongError`'s
+    `limit` does: an operator refused at a boundary they cannot see has nothing
+    to act on, and the boundary is a policy this deployment publishes rather
+    than anything about its inventory. The date they typed is their own input
+    described back to them, which is the test `interfaces/http/errors.py`
+    already applies to `composition` and `UploadRejectedError.public_detail`.
+    """
+
+    code = "api_key_lifetime"
+
+    def __init__(self, maximum_days: int, detail: str | None = None) -> None:
+        super().__init__(detail)
+        self.maximum_days = maximum_days
+        self.public_message = (
+            f"A key may not last longer than {maximum_days} days from today. "
+            "Choose an earlier expiry date."
+        )
+
+
+class PromptTemplateStateConflictError(StateConflictError):
+    code = "prompt_template_state_conflict"
+    public_message = "That change to the template is not allowed."
+
+
+class RoutingPolicyStateConflictError(StateConflictError):
+    code = "routing_policy_state_conflict"
+    public_message = "That routing policy cannot be saved as written."
+
+
+class NodeStateConflictError(StateConflictError):
+    code = "node_state_conflict"
+    public_message = "The node is not in a state that allows this operation."
+
+
+class TenantStateConflictError(StateConflictError):
+    code = "tenant_state_conflict"
+    public_message = "That change to the tenant is not allowed."
+
+
+class UserStateConflictError(StateConflictError):
+    code = "user_state_conflict"
+    public_message = "That change to the account is not allowed."
+
+
+class CollectionStateConflictError(StateConflictError):
+    code = "collection_state_conflict"
+    public_message = "That change to the collection is not allowed."
+
+
+class DebugWindowError(StateConflictError):
+    code = "debug_window_invalid"
+    public_message = "That debug window is not allowed."
 
 
 class InsufficientMemoryError(DomainError):

@@ -23,7 +23,7 @@ from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.audit import AuditAction
 from app.domain.entities.model import RuntimeKind
 from app.domain.entities.node import Node, NodeStatus
-from app.domain.exceptions import ModelStateConflictError, NodeNotFoundError
+from app.domain.exceptions import NodeNotFoundError, NodeStateConflictError
 from app.domain.ports.egress_port import EgressGuardPort
 from app.domain.ports.node_health_port import NodeHealthPort
 from app.domain.ports.repositories import ModelRepositoryPort, NodeRepositoryPort
@@ -135,7 +135,7 @@ class ManageNodes:
         # message that says which node and why.
         attached = [m.alias for m in await self._models.list_all() if m.node_id == node_id]
         if attached:
-            raise ModelStateConflictError(
+            raise NodeStateConflictError(
                 detail=f"node {node_id} still has models registered: {', '.join(sorted(attached))}"
             )
 
@@ -168,4 +168,4 @@ class ManageNodes:
         # conflict rather than the database's unique-violation 500. The node
         # table is tiny, so a full scan costs nothing.
         if any(n.name == name for n in await self._nodes.list_all()):
-            raise ModelStateConflictError(detail=f"a node named {name!r} already exists")
+            raise NodeStateConflictError(detail=f"a node named {name!r} already exists")

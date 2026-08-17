@@ -21,12 +21,15 @@ from app.domain.entities.model import Model, ModelState, ResourceProfile, Runtim
 from app.domain.entities.routing_policy import RoutingCandidate, RoutingPolicy
 from app.domain.entities.user import User
 from app.domain.exceptions import (
+    ApiKeyStateConflictError,
+    DebugWindowError,
     InvalidCidrError,
     LastAdministratorError,
     ModelNotFoundError,
-    ModelStateConflictError,
     NotAuthorizedError,
+    RoutingPolicyStateConflictError,
     UserNotFoundError,
+    UserStateConflictError,
 )
 from app.domain.services.api_key_service import ApiKeyService
 from app.domain.services.debug_window import MAX_DEBUG_WINDOW_MINUTES
@@ -118,7 +121,7 @@ async def test_an_expiry_in_the_past_is_refused() -> None:
     dead on arrival and reads as a platform fault."""
     harness = KeyHarness()
 
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(ApiKeyStateConflictError):
         await harness.issue(expires_at=NOW - timedelta(days=1))
 
 
@@ -126,7 +129,7 @@ async def test_an_unknown_capability_is_refused() -> None:
     """Otherwise the typo becomes a key that verifies and can do nothing."""
     harness = KeyHarness()
 
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(ApiKeyStateConflictError):
         await harness.issue(scopes=["chatt"])
 
 
@@ -195,7 +198,7 @@ async def test_a_revoked_key_cannot_be_edited() -> None:
     issued = await harness.issue()
     await harness.use_case.revoke(ADMIN, issued.key.key_id)
 
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(ApiKeyStateConflictError):
         await harness.use_case.update(ADMIN, issued.key.key_id, name="again")
 
 
@@ -363,7 +366,7 @@ async def test_zero_minutes_closes_a_users_debug_window() -> None:
 async def test_a_users_debug_window_cannot_exceed_the_shared_ceiling() -> None:
     harness = UserHarness([make_user("admin-1", Role.ADMIN), make_user("u2")])
 
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(DebugWindowError):
         await harness.use_case.set_debug_window(ADMIN, "u2", minutes=MAX_DEBUG_WINDOW_MINUTES + 1)
 
     assert harness.users.rows["u2"].debug_logging_until is None
@@ -375,7 +378,7 @@ async def test_a_keys_debug_window_cannot_exceed_the_shared_ceiling() -> None:
     harness = KeyHarness()
     issued = await harness.issue()
 
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(DebugWindowError):
         await harness.use_case.set_debug_window(
             ADMIN, issued.key.key_id, minutes=MAX_DEBUG_WINDOW_MINUTES + 1
         )
@@ -390,7 +393,7 @@ async def test_a_disabled_account_cannot_have_its_debug_window_opened() -> None:
     harness = UserHarness([make_user("admin-1", Role.ADMIN), make_user("u2")])
     await harness.use_case.set_disabled(ADMIN, "u2", disabled=True)
 
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(UserStateConflictError):
         await harness.use_case.set_debug_window(ADMIN, "u2", minutes=60)
 
     assert harness.users.rows["u2"].debug_logging_until is None
@@ -452,7 +455,7 @@ async def test_a_policy_for_an_unknown_capability_is_refused() -> None:
         audit=FakeAudit(),
     )
 
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(RoutingPolicyStateConflictError):
         await use_case.save(ADMIN, "chatt", [RoutingCandidate("a", 1)])
 
 
@@ -466,7 +469,7 @@ async def test_an_empty_policy_is_refused() -> None:
         audit=FakeAudit(),
     )
 
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(RoutingPolicyStateConflictError):
         await use_case.save(ADMIN, "chat", [])
 
 

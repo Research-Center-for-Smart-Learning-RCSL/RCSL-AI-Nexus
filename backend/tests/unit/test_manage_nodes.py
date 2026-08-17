@@ -16,8 +16,8 @@ from app.domain.entities.model import Model, ModelState, ResourceProfile, Runtim
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.exceptions import (
     InvalidNodeAddressError,
-    ModelStateConflictError,
     NodeNotFoundError,
+    NodeStateConflictError,
     NotAuthorizedError,
 )
 from tests.unit.fakes import (
@@ -104,7 +104,7 @@ async def test_register_refuses_an_off_tailnet_address_and_stores_nothing() -> N
 async def test_register_refuses_a_duplicate_name() -> None:
     nodes, _, _, _, _ = build(nodes=(EXISTING,))
 
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(NodeStateConflictError):
         await nodes.register(
             ADMIN,
             name="studio",
@@ -166,7 +166,7 @@ async def test_delete_is_refused_while_models_are_attached() -> None:
     )
     nodes, repo, _, _, _ = build(nodes=(EXISTING,), models=(model,))
 
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(NodeStateConflictError):
         await nodes.delete(ADMIN, EXISTING.id)
 
     assert EXISTING.id in repo.rows, "the node must survive a refused delete"

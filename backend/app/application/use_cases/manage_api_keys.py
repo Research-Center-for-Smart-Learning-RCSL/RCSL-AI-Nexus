@@ -31,8 +31,9 @@ from app.domain.entities.api_key import ApiKey
 from app.domain.entities.audit import AuditAction
 from app.domain.entities.capability import ISSUABLE_CAPABILITIES
 from app.domain.exceptions import (
+    ApiKeyLifetimeError,
+    ApiKeyStateConflictError,
     InvalidCidrError,
-    ModelStateConflictError,
     NotAuthorizedError,
     UserNotFoundError,
 )
@@ -97,10 +98,19 @@ class ManageApiKeys:
         """
         now = self._clock.now()
         if expires_at <= now:
-            raise ModelStateConflictError(detail=f"expiry {expires_at} is not in the future")
+            raise ApiKeyStateConflictError(detail=f"expiry {expires_at} is not in the future")
         if expires_at > now + self._max_lifetime:
-            raise ModelStateConflictError(
-                detail=f"expiry {expires_at} is beyond the {self._max_lifetime.days} day maximum"
+            # The one refusal on this surface that reached a caller and told
+            # them nothing they could act on. On 2026-08-17 an operator sent
+            # this seven times in three minutes with 2029, then 2028, then
+            # 2027 -- each beyond the maximum, each answered with a message
+            # about *models* because this code was the platform's general 409
+            # -- and concluded the capability edit beside it was what had
+            # failed. `ApiKeyLifetimeError` carries the figure, so the number
+            # they are being held to arrives with the refusal.
+            raise ApiKeyLifetimeError(
+                self._max_lifetime.days,
+                detail=f"expiry {expires_at} is beyond the {self._max_lifetime.days} day maximum",
             )
 
     async def list_visible(self, actor: Actor) -> tuple[list[ApiKey], dict[str, datetime]]:
@@ -143,7 +153,7 @@ class ManageApiKeys:
 
         unknown = sorted(set(scopes) - ISSUABLE_CAPABILITIES)
         if unknown:
-            raise ModelStateConflictError(detail=f"unknown capabilities {unknown}")
+            raise ApiKeyStateConflictError(detail=f"unknown capabilities {unknown}")
 
         issued = self._service.issue()
         key = ApiKey(
@@ -193,7 +203,7 @@ class ManageApiKeys:
         if key.revoked_at is not None:
             # Editing a revoked key would produce something that looks active
             # in a list and is not. Reissue instead.
-            raise ModelStateConflictError(detail=f"key {key_id} is revoked")
+            raise ApiKeyStateConflictError(detail=f"key {key_id} is revoked")
 
         if expires_at is not None:
             self._assert_expiry_sane(expires_at)
@@ -201,7 +211,7 @@ class ManageApiKeys:
         if scopes is not None:
             unknown = sorted(set(scopes) - ISSUABLE_CAPABILITIES)
             if unknown:
-                raise ModelStateConflictError(detail=f"unknown capabilities {unknown}")
+                raise ApiKeyStateConflictError(detail=f"unknown capabilities {unknown}")
 
         updated = replace(
             key,
@@ -234,7 +244,7 @@ class ManageApiKeys:
                 "allowed_cidrs": [str(n) for n in updated.allowed_cidrs],
             },
         ):
-            raise ModelStateConflictError(detail=f"key {key_id} was revoked concurrently")
+            raise ApiKeyStateConflictError(detail=f"key {key_id} was revoked concurrently")
 
         # Scope changes are audited by name, because they are the edit that
         # changes what a leaked key can reach.
@@ -269,10 +279,10 @@ class ManageApiKeys:
         key = await self._require(key_id)
         self._require_owner_permission(actor, key.owner_id)
         if key.revoked_at is not None:
-            raise ModelStateConflictError(detail=f"key {key_id} is revoked")
+            raise ApiKeyStateConflictError(detail=f"key {key_id} is revoked")
 
         if not await self._keys.update_settings(key.key_id, {"debug_logging_until": until}):
-            raise ModelStateConflictError(detail=f"key {key_id} was revoked concurrently")
+            raise ApiKeyStateConflictError(detail=f"key {key_id} was revoked concurrently")
 
         await self._audit.record(
             actor,

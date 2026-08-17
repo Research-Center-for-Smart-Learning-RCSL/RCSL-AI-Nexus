@@ -18,7 +18,7 @@ from app.application.use_cases.issue_invitation import IssuedInvitation, IssueIn
 from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.entities.audit import AuditAction
 from app.domain.entities.tenant import Tenant
-from app.domain.exceptions import ModelStateConflictError
+from app.domain.exceptions import TenantStateConflictError
 from app.domain.ports.repositories import TenantRepositoryPort
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
 
@@ -56,7 +56,7 @@ class ManageTenants:
         if await self._tenants.get_by_name(name) is not None:
             # 409, consistent with how a taken model alias or node name is
             # reported rather than surfacing the unique-violation as a 500.
-            raise ModelStateConflictError(detail=f"a tenant named {name!r} already exists")
+            raise TenantStateConflictError(detail=f"a tenant named {name!r} already exists")
 
         tenant = Tenant(id=str(uuid.uuid4()), name=name)
         await self._tenants.save(tenant)

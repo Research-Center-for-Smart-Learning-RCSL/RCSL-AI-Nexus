@@ -21,9 +21,9 @@ from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.entities.chat import Message, MessageRole
 from app.domain.entities.prompt_template import MAX_SYSTEM_PROMPT_CHARS, PromptTemplate
 from app.domain.exceptions import (
-    ModelStateConflictError,
     NotAuthorizedError,
     PromptTemplateNotFoundError,
+    PromptTemplateStateConflictError,
 )
 from app.domain.services.prompt_assembly import apply_template
 from app.shared.clock import FixedClock
@@ -156,14 +156,14 @@ async def test_a_duplicate_name_is_refused_before_the_unique_index() -> None:
     constraint violation raised at commit, after the response has been sent."""
     use_case, _, _ = harness([template("welsh")])
 
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(PromptTemplateStateConflictError):
         await use_case.create(CURATOR, name="welsh", description="", system_prompt="Again.")
 
 
 async def test_renaming_onto_another_templates_name_is_refused() -> None:
     use_case, _, _ = harness([template("welsh"), template("terse")])
 
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(PromptTemplateStateConflictError):
         await use_case.update(CURATOR, "pt-terse", name="welsh")
 
 
@@ -185,14 +185,14 @@ async def test_an_empty_system_prompt_is_refused() -> None:
     selection is broken rather than that the template is empty."""
     use_case, _, _ = harness()
 
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(PromptTemplateStateConflictError):
         await use_case.create(CURATOR, name="empty", description="", system_prompt="   ")
 
 
 async def test_a_system_prompt_over_the_ceiling_is_refused() -> None:
     use_case, _, _ = harness()
 
-    with pytest.raises(ModelStateConflictError):
+    with pytest.raises(PromptTemplateStateConflictError):
         await use_case.create(
             CURATOR, name="huge", description="", system_prompt="x" * (MAX_SYSTEM_PROMPT_CHARS + 1)
         )
