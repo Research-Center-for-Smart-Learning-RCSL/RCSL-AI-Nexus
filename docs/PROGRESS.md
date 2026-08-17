@@ -282,6 +282,32 @@ with that person's real scopes, is refused without `model:write`, and leaves an
 `evaluation.imported` row under their name. What it costs is that nobody can
 import anonymously, which is the point.
 
+### The first import was five points wrong, and the table looked fine
+
+Loading the run put `qwen3.6:27b` on the screen at **81.9%** against its
+published 87.5%. Nothing raised, nothing logged, and the three rows were
+individually plausible.
+
+The harness writes every phase into one file and they are not alternatives.
+This entry's own 2026-08-15 record says three prompts were rewritten and re-run
+for every candidate after they were found to be measuring this repository's
+formatting rather than a model's capability -- that re-run is a `repair` phase,
+and the published figures are `full` with `repair` replacing the three tasks it
+covers. Importing `full` alone puts the superseded `IndentationError` zero back
+into the mean, reproducing the exact defect the re-run existed to remove.
+
+`--phase` is therefore repeatable and ordered, a later phase superseding an
+earlier one task by task, and `test_import_evaluation.py` pins the rule. **The
+stored run now reproduces the record exactly**: 94.4 / 89.8 / 87.5, sample
+counts 54 / 52 / 53, and the two truncations carried as no-result rather than
+as zero.
+
+**One figure legitimately differs from the table above and is not a defect.**
+Wall clock per round is 523-580 s for `gemma4` where this file records 551-615,
+because those are the `full`-phase timings and the stored run uses the repaired
+tasks' timings for the three tasks that were re-run. The scores were corrected
+by that re-run; so were the seconds it took to produce them.
+
 ### And the fabrication finding reached a user-facing screen
 
 2026-08-15 called `insufficient_data` "the finding here with the shortest path
