@@ -295,9 +295,13 @@ class Settings(BaseSettings):
       **That is no longer maintained here by hand, because it was not being
       maintained.** On 2026-08-17 this value was 98304 and exactly half of
       qwen36-35b-a3b-q8's registered 196608 — at the truncation point rather
-      than below it — while `chat` still fell back to qwen7b, whose 8192 puts
+      than below it — while `chat` still fell back to qwen7b, whose 8192 put
       the same point at 4096. Only the absence of long `chat` traffic had kept
-      that from being served. `RouteChatRequest._refuse_what_this_target_would_truncate`
+      that from being served, and `assist`, which routes to qwen7b alone, was
+      being served truncated whenever a conversation reached a second turn.
+      qwen7b was widened to its native 32768 that evening, which is the fix for
+      that capability; the rule below is what made it visible.
+      `RouteChatRequest._refuse_what_this_target_would_truncate`
       now applies the rule against whichever model routing actually picked, so
       this value bounds hardware cost and that one bounds correctness. Keep
       them consistent anyway: a global ceiling above a target's half turns what

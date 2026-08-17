@@ -571,9 +571,19 @@ class RouteChatRequest:
         across three values that live in three different places. On 2026-08-17
         that invariant was not holding: the global ceiling was 98304 and exactly
         half of `qwen36-35b-a3b-q8`'s registered 196608, so it sat *at* the
-        truncation point rather than below it, and `chat` still falls back to
-        `qwen7b`, whose 8192 puts the same point at 4096 — twenty-four times
+        truncation point rather than below it, and `chat` still fell back to
+        `qwen7b`, whose 8192 put the same point at 4096 — twenty-four times
         under the ceiling that admitted the request.
+
+        **The capability it actually bit was `assist`,** which routes to
+        `qwen7b` alone. The management assistant's own system prompt estimates
+        3551 tokens against that 4096, so the first reply longer than roughly
+        500 tokens made the second turn refuse — against a 1536-token reply
+        budget. Before this check the same conversation was served from a
+        prompt Ollama had cut the front off, which is where the instructions
+        and the nonce-delimited data boundary live. `qwen7b` was widened to its
+        native 32768 the same evening, putting that point at 16384; this check
+        is what turned an invisible truncation into a visible one.
 
         Checked here because this is the first line where the target is known.
         A fallback to a smaller model now refuses rather than answering from a
