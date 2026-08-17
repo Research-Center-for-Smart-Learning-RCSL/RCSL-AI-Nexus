@@ -1,7 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon } from 'lucide-react';
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+  CopyIcon,
+} from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -22,6 +29,7 @@ import { refusalToMarkdown, refusalsToMarkdown } from '@/features/refusals/markd
 import { FIGURE_LABELS, remedyFor, type Refusal } from '@/features/refusals/schema';
 import { useUsers } from '@/features/users/hooks/use-users';
 import { useCopyToClipboard } from '@/lib/use-copy-to-clipboard';
+import { cn } from '@/lib/utils';
 
 const PAGE_SIZE = 50;
 const BASE_COLUMNS = ['When', 'Code', 'What you were told', 'Where', 'Request', ''];
@@ -46,9 +54,16 @@ function figureText(value: unknown): string {
  * `composition` is a sentence and everything else is a number, so a uniform
  * grid would either wrap the numbers absurdly or truncate the sentence that
  * says which of three remedies applies. It is the field that ended the
- * 2026-08-17 incident, so it gets its own line.
+ * 2026-08-17 incident, so it gets its own line — clamped to that one line
+ * until the row is opened, because a page is read by scanning it.
  */
-function Figures({ figures }: { figures: Record<string, unknown> }) {
+function Figures({
+  figures,
+  expanded,
+}: {
+  figures: Record<string, unknown>;
+  expanded: boolean;
+}) {
   const keys = Object.keys(figures);
   if (keys.length === 0) return null;
   const short = keys.filter((k) => k !== 'composition');
@@ -80,7 +95,13 @@ function Figures({ figures }: { figures: Record<string, unknown> }) {
         // applies, so it is the one long value on this screen worth reading in
         // full. `break-words` is for a single unbroken token — a path, a base64
         // blob quoted back — which would otherwise run past the cap.
-        <p className="max-w-[34rem] font-mono text-[0.7rem] leading-relaxed break-words text-muted-foreground">
+        <p
+          className={cn(
+            'max-w-[34rem] font-mono text-[0.7rem] leading-relaxed break-words text-muted-foreground',
+            expanded ? '' : 'line-clamp-1',
+          )}
+          title={composition}
+        >
           {composition}
         </p>
       ) : null}
@@ -117,6 +138,22 @@ export function RefusalsTable() {
   const [code, setCode] = useState('');
   const [account, setAccount] = useState('');
   const [offset, setOffset] = useState(0);
+  // **Collapsed by default, because one row was four times the height of its
+  // neighbours.** The stored 413 carries a 287-character message, three
+  // figures, a 113-character composition and a 295-character remedy — about
+  // 700 characters of prose in one cell, next to a 429 whose whole message is
+  // eighteen. Capping the width fixed the table running off the right edge and
+  // did nothing about that, and a page of fifty is read by scanning it.
+  //
+  // Per row rather than a single flag: opening one refusal to read it should
+  // not re-lay-out every other row on the page.
+  const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (id: string) =>
+    setOpened((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
 
   const filters = {
     code: code.trim() || undefined,
@@ -274,6 +311,7 @@ export function RefusalsTable() {
               entries.map((entry) => {
                 const remedy = remedyFor(entry.code);
                 const account_ = describeAccount(entry, accounts);
+                const isOpen = opened.has(entry.id);
                 return (
                   <TableRow key={entry.id} className="align-top">
                     <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">
@@ -332,9 +370,21 @@ export function RefusalsTable() {
                         so; this table repeated it in four columns. */}
                     <TableCell>
                       <div className="max-w-[34rem] space-y-1">
-                        <p className="text-sm break-words">{entry.message}</p>
-                        <Figures figures={entry.figures} />
-                        {remedy ? (
+                        <p
+                          className={cn('text-sm break-words', isOpen ? '' : 'line-clamp-2')}
+                          title={entry.message}
+                        >
+                          {entry.message}
+                        </p>
+                        {/* The figures stay visible collapsed: they are short,
+                            they are what a reader scans for, and they are the
+                            part that differs between two refusals carrying the
+                            same sentence. */}
+                        <Figures figures={entry.figures} expanded={isOpen} />
+                        {/* The remedy is advice per *code*, not per row, so a
+                            page of fifty 413s would print the same paragraph
+                            fifty times. It belongs to the row somebody opened. */}
+                        {remedy && isOpen ? (
                           <p className="text-xs break-words text-muted-foreground">{remedy}</p>
                         ) : null}
                       </div>
@@ -369,7 +419,23 @@ export function RefusalsTable() {
                         usually read in order to send it to somebody who can
                         act on it, and selecting the rendered row loses the
                         composition's structure and truncates the id. */}
-                    <TableCell className="text-right">
+                    <TableCell className="text-right whitespace-nowrap">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        type="button"
+                        aria-expanded={isOpen}
+                        aria-label={
+                          isOpen ? 'Show less of this refusal' : 'Show all of this refusal'
+                        }
+                        onClick={() => toggle(entry.id)}
+                      >
+                        {isOpen ? (
+                          <ChevronUpIcon className="size-4" />
+                        ) : (
+                          <ChevronDownIcon className="size-4" />
+                        )}
+                      </Button>
                       <CopyRefusal refusal={entry} account={account_.name} />
                     </TableCell>
                   </TableRow>

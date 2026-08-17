@@ -305,7 +305,7 @@ that this repository keeps finding the hard way. The three existing rows carry
 an empty name, which is what they honestly hold; the screen falls back to the
 account id rather than inventing one.
 
-### The Refusals table capped four columns that could each widen it off-screen
+### The Refusals table could be widened, and stretched, by its own content
 
 The audit log has a comment explaining that a width on a `td` is advisory under
 the automatic table layout these tables use — the column is sized from its
@@ -317,11 +317,25 @@ that grows with the conversation, figures whose set is open, and a message that
 is a paragraph.
 
 Every cap now constrains a block inside the cell. **Prose wraps and identifiers
-truncate**, which is the distinction worth keeping: `composition` names which of
-three remedies applies and is the one long value here worth reading in full, so
-it wraps with `break-words` for a pathological unbroken token; a path, a request
-id, a key handle and a figure are all quoted rather than read, so they truncate
-with the whole value on the hover.
+truncate**, which is the distinction worth keeping: a path, a request id, a key
+handle and a figure are all quoted rather than read, so they truncate with the
+whole value on the hover.
+
+**And capping the width did nothing about the height, which was the same
+oversight one axis over.** The stored `413` carries a 287-character message,
+three figures, a 113-character composition and a 295-character remedy — about
+seven hundred characters of prose in one cell, beside a `429` whose entire
+message is eighteen. One row stood four times taller than its neighbours, and
+the remedy is advice per *code* rather than per row, so a page of fifty 413s
+printed the same paragraph fifty times.
+
+So a row is collapsed until somebody opens it: the message clamps to two lines,
+the composition to the one line it is scanned on, and the remedy is not in the
+document at all. The figures stay, because they are short, they are what a
+reader scans for, and they are the part that differs between two refusals
+carrying the same sentence. Opening is per row — reading one refusal should not
+re-lay-out the rest of the page — and the copy button is unaffected either way,
+because it builds from the data rather than from what is on screen.
 
 ### A review of the two features found seven things, and all seven were real
 
