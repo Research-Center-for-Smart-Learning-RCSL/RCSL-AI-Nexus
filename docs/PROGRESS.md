@@ -226,6 +226,44 @@ remains the Phase 3 increment.
 
 ## 2026-08-17
 
+### Every refusal this platform can produce, sorted by what it tells the caller
+
+Counted because two people lost an evening that day to refusals that were
+correct and silent about their subject, and the fixes for those two do not help
+the next one. **55 `DomainError` subclasses** after that evening's split, 45
+before it. Nine carry a figure the caller can act on; the rest carry a sentence.
+
+**Already right, and the nine to copy.** `context_too_long` (`estimated`,
+`limit`, `composition`), `capability_not_issued` (`capability`, `available`),
+`api_key_lifetime` (`maximum_days`), `insufficient_memory` (`required_gb`,
+`available_gb`), `overloaded` / `quota_exceeded` / `rate_limited`
+(`retry_after_seconds`), `weak_password` (`reason`), and `upload_rejected`,
+which passes its whole `detail` through on the stated ground that it describes
+the caller's own file.
+
+**Wrong subject — fixed that evening.** `ModelStateConflictError` answered
+every 409 on the admin surface: 34 raises across eleven modules, eleven of them
+about models, all of them saying "The model is not in a state that allows this
+operation." Split per subject, with `ApiKeyLifetimeError` carrying the number.
+
+**Right subject, no figures — the remaining work.** The rule is stated and
+neither the limit nor the value that broke it is:
+
+| error | what it withholds |
+|---|---|
+| `retention_window_too_long` / `_too_short` | the ceiling and the floor, in days |
+| `invalid_cidr` | which of the ranges was rejected |
+| `invalid_node_address` | what the tailnet range is |
+| `request_too_large` | the size sent and the limit, both of which `context_too_long` now gives |
+
+**The criterion that decides these is not a new argument.** It was settled for
+`composition` and `limit` the same day: a figure may reach the caller when it
+describes the caller's own payload back to them, or when it is a policy this
+deployment publishes. It may not when it describes the inventory — which is why
+the model's alias is still withheld on a fallback refusal, and why `detail`
+still does not leave the process. Everything in the table above passes that
+test; none of it has been written.
+
 ### The estimator, measured against the tokeniser on the payloads that were refused
 
 Ground truth is Ollama's own `prompt_eval_count` through the resident runner,
