@@ -190,8 +190,10 @@ class Settings(BaseSettings):
     with every slot held waited producing zero bytes — no status, no code —
     until their own client timeout killed the connection, which is
     indistinguishable from a hung deployment. A slot can legitimately be held
-    for 25 minutes (`request_timeout_seconds` + `generation_deadline_seconds`),
-    so that silence had real depth.
+    for 35 minutes (`request_timeout_seconds` + `generation_deadline_seconds`),
+    so that silence had real depth. That figure said 25 minutes until
+    2026-08-17: it was written against a 600-second read timeout and was not
+    moved when the context raise of 2026-08-14 took that timeout to 1200.
 
     Two minutes keeps the ordinary case — a slot frees within a typical
     generation's tail — while refusing loudly, with `Retry-After`, once the

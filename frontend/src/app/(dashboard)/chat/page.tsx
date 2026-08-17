@@ -16,24 +16,27 @@ export default function ChatPage() {
         <h1 className="font-heading text-lg font-semibold">Chat</h1>
         <p className="max-w-prose text-sm text-muted-foreground">
           Ask this deployment&apos;s models a question directly, signed in as
-          yourself — no API key is involved, and nothing here is reachable from
-          outside. Choose a <strong>capability</strong> rather than a model: the
+          yourself. No API key is involved: this screen is authorised by your
+          own identity, and no key issued here can reach it. Choose a{' '}
+          <strong>capability</strong> rather than a model: the
           name describes the job, and the platform decides which model serves
           it, so conversations keep working when the models behind a name are
           replaced.
         </p>
         <p className="mt-2 max-w-prose text-sm text-muted-foreground">
           Replies stream as they are produced, and <strong>Stop</strong> ends a
-          reply that is going nowhere — it stops the work on the server rather
-          than only hiding it.
+          reply that is no longer worth waiting for — it stops the work on the
+          server rather than only hiding it.
         </p>
         <p className="mt-2 max-w-prose text-sm text-muted-foreground">
-          Two things change what a model is working from. A{' '}
-          <strong>prompt template</strong> applies saved standing instructions
-          to the conversation, and is chosen per conversation rather than set
-          once. <strong>Retrieval</strong> has answers drawn from your
-          tenant&apos;s uploaded documents; it is off unless switched on, so by
-          default a reply comes from the model alone.
+          Two controls change how a reply is produced.{' '}
+          <strong>Thinking</strong> lets a deliberating model reason before it
+          answers; clearing it asks for a direct reply, which is the remedy
+          when a model reasons at length and produces no answer at all.{' '}
+          <strong>Answer from the knowledge base</strong> draws the reply from
+          your tenant&apos;s uploaded documents; it is off unless switched on,
+          so by default a reply comes from the model alone. Prompt templates
+          are not applied here — they are selected by callers using the API.
         </p>
       </div>
       <div className="min-h-0 flex-1">
