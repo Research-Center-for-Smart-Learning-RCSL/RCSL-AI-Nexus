@@ -528,6 +528,19 @@ Every response carries `X-Request-Id`, and every error body repeats it as
 keys on it, and it is the difference between an administrator grepping
 timestamps and finding the exact line.
 
+**Since 2026-08-18 the request id is enough on its own for a refusal.** Every
+refusal the platform produces is stored with the code, the status, the message
+the caller received and the figures that came with it, and an administrator
+reads it back on the **Refusals** screen — so "what happened at 19:16?" is a
+search rather than a grep through container logs, which is what it was twice on
+2026-08-17. A `429` is the case that gains most: the wait it asked for is a
+header, and the header is gone by the time anybody comes to look.
+
+The screen shows a caller their own refusals as well, so an integrator with an
+account can answer the question without asking anybody. Nothing about the
+request is stored — no messages, no tool definitions, no model name — so what
+is there is exactly the answer that was sent.
+
 For an active debugging session, open a **debug window** on the key (API keys
 page, the Debug button: one hour per press, capped at 24, audited). While it
 is open, error responses to that key carry `error.detail` — the

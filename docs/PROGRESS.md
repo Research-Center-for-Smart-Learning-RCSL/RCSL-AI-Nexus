@@ -36,8 +36,10 @@ natively and holds `qwen3.6:35b-a3b-q8_0`, `qwen2.5:7b` and `nomic-embed-text` �
 `glm-4.7-flash:q8_0` before it, and `gemma4:31b-it-qat`, the q4 this ran on for
 part of a day.
 
-**Those five lines were corrected on 2026-08-16 and nothing else in this block
-was re-checked.** They named `gemma4-31b-q8` and a 36.3 GiB figure, both made
+**The two count rows were corrected on 2026-08-18 and the five lines above them
+on 2026-08-16; nothing else in this block has been re-checked.** The counts had
+drifted by a third — 742 unit tests against 907, twelve migrations against
+fifteen — which is enough to be quoted at somebody and enough to be wrong. They named `gemma4-31b-q8` and a 36.3 GiB figure, both made
 untrue that day by the entry at the top of this file. The rule above still
 applies to every other sentence here.
 
@@ -51,8 +53,8 @@ last row in security.md §13.0 that said "not implemented".
 
 | | |
 |---|---|
-| Backend | 30 use cases, 25 routers, 17 entity modules, 12 migrations (head `a1d6e93c7f52`), 742 unit tests, 104 integration tests that skip without `TEST_DATABASE_URL` |
-| Frontend | 19 feature folders, 15 screens, 241 tests, types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
+| Backend | 32 use cases, 27 routers, 19 entity modules, 15 migrations (head `f3c8a15d27be`), 907 unit tests, 118 integration tests that skip without `TEST_DATABASE_URL` |
+| Frontend | 21 feature folders, 20 screens, 296 tests, types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
 | Gates | ruff, ruff-format, strict mypy, pytest; tsc, eslint, vitest, a real `next build`, five Playwright paths; Trivy, pip-audit and pnpm audit advisory-only. All green — **and this row was false from 2026-08-07 to 2026-08-08**, see below |
 
 **Verified on real hardware**, not only in tests: the full inference path with

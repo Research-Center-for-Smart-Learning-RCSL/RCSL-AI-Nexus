@@ -63,7 +63,7 @@ marked done, and not actually in force.
 - [x] `interfaces/http/middleware/identity.py`: per-entrance identity resolution, installed by dependency override so an entrance that chooses neither fails closed
 - [x] `infrastructure/di.py` composition root, Ollama only — **MLX since Phase 2**, which cost one entry here and one adapter file
 - [x] `infrastructure/config.py` with `secrets_dir`, and a startup assertion that `AUTH_MODE=dev` cannot run under `ENV=production`
-- [x] Alembic migrations: `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `invitations`, `recovery_codes`, `usage_records`, `audit_log`. **Twelve revisions as of 2026-08-08**, head `a1d6e93c7f52`; the later ones add `tenants`, the knowledge base, model observations, `api_keys.created_at`, `usage_records.prompt_tokens`, `routing_policies.thinking`, `prompt_templates` and `prompt_logs`
+- [x] Alembic migrations: `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `invitations`, `recovery_codes`, `usage_records`, `audit_log`. **Fifteen revisions as of 2026-08-18**, head `f3c8a15d27be`; the later ones add `tenants`, the knowledge base, model observations, `api_keys.created_at`, `usage_records.prompt_tokens`, `routing_policies.thinking`, `prompt_templates`, `prompt_logs`, the model evaluations, and `refusals` with the `actor_display` its screen needed
 - [x] `tests/unit`: routing selection, streaming lifecycle (slot release on disconnect), dev-mode fail-fast, header stripping, login rules, session invalidation, TOTP replay, password policy, entrance wiring
 - [x] `tests/integration`: repository invariants, and a fresh deployment through bootstrap, invitation, enrolment and login
 

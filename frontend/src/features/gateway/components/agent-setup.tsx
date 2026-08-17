@@ -433,8 +433,11 @@ wire_api = "responses"`}
             is the token budget, which says how long it needs and does not come
             back by retrying. If your client only reports{' '}
             <em>exceeded retry limit, last status: 429</em>, it has swallowed
-            the body; quote the request id it prints and an administrator can
-            find the refusal in the gateway log.
+            the body; quote the request id it prints. Since 2026-08-18 every
+            refusal is stored with the figures it carried, so an administrator
+            can look that id up on the Refusals screen rather than reading a
+            container log — including the wait a <code>429</code> asked for,
+            which is otherwise a header nobody still has.
           </dd>
 
           <dt className="font-mono text-xs text-muted-foreground">
@@ -478,8 +481,9 @@ wire_api = "responses"`}
             definitions, and what share the largest single turn took — the
             fastest way to tell &quot;the conversation grew&quot; from &quot;one
             file is 97% of it&quot;. If your client has swallowed it, quote the
-            request id it printed and an administrator can read the same
-            breakdown from the gateway log.
+            request id it printed: the same breakdown is stored with the
+            refusal, and an administrator can read it back from the Refusals
+            screen without going near a container log.
             <br />
             <strong>Budget from where a conversation starts, not from zero.</strong>{' '}
             Three sessions measured here on 2026-08-17 began at about 42,000
