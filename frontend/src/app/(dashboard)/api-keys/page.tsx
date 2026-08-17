@@ -30,7 +30,7 @@ export default function ApiKeysPage() {
           {
             href: '/agent-setup',
             label: 'Connect an agent',
-            note: 'the same key wired into a coding agent, step by step, including the two limits below that are wrong by default for that use',
+            note: 'the same key configured in a coding agent, step by step, including the two limits whose defaults are wrong for that use',
           },
           {
             href: '/usage',

@@ -49,6 +49,15 @@ import { useAssistantSurface } from '@/features/assistant/context';
  * time. The same revision added the sections integrators had to learn by
  * surprise: client timeout sizing and the `extra_body` route to the
  * platform's extension fields.
+ *
+ * Revised on 2026-08-17 for three things this page said that had stopped being
+ * true. The timeout section still described the 600-second read timeout and a
+ * prompt-evaluation rate measured before the context raise of 2026-08-14, so
+ * it advertised a 25-minute worst case and a 1600-second client timeout
+ * against a deployment whose real bounds are 1200 + 900 seconds. The
+ * `prompt_template` request field was missing entirely, on a page whose own
+ * introduction promises every field a request accepts. And "two fields are
+ * refused" was followed by a list of four.
  */
 export function ApiReference() {
   const { data, isLoading, error, refetch } = useGatewayInfo();
@@ -212,11 +221,22 @@ export function ApiReference() {
             <code>use_knowledge</code> is set. It can only narrow: the tenant
             scope is fixed by your key and no value here widens it.
           </dd>
+          <dt className="font-mono text-muted-foreground">prompt_template</dt>
+          <dd>
+            An extension. Names one of your tenant&apos;s saved prompt
+            templates, whose text is placed at the front of the conversation,
+            ahead of any system message you send, which is kept rather than
+            replaced. There is no substitution: a template is fixed text, and
+            what you choose is which one rather than what it says. A name that
+            does not resolve is a <code>404</code>, so a request never quietly
+            runs without the template it asked for.
+          </dd>
         </dl>
         <p className="text-sm text-muted-foreground">
           <strong>
-            <code>think</code>, <code>use_knowledge</code> and{' '}
-            <code>knowledge_collection</code> are not OpenAI schema fields
+            <code>think</code>, <code>use_knowledge</code>,{' '}
+            <code>knowledge_collection</code> and{' '}
+            <code>prompt_template</code> are not OpenAI schema fields
           </strong>
           , and the official SDKs refuse unknown named arguments rather than
           forwarding them. Send them through the SDK&apos;s escape hatch — in
@@ -254,9 +274,9 @@ export function ApiReference() {
           </strong>{' '}
           The ones you might reasonably expect to work and which do nothing:{' '}
           <code>response_format</code>, <code>parallel_tool_calls</code>,{' '}
-          <code>frequency_penalty</code> and <code>presence_penalty</code>. Two
-          fields are refused rather than ignored, because serving them wrongly
-          would be worse than saying no: <code>n</code> other than{' '}
+          <code>frequency_penalty</code> and <code>presence_penalty</code>.
+          Four requests are refused rather than ignored, because serving them
+          wrongly would be worse than refusing: <code>n</code> other than{' '}
           <code>1</code>, a <code>tool_choice</code> of <code>required</code>{' '}
           or a named function, the deprecated <code>functions</code> /{' '}
           <code>function_call</code> spellings (send <code>tools</code> and{' '}
@@ -527,30 +547,32 @@ data: [DONE]`}
 
       <section className="space-y-3">
         <h2 className="font-heading text-base font-semibold">
-          Timeouts: size your client&apos;s before it sizes you
+          Timeouts, and sizing your client&apos;s
         </h2>
         <p className="text-sm text-muted-foreground">
           <strong>
             The first token of a large request can legitimately take close to
-            ten minutes to arrive.
+            twenty minutes to arrive.
           </strong>{' '}
-          Prompt evaluation on this hardware runs at a measured ~118 tokens per
-          second and produces no bytes while it works, so a conversation near
-          the context ceiling is minutes of silence before anything streams —
-          that silence is work, not failure. One request&apos;s worst case,
-          end to end, is <strong>25 minutes</strong>: up to 10 reading the
-          prompt, up to 15 writing the answer.
+          Prompt evaluation produces no bytes while it runs, so a conversation
+          near the context ceiling is minutes of silence before anything
+          streams — that silence is work, not failure. Two bounds apply in
+          sequence, and they compose: the platform allows up to 20 minutes
+          between bytes from the runtime, which is what bounds reading the
+          prompt, and up to 15 minutes of wall clock for writing the answer,
+          counted from the first chunk. One request&apos;s worst case, end to
+          end, is therefore <strong>35 minutes</strong>.
         </p>
         <p className="text-sm text-muted-foreground">
           Most SDK defaults are shorter than that. The OpenAI Python
           SDK&apos;s default overall timeout is 600 seconds, so on a long
           agent conversation <em>your own client</em> gives up first, and the
           resulting connection error is indistinguishable from a platform
-          failure. Set the read timeout to at least 1600 seconds for agent
-          workloads:
+          failure. Set the client&apos;s timeout to at least 2100 seconds for
+          agent workloads:
         </p>
         <CodeBlock
-          code={`client = OpenAI(base_url="${baseUrl}/v1", api_key=key, timeout=1600.0)`}
+          code={`client = OpenAI(base_url="${baseUrl}/v1", api_key=key, timeout=2100.0)`}
           label="Copy the timeout example"
         />
         <p className="text-sm text-muted-foreground">

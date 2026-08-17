@@ -188,8 +188,9 @@ const NAV_GROUPS: NavGroup[] = [
         label: 'Prompt templates',
         icon: <FileTextIcon className="size-4" />,
         // `prompt:read` is a base scope, unlike `knowledge:read`, so this is
-        // the one Knowledge-group entry a `user` sees: choosing a template is
-        // part of asking a question, and the chat picker reads the same list.
+        // the one Content entry a `user` sees: a template is named by its
+        // caller, so whoever sends `prompt_template` needs to read the list.
+        // The chat panel has no template picker; only API callers select one.
         requires: 'prompt:read',
       },
       {

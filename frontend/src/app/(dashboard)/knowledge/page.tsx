@@ -24,8 +24,8 @@ export default function KnowledgePage() {
           the model does not read the whole library, so a large collection does
           not slow answers down, but a document that never matches is never
           used. The <strong>Search</strong> tab runs retrieval on its own, which
-          is how to check what a question would actually find before blaming an
-          answer.
+          is how to check what a question retrieves before attributing a poor
+          answer to the documents behind it.
         </p>
         <p className="mt-2 max-w-prose text-sm text-muted-foreground">
           Retrieval is off unless a request asks for it. Everything here belongs

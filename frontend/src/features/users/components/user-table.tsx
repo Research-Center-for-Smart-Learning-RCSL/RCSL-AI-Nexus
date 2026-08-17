@@ -284,7 +284,7 @@ export function UserTable() {
           if (!open) setDeleting(null);
         }}
         title={`Remove ${deleting?.display_name ?? 'this user'}?`}
-        description="Their sessions end immediately and any API keys they own should be revoked separately."
+        description="Their sessions end immediately, and the API keys they own are deleted with the account, so anything using one stops working at once. The audit log keeps what the account did."
         confirmLabel="Remove"
         destructive
         onConfirm={async () => {

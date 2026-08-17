@@ -132,10 +132,9 @@ export function AgentSetup() {
           <Step n={2} title="Install the client">
             <CodeBlock code={'npm install -g @openai/codex'} label="Copy" />
             <p>
-              <strong>This needs Node.js</strong>, which is the first thing
-              people ask about and the answer is yes. Install it from
-              nodejs.org, or <code>winget install OpenJS.NodeJS.LTS</code> on
-              Windows, then reopen the terminal. On Windows PowerShell may refuse to run{' '}
+              <strong>Node.js is required.</strong> Install it from nodejs.org,
+              or <code>winget install OpenJS.NodeJS.LTS</code> on Windows, then
+              reopen the terminal. On Windows PowerShell may refuse to run{' '}
               <code>npm</code> until you allow local scripts once:{' '}
               <code>Set-ExecutionPolicy -Scope CurrentUser RemoteSigned</code>.
               That is per-user, needs no administrator, and is the value
@@ -457,7 +456,7 @@ wire_api = "responses"`}
             prompt of 32231 tokens and a reply of 537, against a 32768-token
             window. The reply was exactly what was left, and the platform
             reported it as a normal completion, so the client had nothing to
-            show. The window is now 131072 tokens — twice what a caller may
+            show. The window is now 196608 tokens — twice what a caller may
             send — and a truncated reply now ends as{' '}
             <code>response.incomplete</code>. If you still see this, it is the
             output ceiling rather than the window, and the response says so.

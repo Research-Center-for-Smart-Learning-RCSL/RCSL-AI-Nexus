@@ -18,10 +18,11 @@ export default function PromptTemplatesPage() {
           style, a required output language, or a tone to keep to.
         </p>
         <p className="mt-2 max-w-prose text-sm text-muted-foreground">
-          Applying one is a choice made per request: pick it in the chat
-          composer, or send its name as{' '}
+          Applying one is a choice made per request: send its name as{' '}
           <code className="font-mono text-xs">prompt_template</code> from your
-          own code. The text is placed at the front of the conversation, ahead
+          own code. The chat screen in this application does not offer them, so
+          a template affects API callers only. The text is placed at the front
+          of the conversation, ahead
           of any instructions the caller sends, and those are kept rather than
           replaced. A name that does not exist is refused, so a request never
           quietly runs without the template it asked for.
@@ -41,7 +42,7 @@ export default function PromptTemplatesPage() {
           {
             href: '/chat',
             label: 'Chat',
-            note: 'the composer lists these templates, and picking one applies it to that conversation only',
+            note: 'the same models, asked directly and signed in as yourself; templates are not applied there',
           },
           {
             href: '/api-docs',
