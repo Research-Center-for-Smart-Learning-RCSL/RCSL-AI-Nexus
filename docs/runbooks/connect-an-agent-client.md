@@ -304,6 +304,37 @@ found, because a conversation created against that provider still references it.
 Deleting that conversation cleared it; the state file was renamed aside first
 and turned out not to be the cause.
 
+### 3.3 What a conversation costs before anybody types
+
+**A new conversation does not start at zero, and the part that is not zero is
+the part a client controls.** Three sessions opened on 2026-08-17 began at
+42,005, 42,427 and 42,080 estimated tokens -- tool definitions, the agent's
+instruction file, and whatever was pasted to start. Against that day's ceiling
+that left about 38,000 for the work, and the turns that wrote files cost around
+10,000 each, so the session had roughly four turns in it. **The operator read
+that as the platform getting weaker over the evening.** It was the starting
+position.
+
+The gateway now says so without waiting for a refusal: when tool definitions are
+at least half the estimate and worth at least a tenth of the ceiling, a line is
+logged naming the share, the count and that they are resent every turn. It fires
+on requests that succeed, which is the point -- the two clients diagnosed that
+day were both diagnosed from a refusal, after the work was lost.
+
+Three things to check on the client, in order of what they usually cost:
+
+- **The tool list.** Resent whole on every turn, so it is charged once per step
+  of a task rather than once per task. See 3.2 for the case where it exceeded
+  the entire ceiling on its own.
+- **The instructions file** (`AGENTS.md` and whatever the client layers on top).
+  Also resent every turn.
+- **What gets read into the conversation.** A large file read once stays in the
+  payload for every subsequent turn, so re-reading it is not the expensive part
+  -- reading it at all is.
+
+None of these are settings on this platform, and the ceiling is not the lever
+that fixes them: doubling it doubles how long a session runs before it stops.
+
 ## 4. Check it end to end
 
 Before involving the agent, confirm the platform half with curl. A failure here

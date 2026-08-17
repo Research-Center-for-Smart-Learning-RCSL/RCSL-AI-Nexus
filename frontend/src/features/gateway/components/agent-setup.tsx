@@ -475,6 +475,14 @@ wire_api = "responses"`}
             request id it printed and an administrator can read the same
             breakdown from the gateway log.
             <br />
+            <strong>Budget from where a conversation starts, not from zero.</strong>{' '}
+            Three sessions measured here on 2026-08-17 began at about 42,000
+            tokens before any work — tool definitions, the agent&apos;s
+            instruction file, and whatever was pasted to open with — and the
+            turns that wrote files cost around 10,000 each, which is four turns
+            of room. All three of those are the client&apos;s, and raising the
+            ceiling only changes how long a session runs before it stops.
+            <br />
             Reached sooner than the character count suggests if you work in
             Chinese: measured against the model now serving this deployment,
             Traditional Chinese costs about one token per 1.5 characters against
