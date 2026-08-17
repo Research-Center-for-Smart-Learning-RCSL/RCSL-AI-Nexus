@@ -56,8 +56,8 @@ from app.shared.clock import SystemClock
 logger = logging.getLogger(__name__)
 
 
-def parse_samples(lines: Sequence[str], *, phase: str = "") -> list[EvaluationSample]:
-    """Read the harness's JSONL into domain samples, optionally one phase of it.
+def parse_samples(lines: Sequence[str], *, phases: Sequence[str] = ()) -> list[EvaluationSample]:
+    """Read the harness's JSONL into domain samples, honouring phase order.
 
     Unparseable lines are skipped rather than fatal, matching `analyse.py`:
     the file is appended to across rounds and a run interrupted mid-write
@@ -65,12 +65,27 @@ def parse_samples(lines: Sequence[str], *, phase: str = "") -> list[EvaluationSa
     above it. A line that parses but names no model or task is a different
     thing — that is a shape this importer does not understand — so it raises.
 
-    The phase filter is applied here, on the raw row, because the domain sample
+    **A later phase supersedes an earlier one, task by task.** The harness
+    writes every phase into the same file, and they are not alternatives: on
+    2026-08-15 three prompts were found to be measuring this repository's own
+    formatting rather than a model's capability, and the fix was to rewrite
+    them and re-run those three tasks for every candidate under a `repair`
+    phase. The published figures are `full` with `repair` replacing the tasks
+    it covers, and averaging the two together instead reproduces the defect the
+    re-run existed to remove — `qwen3.6:27b` comes out at 81.9% against its
+    real 87.5%, because the run where it scored zero for an `IndentationError`
+    is still in the mean.
+
+    So the phases are given in order and the last one wins for any task it
+    contains. With no phases named, everything in the file is used, which is
+    only right for a file holding one run.
+
+    The filter is applied here, on the raw row, because the domain sample
     deliberately has no phase of its own: a stored run has one phase, and a
     field per sample would invite a run that mixes a calibration read with a
     comparison read and averages them together.
     """
-    samples: list[EvaluationSample] = []
+    by_phase: dict[str, list[tuple[str, EvaluationSample]]] = {}
     for line in lines:
         line = line.strip()
         if not line:
@@ -82,21 +97,35 @@ def parse_samples(lines: Sequence[str], *, phase: str = "") -> list[EvaluationSa
             continue
         if not isinstance(row, dict) or "model" not in row or "task" not in row:
             raise ValueError(f"sample carries no model or task: {line[:120]}")
-        if phase and str(row.get("phase", "")) != phase:
+        phase = str(row.get("phase", ""))
+        if phases and phase not in phases:
             continue
-        samples.append(
-            EvaluationSample(
-                model_ref=str(row["model"]),
-                task=str(row["task"]),
-                group=str(row.get("group", "")),
-                round_index=int(row.get("round", 0)),
-                score=None if row.get("score") is None else float(row["score"]),
-                generation_tokens_per_second=_optional_float(row.get("gen_tok_s")),
-                prompt_tokens=_optional_int(row.get("prompt_eval_count")),
-                wall_seconds=_optional_float(row.get("wall_s")),
+        by_phase.setdefault(phase, []).append(
+            (
+                str(row["task"]),
+                EvaluationSample(
+                    model_ref=str(row["model"]),
+                    task=str(row["task"]),
+                    group=str(row.get("group", "")),
+                    round_index=int(row.get("round", 0)),
+                    score=None if row.get("score") is None else float(row["score"]),
+                    generation_tokens_per_second=_optional_float(row.get("gen_tok_s")),
+                    prompt_tokens=_optional_int(row.get("prompt_eval_count")),
+                    wall_seconds=_optional_float(row.get("wall_s")),
+                ),
             )
         )
-    return samples
+
+    ordered = list(phases) if phases else list(by_phase)
+    superseded: set[str] = set()
+    # Walked backwards, so the last phase named keeps every task it covers and
+    # each earlier one contributes only the tasks nothing later re-ran.
+    kept: list[list[EvaluationSample]] = []
+    for phase in reversed(ordered):
+        entries = by_phase.get(phase, [])
+        kept.append([sample for task, sample in entries if task not in superseded])
+        superseded.update(task for task, _ in entries)
+    return [sample for block in reversed(kept) for sample in block]
 
 
 def _optional_float(value: object) -> float | None:
@@ -159,10 +188,12 @@ async def run(args: argparse.Namespace) -> int:
     settings = get_settings()
     init_engine(settings)
     try:
-        # The harness writes `pilot` and `full` into the same file, and the two
-        # answer different questions: one calibrates the task set, the other
-        # compares candidates. Importing without naming a phase mixes them.
-        samples = parse_samples(sys.stdin.readlines(), phase=args.phase)
+        # The harness writes every phase into the same file. `pilot` and
+        # `full` answer different questions — one calibrates the task set, the
+        # other compares candidates — and a repair phase re-runs tasks whose
+        # earlier result measured something other than the model. Both are
+        # reasons to name the phases rather than take the file whole.
+        samples = parse_samples(sys.stdin.readlines(), phases=args.phase)
         if not samples:
             raise SystemExit("no samples on stdin")
 
@@ -170,7 +201,9 @@ async def run(args: argparse.Namespace) -> int:
             samples,
             run_id=str(uuid.uuid4()),
             label=args.label,
-            phase=args.phase or "full",
+            # The last phase named is the one the run is filed under, since
+            # it is the one whose numbers survive superseding.
+            phase=args.phase[-1] if args.phase else "full",
             ran_at=_parse_ran_at(args.ran_at),
             harness_ref=args.harness_ref,
             caveats=args.caveat,
@@ -212,7 +245,15 @@ def main() -> int:
     parser.add_argument("--label", required=True, help="how operators will refer to this run")
     parser.add_argument("--ran-at", required=True, help="when it ran (ISO date or timestamp)")
     parser.add_argument("--harness-ref", default="", help="path or commit of the harness")
-    parser.add_argument("--phase", default="", help="keep only this harness phase")
+    parser.add_argument(
+        "--phase",
+        action="append",
+        default=[],
+        help=(
+            "harness phase to include; repeatable, and a later one supersedes "
+            "an earlier one task by task (e.g. --phase full --phase repair)"
+        ),
+    )
     parser.add_argument("--note", default="", help="a sentence about the run")
     parser.add_argument(
         "--caveat",
