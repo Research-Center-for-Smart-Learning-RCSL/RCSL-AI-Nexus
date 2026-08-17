@@ -84,6 +84,7 @@ import type {
   PromptLogTranscript,
 } from '@/features/prompt-logs/schema';
 import type { PromptTemplate } from '@/features/prompt-templates/schema';
+import type { Refusal, RefusalPage } from '@/features/refusals/schema';
 import type { CreateTenantResponse, Tenant } from '@/features/tenants/schema';
 import type { UsageAnalytics } from '@/features/usage/schema';
 import type { Invitation, RoleCatalogueEntry, User } from '@/features/users/schema';
@@ -166,6 +167,13 @@ const _promptLogTranscript: Agrees<
   PromptLogTranscript,
   Api['PromptLogTranscriptResponse']
 > = true;
+
+// The envelope as well as the row, because `scoped_to_self` is the field the
+// screen reads to say whether it is showing a complete answer or a narrowed
+// one — a rename of it would leave every row perfectly correct and the sentence
+// above the table silently wrong.
+const _refusal: Agrees<Refusal, Api['RefusalResponse']> = true;
+const _refusalPage: Agrees<RefusalPage, Api['RefusalListResponse']> = true;
 
 // --- knowledge base ------------------------------------------------------
 const _collection: Agrees<Collection, Api['KnowledgeCollectionResponse']> = true;

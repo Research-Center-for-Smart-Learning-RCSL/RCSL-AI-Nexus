@@ -237,9 +237,29 @@ Ports the domain defines, and what implements them:
 | `AuditPort` | `PostgresAudit` | **no adapter, no call sites** |
 | `JobProgressPort` | Redis | **no adapter** |
 | `KnowledgeRepositoryPort`, `MetricsPort` | Phase 2 | correctly absent |
+| `TokenCounterPort` | `GgufTokenCounter` | yes |
 
 A port with no adapter is not neutral: `AuditPort` and the `audit_log` table
 both exist, which reads as an audit trail that is in fact never written.
+
+**Every domain error is stored where its caller can read it (§9.5).** The shared
+exception handler writes a `refusals` row carrying the code, the status, the
+public message and the caller-facing figures — built by the same function that
+builds the response body, so a stored refusal cannot disagree with the one that
+was sent. The handler is the write point rather than any use case because it is
+the only place every `DomainError` passes through: the refusal that motivated
+the table was an API key's expiry on the admin surface, which reaches no
+inference code at all.
+
+**`TokenCounterPort` is the one port that may answer "I cannot say".** It counts
+a prompt with the vocabulary and chat template read out of the GGUF the target's
+`ref` resolves to, and returns `None` for a target this host holds no weights
+for — an MLX model, a reference not yet pulled, a deployment that mounts no
+model store. `RouteChatRequest` falls back to the character estimate there and
+logs which reference it happened for, because the guardrail it feeds runs before
+any hardware is committed and "no counter, no ceiling" is not an available
+state. It is also the only port whose adapter reads a file the platform does not
+own: the mount is read-only, and nothing past the metadata header is ever read.
 
 ## 4. Domain Services
 
@@ -292,7 +312,9 @@ A single exception handler registered in `interfaces/http/errors.py` performs th
 | `NoAvailableModelError` | 503 | Never names the models that were considered |
 | `ModelStateConflictError` | 409 | For example, unloading a model that is not loaded |
 | `InsufficientMemoryError` | 409 | Returns required and available capacity |
-| `ContextTooLongError` | 413 | Input ceiling, checked before any token is produced |
+| `ContextTooLongError` | 413 | Input ceiling, checked before any token is produced. Carries `estimated`, `limit`, `composition` and `basis` |
+| `ApiKeyLifetimeError` | 409 | Carries `maximum_days`, the policy the expiry exceeded |
+| `CapabilityNotIssuedError` | 403 | Carries `capability` and `available`, both of which the caller already holds |
 | `QuotaExceededError` | 429 | With `Retry-After` |
 | `RateLimitedError` | 429 | With `Retry-After` |
 | `CountryNotAllowedError` | 403 | Generic body, does not echo the detected country |

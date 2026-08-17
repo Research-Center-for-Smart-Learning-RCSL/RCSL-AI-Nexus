@@ -422,6 +422,65 @@ class PromptLogRow(Base):
     )
 
 
+class RefusalRow(Base):
+    """What a caller was refused, kept where they can read it back.
+
+    **Not a second copy of the application log.** What is stored is what left
+    the process: the code, the status, the message the caller received and the
+    figures that accompanied it. `detail` is absent by construction — the
+    handler builds this from the same function that builds the response body —
+    which is what makes a row here safe to show its own subject.
+
+    **No foreign keys**, like `audit_log` and `prompt_logs`. The row must
+    survive the deletion of the key or the account it names, and the gateway
+    writes here with an account that has no reason to hold `SELECT` anywhere
+    else.
+
+    Text columns are `Text`, not `String(n)`, for the reason `prompt_logs`
+    gives: `audit_log` lost rows whose values were wider than their column, and
+    lost them silently. The bound here is time, applied by the retention sweep,
+    plus a per-figure cap in the domain that records that it applied.
+    """
+
+    __tablename__ = "refusals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+    actor_id: Mapped[str] = mapped_column(String(36), index=True)
+    actor_display: Mapped[str] = mapped_column(String(255), default="")
+    """Denormalised like `audit_log`'s, so the row stays readable after the
+    account is gone and a page of other people's refusals says whose."""
+
+    api_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
+    code: Mapped[str] = mapped_column(String(64), index=True)
+    """Indexed because it is what an operator filters by. A status is too
+    coarse: the evening this table exists for had two 413s with different causes
+    and two 409s with nothing in common."""
+
+    status: Mapped[int] = mapped_column(Integer)
+    surface: Mapped[str] = mapped_column(String(32))
+    method: Mapped[str] = mapped_column(String(8))
+    path: Mapped[str] = mapped_column(Text)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    """Indexed because it is the way in. A caller reports a failure by quoting
+    the id from their error envelope."""
+
+    message: Mapped[str] = mapped_column(Text)
+    figures: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+
+    __table_args__ = (
+        # The paged read is "this tenant's refusals, newest first", and the
+        # commonest filtered read is one actor's. Both sort by `at`, so the
+        # index carries the filter and the sort together — without it the
+        # planner sorts the whole tenant partition on every page.
+        Index("ix_refusals_tenant_at", "tenant_id", "at"),
+        Index("ix_refusals_actor_at", "actor_id", "at"),
+    )
+
+
 class EvaluationRunRow(Base):
     """One execution of the capability task set.
 

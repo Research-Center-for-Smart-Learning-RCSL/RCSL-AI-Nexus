@@ -918,6 +918,23 @@ export interface paths {
         patch: operations["update_template_admin_prompt_templates__template_id__patch"];
         trace?: never;
     };
+    "/admin/refusals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Refusals */
+        get: operations["list_refusals_admin_refusals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/retention": {
         parameters: {
             query?: never;
@@ -2190,6 +2207,62 @@ export interface components {
             /** Recovery Codes */
             recovery_codes: string[];
         };
+        /** RefusalListResponse */
+        RefusalListResponse: {
+            /** Entries */
+            entries: components["schemas"]["RefusalResponse"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Scoped To Self */
+            scoped_to_self: boolean;
+            /** Total */
+            total: number;
+        };
+        /**
+         * RefusalResponse
+         * @description One refusal, in the shape the caller was refused in.
+         *
+         *     Every field here was already sent to whoever provoked it — the code they
+         *     branched on, the status, the message they read, and the figures that came
+         *     with it. There is no second, fuller read behind this one, unlike the prompt
+         *     logs above: the row *is* the disclosure, and it discloses a copy of an
+         *     answer its subject already has.
+         */
+        RefusalResponse: {
+            /** Actor Display */
+            actor_display: string;
+            /** Actor Id */
+            actor_id: string;
+            /** Api Key Id */
+            api_key_id: string | null;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Code */
+            code: string;
+            /** Figures */
+            figures: {
+                [key: string]: unknown;
+            };
+            /** Id */
+            id: string;
+            /** Message */
+            message: string;
+            /** Method */
+            method: string;
+            /** Path */
+            path: string;
+            /** Request Id */
+            request_id: string | null;
+            /** Status */
+            status: number;
+            /** Surface */
+            surface: string;
+        };
         /** RequirementBody */
         RequirementBody: {
             /** Min Free Memory Gb */
@@ -2220,13 +2293,17 @@ export interface components {
          *     things it is safe to delete from is decided here rather than at the edge.
          * @enum {string}
          */
-        RetentionDataset: "audit_log" | "usage_records" | "prompt_logs";
+        RetentionDataset: "audit_log" | "usage_records" | "prompt_logs" | "refusals";
         /** RetentionPolicyResponse */
         RetentionPolicyResponse: {
             /** Dataset */
             dataset: string;
             /** Days */
             days: number;
+            /** Maximum Days */
+            maximum_days: number | null;
+            /** Minimum Days */
+            minimum_days: number;
             /** Updated At */
             updated_at: string | null;
             /** Updated By */
@@ -4306,6 +4383,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PromptTemplateResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    list_refusals_admin_refusals_get: {
+        parameters: {
+            query?: {
+                actor_id?: string | null;
+                api_key_id?: string | null;
+                code?: string | null;
+                request_id?: string | null;
+                since?: string | null;
+                until?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefusalListResponse"];
                 };
             };
             /** @description Unprocessable Entity */

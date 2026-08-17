@@ -14,7 +14,7 @@ a TOTP secret, a set of recovery codes — are marked as such where they appear.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field
 
@@ -22,6 +22,7 @@ from app.adapters.authz.role_authorization import ASSIGNABLE_ROLES
 from app.application.use_cases.manage_prompt_templates import MAX_NAME_CHARS
 from app.application.use_cases.read_audit_log import AuditLogPage
 from app.application.use_cases.read_prompt_logs import PromptLogPage
+from app.application.use_cases.read_refusals import RefusalPage
 from app.application.use_cases.read_usage_analytics import UsageAnalytics
 from app.domain.entities.actor import Role
 from app.domain.entities.api_key import ApiKey
@@ -46,7 +47,8 @@ from app.domain.entities.prompt_template import (
     MAX_SYSTEM_PROMPT_CHARS,
     PromptTemplate,
 )
-from app.domain.entities.retention import RetentionPolicy
+from app.domain.entities.refusal import Refusal
+from app.domain.entities.retention import RetentionPolicy, bounds_for
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.tenant import Tenant
 from app.domain.entities.user import User
@@ -740,6 +742,69 @@ class PromptLogSummaryResponse(BaseModel):
         )
 
 
+class RefusalResponse(BaseModel):
+    """One refusal, in the shape the caller was refused in.
+
+    Every field here was already sent to whoever provoked it — the code they
+    branched on, the status, the message they read, and the figures that came
+    with it. There is no second, fuller read behind this one, unlike the prompt
+    logs above: the row *is* the disclosure, and it discloses a copy of an
+    answer its subject already has.
+    """
+
+    id: str
+    at: datetime
+    code: str
+    status: int
+    actor_id: str
+    actor_display: str
+    api_key_id: str | None
+    surface: str
+    method: str
+    path: str
+    request_id: str | None
+    message: str
+    figures: dict[str, Any]
+
+    @classmethod
+    def of(cls, refusal: Refusal) -> RefusalResponse:
+        return cls(
+            id=refusal.id,
+            at=refusal.at,
+            code=refusal.code,
+            status=refusal.status,
+            actor_id=refusal.actor_id,
+            actor_display=refusal.actor_display,
+            api_key_id=refusal.api_key_id,
+            surface=refusal.surface,
+            method=refusal.method,
+            path=refusal.path,
+            request_id=refusal.request_id,
+            message=refusal.message,
+            figures=refusal.figures,
+        )
+
+
+class RefusalListResponse(BaseModel):
+    entries: list[RefusalResponse]
+    total: int
+    limit: int
+    offset: int
+    scoped_to_self: bool
+    """True when the reader may see only their own, so the screen can say so
+    rather than presenting a filter that silently does nothing."""
+
+    @classmethod
+    def of(cls, page: RefusalPage) -> RefusalListResponse:
+        return cls(
+            entries=[RefusalResponse.of(e) for e in page.entries],
+            total=page.total,
+            limit=page.limit,
+            offset=page.offset,
+            scoped_to_self=page.scoped_to_self,
+        )
+
+
 class PromptLogListResponse(BaseModel):
     entries: list[PromptLogSummaryResponse]
     total: int
@@ -991,13 +1056,35 @@ class RetentionPolicyResponse(BaseModel):
     """Null while the dataset is still on the default nobody has changed, which
     the screen shows as "default" rather than as an empty author."""
 
+    minimum_days: int
+    maximum_days: int | None
+    """The bounds this dataset's window may be set within, sent rather than
+    mirrored.
+
+    **The screen used to carry its own copy of `RETENTION_BOUNDS`, and adding a
+    fourth dataset broke it.** `refusals` arrived on 2026-08-18 and the form had
+    no bounds for it, no label for it, and — because the frontend's dataset enum
+    is what parses the response — no way to render the page at all: every
+    retention policy failed to load behind one unrecognised value, on a screen
+    whose own docstring claimed a fourth dataset would appear without a frontend
+    change. Two tables that must agree, in two languages, with nothing failing
+    until somebody opened the page.
+
+    `None` where growth rather than disclosure is what is bounded, which is the
+    shape `audit_log` and `usage_records` have; a number where the danger runs
+    the other way, as it does for `prompt_logs` and `refusals`.
+    """
+
     @classmethod
     def of(cls, policy: RetentionPolicy) -> RetentionPolicyResponse:
+        bounds = bounds_for(policy.dataset)
         return cls(
             dataset=policy.dataset.value,
             days=policy.days,
             updated_at=policy.updated_at,
             updated_by=policy.updated_by,
+            minimum_days=bounds.minimum_days,
+            maximum_days=bounds.maximum_days,
         )
 
 

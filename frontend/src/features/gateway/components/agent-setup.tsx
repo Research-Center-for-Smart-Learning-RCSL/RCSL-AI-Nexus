@@ -462,13 +462,19 @@ wire_api = "responses"`}
             is usually the app&apos;s own tools arriving through the shared
             configuration directory; see Codex in the ChatGPT app above.
             <br />
-            The count is an estimate from character widths, and a deliberately
-            careful one — it can refuse a conversation that would have fitted.
-            Reading one large file repeatedly is what usually reaches it.
+            Since 2026-08-17 the count is the model&apos;s own, not an estimate:
+            your prompt is tokenized with the vocabulary and chat template of the
+            model that would have read it, so the figure in the refusal is the
+            one that model would have charged. The response says which in{' '}
+            <code>basis</code> — <code>tokenizer</code> for a real count,{' '}
+            <code>estimate</code> for the character-width fallback a model with
+            no vocabulary on this host still gets. The estimate ran 20% to 50%
+            high on ordinary content and refused at least one conversation that
+            would have fitted; a <code>tokenizer</code> figure does not.
             <br />
             <strong>Codex hides the body, so read the error yourself.</strong>{' '}
             The response carries <code>composition</code>, which says how the
-            estimate split across your messages, prior tool calls and tool
+            count split across your messages, prior tool calls and tool
             definitions, and what share the largest single turn took — the
             fastest way to tell &quot;the conversation grew&quot; from &quot;one
             file is 97% of it&quot;. If your client has swallowed it, quote the

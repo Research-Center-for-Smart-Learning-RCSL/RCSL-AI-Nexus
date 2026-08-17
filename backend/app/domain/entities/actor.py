@@ -95,6 +95,36 @@ class Scope(StrEnum):
 
     LOGS_READ = "logs:read"
 
+    REFUSAL_READ_OWN = "refusal:read_own"
+    """Read the refusals this account and its keys provoked.
+
+    In the base scopes, because being able to see why you were refused is the
+    whole of the feature: on 2026-08-17 two people spent an evening each on
+    refusals that were correct and silent about which of several things they
+    had just changed had caused them, and neither had anywhere to look.
+
+    It discloses nothing new. Every row is a second copy of a response the
+    holder already received — the code, the status, the message, and the
+    figures that came with it — which is why it sits beside `usage:read_own`
+    rather than behind an administrator.
+    """
+
+    REFUSAL_READ_ALL = "refusal:read_all"
+    """Read anyone's, which is what made that evening's diagnosis possible.
+
+    Granted like `usage:read_all` and for a closely related reason: both are
+    metadata about requests rather than their content, and the roles that
+    investigate load are the roles that investigate refusals. It is deliberately
+    *not* in `ADMIN_ONLY_SCOPES` beside `prompt_log:read` — that one reads what
+    somebody typed, and this one reads only what the platform told them.
+
+    What it does disclose is shape, and that is worth naming rather than
+    waving past: a `composition` says a conversation was 97% one message, and a
+    month of 413s says how somebody works. That is the reason it is a scope at
+    all instead of following `logs:read`, and the reason the retention bound on
+    this dataset is a ceiling.
+    """
+
     PROMPT_LOG_READ = "prompt_log:read"
     """Read the full prompt and completion text captured while a debug window
     was open (§9.2).

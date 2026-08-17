@@ -71,6 +71,20 @@ x-backend: &backend
     # and it holds model files only. On the Mac Studio, HF_CACHE_HOST_PATH points
     # at the runtime account's ~/.cache/huggingface. See docs/architecture/deployment.md.
     - ${HF_CACHE_HOST_PATH:-./data/hf-cache}:/hf-cache
+    # The Ollama model store, read-only. The platform reads two things out of
+    # the GGUF a `ref` resolves to — the vocabulary and the chat template — and
+    # counts a prompt with them instead of estimating it from character widths,
+    # which was wrong by 1.34x-1.48x on ordinary content and 0.36x on dense
+    # identifiers (see PROGRESS.md 2026-08-17). Only the metadata header is
+    # ever read: 11.9 MiB in front of 38.7 GB of tensors, once per model per
+    # process.
+    #
+    # **Read-only, and it is the one mount where that matters most.** Ollama
+    # owns this directory; a container that could write it could replace the
+    # weights the host serves. Omitting the mount entirely is supported and
+    # lands the platform back on the character estimate, with a log line per
+    # model saying so — see `ollama_models_path` in infrastructure/config.py.
+    - ${OLLAMA_MODELS_HOST_PATH:-./data/ollama-models}:/ollama-models:ro
   depends_on:
     migrate:
       condition: service_completed_successfully

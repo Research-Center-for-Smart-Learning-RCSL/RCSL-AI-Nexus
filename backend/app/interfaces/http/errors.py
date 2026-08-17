@@ -11,15 +11,20 @@ existing clients parse it, and the admin API uses a plainer shape.
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.domain.entities.audit import AuditAction
+from app.domain.entities.refusal import Refusal
 from app.domain.exceptions import (
+    ApiKeyLifetimeError,
     AssistantUnavailableError,
+    CapabilityNotIssuedError,
     CollectionNotFoundError,
     ContextTooLongError,
     CountryNotAllowedError,
@@ -234,6 +239,106 @@ async def _audit_refusal(request: Request, exc: NotAuthorizedError) -> None:
     )
 
 
+def _route_path(request: Request) -> str:
+    """The route as declared, not the URL as sent, wherever routing got that far.
+
+    `/admin/api-keys/{key_id}` rather than `/admin/api-keys/68953ceb…`. Two
+    reasons, and the second is the one that decided it. A thousand refusals on
+    one endpoint group together instead of scattering by id, which is what makes
+    "this endpoint has been refusing all afternoon" visible. And a path
+    parameter is a value the caller chose: storing the template keeps this table
+    to what the platform said rather than what the caller sent.
+
+    The route's own `path` is not the whole path — routers are included under a
+    prefix, and what `scope["route"]` carries is the inner route's spelling,
+    `/api-keys/{key_id}` for a request to `/admin/api-keys/<id>`. So the prefix
+    is taken from the request and the tail from the template, by position.
+
+    **Substituting the parameter values into the path instead does not work,
+    and it is worth saying why, because it looks like it does.** The values are
+    caller-chosen, so a value that also appears earlier in the path templates
+    the wrong segment: `GET /admin/users/admin` with `user_id="admin"` stored
+    itself as `/{user_id}/users/admin`, and `key_id="keys"` turned
+    `/admin/api-keys/keys` into `/admin/api-{key_id}/keys`. Any caller could
+    provoke a row that named neither the route nor their request.
+
+    Falls back to the literal path when nothing matched, which is a refusal
+    raised before or during routing — a body over the byte limit, a country
+    block, a request to a path that does not exist.
+    """
+    route = request.scope.get("route")
+    template = getattr(route, "path", None)
+    path = request.url.path
+    if not isinstance(template, str) or not template:
+        return path
+    tail = [segment for segment in template.split("/") if segment]
+    sent = [segment for segment in path.split("/") if segment]
+    if len(sent) < len(tail):
+        # Nothing sensible to align; the literal path is still true.
+        return path
+    return "/" + "/".join([*sent[: len(sent) - len(tail)], *tail])
+
+
+INTERNAL_ERROR_CODE = "internal_error"
+INTERNAL_ERROR_MESSAGE = "An internal error occurred."
+
+
+async def _record_refusal(
+    request: Request,
+    *,
+    code: str,
+    status: int,
+    message: str,
+    figures: dict[str, object],
+    surface: str,
+) -> None:
+    """Keep the refusal where the caller who provoked it can read it back.
+
+    **The handler is the write point, and that is a departure from the shape
+    this feature was specified in.** The plan was a row written in the same
+    `finally` that records usage, so that one write point served all three
+    entrances the way `prompt_logs` does. That works for the inference path and
+    only for it: the `409` that cost an operator an evening on 2026-08-17 was an
+    API key's expiry being refused on the admin surface, which never reaches
+    `RouteChatRequest` at all. Storing every `DomainError` means writing from
+    the one place every `DomainError` already passes through, and this is it.
+
+    **Only refusals with an identified caller are kept.** The feature exists so
+    that a caller can read their own; an anonymous refusal has no such reader,
+    and it would be a row written at whatever rate an unauthenticated client
+    chooses to provoke one. The identity-plane refusals that matter — a failed
+    sign-in, an authorization denial, a recovery code replayed — are already
+    recorded in `audit_log` by §12, which is the table for events about who
+    somebody is rather than about what they sent.
+
+    Best-effort twice over: the writer swallows its own failures, and this
+    returns quietly when no writer is wired. A deployment that has not run the
+    migration still answers its callers.
+    """
+    writer = getattr(request.app.state, "refusals", None)
+    actor = actor_from_request(request)
+    if writer is None or actor is None:
+        return
+    await writer.record(
+        Refusal(
+            id=str(uuid.uuid4()),
+            at=datetime.now(UTC),
+            code=code,
+            status=status,
+            actor_id=actor.id,
+            actor_display=actor.display,
+            api_key_id=actor.api_key_id,
+            surface=surface,
+            method=request.method,
+            path=_route_path(request),
+            request_id=current_request_id(),
+            message=message,
+            figures=figures,
+            tenant_id=actor.tenant_id,
+        )
+    )
+
+
 def error_response(
     exc: DomainError, *, envelope: str = "admin", auth_mode: str | None = None
 ) -> JSONResponse:
@@ -284,7 +389,15 @@ def error_response(
             # process: an administrator opened a time-boxed debug window on
             # this credential. See request_context.grant_debug_detail.
             error["detail"] = exc.detail
-        error.update(_context_fields(exc))
+        # The same figures the admin envelope carries and the same ones stored,
+        # from the one function that decides what may reach a caller. It was
+        # `_context_fields` here until 2026-08-18, which meant the gateway's
+        # stored refusals could carry a figure its responses had not — and "a
+        # row is a copy of the answer you already had" is the whole of why the
+        # table is safe to show its own subject. Flattened rather than nested,
+        # as the request id above is: OpenAI client libraries ignore keys they
+        # do not know, so the placement costs a caller nothing.
+        error.update(public_details(exc))
         body: dict[str, object] = {"error": error}
     else:
         body = {"code": exc.code, "message": exc.public_message}
@@ -294,22 +407,56 @@ def error_response(
             body["detail"] = exc.detail
         if status == 401 and auth_mode is not None:
             body["auth_mode"] = auth_mode
-        if isinstance(exc, InsufficientMemoryError):
-            body["details"] = {
-                "required_gb": exc.required_gb,
-                "available_gb": exc.available_gb,
-            }
-        elif isinstance(exc, WeakPasswordError):
-            body["details"] = {"reason": exc.reason}
-        elif isinstance(exc, UploadRejectedError) and exc.public_detail:
-            # The one detail string that goes outward, and it describes the
-            # caller's own file: an operator who is told only "this file cannot
-            # be accepted" has no way to tell a size limit from a type one.
-            body["details"] = {"reason": exc.public_detail}
-        elif fields := _context_fields(exc):
+        if fields := public_details(exc):
             body["details"] = fields
 
     return JSONResponse(status_code=status, content=body, headers=headers)
+
+
+def public_details(exc: DomainError) -> dict[str, object]:
+    """Every figure this error is allowed to hand its caller.
+
+    One function because there are now two readers and they must not disagree:
+    the response body renders it, and `refusals` stores it. A refusal row is a
+    second copy of what the caller was told, and the only way to keep that claim
+    true is for both copies to be built here.
+
+    Nothing operator-facing passes through. `detail` is absent by construction —
+    it is not read in this function at all — and so is the model's alias, which
+    `NoAvailableModelError` and `ContextTooLongError` are both careful never to
+    put in a figure.
+
+    The upload case is the one detail string that does go outward, and it goes
+    outward because it describes the caller's own file: an operator told only
+    "this file cannot be accepted" has no way to tell a size limit from a type
+    one.
+    """
+    if isinstance(exc, InsufficientMemoryError):
+        return {"required_gb": exc.required_gb, "available_gb": exc.available_gb}
+    if isinstance(exc, ApiKeyLifetimeError):
+        # A field as well as a sentence, and it was only a sentence until
+        # 2026-08-18. This is the refusal that cost an operator an evening: they
+        # saw a save fail with no subject immediately after editing a capability
+        # list, and read it as the capability edit being rejected. A published
+        # policy is not inventory — the same ground `limit` reaches a caller on.
+        return {"maximum_days": exc.maximum_days}
+    if isinstance(exc, CapabilityNotIssuedError):
+        # The capability they sent, and the list `GET /v1/models` would return
+        # the same key. Both were already in the message; as fields they are
+        # something a client can branch on rather than parse.
+        return {"capability": exc.capability, "available": list(exc.available)}
+    if isinstance(exc, WeakPasswordError):
+        return {"reason": exc.reason}
+    if isinstance(exc, UploadRejectedError) and exc.public_detail:
+        return {"reason": exc.public_detail}
+    fields = _context_fields(exc)
+    retry_after = getattr(exc, "retry_after_seconds", None)
+    if isinstance(retry_after, int):
+        # Carried as a figure as well as a header. A caller reading their own
+        # refusals a day later has no headers, and "how long was I told to
+        # wait" is exactly the question a 429 in that list raises.
+        fields["retry_after_seconds"] = retry_after
+    return fields
 
 
 def _context_fields(exc: DomainError) -> dict[str, object]:
@@ -334,11 +481,19 @@ def _context_fields(exc: DomainError) -> dict[str, object]:
         fields["limit"] = exc.limit
     if exc.composition is not None:
         fields["composition"] = exc.composition
+    # Always present when a figure is, because its absence would be read as
+    # "exact" by anyone who met the field on one deployment and not another.
+    if exc.estimated is not None:
+        fields["basis"] = exc.basis
     return fields
 
 
 def install_error_handlers(
-    app: FastAPI, *, envelope: str = "admin", auth_mode: str | None = None
+    app: FastAPI,
+    *,
+    envelope: str = "admin",
+    auth_mode: str | None = None,
+    surface: str = "admin",
 ) -> None:
     """`auth_mode` is echoed on 401 bodies only.
 
@@ -355,9 +510,21 @@ def install_error_handlers(
             # Registration guarantees this, but an `assert` would vanish under
             # python -O and turn a wiring mistake into a confusing 500.
             raise exc
-        _log(request, exc, _status_for(exc))
+        status = _status_for(exc)
+        _log(request, exc, status)
         if isinstance(exc, NotAuthorizedError):
             await _audit_refusal(request, exc)
+        await _record_refusal(
+            request,
+            code=exc.code,
+            status=status,
+            message=exc.public_message,
+            # The same figures the body carries, from the same function, which
+            # is what makes a stored refusal a copy of the caller's own answer
+            # rather than a second opinion about it.
+            figures=public_details(exc),
+            surface=surface,
+        )
         return error_response(exc, envelope=envelope, auth_mode=auth_mode)
 
     handler: Callable[[Request, Exception], Awaitable[JSONResponse]] = handle
@@ -386,17 +553,30 @@ def install_error_handlers(
         """
         request_id = current_request_id()
         logger.exception("unhandled_error path=%s request_id=%s", request.url.path, request_id)
+        # Stored like any other refusal, with no figures, because a caller
+        # holding a request id and a 500 has exactly the problem this table was
+        # built for: a correct-looking failure with nothing in it to act on.
+        # The traceback stays in the log — what is stored here is what the
+        # caller was sent, which is a code and an apology.
+        await _record_refusal(
+            request,
+            code=INTERNAL_ERROR_CODE,
+            status=500,
+            message=INTERNAL_ERROR_MESSAGE,
+            figures={},
+            surface=surface,
+        )
         if envelope == "openai":
             error: dict[str, object] = {
                 "type": "api_error",
-                "code": "internal_error",
-                "message": "An internal error occurred.",
+                "code": INTERNAL_ERROR_CODE,
+                "message": INTERNAL_ERROR_MESSAGE,
             }
             if request_id is not None:
                 error["request_id"] = request_id
             body: dict[str, object] = {"error": error}
         else:
-            body = {"code": "internal_error", "message": "An internal error occurred."}
+            body = {"code": INTERNAL_ERROR_CODE, "message": INTERNAL_ERROR_MESSAGE}
             if request_id is not None:
                 body["request_id"] = request_id
         headers = {"X-Request-Id": request_id} if request_id is not None else None

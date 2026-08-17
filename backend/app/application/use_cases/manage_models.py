@@ -15,6 +15,7 @@ See docs/architecture/security.md section 7.1.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import replace
 from typing import Protocol
@@ -36,7 +37,10 @@ from app.domain.ports.repositories import (
     RoutingPolicyRepositoryPort,
 )
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
+from app.domain.ports.token_counter_port import TokenCounterPort
 from app.domain.services.memory_budget_service import MemoryBudgetService
+
+logger = logging.getLogger(__name__)
 
 
 class ModelStateCommitterPort(Protocol):
@@ -84,6 +88,7 @@ class ManageModels:
         state_committer: ModelStateCommitterPort,
         authz: AuthorizationPort,
         audit: AuditPort,
+        tokens: TokenCounterPort | None = None,
     ) -> None:
         self._models = models
         self._nodes = nodes
@@ -93,6 +98,11 @@ class ManageModels:
         self._state = state_committer
         self._authz = authz
         self._audit = audit
+        self._tokens = tokens
+        """Warmed on load, so the first request to a fresh model is not the one
+        that pays for reading its vocabulary. Optional, as it is on
+        `RouteChatRequest`: a build without it loads models exactly as before.
+        """
 
     async def list_all(self, actor: Actor) -> list[Model]:
         self._authz.require(actor, Scope.MODEL_READ)
@@ -305,7 +315,38 @@ class ManageModels:
         # LOADING left by such a failure to ERROR.
         await self._models.set_state(model.id, ModelState.LOADED)
         await self._audit.record(actor, AuditAction.MODEL_LOADED, target=model.id)
+        await self._prepare_token_counter(model)
         return _with_state(model, ModelState.LOADED)
+
+    async def _prepare_token_counter(self, model: Model) -> None:
+        """Read this model's vocabulary now rather than on somebody's request.
+
+        Two things are bought here and neither is the quarter of a second. The
+        first is that the cost lands on the operator who pressed Load rather
+        than on the first caller after it. The second is the log line: whether a
+        model can be counted exactly is decided by files on the host, and
+        without this an operator would find out weeks later, from a drift line
+        about an estimate, that this model was never counted exactly at all.
+
+        After the audit row, never before it. A failure to read a vocabulary
+        must not be able to unwind a load that has already happened, so this
+        sits past every write and swallows everything: the model is resident and
+        serving whether or not it can be counted exactly.
+        """
+        if self._tokens is None:
+            return
+        try:
+            prepared = await self._tokens.prepare(model.ref)
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to read a vocabulary for %s", model.ref)
+            return
+        if not prepared:
+            logger.info(
+                "%s will be counted by the character estimate; no vocabulary was resolved "
+                "for %s on this host",
+                model.alias,
+                model.ref,
+            )
 
     async def unload(self, actor: Actor, model_id: str) -> Model:
         self._authz.require(actor, Scope.MODEL_WRITE)

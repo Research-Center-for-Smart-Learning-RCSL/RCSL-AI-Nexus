@@ -41,6 +41,9 @@ from app.domain.entities.model import Model, RuntimeKind
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.usage import UsageRecord
 from app.domain.exceptions import (
+    COUNT_BY_ESTIMATE,
+    COUNT_BY_LOWER_BOUND,
+    COUNT_BY_TOKENIZER,
     CapabilityNotIssuedError,
     ContextTooLongError,
     NoAvailableModelError,
@@ -55,6 +58,7 @@ from app.domain.ports.repositories import (
     UsageRepositoryPort,
 )
 from app.domain.ports.security_ports import AuthorizationPort
+from app.domain.ports.token_counter_port import TokenCounterPort
 from app.domain.services.prompt_capture import TranscriptBuffer, should_capture
 from app.domain.services.routing_service import RoutingService
 from app.shared.clock import Clock
@@ -141,9 +145,16 @@ and the two errors happen to cancel in it. The first says the tool definitions
 that fill an agent's window are over-counted like everything else, so the client
 that could not send an empty conversation had more room than it was told.
 
-The fix for the over-count is a real tokenizer, not a retuned constant — see the
-table above for why no constant sits inside that gap. What is fixed already is
-a ceiling that knows which model it is protecting; see
+**Everything above describes the fallback now, not the ceiling.** Since
+2026-08-17 a request is counted with the vocabulary and chat template of the
+model that will read it, taken out of that model's own weights file
+(`adapters/tokenizer/gguf_token_counter.py`), and measured against the runtime
+it agrees to within a constant of about a dozen tokens. The tables here are
+kept because they are what the estimator still does on the paths where no
+vocabulary can be resolved — an MLX target, a model registered but not pulled,
+a host without the model store mounted — and because they are the record of why
+no retuned constant was an acceptable answer. What is also fixed is a ceiling
+that knows which model it is protecting; see
 `RouteChatRequest._refuse_what_this_target_would_truncate`.
 
 **Two characters per token is not a safe floor either, and no single number
@@ -162,6 +173,12 @@ def _estimated_tokens(text: str) -> int:
     correlates with tokenizer density: scripts outside ASCII are near one token
     per character in every tokenizer this platform will meet, and ASCII is not.
     """
+    if text.isascii():
+        # The common case, and the one worth not walking in Python. A 286-tool
+        # payload is half a megabyte of JSON that `json.dumps` has already made
+        # ASCII, and counting it character by character costs about 25 ms on
+        # the event loop — paid before a concurrency slot is even taken.
+        return ceil(len(text) / ASCII_CHARS_PER_TOKEN)
     ascii_chars = sum(1 for c in text if c.isascii())
     wide_chars = len(text) - ascii_chars
     return ceil(ascii_chars / ASCII_CHARS_PER_TOKEN + wide_chars / WIDE_CHARS_PER_TOKEN)
@@ -209,8 +226,96 @@ def _estimated_prompt_tokens(
     return total + tool_tokens, tool_tokens
 
 
+FLOOR_ASCII_CHARS_PER_TOKEN = 8.0
+FLOOR_WIDE_CHARS_PER_TOKEN = 3.5
+"""The most characters one token could plausibly hold, by script.
+
+Not an estimate and not a tuned constant: a *bound*, used by the one check that
+runs before a model has been chosen. Exact counting needs a vocabulary, a
+vocabulary needs the target, and the target needs the routing reads that may
+not happen before the concurrency slot is taken — so what runs first can only
+be something no tokeniser could contradict.
+
+Both values are roughly twice the most efficient density ever measured here:
+4.57 ASCII characters per token on English prose, and 1.71 on a mixed Chinese
+runbook. Doubling leaves room for a vocabulary more efficient than either, and
+the cost of the margin is only that a payload between the bound and the real
+ceiling waits for a slot in order to be refused by the exact count.
+
+**Deliberately too loose to be a ceiling.** With the 4 MiB body limit above it
+and a 122880-token ceiling below, this turns away a request only when it is
+about a megabyte of prose or larger — which is the class of request worth
+shedding without waiting for a slot, and nothing else.
+"""
+
+
+def _counted_phrase(basis: str, tokens: int) -> str:
+    """How a figure is named in a log line and in the refusal's `detail`.
+
+    The same distinction `ContextTooLongError` draws for the caller, spelled
+    the way this file spells figures: a tilde for an approximation, none for a
+    count. Kept here rather than shared with the exception because the two
+    audiences differ — that one is prose for a client, this one is read beside
+    the numbers in a container log — and the one thing they must agree on is
+    which of the three a figure is, which is what `basis` carries.
+    """
+    if basis == COUNT_BY_TOKENIZER:
+        return f"{tokens} tokens"
+    if basis == COUNT_BY_LOWER_BOUND:
+        return f"at least ~{tokens} tokens"
+    return f"~{tokens} estimated tokens"
+
+
+def _floor_tokens(text: str) -> float:
+    """A count no tokeniser can go below, computed without walking the string.
+
+    `str.isascii` and `str.encode` are both C-level passes, which matters
+    because this runs on the event loop before any slot is taken. The
+    non-ASCII arm turns UTF-8's own arithmetic into a lower bound on the
+    character count: a character costing n bytes adds n-1 to the difference
+    between the encoded length and the character length, and n is at most 4, so
+    dividing that difference by 3 can only understate how many wide characters
+    there are — which is the safe direction for a floor.
+    """
+    if text.isascii():
+        return len(text) / FLOOR_ASCII_CHARS_PER_TOKEN
+    wide = (len(text.encode("utf-8")) - len(text)) / 3
+    return (len(text) - wide) / FLOOR_ASCII_CHARS_PER_TOKEN + wide / FLOOR_WIDE_CHARS_PER_TOKEN
+
+
+def _floor_prompt_tokens(messages: Sequence[Message], tools: Sequence[ToolDefinition]) -> int:
+    """The bound above, over everything the model will read."""
+    total = sum(_floor_tokens(m.content) for m in messages)
+    total += sum(
+        _floor_tokens(c.name) + _floor_tokens(c.arguments) for m in messages for c in m.tool_calls
+    )
+    total += sum(
+        _floor_tokens(tool.name)
+        + _floor_tokens(tool.description)
+        + _floor_tokens(json.dumps(tool.parameters))
+        for tool in tools
+    )
+    return int(total)
+
+
+def _composition_parts(messages: Sequence[Message], tools: Sequence[ToolDefinition]) -> list[str]:
+    """Every piece a composition is measured over, flattened in a fixed order.
+
+    Message contents first, then each turn's own tool calls, then the tool
+    definitions — because the counter that measures them takes one list and
+    returns one list, and the order is what puts the numbers back where they
+    came from. One round trip to a worker thread rather than one per message:
+    the conversations this runs on have hundreds of turns.
+    """
+    return (
+        [m.content for m in messages]
+        + ["".join(c.name + c.arguments for c in m.tool_calls) for m in messages]
+        + [tool.name + tool.description + json.dumps(tool.parameters) for tool in tools]
+    )
+
+
 def _describe_prompt_composition(
-    messages: Sequence[Message], tools: Sequence[ToolDefinition]
+    messages: Sequence[Message], tools: Sequence[ToolDefinition], counts: Sequence[int]
 ) -> str:
     """Where a refused prompt's tokens actually went.
 
@@ -226,27 +331,26 @@ def _describe_prompt_composition(
     reached the person driving it was a number with no subject, and the session
     was restarted several times before the file was recognised as the cause.
 
-    Walked a second time rather than returned alongside the total, because this
-    runs only on the refusal path: the guardrail admits far more requests than
-    it turns away, and the common path should not pay for the rare one.
+    `counts` comes from `_composition_parts` in the same order, measured either
+    by the model's own vocabulary or by the character estimate. **The shares
+    keep their tildes under both**, and that is not laziness: even when every
+    part is counted exactly, the parts do not add up to the total, because the
+    chat template's framing belongs to no single message. The figure the
+    ceiling judged is the one that has to be exact; these say where it went.
+
+    Only reached on the refusal path: the guardrail admits far more requests
+    than it turns away, and the common path should not pay for the rare one.
     """
-    message_tokens = sum(_estimated_tokens(m.content) for m in messages)
-    call_tokens = sum(
-        _estimated_tokens(c.name) + _estimated_tokens(c.arguments)
-        for m in messages
-        for c in m.tool_calls
-    )
-    tool_tokens = _estimated_tool_tokens(tools)
+    turns = len(messages)
+    message_tokens = sum(counts[:turns])
+    call_tokens = sum(counts[turns : 2 * turns])
+    tool_tokens = sum(counts[2 * turns :])
     # Content *and* the turn's own tool calls. An agent writing a file puts the
     # body in `tool_calls[].arguments` and leaves `content` empty, so measuring
     # content alone reported "largest ~40, 0% of the whole" for a conversation
     # that was one 60000-token patch — the exact case the share exists to name.
     largest = max(
-        (
-            _estimated_tokens(m.content)
-            + sum(_estimated_tokens(c.name) + _estimated_tokens(c.arguments) for c in m.tool_calls)
-            for m in messages
-        ),
+        (counts[i] + counts[turns + i] for i in range(turns)),
         default=0,
     )
     total = message_tokens + call_tokens + tool_tokens
@@ -260,11 +364,35 @@ def _describe_prompt_composition(
     )
 
 
+def _estimated_composition(messages: Sequence[Message], tools: Sequence[ToolDefinition]) -> str:
+    """The composition when no vocabulary is available to count the parts."""
+    parts = _composition_parts(messages, tools)
+    return _describe_prompt_composition(messages, tools, [_estimated_tokens(p) for p in parts])
+
+
+def _floor_composition(messages: Sequence[Message], tools: Sequence[ToolDefinition]) -> str:
+    """The composition for the pre-slot refusal, on the bound's own basis.
+
+    **The shares have to be measured the way the headline was**, and this is
+    the one path where that took a third function. The bound divides ASCII by
+    8.0 and the estimator by 3.0, so a refusal quoting "at least ~137500" above
+    parts totalling ~366667 invites arithmetic that contradicts itself by a
+    factor of 2.7 — on the only path where the caller has no exact figure to
+    reconcile the two against.
+
+    Understating every part equally leaves the shares — which is what this line
+    is actually read for — unchanged, since they are ratios.
+    """
+    parts = _composition_parts(messages, tools)
+    return _describe_prompt_composition(messages, tools, [int(_floor_tokens(p)) for p in parts])
+
+
 def _warn_if_prompt_was_truncated(
     prompt_tokens: int,
     context_length: int,
     *,
     estimated: int,
+    basis: str,
     request_id: str | None,
     actor: str,
 ) -> None:
@@ -305,7 +433,9 @@ def _warn_if_prompt_was_truncated(
         # prompt estimated at 100000 and cut to 4096 reads as a 24x over-count
         # when the estimator in fact under-counted. That is the one direction
         # this signal exists to catch, inverted.
-        _log_estimate_drift(prompt_tokens, estimated=estimated, request_id=request_id, actor=actor)
+        _log_estimate_drift(
+            prompt_tokens, estimated=estimated, basis=basis, request_id=request_id, actor=actor
+        )
         return
     logger.warning(
         "prompt likely truncated by the runtime: prompt_tokens=%s reached num_ctx/2=%s "
@@ -350,9 +480,9 @@ reach the ceiling and the ordinary remedies apply."""
 
 
 def _warn_if_tools_dominate(
-    estimated: int,
-    tool_tokens: int,
-    tool_count: int,
+    counted: int,
+    messages: Sequence[Message],
+    tools: Sequence[ToolDefinition],
     ceiling: int,
     request_id: str | None,
     actor: Actor,
@@ -377,41 +507,111 @@ def _warn_if_tools_dominate(
     every request in the task. That is deliberate: the alternative is per-process
     state to deduplicate a line that stops the moment the client is fixed, and
     the drift log above already made the same trade.
+
+    **The share is computed entirely from estimates, and the exact total is
+    reported beside it rather than divided into it.** Dividing an estimated
+    tool figure by an exact total mixes bases that differ by the factor this
+    file's tables record: for the 286-definition client of 2026-08-17 that is
+    140059 over about 99000, and the line would have read "tool definitions are
+    141% of this prompt". A share above the whole is not a rounding error, it
+    is a sentence nobody can act on — and the same mismatch moves the trigger,
+    firing on prompts whose definitions are honestly well under half.
+
+    Measuring the share exactly would mean encoding the definitions a second
+    time on the common path, for a payload where they are by definition the
+    largest part, and this is a log line. So the cheap absolute floor is the
+    gate: below a tenth of the ceiling nothing is computed at all, and the full
+    estimate — the one pass this path was written to avoid — is paid only by
+    the payloads that were about to provoke the warning anyway.
     """
-    if tool_count == 0 or estimated <= 0:
+    if not tools or ceiling <= 0:
+        return
+    tool_tokens = _estimated_tool_tokens(tools)
+    if tool_tokens < ceiling // 10:
+        return
+    estimated, _ = _estimated_prompt_tokens(messages, tools)
+    if estimated <= 0:
         return
     share = tool_tokens / estimated
-    if share < TOOL_SHARE_WARNING or tool_tokens < ceiling // 10:
+    if share < TOOL_SHARE_WARNING:
         return
     logger.warning(
-        "tool definitions are %.0f%% of this prompt: ~%s estimated tokens in %s definitions "
-        "against a ceiling of %s, resent every turn request_id=%s actor=%s",
+        "tool definitions are about %.0f%% of this prompt: ~%s estimated tokens in %s "
+        "definitions, against a counted %s and a ceiling of %s, resent every turn "
+        "request_id=%s actor=%s",
         share * 100,
         tool_tokens,
-        tool_count,
+        len(tools),
+        counted,
         ceiling,
         request_id,
         actor.display,
     )
 
 
+EXACT_DRIFT_ALLOWANCE = (-16, 64)
+"""How far an exact count may sit from `prompt_eval_count` before it is news.
+
+Tokens, not a ratio, because what separates the two is a constant rather than a
+share: the chat template this platform renders emits a `<think>` opener Ollama
+does not, and Ollama's tool preamble is a little shorter than the template's.
+Measured across six payload shapes on 2026-08-17 the gap was +2 with no tools,
++12 with 12 definitions and with 60, and +14 for a conversation carrying a tool
+call and its result — constant in every case, which is why a ratio would be the
+wrong instrument at both ends of the size range.
+
+The window is asymmetric for the reason every threshold in this file is: an
+under-count is the direction that ends in a prompt the runtime truncates in
+silence, so it is allowed sixteen tokens and the safe direction is allowed
+sixty-four. Anything outside it is a change in what the runtime builds around a
+prompt, and the point of logging it is that nothing else on this platform would
+notice one.
+"""
+
+
 def _log_estimate_drift(
-    prompt_tokens: int, *, estimated: int, request_id: str | None, actor: str
+    prompt_tokens: int, *, estimated: int, basis: str, request_id: str | None, actor: str
 ) -> None:
-    """One line when the estimate leaves the spread it was measured to have.
+    """One line when the count leaves the spread it was measured to have.
 
     INFO rather than WARNING: on its own it is a calibration observation, not a
     fault, and the fault it precedes has its own warning above. The caller is
     told nothing — by the time this runs their answer has already been produced.
+
+    **This is the instrument that proves the tokeniser, and it is the only
+    one.** An exact count is exact against the vocabulary it was built from; a
+    vocabulary bound to the wrong model, a pre-tokeniser scheme that splits
+    text differently, or a runtime upgrade that changes the framing would each
+    produce a confident figure that no test in this repository could catch,
+    because the ground truth lives in the runtime. This line is where the two
+    are compared, on every request that ran to completion.
 
     Only reached for prompts the runtime read whole; see the caller for why a
     truncated one cannot be judged this way.
     """
     if not estimated:
         return
+    if basis == COUNT_BY_TOKENIZER:
+        low, high = EXACT_DRIFT_ALLOWANCE
+        difference = estimated - prompt_tokens
+        if low <= difference <= high:
+            return
+        logger.info(
+            "exact count disagrees with the runtime by %+d tokens: counted=%s actual=%s "
+            "(expected %+d to %+d) request_id=%s actor=%s — %s",
+            difference,
+            estimated,
+            prompt_tokens,
+            low,
+            high,
+            request_id,
+            actor,
+            "the vocabulary or the framing no longer describes what this runtime builds",
+        )
+        return
     ratio = estimated / prompt_tokens
-    low, high = ESTIMATE_DRIFT_BAND
-    if low <= ratio <= high:
+    low_ratio, high_ratio = ESTIMATE_DRIFT_BAND
+    if low_ratio <= ratio <= high_ratio:
         return
     logger.info(
         "token estimate outside its measured band: estimated=%s actual=%s ratio=%.2f "
@@ -419,12 +619,12 @@ def _log_estimate_drift(
         estimated,
         prompt_tokens,
         ratio,
-        low,
-        high,
+        low_ratio,
+        high_ratio,
         request_id,
         actor,
         "under-counting, which is what precedes a silent truncation"
-        if ratio < low
+        if ratio < low_ratio
         else "over-counting, which refuses requests the model would have served",
     )
 
@@ -445,6 +645,7 @@ class RouteChatRequest:
         clock: Clock,
         max_tokens_ceiling: int,
         capabilities: ListCapabilities,
+        tokens: TokenCounterPort | None = None,
         prompt_logs: PromptLogWriterPort | None = None,
         request_id: Callable[[], str | None] = lambda: None,
         max_context_tokens: int = 32768,
@@ -456,6 +657,17 @@ class RouteChatRequest:
         self._models = models
         self._nodes = nodes
         self._usage = usage
+        self._tokens = tokens
+        """The counter that reads the target's own vocabulary, or None.
+
+        Optional for the same reason `prompt_logs` is, and defaulting the same
+        way: a build that does not wire it counts characters, which is what
+        every build did before 2026-08-17. What it must never become is a
+        required port with a no-op implementation, because then "this
+        deployment is not counting exactly" would be a fact about an adapter
+        nobody reads instead of a `None` in the composition root.
+        """
+
         self._prompt_logs = prompt_logs
         """Where a §9.2 transcript goes when a debug window is open, or None.
 
@@ -567,25 +779,31 @@ class RouteChatRequest:
         # client grows without bound: leaving them out would have let a caller
         # carry an arbitrary payload past the guardrail in `tools`, which is
         # the one field of an agent request that no person ever types.
-        estimated, tool_tokens = _estimated_prompt_tokens(messages, tools)
-        _warn_if_tools_dominate(
-            estimated,
-            tool_tokens,
-            len(tools),
-            self._max_context_tokens,
-            self._request_id(),
-            actor,
-        )
-        if estimated > self._max_context_tokens:
-            composition = _describe_prompt_composition(messages, tools)
+        # **A bound here, the real count below.** Exact counting needs the
+        # model's vocabulary, the vocabulary needs the target, and resolving
+        # the target needs the routing reads that the comment on the slot
+        # forbids doing first — so this is the only kind of check available
+        # before a slot is held, and it is deliberately loose. It refuses
+        # payloads no tokeniser could bring under the ceiling and nothing else;
+        # everything between it and the ceiling waits for a slot and is then
+        # judged by a figure that cannot be wrong about the model.
+        #
+        # This ordering is the fix for the 2026-08-17 refusal. That client's
+        # payload estimated 140059 against a 122880 ceiling and was turned away
+        # here, before any model was chosen; it was about 99000 real tokens,
+        # and the model that would have served it could read 131072.
+        floor = _floor_prompt_tokens(messages, tools)
+        if floor > self._max_context_tokens:
+            composition = _floor_composition(messages, tools)
             raise ContextTooLongError(
                 detail=(
-                    f"~{estimated} estimated tokens exceeds the configured limit "
-                    f"of {self._max_context_tokens}: {composition}"
+                    f"{_counted_phrase(COUNT_BY_LOWER_BOUND, floor)} exceeds the configured "
+                    f"limit of {self._max_context_tokens}: {composition}"
                 ),
-                estimated=estimated,
+                estimated=floor,
                 limit=self._max_context_tokens,
                 composition=composition,
+                basis=COUNT_BY_LOWER_BOUND,
             )
 
         # The concurrency slot is taken before any database work. Doing the
@@ -605,16 +823,39 @@ class RouteChatRequest:
             if runtime is None:
                 raise NoAvailableModelError(detail=f"no adapter for runtime={target.runtime}")
 
-            # Inside the slot, and not by preference: the check needs `target`,
+            # Inside the slot, and not by preference: counting needs `target`,
             # routing needs the reads above, and the comment at the top of this
             # block is why those reads may not happen before the slot is held.
             # So a request too long for the model that would serve it waits for
             # a slot in order to be told so — and a client retrying a permanent
             # 413 (six times in seven seconds, 2026-08-17) contends for one each
             # time. The refusal itself does no I/O and releases immediately, so
-            # what it costs is the wait, not the slot; the global ceiling still
+            # what it costs is the wait, not the slot; the bound above still
             # turns away the largest prompts before any of this.
-            self._refuse_what_this_target_would_truncate(estimated, target, actor, messages, tools)
+            counted, basis = await self._count_prompt(target, messages, tools)
+            _warn_if_tools_dominate(
+                counted,
+                messages,
+                tools,
+                self._max_context_tokens,
+                self._request_id(),
+                actor,
+            )
+            if counted > self._max_context_tokens:
+                composition = await self._prompt_composition(target, messages, tools, basis)
+                raise ContextTooLongError(
+                    detail=(
+                        f"{_counted_phrase(basis, counted)} exceeds the configured limit "
+                        f"of {self._max_context_tokens}: {composition}"
+                    ),
+                    estimated=counted,
+                    limit=self._max_context_tokens,
+                    composition=composition,
+                    basis=basis,
+                )
+            await self._refuse_what_this_target_would_truncate(
+                counted, basis, target, actor, messages, tools
+            )
 
             # `aclosing` again, for the same reason it is needed one layer
             # down: a bare `async for` over a generator leaves it for the
@@ -644,15 +885,69 @@ class RouteChatRequest:
                     # Carried rather than recomputed: it is one pass over the
                     # whole prompt, and the only reader is the truncation
                     # backstop, which needs the figure the guardrail judged.
-                    estimated,
+                    counted,
+                    basis,
                 )
             ) as generation:
                 async for chunk in generation:
                     yield chunk
 
-    def _refuse_what_this_target_would_truncate(
+    async def _count_prompt(
+        self, target: Model, messages: Sequence[Message], tools: Sequence[ToolDefinition]
+    ) -> tuple[int, str]:
+        """What the target will actually read, and how that figure was reached.
+
+        The counter answers `None` for a target whose vocabulary this host
+        cannot resolve — an MLX model, a reference registered but not pulled, a
+        missing mount — and the character estimate answers instead, which is
+        what every request was counted by before 2026-08-17. That fallback is
+        not a degraded mode to be alarmed about; it is the previous behaviour,
+        and the guardrail must have an answer before hardware is committed.
+
+        The basis travels with the number because three readers need it: the
+        caller, who is told a different sentence for a count than for an
+        estimate; the drift log, which judges an exact count against a window
+        of tokens and an estimate against a band of ratios; and this file's own
+        refusal messages, which stopped saying "estimated" about a figure that
+        is not one.
+        """
+        if self._tokens is not None:
+            counted = await self._tokens.count_prompt(target.ref, messages, tools)
+            if counted is not None:
+                return counted, COUNT_BY_TOKENIZER
+        estimated, _ = _estimated_prompt_tokens(messages, tools)
+        return estimated, COUNT_BY_ESTIMATE
+
+    async def _prompt_composition(
         self,
-        estimated: int,
+        target: Model,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+        basis: str,
+    ) -> str:
+        """The breakdown that goes to a refused caller, on the same basis as
+        the figure it accompanies.
+
+        **`basis` decides, not the counter's availability**, and the difference
+        is not hypothetical: `count_prompt` declines for a payload shape the
+        chat template refuses and for tool-call arguments that are not JSON,
+        while `count_parts` needs no template and would have answered exactly.
+        Asking each independently produced a refusal quoting an estimated total
+        beside tokenised shares — the arithmetic this method exists to keep
+        consistent, failing in the one direction nobody would look for.
+        """
+        parts = _composition_parts(messages, tools)
+        counts: Sequence[int] | None = None
+        if basis == COUNT_BY_TOKENIZER and self._tokens is not None:
+            counts = await self._tokens.count_parts(target.ref, parts)
+        if counts is None:
+            counts = [_estimated_tokens(part) for part in parts]
+        return _describe_prompt_composition(messages, tools, counts)
+
+    async def _refuse_what_this_target_would_truncate(
+        self,
+        counted: int,
+        basis: str,
         target: Model,
         actor: Actor,
         messages: Sequence[Message],
@@ -697,22 +992,22 @@ class RouteChatRequest:
         if target.runtime is not RuntimeKind.OLLAMA:
             return
         servable = target.resource_profile.context_length // 2
-        if servable <= 0 or estimated <= servable:
+        if servable <= 0 or counted <= servable:
             return
         # The alias is named to the operator and not to the caller. A refusal
         # that named it would disclose the model inventory to anyone who could
         # provoke one, which is the disclosure `NoAvailableModelError` is
         # careful about a few lines above.
         logger.warning(
-            "refusing ~%s estimated tokens: %s would evaluate at most num_ctx/2=%s of "
+            "refusing %s: %s would evaluate at most num_ctx/2=%s of "
             "them and drop the rest request_id=%s actor=%s",
-            estimated,
+            _counted_phrase(basis, counted),
             target.alias,
             servable,
             self._request_id(),
             actor.display,
         )
-        composition = _describe_prompt_composition(messages, tools)
+        composition = await self._prompt_composition(target, messages, tools, basis)
         # `limit` reaches the caller and is half this model's registered
         # context, so a fallback refusal tells them roughly how large the model
         # standing in is. Weighed and accepted on 2026-08-17 — a number they
@@ -720,12 +1015,13 @@ class RouteChatRequest:
         # not sent. See `ContextTooLongError.__init__`.
         raise ContextTooLongError(
             detail=(
-                f"~{estimated} estimated tokens exceeds the {servable} the model "
+                f"{_counted_phrase(basis, counted)} exceeds the {servable} the model "
                 f"serving this capability can read: {composition}"
             ),
-            estimated=estimated,
+            estimated=counted,
             limit=servable,
             composition=composition,
+            basis=basis,
         )
 
     def _resolve_thinking(self, requested: bool | None, policy: RoutingPolicy) -> bool:
@@ -747,7 +1043,8 @@ class RouteChatRequest:
         tools: Sequence[ToolDefinition] = (),
         tool_choice: ToolChoice | None = None,
         sampling: SamplingOptions | None = None,
-        estimated_prompt_tokens: int = 0,
+        counted_prompt_tokens: int = 0,
+        counted_basis: str = COUNT_BY_ESTIMATE,
     ) -> AsyncGenerator[CompletionChunk, None]:
         # The caller's request is honoured only where it is stricter than ours.
         # An unbounded generation is a hardware problem, not a client choice.
@@ -938,7 +1235,8 @@ class RouteChatRequest:
             _warn_if_prompt_was_truncated(
                 prompt_tokens,
                 target.resource_profile.context_length,
-                estimated=estimated_prompt_tokens,
+                estimated=counted_prompt_tokens,
+                basis=counted_basis,
                 request_id=self._request_id(),
                 actor=actor.display,
             )

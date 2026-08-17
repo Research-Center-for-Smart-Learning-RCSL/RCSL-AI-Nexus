@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 # The tables the gateway writes. Everything else it may only read. Kept here,
 # in code, because it is a security decision that belongs under review, not in a
 # deployment file. See security.md section 6.
-GATEWAY_WRITABLE_TABLES: tuple[str, ...] = ("usage_records", "prompt_logs")
+GATEWAY_WRITABLE_TABLES: tuple[str, ...] = ("usage_records", "prompt_logs", "refusals")
 
 # The tables the gateway may **not** read, subtracted after the blanket SELECT
 # below. Empty until 2026-08-08, and `prompt_logs` is what it was added for.
@@ -73,7 +73,15 @@ GATEWAY_WRITABLE_TABLES: tuple[str, ...] = ("usage_records", "prompt_logs")
 #
 # The read path is on the admin entrances, whose account holds full DML, so
 # nothing is lost by this: it removes an ability the gateway never used.
-GATEWAY_DENIED_READ_TABLES: tuple[str, ...] = ("prompt_logs",)
+# `refusals` joined on 2026-08-18, and the argument is weaker than the one above
+# and still holds. That table carries no request content — only the code, the
+# status, the message a caller was already sent and the figures that came with
+# it — so a gateway reading it would not be reading anybody's ideas. What it
+# would be reading is every tenant's refusal history from the one process
+# exposed to the internet, which is a map of who is doing what and where their
+# clients break. The gateway writes a row and has no use for any row: the read
+# path is on the admin entrances, so revoking this removes nothing it does.
+GATEWAY_DENIED_READ_TABLES: tuple[str, ...] = ("prompt_logs", "refusals")
 
 # Where the migrate service sees the other services' connection URLs. Each holds
 # the same content that service reads as `/run/secrets/database_url`; mounted

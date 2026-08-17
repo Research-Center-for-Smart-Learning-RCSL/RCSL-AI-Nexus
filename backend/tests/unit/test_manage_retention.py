@@ -21,6 +21,7 @@ from app.domain.entities.retention import (
     MINIMUM_RETENTION_DAYS,
     RetentionDataset,
     RetentionPolicy,
+    bounds_for,
 )
 from app.domain.exceptions import (
     NotAuthorizedError,
@@ -101,6 +102,7 @@ def _build(
             RetentionDataset.AUDIT_LOG: audit_rows,
             RetentionDataset.USAGE_RECORDS: usage_rows,
             RetentionDataset.PROMPT_LOGS: prompt_rows,
+            RetentionDataset.REFUSALS: FakePurge([]),
         },
         authz=_AUTHZ,
         audit=trail,
@@ -381,6 +383,7 @@ async def test_the_sweep_applies_every_stored_policy_and_needs_no_actor() -> Non
         RetentionDataset.AUDIT_LOG: 2,
         RetentionDataset.USAGE_RECORDS: 4,
         RetentionDataset.PROMPT_LOGS: 0,
+        RetentionDataset.REFUSALS: 0,
     }
     assert len(audit_rows.ats) == 3
     assert len(usage_rows.ats) == 1
@@ -392,7 +395,7 @@ async def test_the_sweep_reports_zero_rather_than_skipping_an_empty_dataset() ->
 
     outcomes = await use_case.purge_due()
 
-    assert [o.deleted for o in outcomes] == [0, 0, 0]
+    assert [o.deleted for o in outcomes] == [0, 0, 0, 0]
     assert {o.dataset for o in outcomes} == set(RetentionDataset)
 
 
@@ -416,3 +419,23 @@ async def test_a_missing_purge_is_refused_at_construction() -> None:
             audit=FakeAudit(),
             clock=FakeClock(),
         )
+
+
+def test_every_dataset_ships_its_bounds_to_the_screen() -> None:
+    """The screen used to carry its own copy of the bounds table, and adding a
+    fourth dataset broke it: the frontend's closed enum of three meant every
+    policy failed to parse behind the one unrecognised value, so the page
+    showed nothing at all. The bounds ride on the response now, which is only
+    true while every dataset has some — and `RETENTION_BOUNDS` is total, so the
+    thing worth pinning is that the response actually carries them.
+    """
+    from app.interfaces.http.schemas.admin_schemas import RetentionPolicyResponse
+
+    for dataset in RetentionDataset:
+        response = RetentionPolicyResponse.of(RetentionPolicy(dataset=dataset, days=30))
+        bounds = bounds_for(dataset)
+
+        assert response.dataset == dataset.value
+        assert response.minimum_days == bounds.minimum_days
+        assert response.maximum_days == bounds.maximum_days
+        assert response.maximum_days is None or response.maximum_days >= response.minimum_days

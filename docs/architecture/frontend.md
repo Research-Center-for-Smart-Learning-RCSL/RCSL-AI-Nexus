@@ -1,6 +1,6 @@
 # Frontend Architecture: Layered Components on shadcn/ui
 
-Extends [../ARCHITECTURE.md](../ARCHITECTURE.md). The management UI is mostly tables, forms, and a few charts across **eighteen feature folders and fourteen screens** as of 2026-08-05 — it said "eleven modules" from the design phase onward — so this document fixes how components are layered and how data flows, letting all modules share one skeleton instead of each inventing its own.
+Extends [../ARCHITECTURE.md](../ARCHITECTURE.md). The management UI is mostly tables, forms, and a few charts across **twenty-one feature folders and twenty screens** as of 2026-08-18 — it said "eleven modules" from the design phase onward, and "eighteen and fourteen" from 2026-08-05 until the evaluation, refusals and account screens arrived — so this document fixes how components are layered and how data flows, letting all modules share one skeleton instead of each inventing its own.
 
 ## 1. Where the Frontend Runs
 

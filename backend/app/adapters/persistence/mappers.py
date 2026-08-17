@@ -25,6 +25,7 @@ from app.adapters.persistence.sqlalchemy_models import (
     PromptLogRow,
     PromptTemplateRow,
     RecoveryCodeRow,
+    RefusalRow,
     RetentionPolicyRow,
     RoutingPolicyRow,
     TenantRow,
@@ -49,6 +50,7 @@ from app.domain.entities.model import Model, ModelState, ResourceProfile, Runtim
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.prompt_log import PromptLogEntry
 from app.domain.entities.prompt_template import PromptTemplate
+from app.domain.entities.refusal import Refusal
 from app.domain.entities.retention import RetentionDataset, RetentionPolicy
 from app.domain.entities.routing_policy import (
     Requirement,
@@ -556,4 +558,50 @@ def evaluation_task_score_to_domain(row: EvaluationTaskScoreRow) -> EvaluationTa
         group=row.task_group,
         score=row.score,
         samples=row.samples,
+    )
+
+
+# --- Refusals ------------------------------------------------------------
+
+
+def refusal_to_row(refusal: Refusal) -> RefusalRow:
+    return RefusalRow(
+        id=refusal.id,
+        tenant_id=refusal.tenant_id,
+        at=refusal.at,
+        actor_id=refusal.actor_id,
+        actor_display=refusal.actor_display,
+        api_key_id=refusal.api_key_id,
+        code=refusal.code,
+        status=refusal.status,
+        surface=refusal.surface,
+        method=refusal.method,
+        path=refusal.path,
+        request_id=refusal.request_id,
+        message=refusal.message,
+        figures=dict(refusal.figures),
+    )
+
+
+def refusal_row_to_domain(row: RefusalRow) -> Refusal:
+    return Refusal(
+        id=row.id,
+        at=row.at,
+        code=row.code,
+        status=row.status,
+        actor_id=row.actor_id,
+        # Empty on a row written before this column existed, which reads as
+        # "unknown" rather than failing the page it appears on.
+        actor_display=row.actor_display or "",
+        api_key_id=row.api_key_id,
+        surface=row.surface,
+        method=row.method,
+        path=row.path,
+        request_id=row.request_id,
+        message=row.message,
+        # Coerced, for the reason the prompt-log mapper coerces its own JSON
+        # column: a row written before this column existed reads back as None,
+        # and a `None` where a mapping is declared fails far from here.
+        figures=dict(row.figures or {}),
+        tenant_id=row.tenant_id,
     )

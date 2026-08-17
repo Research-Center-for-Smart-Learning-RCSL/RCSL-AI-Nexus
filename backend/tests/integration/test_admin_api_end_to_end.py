@@ -357,7 +357,7 @@ def test_retention_is_configurable_and_purges_what_it_says(admin: TestClient) ->
     defaults = admin.get("/admin/retention")
     assert defaults.status_code == 200, defaults.text
     by_dataset = {p["dataset"]: p for p in defaults.json()}
-    assert set(by_dataset) == {"audit_log", "usage_records", "prompt_logs"}
+    assert set(by_dataset) == {"audit_log", "usage_records", "prompt_logs", "refusals"}
     assert by_dataset["audit_log"]["days"] == 360
     assert by_dataset["usage_records"]["days"] == 360
     # Markedly shorter, and not by convention: section 9.2 requires it and the
@@ -430,6 +430,67 @@ def test_the_transcript_routes_are_reachable_and_empty_by_default(
 
     assert listed.status_code == 200, listed.text
     assert listed.json() == {"entries": [], "total": 0, "limit": 50, "offset": 0}
+
+
+def test_a_refusal_reaches_the_table_and_comes_back_with_its_figure(
+    admin: TestClient,
+) -> None:
+    """The whole of the feature, over HTTP, on the refusal that cost an evening.
+
+    An expiry beyond the maximum is refused with a 409 whose reason lived in
+    `detail` — which does not leave the process — so what the operator saw was a
+    save that failed with no subject, immediately after editing a capability
+    list, and they read it as the capability edit being rejected. Seven attempts
+    in three minutes.
+
+    Now the same refusal is stored as what they were told, and they can read it
+    back without an administrator opening a container log. `maximum_days` is
+    there because a published policy is not inventory, and it is the figure that
+    ends this particular evening.
+    """
+    users = admin.get("/admin/users").json()
+    refused = admin.post(
+        "/admin/api-keys",
+        json={
+            "name": "forever",
+            "owner_id": users[0]["id"],
+            "scopes": ["chat"],
+            "rate_limit_rpm": 60,
+            "quota_tokens_per_day": 1000,
+            "allowed_cidrs": [],
+            "expires_at": "9999-12-31T00:00:00Z",
+        },
+    )
+    assert refused.status_code == 409, refused.text
+
+    listed = admin.get("/admin/refusals", params={"code": "api_key_lifetime"})
+
+    assert listed.status_code == 200, listed.text
+    page = listed.json()
+    assert page["total"] >= 1
+    stored = page["entries"][0]
+    assert stored["status"] == 409
+    assert stored["figures"]["maximum_days"] == 365
+    # The route as declared, so a hundred refusals on this endpoint group
+    # instead of scattering, and nothing a caller put in a path is kept.
+    assert stored["path"] == "/admin/api-keys"
+    assert stored["request_id"] == refused.json()["request_id"]
+    # `detail` names the date they typed and is operator-facing; it must not be
+    # in a row its own subject may read.
+    assert "9999" not in stored["message"]
+
+
+def test_the_refusals_a_caller_may_read_are_theirs_unless_a_scope_says_otherwise(
+    admin: TestClient,
+) -> None:
+    """The administrator here holds `refusal:read_all`, so the page says it is
+    not narrowed. The narrowing itself is unit-tested; what this pins is that
+    the flag survives the wire, because it is what the screen reads to decide
+    whether to tell the reader they are seeing a subset."""
+    page = admin.get("/admin/refusals").json()
+
+    assert page["scoped_to_self"] is False
+    assert set(page) == {"entries", "total", "limit", "offset", "scoped_to_self"}
 
 
 def test_reading_a_transcript_that_does_not_exist_is_a_404(admin: TestClient) -> None:

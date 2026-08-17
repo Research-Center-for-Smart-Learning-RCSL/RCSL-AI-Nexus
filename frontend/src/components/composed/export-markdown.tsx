@@ -16,11 +16,12 @@
  * have given.
  */
 
-import { useRef, useState, type RefObject } from 'react';
+import { type RefObject } from 'react';
 import { CheckIcon, CopyIcon, DownloadIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { elementToMarkdown } from '@/lib/markdown-export';
+import { useCopyToClipboard } from '@/lib/use-copy-to-clipboard';
 
 export function ExportMarkdown({
   contentRef,
@@ -33,8 +34,7 @@ export function ExportMarkdown({
   /** Without the extension. */
   filename: string;
 }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { copied, copy: writeToClipboard } = useCopyToClipboard();
 
   function build(): string | null {
     const root = contentRef.current;
@@ -51,16 +51,9 @@ export function ExportMarkdown({
 
   async function copy() {
     const markdown = build();
-    if (!markdown) return;
-    try {
-      await navigator.clipboard.writeText(markdown);
-      setCopied(true);
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard permission can be refused; the download below still works.
-      setCopied(false);
-    }
+    // Failure is not surfaced here: the download button beside this one writes
+    // the same bytes to a file and needs no permission.
+    if (markdown) await writeToClipboard(markdown);
   }
 
   function download() {

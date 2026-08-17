@@ -3,84 +3,86 @@ import { z } from 'zod';
 /**
  * How long records are kept, and what a purge would remove.
  *
- * Three datasets, and the set is closed on the server: the enum is the
- * allowlist, because these values reach a `DELETE`. The screen renders whatever
- * the server lists rather than a hardcoded set, so a fourth dataset appears
- * here without a frontend change — but it cannot invent one.
+ * **The bounds come from the server with each policy, and used to be mirrored
+ * here.** That mirror broke this screen: `refusals` was added on 2026-08-18 as
+ * a fourth dataset, and the frontend had a closed enum of three — so every
+ * policy failed to parse behind the one unrecognised value and the page showed
+ * nothing at all, under a docstring claiming a fourth dataset would appear
+ * without a frontend change. Two tables that had to agree, in two languages,
+ * with nothing failing until somebody opened the page.
+ *
+ * So the dataset is a plain string now and the bounds ride on the response.
+ * What stays here is prose — a label and a sentence per dataset — because that
+ * is a decision about how to explain something, not a fact about the schema,
+ * and an unknown dataset falls back to its table name rather than to nothing.
  *
  * **The bound is not the same shape for every dataset.** `audit_log` and
  * `usage_records` carry a floor: the danger there is forgetting too soon, and
- * an administrator may keep them as long as they like. `prompt_logs` carries a
- * *ceiling* instead. It holds message content, it exists only for the length of
- * a debugging session, and the failure the whole control was designed against
- * is full logging switched on for an afternoon and left on for a year.
+ * an administrator may keep them as long as they like. `prompt_logs` and
+ * `refusals` carry a *ceiling* instead — one holds message content and exists
+ * only for the length of a debugging session, and the other accumulates a
+ * description of how somebody works.
  */
 
-export const RETENTION_DATASETS = ['audit_log', 'usage_records', 'prompt_logs'] as const;
-export type RetentionDataset = (typeof RETENTION_DATASETS)[number];
+export type RetentionDataset = string;
 
 /**
  * What each dataset is, for someone deciding how long to keep it. The names
  * are table names, which is right for precision and useless for a decision.
  */
-export const DATASET_LABELS: Record<RetentionDataset, string> = {
+export const DATASET_LABELS: Record<string, string> = {
   audit_log: 'Audit log',
   usage_records: 'Usage records',
   prompt_logs: 'Prompt transcripts',
+  refusals: 'Refusals',
 };
 
-export const DATASET_DESCRIPTIONS: Record<RetentionDataset, string> = {
+export const DATASET_DESCRIPTIONS: Record<string, string> = {
   audit_log:
     'Who did what: sign-ins, refusals, and every administrative action. Deleting these removes the record of what was done, including the record of this deletion.',
   usage_records:
     'What each request cost, per capability and per account. Quotas are measured against these, so a window shorter than the longest quota period would make enforcement wrong rather than merely forgetful.',
   prompt_logs:
     'The full prompt and completion text captured while a debug window was open: what researchers typed, and what the models answered. The most sensitive data the platform holds, and the only one here whose limit is a maximum rather than a minimum.',
+  refusals:
+    'Every request the platform turned away, with the message its caller was given and the figures that came with it. No request content, but a month of somebody’s refusals describes how they work — which is why this one has a ceiling as well as a floor.',
 };
 
-export const MINIMUM_RETENTION_DAYS = 30;
-/** Mirrors the server's floor so the form can say no before the request does.
- *  The server enforces it regardless; this only saves a round trip. */
+/** A dataset nobody has written prose for still has to render. */
+export function datasetLabel(dataset: string): string {
+  return DATASET_LABELS[dataset] ?? dataset.replace(/_/g, ' ');
+}
 
-export const PROMPT_LOG_MINIMUM_DAYS = 1;
-export const PROMPT_LOG_MAXIMUM_DAYS = 30;
+export function datasetDescription(dataset: string): string {
+  return (
+    DATASET_DESCRIPTIONS[dataset] ??
+    'No description has been written for this record type yet. The window below is the one the server enforces.'
+  );
+}
 
 export type RetentionBounds = { min: number; max: number | null };
 
-/**
- * The bounds per dataset, mirroring `domain/entities/retention.py`.
- *
- * A table rather than one constant, because the two shapes are opposite and a
- * single `MINIMUM_RETENTION_DAYS` applied to all three would put a floor of 30
- * on a dataset whose *ceiling* is 30 — refusing every value it accepts, and
- * doing so in the form rather than at the server, so nothing would reach the
- * error that explains it.
- */
-export const RETENTION_BOUNDS: Record<RetentionDataset, RetentionBounds> = {
-  audit_log: { min: MINIMUM_RETENTION_DAYS, max: null },
-  usage_records: { min: MINIMUM_RETENTION_DAYS, max: null },
-  prompt_logs: { min: PROMPT_LOG_MINIMUM_DAYS, max: PROMPT_LOG_MAXIMUM_DAYS },
-};
-
 export const retentionPolicySchema = z.object({
-  dataset: z.enum(RETENTION_DATASETS),
+  dataset: z.string(),
   days: z.number().int().positive(),
   updated_at: z.string().nullable(),
   updated_by: z.string().nullable(),
+  minimum_days: z.number().int().positive(),
+  maximum_days: z.number().int().positive().nullable(),
 });
 export type RetentionPolicy = z.infer<typeof retentionPolicySchema>;
 
 export const retentionPolicyListSchema = z.array(retentionPolicySchema);
 
 export const retentionPreviewSchema = z.object({
-  dataset: z.enum(RETENTION_DATASETS),
+  dataset: z.string(),
   days: z.number().int().positive(),
   affected: z.number().int().nonnegative(),
 });
 export type RetentionPreview = z.infer<typeof retentionPreviewSchema>;
 
 export const purgeOutcomeSchema = z.object({
-  dataset: z.enum(RETENTION_DATASETS),
+  dataset: z.string(),
   cutoff: z.string(),
   deleted: z.number().int().nonnegative(),
 });
