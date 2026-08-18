@@ -66,7 +66,7 @@ if [ "${1:-}" = "--rollback" ]; then
   log "  cd $REPO && git show HEAD~1:launchd/online.rcsl.ollama.plist > /tmp/ollama.plist"
   log "  sudo cp /tmp/ollama.plist $PLIST_DST && sudo launchctl bootstrap system $PLIST_DST"
   log "and put OLLAMA_MODELS_HOST_PATH back to $OPERATOR_HOME/models in .env,"
-  log "then: docker compose up -d --force-recreate gateway admin-tailnet admin-public parser"
+  log "then: docker compose up -d --force-recreate gateway admin-tailnet admin-public"
   exit 0
 fi
 
@@ -187,6 +187,9 @@ log "models visible through the API: $models"
 
 log "done. Still to do, and not by this script:"
 log "  1. .env  OLLAMA_MODELS_HOST_PATH=$SERVICE_HOME/models"
-log "  2. docker compose up -d --force-recreate gateway admin-tailnet admin-public parser"
-log "  3. confirm the tokenizer still sees the weights:"
+log "  2. docker compose up -d --force-recreate gateway admin-tailnet admin-public"
+log "  3. confirm the tokenizer still sees the weights, in both containers that"
+log "     count with it -- the mount was missing from the admin entrances until"
+log "     2026-08-18 and nothing failed when it was:"
 log "     docker exec rcsl-ai-nexus-gateway-1 ls /ollama-models/blobs | head -3"
+log "     docker exec rcsl-ai-nexus-admin-tailnet-1 ls /ollama-models/blobs | head -3"

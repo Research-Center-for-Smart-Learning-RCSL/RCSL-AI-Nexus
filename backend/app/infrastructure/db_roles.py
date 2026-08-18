@@ -5,10 +5,13 @@ The split this implements: three Postgres accounts, not one.
 - The **owner** (`POSTGRES_USER`) owns the schema and runs migrations. Only the
   `migrate` job connects as it, and this module runs as it.
 - The **gateway** account may read every table and may INSERT into
-  `usage_records`, nothing more. It must not be able to write `api_keys`,
-  `routing_policies`, or `users`, so a compromised public gateway cannot mint
-  itself an admin key. "Read only" is the wrong shape: the restriction is per
-  table, so the writable set is named explicitly below.
+  `usage_records`, `prompt_logs` and `refusals`, nothing more. Its read on the
+  last two is revoked again afterwards, so it writes them without being able to
+  read them back: the gateway records what it refused and what it captured, and
+  a compromise of it cannot enumerate either. It must not be able to write
+  `api_keys`, `routing_policies`, or `users`, so a compromised public gateway
+  cannot mint itself an admin key. "Read only" is the wrong shape: the
+  restriction is per table, so both sets are named explicitly below.
 - The **admin** account, shared by both admin entrances (§1, same trust tier),
   has full DML on every table and no DDL.
 

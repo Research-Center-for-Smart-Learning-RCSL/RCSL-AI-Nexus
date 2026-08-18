@@ -186,7 +186,7 @@ if [ "$LAST_SEC" -lt "$BOOT_SEC" ]; then
 fi
 
 log "preconditions pass"
-log "  nine expected services running, six requested bindings actual"
+log "  $(printf %s "$EXPECTED_SERVICES" | wc -w | tr -d ' ') expected services running, six requested bindings actual"
 log "  reconciler ran $((LAST_SEC - BOOT_SEC))s into this boot ($LAST_START)"
 
 # --- record the pre-state ----------------------------------------------------
