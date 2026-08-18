@@ -135,6 +135,8 @@ There are **two** sets and they are defined together, in `domain/entities/capabi
 
 **Only chat-shaped capabilities are reachable today.** The gateway mounts `/v1/chat/completions` and `/v1/responses` and nothing else — the second added 2026-08-07 for agent clients that dropped Chat Completions, and a translation onto the same use case rather than a second inference path — so `embedding` and `rerank` can be named in a policy and issued on a key but have no endpoint whose request and response shapes fit them. They are part of the model, not yet part of the API; `/v1/embeddings` belongs with the knowledge base in Phase 2, which is the first thing that will need it.
 
+**A prompt is counted with the vocabulary of the model that will read it.** The context guardrail was a flat four-characters-per-token estimate until 2026-08-18, which ran roughly 1.2x-1.6x high on prose, source and tool schemas and about 0.37x on a list of dense identifiers — so it refused a conversation the hardware would have served. `TokenCounterPort` now resolves a counter per target the way routing resolves the model, and `GgufTokenCounter` reads the vocabulary and chat template out of the GGUF that the registry's `ref` points at, so the count cannot describe a different model from the one about to answer. A counter may answer "cannot say" — an MLX target, or a host with no local GGUF — in which case the character estimate stays as a labelled fallback, and the caller is always told which of `tokenizer`, `estimate` or `lower_bound` produced the figure. See [security.md](./architecture/security.md) §4.3 and §13.0.
+
 ### 2.4 Routing Policy
 
 Maps a capability to candidate models with priority and fallback.
@@ -161,7 +163,7 @@ Maps a capability to candidate models with priority and fallback.
 
 ### 2.5 API Key
 
-Issued to applications and users. Binds allowed capabilities, rate limit, quota, expiry, and source CIDRs. Full design in [security.md](./architecture/security.md) §4.2.
+Issued to applications and users. Binds allowed capabilities, rate limit, quota, expiry, and source CIDRs. Since 2026-08-18 a key may also name a **default capability**: what to serve when a caller puts a model name in the `model` field rather than a capability the key holds, which is what an agent client whose picker overrides its configured model line sends. It is opt-in per key and constrained to a capability the key already holds — at issue, at edit, and again at use — so it can shorten the path to what the key may already reach and can never add to it; the caller is told in `X-Capability-Defaulted`, and `usage_records.requested_capability` keeps what was actually asked for, so the substitution outlives both that header and the log. Full design in [security.md](./architecture/security.md) §4.2.
 
 The capability list is enforced against the capability each request names, and has been since 2026-07-28. Before that it decided only whether a key worked at all, so a key issued for `chat` reached every capability the deployment could route — the field read as a restriction and was not one. The names it may contain are `domain/entities/capability.py`, which is also what a routing policy is checked against, so a policy and a key cannot disagree about what a capability is called.
 

@@ -12,9 +12,9 @@ is a hint printed next to a form.
 Two properties are worth stating because they are easy to lose:
 
 **The system prompt is assembled here, from live values.** The rules it recites
-— which capabilities may be issued for, how long a key may live, that `model`
-names a capability — are read from the domain and from the same settings the
-use cases are constructed with, never transcribed. A transcription would be a
+— which capabilities may be issued for, how long a key may live, how large an
+input may be, that `model` names a capability — are read from the domain and
+from the same settings the use cases are constructed with, never transcribed. A transcription would be a
 further copy of a set this project has already had drift on twice
 (`domain/entities/capability.py` exists because of it), and the assistant is the
 worst possible place for a stale copy: it states the rule confidently to the one
@@ -345,6 +345,14 @@ the platform supports in general — a key issued for it would be refused.
   recommend it whenever the caller has a stable address.
 - A key's capability list is what it may ask for. Issue the narrowest set that
   does the job rather than everything available.
+- `default_capability` is what the key serves when a request names a capability
+  it does not hold. Null refuses, which is the ordinary setting and what every
+  key did before the field existed. It must be one of that key's own
+  capabilities — checked when the key is issued, when it is edited, and again on
+  every request — so it can shorten the path to something the key already
+  reaches and can never add one. Narrowing the capability list out from under a
+  stored default is refused rather than silently clearing it. On the form it is
+  the field labelled "When a request names something else".
 
 ## This screen
 

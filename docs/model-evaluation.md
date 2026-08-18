@@ -3,13 +3,24 @@
 **Status: designed 2026-08-14, run 2026-08-15.** The harness is
 [`scripts/model-eval/`](../scripts/model-eval/) — committed, unlike the one
 behind the previous set — and the results are in [PROGRESS.md](./PROGRESS.md)
-2026-08-15. Three candidates, three interleaved rounds, 162 scored samples — 189
-written, with a `repair` phase superseding the three tasks it re-ran; the 280 rows
-in `results.jsonl` include the two calibration phases, which ran against the
-incumbent alone:
+2026-08-15. Three candidates, three interleaved rounds, 162 samples of which 159
+scored — 189 written, with a `repair` phase superseding the three tasks it re-ran;
+the 280 rows in `results.jsonl` include the two calibration phases, which ran
+against the incumbent alone:
 `gemma4:31b-it-q8_0` 94.4%, `qwen3.6:35b-a3b-q8_0` 89.8%, `qwen3.6:27b-q8_0`
 87.5%. **It separates them, which is the one thing the twelve-task set could not
 do**, and the order held across all three rounds.
+
+**Three of those figures were re-run rather than kept.** `retry_deadline`,
+`rate_limiter` and `range_sum_updates` carried a `def f(...): ...` stub in the
+prompt; `qwen3.6:27b-q8_0` copied the stub and indented a body under it in all
+three rounds of `retry_deadline`, scoring 0.00 on an `IndentationError` — a
+measurement of this repository's prompt formatting, not of the retrying the task
+asks about. The stub is gone from all three, and the three were re-run for every
+candidate under a `repair` phase which supersedes `full` task by task. Reading
+the file any other way restores the defect: `full` alone puts `qwen3.6:27b-q8_0`
+at 81.9%, and concatenating both phases without letting the later one win puts it
+at 83.5%, against its real 87.5%.
 
 **Two things below are now known to be wrong, and are left standing with this
 note rather than quietly edited.** Section 4's calibration gate failed twice —

@@ -59,6 +59,14 @@ frontend/
         one-time-secret.tsx     # a value the server will never return again
         secret-dialog.tsx       # cannot be dismissed by accident while one is shown
         code-block.tsx          # a snippet meant to be copied rather than read
+        disabled-reason.tsx     # why a control is disabled, said where the control is
+        export-markdown.tsx     # a selection copied out as markdown (see features/refusals)
+        app-shell.tsx           # nav, scope gating, the assistant drawer mount (§3)
+        related-screens.tsx     # the cross-references at the foot of each screen
+        stream-message.tsx      # one assistant turn, while it is still arriving
+        theme-toggle.tsx
+        spinner.tsx
+        logo.tsx
 
     features/
       models/
@@ -127,6 +135,11 @@ frontend/
     lib/
       api-client.ts
       session.tsx             # auth mode context
+      safe-redirect.ts        # the open redirect that shipped once (§9)
+      markdown-export.ts      # shared by the refusals and audit-log exports
+      use-debounced.ts        # filter inputs that must not fire per keystroke
+      use-copy-to-clipboard.ts
+      wrap-tooltip.ts         # a native `title` renders on one line however long
       generated/              # openapi-typescript output, committed, never
                               #   hand-edited (§4)
       api-contract.ts         # hand-written, and deliberately not inside

@@ -501,6 +501,20 @@ wire_api = "responses"`}
             Nothing needs granting: it is not a capability, so there is no
             capability to issue. Turn the auto-review off, or point that slot at{' '}
             <code>code</code> if your version exposes the setting.
+            <br />
+            <strong>
+              A key can be issued with a default capability, which is a trade
+              rather than a fix.
+            </strong>{' '}
+            An administrator can set <code>default_capability</code> on the key
+            to one of its own capabilities, and the gateway then serves that
+            instead of refusing whatever name arrives. It can never name a
+            capability the key was not issued for. What it costs is the signal:
+            a client sending its own model name simply works, and nobody
+            discovers that the <code>model</code> line was never in use. The
+            response carries <code>X-Capability-Defaulted</code> with what
+            actually ran, and the usage record keeps what was asked for, so the
+            question stays answerable afterwards.
           </dd>
 
           <dt className="font-mono text-xs text-muted-foreground">401</dt>
