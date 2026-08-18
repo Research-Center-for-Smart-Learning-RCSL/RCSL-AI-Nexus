@@ -88,7 +88,7 @@ last row in security.md §13.0 that said "not implemented".
 
 | | |
 |---|---|
-| Backend | 32 use cases, 27 routers, 19 entity modules, 16 migrations (head `a4c1e07f2b9d`), 944 unit tests, 120 integration tests that skip without `TEST_DATABASE_URL` |
+| Backend | 32 use cases, 27 routers, 19 entity modules, 16 migrations (head `a4c1e07f2b9d`), 945 unit tests, 120 integration tests that skip without `TEST_DATABASE_URL` |
 | Frontend | 21 feature folders, 20 screens, **366 tests across 40 files** (296, then 308, 345 and 359, earlier on 2026-08-18), types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
 | Gates | ruff, ruff-format, strict mypy, pytest; tsc, eslint, vitest, a real `next build`, **six Playwright paths** (five until 2026-08-18, three days after the sixth landed); Trivy, pip-audit and pnpm audit advisory-only. All green — **and this row was false from 2026-08-07 to 2026-08-08**, see below; the claim was not re-run in the 2026-08-18 pass |
 
@@ -304,6 +304,66 @@ days later, which is what a present tense inside a dated entry costs.
 ---
 
 ## 2026-08-18
+
+### The runtime changed accounts, one model did not come back, and the capability that needed it was the one thing that could not ask for it
+
+Follows the entry below on moving Ollama to `_rcslollama`. That move restarts
+the runtime, and a restart evicts everything resident. Two of the three models
+returned by themselves; `nomic-embed-text` did not, and **could not**.
+
+**Inference loads on demand, embedding does not.** A `chat` or `code` request
+reaches `generate`, which sends `keep_alive` with every call, so the first
+request after the restart both loaded the weights and made them stay — the
+registry's `loaded` intent was still standing, the heartbeat had not yet
+contradicted it, and by the time it looked the model was genuinely resident.
+Nothing on the embedding path does that. Routing requires an *observed*
+`loaded` (observation outranks intent since 2026-07-27), the observation said
+`downloaded`, so every embedding request was refused before it could become the
+request that warmed the model. **A deadlock, not a delay**: `embedding` would
+have stayed unroutable until somebody warmed the model by hand, and nothing
+would have said so — the capability simply answers `no_available_model` while
+the model sits on disk in perfect health.
+
+Measured at 18:07, two hours after the move: `/api/ps` held
+`qwen3.6:35b-a3b-q8_0` and `qwen2.5:7b` and not the embedder; `models` said
+`state=loaded, observed_state=downloaded`. Warmed through the same call
+`OllamaAdapter.load` makes — `/api/embed`, empty input, `keep_alive: -1`,
+`num_ctx` 8192 from the registry's own `context_length` — and the next
+heartbeat sweep wrote `loaded` back. Three models resident, 43.63 GiB, node
+`online`.
+
+**The one-line fix would not have held, and finding out why is the useful part
+of this.** `embed()` sent no `keep_alive`, so Ollama applied its own
+five-minute default to every batch — the identical mistake `DEFAULT_KEEP_ALIVE`
+records about `generate`, one method over, and the same one that reloaded a
+model fourteen times in a day before it was found there. **It costs more here.**
+On the generate path the penalty is a reload; on this one the eviction is
+terminal, because the deadlock above means no later request can undo it. The
+first knowledge search after any warm-up would have handed residency back to a
+five-minute timer and taken the capability out again five minutes later, and the
+warm-up would have looked like it worked. `embed()` sends `keep_alive` now, with
+a test that asserts it is the configured value rather than a hardcoded `-1`.
+
+**Nothing in the platform re-asserts intent after a runtime restart.** `state =
+loaded` is an assertion only `ManageModels.load` ever acts on, which means a
+human pressing a button in the admin UI. The heartbeat is a *reader*: it writes
+what it observes and never tries to make the observation match the intent. That
+is the right split for a heartbeat, but it leaves the gap this entry is about
+open for the next runtime restart, and the answer is a reconciler that reloads
+models whose intent is `loaded` — deliberately not written today, because it
+wants a rate limit and a memory-budget check before it is allowed to load
+anything unattended. `adopt-ollama-service-account.sh` now says so in its
+closing list, which said nothing about warming anything.
+
+**Warmed straight at the runtime, with no audit row** — the same gap the
+2026-08-16 policy edit recorded, reached the same way: there is no
+authenticated path to the control plane from this host, so the alternative to
+doing it out of band was leaving the capability down.
+
+**What was not checked**: no embedding request was sent end to end, because no
+key plaintext is recoverable. Verified instead — residency through `/api/ps`,
+the observation in `models`, `node.status`, `/readyz` on all three ASGI apps
+after the rebuild, and the unit suite. The unit count moves 944 → 945.
 
 ### Committing by path did not keep two sessions apart, because staging is per file
 

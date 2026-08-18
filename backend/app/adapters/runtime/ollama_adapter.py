@@ -523,10 +523,24 @@ class OllamaAdapter:
         The batching endpoint, not the older single-input `/api/embeddings`:
         one round trip per passage would dominate the cost of indexing a
         document. The response's `embeddings` is a list per input, in order.
+
+        **`keep_alive` travels with every batch**, for the reason
+        `DEFAULT_KEEP_ALIVE` gives about `generate`: Ollama applies its own
+        five-minute default to a request that omits the field, so an embedding
+        request would silently overrule whatever `load` asked for. It cost more
+        here than it does on the generate path, because routing requires a
+        `loaded` observation and nothing on the embedding path loads on demand:
+        five minutes after the last search, `embedding` stops resolving to a
+        model at all and no traffic can bring it back. Observed 2026-08-18,
+        when the runtime moved to its own service account and the embedder was
+        the one model that did not return.
         """
         assert_valid_model_ref(ref)
         async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
-            response = await client.post("/api/embed", json={"model": ref, "input": list(texts)})
+            response = await client.post(
+                "/api/embed",
+                json={"model": ref, "input": list(texts), "keep_alive": self._keep_alive},
+            )
             if response.status_code == 404:
                 raise ModelNotFoundError(detail=f"{ref} is not present on this runtime")
             if response.status_code >= 400:
