@@ -305,6 +305,38 @@ days later, which is what a present tense inside a dated entry costs.
 
 ## 2026-08-18
 
+### Committing by path did not keep two sessions apart, because staging is per file
+
+Three sessions worked in this checkout today. To avoid publishing anybody
+else's half-finished work I stopped using `git add -A` and listed every path by
+hand -- and `498c212` still broke CI on `main` with `AttributeError: 'Actor'
+object has no attribute 'capability_for'`.
+
+**`git add <path>` stages the whole file, not the lines you wrote.**
+`route_chat_request.py` was a file both sessions had open: I had edited a
+docstring in it and another session had edited the call site of a method it was
+adding. Naming the path staged both. The definition lived in `actor.py`, which
+I had no reason to stage, so `main` carried a call to a method that did not
+exist for twenty-eight minutes, until the other session committed `actor.py`
+and the failure healed itself.
+
+**What would have caught it**, in ascending order of cost: reading
+`git diff --cached` for lines nobody in this session wrote; running the suite
+against the staged tree rather than the working tree (`git stash --keep-index`,
+test, restore); or not sharing a checkout. The local suite passed the whole
+time because the working tree had `actor.py` in it -- **the tree that was
+tested and the tree that was pushed were different trees**, which is the whole
+of the defect.
+
+The second CI failure the same afternoon was ordinary by comparison and worth
+one line: `getByLabel('Name')` matches a case-insensitive substring, so the
+capability-defaulting field labelled "When a request names something else" made
+the API-key spec's locator ambiguous. `{ exact: true }`, and the update
+assertion gained the `default_capability: null` the form now sends -- seeded
+from the key's current value, so an edit that does not touch it cannot clear
+it.
+
+
 ### The download path verifies digests now, and the library everyone assumes does this does not
 
 `security.md` §7.1(c) asked for two controls on the one path that could carry
