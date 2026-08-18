@@ -94,7 +94,7 @@ last row in security.md §13.0 that said "not implemented".
 |---|---|
 | Backend | 32 use cases, 27 routers, 19 entity modules, 16 migrations (head `a4c1e07f2b9d`), 945 unit tests, 120 integration tests that skip without `TEST_DATABASE_URL` |
 | Frontend | 21 feature folders, 20 screens, **366 tests across 40 files** (296, then 308, 345 and 359, earlier on 2026-08-18), types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
-| Gates | ruff, ruff-format, strict mypy, pytest; tsc, eslint, vitest, a real `next build`, **six Playwright paths** (five until 2026-08-18, three days after the sixth landed); Trivy, pip-audit and pnpm audit advisory-only. All green — **and this row was false from 2026-08-07 to 2026-08-08**, see below; the claim was not re-run in the 2026-08-18 pass |
+| Gates | ruff, ruff-format, strict mypy, pytest; tsc, eslint, vitest, a real `next build`, **six Playwright paths** (five until 2026-08-18, three days after the sixth landed); Trivy, pip-audit and pnpm audit advisory-only. **Not all green, and this row said so until 2026-08-18**: five of the last fifteen CI runs failed, every one of them on Playwright — three on `e2e-full-stack / Browser to gateway` and two on `frontend / Playwright`. `backend`, `frontend` and `audit` have not failed once in that window. The row was also false from 2026-08-07 to 2026-08-08 for a different reason, see below |
 
 **Verified on real hardware**, not only in tests: the full inference path with
 tool calling; the agent loop over ten graduated rungs including a multi-step
@@ -186,6 +186,96 @@ was resolved, so no debug window could apply to it.
 
 The fuller version of that list, with what each would take, is under "What is
 still unverified" further down.
+
+### An intermittent CI failure, a diagnosis that measurement refuted, and the instrument that should settle it next time
+
+`main` went red on the merge of #11 and the failing job was `e2e-full-stack`.
+One assertion: `routing-selection.spec.ts` waiting for the routing-policies
+table to show `beta (p100)` after the browser saved it. Checking the history
+first, before touching anything, is what made the rest of this worth doing —
+**the same assertion, the same locator and the same 5000 ms timeout had failed
+three times that day on commits that touched nothing near it**, and five of the
+last fifteen CI runs were red, every one on Playwright. So it was not the merge,
+and the gates row in this file's summary block was wrong to say "All green".
+
+**The re-run passed and `main` is green, which is the trap rather than the
+result.** `playwright.config.ts` already argues the point in its own comment —
+retries exist to tell a flaky test from a broken one, not to hide it — and here
+the answer turned out to be neither of the two the comment anticipated.
+
+**What the browser's trace establishes, and it is not a flake.** The failed run's
+artifact carries the network log:
+
+    30.572  PUT  /admin/routing-policies/chat   82.6 ms  -> 200, body says beta
+    30.657  GET  /admin/routing-policies        15.2 ms  -> body says alpha
+
+The GET was issued two milliseconds after the PUT's response arrived and came
+back with the state from before it. Three things it is *not*, each checked
+rather than assumed: not a browser cache hit — `serverIPAddress` is 127.0.0.1,
+fourteen milliseconds of server think time, a `Date` of `14:26:30` against the
+first GET's `14:26:28`, and no `Age`; not the Next proxy — `/admin/*` is a
+`NextResponse.rewrite`, which does not cache; not a backend cache — nothing
+caches routing policies, and `grep` over `adapters/cache` says so.
+
+**Then I got it wrong, in the way this file exists to record.** The hypothesis
+was that `get_session` (`di.py:259`) is a FastAPI `yield` dependency and
+`session_scope` commits *after* the yield, so on FastAPI 0.139 the commit lands
+after the response is sent and a fast follow-up read sees the pre-commit state.
+A twenty-line reproduction on the same FastAPI version showed exactly that: the
+client had the response 1.3 ms in, the read was served at 2.5 ms, and the commit
+had not happened.
+
+**Measuring the real application refuted it.** Instrumenting SQLAlchemy's own
+`AsyncSession.commit` in-process — the app imported unmodified, an isolated
+Postgres, the real admin entrance over a real socket — the commit finishes
+**about two milliseconds before the client receives the response**, every round:
+
+    round 1   commit +29.98 ms   client had the response +32.04 ms
+    round 2   commit +35.28 ms   client had the response +37.34 ms
+    round 3   commit +33.09 ms   client had the response +34.41 ms
+
+The toy was missing what the real app has: five `BaseHTTPMiddleware` layers
+(CSRF, identity, metrics, geo, body limit). `BaseHTTPMiddleware` buffers the
+response, so the dependency exit stack — the commit — completes before the
+outermost middleware hands anything back. **A reproduction that omits the thing
+under test proves nothing about it**, and this one was confident and wrong for
+about twenty minutes. The behavioural check agrees: twenty rounds of PUT then an
+immediate GET against the real admin entrance and the real gateway, zero stale
+reads and zero stale routings.
+
+**And it does not reproduce here at all.** Thirty direct rounds, one full-stack
+run, then five more against a Postgres throttled to 0.4 CPU: no failure. The
+throttle was aimed at the wrong thing — the whole test takes under two seconds,
+so the database is not the bottleneck. What CI has is contention across the
+*set*: two cores shared by Postgres, two uvicorns, the fake runtime, Next and
+Chromium, which is why the PUT there took 82.6 ms against 7.2 ms here.
+Reproducing that on this machine means loading a node that is serving, so it was
+not done.
+
+**So the next failure gets instrumented instead of re-argued.** Two changes,
+both test-side, neither touching the application:
+
+- The full-stack harness runs uvicorn at `--log-level info` rather than
+  `warning`, which is what turns the access log on. Verified: a run now prints
+  `PUT /admin/routing-policies/chat 200` and the `GET` that follows it. There
+  was no server-side record of either request before, and the re-run had already
+  overwritten the failing attempt's job log by the time it was wanted.
+- On failure the assertion polls the chat policy from **both sides** for three
+  seconds — straight to the admin entrance, and through the Next origin the page
+  itself uses — and attaches the timeline. The pair names the layer: direct new
+  and proxied old puts it in front of the backend; both old then new gives the
+  size of the window; both old and staying old means the PUT's 200 described
+  something it never persisted.
+
+The diagnostic was itself exercised rather than assumed to work: the assertion
+was temporarily pointed at a locator that cannot match, the run failed, and the
+attachment came out with both readers agreeing at +0 ms and +283 ms. Then it was
+put back and the suite passes.
+
+**One thing found on the way and not fixed:** the admin API sends no
+`Cache-Control: no-store`. It is not the cause here — that was checked and
+excluded above — but an API that returns management data and does not say it
+must not be stored is its own small gap.
 
 ### The backup section 9.4 had described since the first draft now exists, and the ordering argument it needs was wrong in my first pass
 

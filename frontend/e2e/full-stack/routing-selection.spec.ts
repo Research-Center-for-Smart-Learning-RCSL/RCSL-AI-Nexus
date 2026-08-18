@@ -25,6 +25,9 @@ test.describe.configure({ mode: 'serial' });
 const gatewayUrl = process.env.E2E_GATEWAY_URL ?? '';
 const gatewayKey = process.env.E2E_GATEWAY_KEY ?? '';
 const runtimeUrl = process.env.E2E_RUNTIME_URL ?? '';
+// The admin entrance itself, not the Next origin `page` talks to. Only the
+// failure path uses it, to tell a stale backend from a stale browser.
+const adminApiUrl = process.env.E2E_ADMIN_API_URL ?? '';
 const initialAlias = process.env.E2E_INITIAL_ALIAS ?? '';
 const refs: Record<string, string> = JSON.parse(process.env.E2E_MODEL_REFS ?? '{}');
 
@@ -44,6 +47,7 @@ test.beforeAll(() => {
     E2E_GATEWAY_KEY: gatewayKey,
     E2E_RUNTIME_URL: runtimeUrl,
     E2E_INITIAL_ALIAS: initialAlias,
+    E2E_ADMIN_API_URL: adminApiUrl,
   })
     .filter(([, value]) => !value)
     .map(([name]) => name);
@@ -124,9 +128,112 @@ async function selectSoleCandidate(page: Page, alias: string) {
 
   // Asserted against the table the page refetched, so the test proceeds on what
   // the server returned rather than on the optimistic state of a form.
-  await expect(
-    page.getByRole('row').filter({ hasText: `${alias} (p100)` }),
-  ).toBeVisible();
+  try {
+    await expect(
+      page.getByRole('row').filter({ hasText: `${alias} (p100)` }),
+    ).toBeVisible();
+  } catch (failure) {
+    // This assertion failed three times on main on 2026-08-18, on commits that
+    // touched nothing near it, and the investigation ran out of evidence rather
+    // than out of hypotheses. What the browser's trace could establish: the PUT
+    // returned 200 with the new alias in its body, and a GET issued two
+    // milliseconds later reached the server -- fresh `Date`, fourteen
+    // milliseconds of server time, no `Age` -- and came back with the old one.
+    // What nothing could establish is whether the *database* had the write by
+    // then, and thirty rounds against the real admin entrance on a fast machine
+    // never reproduced it, so the question cannot be answered by trying again
+    // locally. It has to be answered on the run that fails.
+    //
+    // So the next failure records the fork instead of leaving it open. The poll
+    // goes straight to the admin entrance, past both the browser and the Next
+    // proxy that `page` speaks to, which is what makes the two answers mean
+    // different things:
+    //
+    //   the API says the new alias  -> the write landed; the stale view came
+    //                                  from the browser or the proxy in front
+    //                                  of it, and the backend is not the place
+    //                                  to look
+    //   the API says the old alias  -> the write had not landed when the page
+    //                                  refetched, and the timestamps below say
+    //                                  how long it took to
+    //
+    // Deliberately not a retry: the assertion has already failed by the time
+    // this runs and the failure is rethrown unchanged with the evidence added.
+    // A poll that rescued the test would turn the one signal into silence.
+    const evidence = await pollPolicyFromBothSides(page);
+    await test.info().attach('admin-entrance-after-failure', {
+      body: evidence,
+      contentType: 'text/plain',
+    });
+    throw new Error(`${(failure as Error).message}\n\n${evidence}`);
+  }
+}
+
+/**
+ * What the chat policy looks like from both sides, for three seconds, once the
+ * browser has already given up.
+ *
+ * Two readers, and the pair is the point. `direct` goes to the admin entrance
+ * on its own port; `proxied` goes to the Next origin the page itself uses, so
+ * it crosses the same middleware rewrite the failing refetch crossed. Between
+ * them they name the layer:
+ *
+ *   direct new, proxied old  -> the write landed and something between the
+ *                               browser and the backend served an older answer
+ *   both old, then new       -> the backend had not committed yet, and the
+ *                               timestamp says for how long
+ *   both old, and they stay  -> the write did not land at all, and the PUT's
+ *                               own 200 was describing something it never
+ *                               persisted
+ *
+ * Timestamps are milliseconds from the first read, so a value that arrives late
+ * is distinguishable from one that never arrives.
+ *
+ * Never throws: it runs on a path that is already failing, and an error here
+ * would replace the real assertion's message with this function's.
+ */
+async function pollPolicyFromBothSides(page: Page): Promise<string> {
+  const lines = [
+    'chat policy after the assertion gave up',
+    `  direct  = ${adminApiUrl}/admin/routing-policies`,
+    '  proxied = the page origin, through the Next middleware rewrite',
+    '',
+  ];
+  const started = Date.now();
+
+  type Policy = { capability: string; candidates: { model_alias: string; priority: number }[] };
+
+  const describe = async (
+    read: () => Promise<{ status: number; body: unknown }>,
+  ): Promise<string> => {
+    try {
+      const { status, body } = await read();
+      const chat = (body as Policy[]).find((policy) => policy.capability === 'chat');
+      const candidates = (chat?.candidates ?? [])
+        .map((c) => `${c.model_alias} (p${c.priority})`)
+        .join(', ');
+      return `${status} ${candidates || '<no chat policy>'}`;
+    } catch (error) {
+      return `unreachable: ${String(error)}`;
+    }
+  };
+
+  for (let i = 0; i < 12; i += 1) {
+    const at = Date.now() - started;
+    const direct = await describe(async () => {
+      const response = await fetch(`${adminApiUrl}/admin/routing-policies`);
+      return { status: response.status, body: await response.json() };
+    });
+    const proxied = await describe(async () => {
+      const response = await page.request.get('/admin/routing-policies');
+      return { status: response.status(), body: await response.json() };
+    });
+    lines.push(
+      `  +${String(at).padStart(4)} ms   direct: ${direct.padEnd(28)} proxied: ${proxied}`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return lines.join('\n');
 }
 
 test('a routing policy edited in the browser changes which model the gateway serves', async ({
