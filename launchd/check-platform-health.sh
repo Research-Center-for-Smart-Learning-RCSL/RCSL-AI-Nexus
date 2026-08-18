@@ -181,6 +181,8 @@ SWAP_USED=""
 DOCKER_DISK_PCT=""
 RECLAIM_GB=""
 GEOIP_AGE_DAYS=""
+BACKUP_AGE_H=""
+BACKUP_FIGURES=""
 
 fail() {
   # $1 short id used for the change signature, $2 human line for the mail body.
@@ -903,6 +905,75 @@ EOF
   fi
 fi
 
+# --- 15. the encrypted backup -----------------------------------------------
+#
+# Asked as an outcome, not as a liveness check, for the same reason the
+# retention question above is: `online.rcsl.backup` is a launchd job in the
+# system domain, so this script — running unprivileged — cannot ask launchctl
+# whether it is loaded, and a job that is loaded but silently failing looks
+# exactly like one that is not installed. What is answerable from here is the
+# only thing anybody actually cares about: when did a backup last SUCCEED.
+#
+# backup.sh writes /opt/homebrew/var/nexus-backup.state on every path it can
+# exit through, including the watchdog kill, and keeps the last success and the
+# last outcome on separate lines. That separation is what lets this check
+# distinguish one transient failure on top of a fresh backup — the external disk
+# unmounted overnight — from a run that has been failing since Tuesday.
+#
+# Tier 1 for the two states that will not fix themselves, and the split is
+# deliberate. The header of this file argues that a check with lead time belongs
+# in the digest, because a subject line that reads FAILING for a fortnight stops
+# meaning anything. A backup that has never run, or has not succeeded in three
+# days, has no lead time in that sense: nothing is going to repair it, and the
+# cost is not paid gradually — it is paid in full, once, on the day somebody
+# needs it. Between one and three days is genuinely degrading and waits for the
+# digest, which is where a single failed night belongs.
+
+BACKUP_STATE_FILE="/opt/homebrew/var/nexus-backup.state"
+BACKUP_WARN_HOURS=30
+BACKUP_FAIL_HOURS=72
+
+if [ ! -f "$BACKUP_STATE_FILE" ]; then
+  # The state file is written by every exit path backup.sh has, so its absence
+  # is not ambiguous: no run has ever completed. Either the plist was never
+  # loaded or the job has never once reached its first line.
+  fail "backup-never-run" "No backup has ever completed on this machine: $BACKUP_STATE_FILE does not exist. Either online.rcsl.backup.plist is not loaded, or the job has never fired. Until this changes there is no copy of the knowledge base or the database anywhere. See docs/runbooks/restore.md section 1."
+else
+  BACKUP_LAST_OK="$(sed -n '1p' "$BACKUP_STATE_FILE" 2>/dev/null)"
+  BACKUP_OUTCOME="$(sed -n '2p' "$BACKUP_STATE_FILE" 2>/dev/null)"
+  BACKUP_FIGURES="$(sed -n '3p' "$BACKUP_STATE_FILE" 2>/dev/null)"
+
+  if [ -z "$BACKUP_LAST_OK" ]; then
+    BACKUP_AGE_H=""
+  else
+    BACKUP_AGE_H="$(/usr/bin/python3 -c '
+import datetime, sys
+try:
+    when = datetime.datetime.strptime(sys.argv[1], "%Y-%m-%dT%H:%M:%S%z")
+except (ValueError, IndexError):
+    sys.exit(1)
+now = datetime.datetime.now(datetime.timezone.utc)
+print(int((now - when).total_seconds() // 3600))
+' "$BACKUP_LAST_OK" 2>/dev/null)"
+  fi
+
+  if [ -z "$BACKUP_LAST_OK" ]; then
+    fail "backup-no-success" "The backup daemon has run and has never succeeded once (last outcome: ${BACKUP_OUTCOME:-unknown}). There is no copy of the knowledge base or the database anywhere. The stage it dies at is the suffix of that outcome; the detail is in $(dirname "$HEALTH_LOG")/nexus-backup.log."
+  elif [ -z "$BACKUP_AGE_H" ]; then
+    # A line that does not parse as a timestamp is not a pass. This is the third
+    # answer the file's header argues every check should be able to give.
+    warn "the backup state file's first line (${BACKUP_LAST_OK}) is not a timestamp this can read, so the age of the last backup is unknown rather than fine"
+  elif [ "$BACKUP_AGE_H" -gt "$BACKUP_FAIL_HOURS" ] 2>/dev/null; then
+    fail "backup-stale" "The last successful backup was ${BACKUP_AGE_H} hours ago (${BACKUP_LAST_OK}), past the ${BACKUP_FAIL_HOURS}-hour limit, and the last run said '${BACKUP_OUTCOME:-unknown}'. A daily job that has missed three days is not going to repair itself. See $(dirname "$HEALTH_LOG")/nexus-backup.log."
+  elif [ "$BACKUP_AGE_H" -gt "$BACKUP_WARN_HOURS" ] 2>/dev/null; then
+    warn "the last successful backup was ${BACKUP_AGE_H} hours ago (over ${BACKUP_WARN_HOURS}), last run '${BACKUP_OUTCOME:-unknown}'; one missed night, and a second would make it tier 1"
+  elif [ "${BACKUP_OUTCOME:-}" != "ok" ]; then
+    warn "the last backup run failed at stage '${BACKUP_OUTCOME#failed:}' but the one before it succeeded ${BACKUP_AGE_H}h ago, so this is one bad night rather than a broken chain"
+  else
+    note "backup: last succeeded ${BACKUP_AGE_H}h ago, ${BACKUP_FIGURES:-no figures recorded}"
+  fi
+fi
+
 # --- decide -----------------------------------------------------------------
 #
 # Only tier 1 reaches the signature. WARNINGS and NOTES are deliberately not in
@@ -1121,6 +1192,10 @@ if [ "$SEND_DIGEST" -eq 1 ]; then
     printf '  - host disk %s%%, Docker VM disk %s%%, %s GB memory available, %s GB swap\n' \
       "${DISK_PCT:-?}" "${DOCKER_DISK_PCT:-?}" "${MEM_AVAIL:-?}" "${SWAP_USED:-?}"
     printf '  - GeoLite2 database %s days old\n' "${GEOIP_AGE_DAYS:-?}"
+    # Printed whether or not it is also a warning above, like every other line
+    # in this section: a figure the reader can watch trend is worth more than a
+    # line that only appears on the days something is wrong.
+    printf '  - last successful backup %s hours ago (%s)\n' "${BACKUP_AGE_H:-?}" "${BACKUP_FIGURES:-no figures}"
     [ -n "$RECLAIM_GB" ] && printf '  - %s GB of Docker space reclaimable\n' "$RECLAIM_GB"
     [ -n "$NOTES" ] && printf '%s' "$NOTES"
     printf '\n'

@@ -75,6 +75,7 @@ openssl rand -base64 32        # for each password and each of the four below
 | `alert_smtp_account` | the Gmail address `check-platform-health.sh` sends alerts *from*; not itself a secret, but kept beside the password because Gmail requires the envelope sender to be the account that authenticates |
 | `alert_smtp_password` | a Google app password for that account, not the account password. Needs 2-Step Verification enabled on it first |
 | `maxmind_license_key` | the MaxMind account's permanent licence key, read by `launchd/refresh-geolite2.sh` on the host — no container mounts it. The long-lived credential, unlike the throwaway tokens the first download used; without it the country database rots in place (the script's header explains). Not needed if the refresh job is not installed |
+| `restic_password` | the passphrase for the backup repository, read by `launchd/backup.sh`; no container mounts it. **This is the one file in this directory whose only copy must not be on this machine.** The repository holds `secrets/` — it has to, or a restore produces a database whose TOTP secrets cannot be decrypted and whose API keys cannot be verified — so this passphrase plus read access to the repository is the whole platform, and a passphrase stored only on the disk being backed up protects nothing against the disk being lost. Keep a copy in a password manager or on paper, off site. Losing it makes every existing snapshot permanently unreadable; there is no recovery path, by design. Not needed if the backup daemon is not installed |
 
 **Use a dedicated sending account, not the operator's own.** These two files sit
 in plaintext on a host whose FileVault is off ([security.md](../docs/architecture/security.md)
@@ -84,6 +85,15 @@ own mailbox is where every password-reset link for every other service arrives,
 and on this deployment it is also the platform's first administrator. The
 recipient address is not a secret and lives in the script, where it is
 reviewable. Neither file is needed if the health-check daemon is not installed.
+
+**The backup repository contains this directory.** That is a deliberate
+decision recorded at the top of [`launchd/backup.sh`](../launchd/backup.sh)
+and its short form is that the alternative is not a restore: without
+`totp_encryption_key` every stored TOTP secret is undecryptable and without
+`api_key_pepper` every key hash is unverifiable, so a backup that omits them
+restores a platform nobody can log into and no client can call. The cost is
+that `restic_password` above concentrates everything into one value, which is
+why the row says to keep it somewhere this machine is not.
 
 `api_key_pepper_previous` is not shipped as a file because it is empty except
 during a pepper rotation. Add it as a secret (and mount it into the backend

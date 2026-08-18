@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>online.rcsl.backup</string>
+
+	<!-- The encrypted backup. What is in it, what is deliberately not, and why
+	     the two captures cannot be made atomic, are at the top of the script.
+	     docs/runbooks/restore.md is the other half of it. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/rcslmac1/dev/RCSL-AI-Nexus/launchd/backup.sh</string>
+	</array>
+
+	<!-- Same identity as the health daemon and the reconciler, and for the same
+	     reason: the docker socket is the user's (~/.docker/run/docker.sock) and
+	     Docker Desktop runs in the user's session, so root would be the wrong
+	     identity even though this is a daemon. It also needs to read secrets/,
+	     which it reads twice over — once for the repository password and once
+	     as the thing being backed up. -->
+	<key>UserName</key>
+	<string>rcslmac1</string>
+
+	<!-- 03:30 daily. Late enough that the day's work is done, early enough that
+	     `restic prune` has finished long before anyone is using the platform:
+	     prune rewrites pack files and is the one stage here that competes for
+	     the disk rather than the CPU.
+
+	     Not RunAtLoad, and the difference from online.rcsl.health-check.plist is
+	     the point. That job wants a run at load because its state file's mtime
+	     is a liveness record that has to be fresh right after a boot. This one
+	     would fire while Docker Desktop is still coming up, fail its preflight,
+	     write `failed:preflight`, and put a warning in the digest after every
+	     single reboot — training the reader to ignore the one line that says
+	     the backup is broken.
+
+	     A missed fire is not a lost day: launchd runs a StartCalendarInterval
+	     job once on wake if its time passed while the machine was asleep or
+	     off. A machine that was off from 02:00 to 09:00 backs up at 09:00. -->
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>3</integer>
+		<key>Minute</key>
+		<integer>30</integer>
+	</dict>
+	<key>RunAtLoad</key>
+	<false/>
+
+	<!-- Low priority I/O. The prune stage can move a lot of bytes and this is a
+	     24/7 inference server: a backup that makes the platform slow is a
+	     backup somebody eventually disables. -->
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>Nice</key>
+	<integer>5</integer>
+
+	<!-- The log carries events only — the stages, the figures, and any failure
+	     with the stage it died in — so reading it shows what happened rather
+	     than a wall of restic progress. "Did it run at all" and "when did it
+	     last succeed" are answered by /opt/homebrew/var/nexus-backup.state,
+	     which check 15 of the health daemon reads and reports in the digest. -->
+	<key>StandardOutPath</key>
+	<string>/opt/homebrew/var/log/nexus-backup.log</string>
+	<key>StandardErrorPath</key>
+	<string>/opt/homebrew/var/log/nexus-backup.log</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/rcslmac1/dev/RCSL-AI-Nexus</string>
+</dict>
+</plist>

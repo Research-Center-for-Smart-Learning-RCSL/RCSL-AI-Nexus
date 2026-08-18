@@ -80,8 +80,12 @@ above still applies to every sentence here that is not one of these numbers.
 five described below, and the full-stack one that landed 2026-08-10 and joins
 the browser to a real gateway and a real Postgres. This said five until
 2026-08-18.
-Phase 2 is complete but for **encrypted backups with a rehearsed restore** and
-**Storybook**. The *logging boundaries* half of §9.2 closed on 2026-08-08 — full
+Phase 2 is complete but for **the rehearsal half of encrypted backups** and
+**Storybook**. The backup *mechanism* shipped 2026-08-18 and nothing has been
+restored from it yet, which is deliberately reported as two claims rather than
+one: security.md §9.4's own sentence is that an unverified backup is not a
+backup, and this file has already recorded eight controls that were designed,
+written down, marked done and not actually in force. The *logging boundaries* half of §9.2 closed on 2026-08-08 — full
 prompt and completion logging, gated by the expiring switch that had been sitting
 there unused, kept for days rather than months, and audited when read. It was the
 last row in security.md §13.0 that said "not implemented".
@@ -182,6 +186,190 @@ was resolved, so no debug window could apply to it.
 
 The fuller version of that list, with what each would take, is under "What is
 still unverified" further down.
+
+### The backup section 9.4 had described since the first draft now exists, and the ordering argument it needs was wrong in my first pass
+
+Nothing implemented it. `grep -ri backup` over the whole repository returned one
+comment in `docker-compose.yml` and the design in security.md §9.4 — so a
+platform holding the team's unpublished research had no copy of it anywhere,
+and had not had one for the twenty-five days it had been serving. It was the
+last Phase 2 functional item and the only one that had never even reached
+"marked done".
+
+What shipped: `launchd/backup.sh`, `launchd/online.rcsl.backup.plist` firing it
+at 03:30, check 15 of `check-platform-health.sh`, and
+[runbooks/restore.md](./runbooks/restore.md). One nightly restic repository
+holding the database, the `documents` volume, `secrets/` and a manifest.
+
+**§9.4 left four questions open and none of them was a typing problem.**
+
+- **`prompt_logs` is out.** §9.4 offers two ways to bound it — exclude the
+  table, or keep backups for less time than the dataset does — and only one is
+  available, because the dataset's bound is a *ceiling* of 30 days on a default
+  of 7 and a backup retention under a week is not a backup. The argument that
+  actually settles it is cheaper than the one the section sets up: the rows have
+  no recovery value. A transcript exists for the length of a debugging session,
+  and nobody restoring from a disaster wants a three-week-old one. It is
+  `--exclude-table-data`, not `--exclude-table`: dropping the table would
+  restore a database missing one `RouteChatRequest` writes to, so the first
+  request after a successful-looking restore would fail. The rehearsal in the
+  runbook asserts `prompt_logs` is both present and empty, which is the only
+  place that distinction can be caught.
+- **`refusals` is in, under the other option.** Retention is 7 daily, 4 weekly,
+  3 monthly, and the figure first written for it here was wrong. It said "about
+  ninety days"; running the policy against 130 synthetic daily snapshots kept 11
+  of them and spanned **49 days**, because the monthly leg counts calendar
+  months rather than 30-day windows and therefore oscillates from about 32 days
+  on the first of a month to about 92 on the last. The bound that has to hold is
+  the upper one against that dataset's own 180-day ceiling, and it holds with
+  more room than the guess claimed.
+- **`secrets/` is in the repository**, and it is the largest decision here.
+  Leaving it out produces something that is not a restore: `totp_encryption_key`
+  is what every stored TOTP secret is encrypted under, `api_key_pepper` is what
+  every key hash is peppered with, and without them the restored database is one
+  where every administrator is locked out and every key is dead. So the question
+  was never safe against unsafe — it was one item kept off this machine or
+  sixteen, and one is the number that will still be right in a year. What it
+  costs is written in three places rather than one, because it is the sentence
+  most likely to be skipped: the repository password plus read access is the
+  whole platform.
+- **Qdrant is out and rebuilt.** It is derived, and `qdrant_store.py` derives
+  point ids rather than generating them, so a re-index is idempotent. The cost
+  is every document embedded again, and the runbook carries the loop instead of
+  leaving it as an exercise.
+
+**The ordering argument was wrong the first time I made it, and the direction it
+was wrong in is the interesting part.** The obvious rule is "files first, then
+the database", so that a restore can only ever have a spare file rather than a
+row pointing at nothing. That is backwards. `knowledge_documents` rows point at
+files in the `documents` volume, and the two capture moments can disagree in two
+ways, not one: a document *uploaded* between them leaves a row with no file if
+the files went first, and a document *deleted* between them leaves a row with no
+file if the database went first. Uploads and deletes cut in opposite directions,
+so no ordering is safe against both — an ordering can only choose which failure
+is the common one. The database goes first, because uploads are ordinary and
+deletes are rare, which puts the harmless shape (an orphan file, invisible) on
+the common path.
+
+The residue is not papered over, and that is the part worth keeping. The runbook
+ends with a reconciliation — two `comm` calls against the row list and the
+directory list — so the rare inconsistency arrives as a named list on the day of
+the restore rather than as a document that mysteriously 500s six months later.
+Making the window genuinely atomic means stopping the stack nightly, and a
+platform that stops serving every night to protect data it is not serving is a
+worse trade. Worth noting that the live system already produces the same shape
+transiently and on purpose: `ManageKnowledge._forget_document` deletes the bytes
+before the row, so a half-finished delete leaves something the operator can see
+and retry.
+
+**Two controls exist only because the failure they prevent looks like success.**
+
+The script refuses to `restic init`. A typo in the repository path, or a disk
+that mounted somewhere slightly different, would otherwise open a fresh empty
+repository, and every night after that would succeed against it while the real
+history sat elsewhere. For the same reason there is a separate check that
+something is actually *mounted* at `/Volumes/nexus-backup`: on macOS an
+unmounted external disk leaves an ordinary empty directory at its mount point,
+so without that check the nightly job would quietly grow a second complete
+repository on the boot volume and report success every time.
+
+**And one of those failures was in the first draft of this change.** The
+manifest was passed to `restic backup` as a host path under a `mktemp -d`
+directory — a different name on every run. `restic forget` groups snapshots by
+host and path, so every night's manifest would have been a group of one, every
+group would have satisfied `--keep-daily 7` on its own, and **nothing would ever
+have been pruned**: the retention policy that is the entire justification for
+`refusals` being in the backup would have been true of the snapshot listing and
+false of the data, for about ninety days before anyone could notice. It is a
+`--stdin` snapshot at a fixed path now, which is also why the database and
+documents captures use a constant `--stdin-filename` rather than a dated one.
+
+**Check 15 splits across the two tiers rather than sitting in one.** No backup
+ever, no success ever, or no success in 72 hours are tier 1 and mail
+immediately; 30 to 72 hours, and a single failed run on top of a fresh success,
+wait for the digest. The file's own header argues that anything with lead time
+belongs in the digest because a subject line reading FAILING for a fortnight
+stops meaning anything — and a broken backup does not have lead time in that
+sense. Nothing is going to repair it, and its cost is not paid gradually but in
+full, once, on the day somebody needs it. The state file keeps the last success
+and the last outcome on separate lines precisely so those two cases can be told
+apart. All seven branches were exercised against synthetic state files before
+this was written down.
+
+**It was installed and rehearsed the same evening, on the Mac Studio, against
+the live stack.** restic 0.19.1, and the repository is on the **internal disk**
+at `/Users/Shared/nexus-backup/restic` because `diskutil list external` was
+empty: it shares a failure domain with the data it copies, so it defends against
+a bad migration, a mistaken `docker volume rm` and a deleted collection, and not
+against the disk. That is written into `backup.sh`, the runbook and §9.4 rather
+than only here, because it is the sentence most likely to be forgotten. Moving
+it is two constants and one `restic init`.
+
+First backup at 21:59:59: four snapshots, 67,080 bytes of raw data. The
+LaunchDaemon was bootstrapped the same evening and `launchctl print` confirms
+what the plist intended: `type = LaunchDaemon`, calendar interval 03:30,
+`username = rcslmac1` (which it needs for the docker socket and for `secrets/`),
+the working directory and both log paths, `nice = 5`, and `state = not running`
+because `RunAtLoad` is false on purpose.
+
+**Then it was kickstarted, because "works by hand, fails as a daemon" is the
+shape of most of the eight defects 2026-07-26 found**, and both successful runs
+up to that point had been from an interactive shell. Under launchd — root
+starting it, dropping to `rcslmac1`, launchd's own environment, no terminal —
+`runs = 1`, `last exit code = 0`, every stage logged, and the state file written
+`ok` at 22:10:51. That run also produced the first evidence that `forget` is
+actually working the way the grouping was designed for: it added four snapshots
+to eight and left eight, two per path group, which is the newest plus restic's
+pinned oldest. Had the manifest still been going in under a `mktemp` path, that
+number would have been twelve. No stray watchdog process survived the run
+either, which is the other half of the defect above. The rehearsal, in full:
+
+- The dump — 2,285 lines — restored into a throwaway `postgres:17-alpine` under
+  `ON_ERROR_STOP=1` with exit 0 and no errors, and **every count matched the
+  live database exactly**: 8 users, 32 API keys, 6 models, 697 usage records,
+  301 audit rows, 11 refusals.
+- **The `prompt_logs` exclusion was proven independently of the table happening
+  to be empty**, which matters because it *was* empty and the obvious check
+  could therefore only return one answer. `CREATE TABLE public.prompt_logs` is
+  in the dump and `COPY public.prompt_logs` is not. The control is
+  `knowledge_documents`: also zero rows, not excluded, and its `COPY` block is
+  present. So the absence is the flag working, not the emptiness.
+- All **17** secret files came back byte-identical, and no `*.example` or
+  `README.md` leaked into the snapshot.
+- **The documents capture had no payload to prove, so it was proven separately.**
+  The knowledge base holds zero documents, so `documents.tar` was two directory
+  entries — a result that cannot distinguish "the capture works" from "the
+  capture silently produced nothing". A 4 KiB random probe was written into the
+  live volume at `.backup-selftest/`, a path the app provably cannot address
+  (`_TENANT_ID` is `[A-Za-z0-9_-]{1,64}`, so a name containing `.` is not
+  constructible), pushed through the real pipeline into a throwaway repository,
+  and came back with an identical sha256. The probe was removed and the volume
+  is back to its single `default/` directory.
+- **Check 15 was verified against reality rather than only against synthetic
+  state files.** It fired tier 1 at 21:46:54 with `backup-never-run` and mailed
+  both recipients — a correct alarm, since the platform genuinely had no backup
+  at that moment, and worth recording that it reached two people's inboxes
+  before anybody had been told the check existed. It cleared by itself at
+  22:02:02 with a recovery mail once the first backup succeeded. The whole
+  lifecycle, on the real mail path.
+
+**Two defects were found by doing this rather than by writing it.** The watchdog
+was `( sleep 7200; kill -TERM $$ ) &` with a `kill` in the exit trap, and it was
+wrong twice: the subshell inherits stdout, so `bash backup.sh | tail` hung for
+two hours against a script that had already finished, and `kill $WATCHDOG` kills
+the subshell while orphaning the `sleep` it was supposed to end — two of them
+were still running when this was found. It polls `kill -0 $$` every 30 seconds
+now and ends by itself. And the retention figure was a guess that measurement
+corrected, recorded above.
+
+**What is not done, and is why the roadmap box stays `[~]` even with the
+rehearsal passed.** The repository is on the same disk as the data, so the item
+as the roadmap words it — a backup — is not honestly `[x]` until it is on
+separate hardware. And it is one repository, not 3-2-1: the offsite leg is blocked on a question this end cannot
+answer — whether institutional policy and the collaboration agreements permit
+unpublished research data on third-party cloud storage — and writing it in
+before somebody answers would have made it the ninth designed-and-not-in-force
+control this file records.
 
 ### The browser now drives the two authentication state machines
 
