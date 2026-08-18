@@ -347,6 +347,7 @@ A single exception handler registered in `interfaces/http/errors.py` performs th
 | `NotAuthenticatedError` | 401 | |
 | `NotAuthorizedError` | 403 | Does not reveal whether the target resource exists |
 | `InvalidModelReferenceError` | 400 | |
+| `ModelIntegrityError` | 502 | Downloaded weights disagree with the digest the repository states. 502 because the party that failed is upstream, and the message does not say "retry": a corrupted transfer would succeed on a second attempt and a repository whose bytes disagree with its own metadata never will, and this error cannot tell them apart |
 | `InvalidCredentialsError` | 401 | **Identical body for unknown login and wrong password**, see §7 |
 | `TotpRequiredError` | 401 | Password accepted, second factor outstanding |
 | `InvalidTotpError` | 401 | Also raised on replay of an already-used counter |

@@ -305,6 +305,51 @@ days later, which is what a present tense inside a dated entry costs.
 
 ## 2026-08-18
 
+### The download path verifies digests now, and the library everyone assumes does this does not
+
+`security.md` §7.1(c) asked for two controls on the one path that could carry
+them, and this morning it recorded both as absent. The format allowlist went in
+at midday. This is the other half.
+
+**The reason it was needed is worth writing down before the fix.**
+`huggingface_hub` is widely assumed to verify what it downloads. Read at
+1.24.0, `file_download` **does not import `hashlib` at all** -- the only
+post-transfer check is `expected_size != temp_file.tell()`. A file that arrives
+the right length and the wrong content passes it, and that was the whole of the
+integrity story on this platform's model downloads.
+
+`_verify_snapshot` now hashes every file against what the repository states:
+`sha256` for LFS objects, and for small files the `blob_id`, which is a **git
+object id** rather than a content hash -- `sha1("blob <len>\0" + content)`.
+Getting that framing wrong produces a digest that never matches and would
+refuse every `config.json` in every repository, so the test pins it against a
+value `git hash-object` printed rather than against the implementation.
+
+**It deletes, and that is the part that makes it a control.** A file that fails
+verification, or that no digest describes, or that arrived without being
+described at all, is unlinked -- symlink *and* blob -- before the error is
+raised. The bytes live in a cache the next `load` reads directly, so a check
+that only reported would leave the rejected weights exactly where the runtime
+would find them.
+
+**`ModelIntegrityError` is a 502 and deliberately does not say "retry".** A
+transfer corrupted in flight would succeed on a second attempt; a repository
+whose bytes disagree with its own metadata never will. This error cannot tell
+the two apart, so promising either would be guessing on the operator's behalf
+about the case that matters.
+
+**What it does not defend against, recorded beside what it does.** The digests
+come from the same Hub API as the metadata, so an upstream that lies in both
+planes at once is not caught and cannot be. The honest control against a
+malicious repository is not downloading from it -- `ALLOWED_REGISTRIES` and the
+operator who typed the reference. What this catches is divergence: a transfer
+or a store serving bytes the metadata plane does not describe.
+
+Six tests, and one of them is the one that would have caught a plausible wrong
+turn: `test_a_file_the_repository_does_not_describe_is_refused`. An allowlisted
+extension is not a licence to arrive unannounced.
+
+
 ### Ollama came off the operator's admin login, and the reason it had never moved was a directory mode
 
 `security.md` §7.1(d) has asked for a dedicated non-administrator service

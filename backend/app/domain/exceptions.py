@@ -216,6 +216,19 @@ class InvalidModelReferenceError(DomainError):
     public_message = "The model reference is not valid."
 
 
+class ModelIntegrityError(DomainError):
+    code = "model_integrity_failed"
+    public_message = "The downloaded weights do not match what the repository describes."
+    # 502 rather than 503 or 400: nothing here is wrong with the request, this
+    # deployment is not out of capacity, and the party that failed is upstream.
+    #
+    # **It deliberately does not say "retry".** A transfer corrupted in flight
+    # would succeed on a second attempt and a repository whose bytes disagree
+    # with its own metadata never will, and this error cannot tell the two
+    # apart. Promising either one would be guessing on the caller's behalf
+    # about the case that matters.
+
+
 CONTEXT_REMEDY = (
     "Retrying it unchanged cannot succeed and waiting does not clear it: send less "
     "— start a new conversation, continue from a summary of this one, or stop "
