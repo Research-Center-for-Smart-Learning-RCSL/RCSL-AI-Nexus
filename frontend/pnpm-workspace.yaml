@@ -56,3 +56,61 @@ overrides:
   # a public-API-compatible performance rewrite, not a breaking change. Dev
   # dependency only (shadcn CLI), never reaches the build output.
   '@hono/node-server': '>=2.0.5'
+  # `shadcn` -> `@modelcontextprotocol/sdk` -> `hono` 4.12.32, by two edges: the
+  # SDK reaches it through `@hono/node-server` (the override directly above) and
+  # also declares it directly, so a floor on the server package alone leaves the
+  # second edge on the vulnerable version. Three advisories, all fixed in
+  # 4.12.34:
+  # CVE-2026-71850, where `memo()` retains SSR output across requests and can
+  # hand one user's rendered markup to the next; CVE-2026-71849, where the Proxy
+  # Helper forwards response headers the `Connection` header lists as
+  # hop-by-hop instead of stripping them; and CVE-2026-71848, quadratic parsing
+  # in the Language middleware. None is reachable from here -- nothing in this
+  # repository runs a Hono server; the package is linked in by the shadcn CLI's
+  # MCP mode, is a devDependency, and never reaches the build output. `^4.12.34`
+  # keeps this on the 4.x line that `@hono/node-server` 2.x declares.
+  hono: '^4.12.34'
+  # `eslint` -> `@eslint/eslintrc`, `openapi-typescript` ->
+  # `@redocly/openapi-core`, and `shadcn` -> `cosmiconfig` each pull in js-yaml
+  # 4.3.0. GHSA-5p4m-2wfm-xmqj: resolving an `!!omap` node is quadratic in its
+  # number of keys, so a small hand-written document can cost seconds of CPU.
+  # The 3.x fix was never backported, which is why the advisory names both
+  # lines; only 4.3.0 is in this tree. All three dependents are devDependencies
+  # and each parses only files committed to this repository -- the ESLint
+  # config, the OpenAPI schema, `components.json` -- never anything a caller
+  # supplies, so the quadratic path has no untrusted input to reach it. One
+  # patch release closes it.
+  js-yaml: '^4.3.1'
+  # `next` -> `postcss` -> `nanoid` 3.3.16. CVE-2026-67213: `customAlphabet` and
+  # `customRandom` loop forever instead of returning an empty string when called
+  # with a size of zero, so a caller deriving that size from input hangs the
+  # process. postcss calls it once, as `nanoid(6)` with a literal, to name an
+  # input in source maps (postcss/lib/input.js), so the defect is not reachable
+  # through this path. It is listed all the same because this is the one entry
+  # in this block that is not dev-only: `next` is a production dependency, so
+  # nanoid is the only package here that ships inside the image. Held to the 3.x
+  # line -- postcss declares `^3.3.16`, and nanoid 5 is ESM-only, so an
+  # unbounded floor would resolve to a major postcss cannot require().
+  nanoid: '^3.3.18'
+  # Three copies of brace-expansion, one per major line, each reached through a
+  # different minimatch: `@eslint/eslintrc` -> minimatch 3 -> 1.1.16,
+  # `openapi-typescript` -> `@redocly/openapi-core` -> minimatch 5 -> 2.1.2, and
+  # `eslint-config-next` -> `@typescript-eslint/*` -> minimatch 10 -> 5.0.8.
+  # GHSA-rgw5-rvv9-x895: expanding a brace pattern builds unbounded intermediate
+  # arrays, so a short pattern costs memory and CPU out of all proportion to its
+  # length -- and this one specifically bypasses the mitigation added for
+  # CVE-2026-14257, which is why the fix is a second patch on top of that.
+  #
+  # Not currently a Dependabot alert; the local `pnpm audit` in the CI audit job
+  # is what surfaces them, which is the argument that job exists for. Every path
+  # is a devDependency and every pattern expanded is a glob written in this
+  # repository -- lint config, the OpenAPI generator's file selection -- so
+  # there is no untrusted input at either end. Floored anyway, because three
+  # one-line ranges is not a cost worth deferring.
+  #
+  # Keyed per major (`name@N`) rather than as one bare floor: a single range
+  # cannot be satisfied by all three lines at once, and a bare `>=5.0.9` would
+  # drag minimatch 3 and 5 onto a major whose API they do not call.
+  'brace-expansion@1': '^1.1.18'
+  'brace-expansion@2': '^2.1.4'
+  'brace-expansion@5': '^5.0.9'
