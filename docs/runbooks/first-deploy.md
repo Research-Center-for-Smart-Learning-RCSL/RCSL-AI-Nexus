@@ -1145,8 +1145,11 @@ LaunchDaemon 放在一起——它要跑得起來，得先有 repo、有 `secret
 的 token 數，取代原本用字元寬度估的做法。只讀 metadata header（`qwen3.6:35b-a3b-q8_0`
 是 38.7 GB 權重前面的 11.9 MiB），每個模型每個 process 一次。
 
-- [ ] 確認 Ollama 的模型倉庫位置，通常是執行 Ollama 那個帳號的 `~/.ollama/models`。
-- [ ] 在 `.env` 設 `OLLAMA_MODELS_HOST_PATH=/Users/<runtime-account>/.ollama/models`。
+- [ ] 確認 Ollama 的模型倉庫位置。**這台是 `/Users/Shared/ollama/models`，不是任何人的
+  家目錄底下**——2026-08-18 把 runtime 移到專用服務帳號 `_rcslollama` 時一起搬的，因為
+  `/Users/rcslmac1` 是 750，服務帳號連進都進不去（見下面 §7 的服務帳號那一步）。全新安裝
+  若還沒做那一步，位置是執行 Ollama 那個帳號的 `~/.ollama/models`。
+- [ ] 在 `.env` 設 `OLLAMA_MODELS_HOST_PATH=/Users/Shared/ollama/models`。
   compose 會把它**唯讀**掛成容器裡的 `/ollama-models`。唯讀是有原因的：那個目錄的擁有者
   是 Ollama，能寫它的容器就能換掉主機正在服務的權重。
 
@@ -1442,6 +1445,30 @@ docstring 裡，那是估算器本身所在的地方。
   sudo install -o root -g wheel -m 644 \
     launchd/online.rcsl.health-check.plist /Library/LaunchDaemons/
   sudo launchctl load -w /Library/LaunchDaemons/online.rcsl.health-check.plist
+  ```
+
+- [ ] **把 Ollama 移到專用服務帳號**（安裝好 ollama 的 plist 之後，`.env` 設定之前）：
+
+  ```sh
+  sudo sh launchd/adopt-ollama-service-account.sh
+  ```
+
+  它會建 `_rcslollama`（uid 470、無 shell、不在 `admin`、密碼 `*`）、停掉 daemon、把
+  `~/.ollama` 搬到 `/Users/Shared/ollama`、改擁有權為 `_rcslollama:staff` 750、把
+  `/opt/homebrew/var/log/ollama.log` 一起改擁有者（**漏掉這步 daemon 開不了自己的 log
+  就不會啟動**），然後裝新 plist 並驗證 API 回應。每一步都先檢查再動，任何一項不成立就
+  拒絕；出事用 `--rollback`。
+
+  **為什麼一定要搬目錄而不只是改 `UserName`**：`/Users/<operator>` 是 750，不在 `staff`
+  的帳號無法 traverse，所以權重不離開家目錄的話，任何服務帳號都讀不到。`/Users/Shared`
+  和家目錄在同一個 volume，所以那 214 GB 是 rename 不是複製，中斷只有兩秒。
+
+  搬完 `.env` 的 `OLLAMA_MODELS_HOST_PATH` 要跟著改，並重建掛載它的三個容器
+  （`gateway`、`admin-tailnet`、`admin-public`），否則 tokenizer 會安靜地退回字元估算 ——
+  `/readyz` 仍然是綠的，這是這個變更唯一會無聲壞掉的地方。確認方式：
+
+  ```sh
+  docker exec rcsl-ai-nexus-gateway-1 ls /ollama-models/blobs | head -3
   ```
 
   **改 plist 之後一定要重裝＋重載，改腳本不用。** plist 上的 `ProgramArguments` 指向工作樹

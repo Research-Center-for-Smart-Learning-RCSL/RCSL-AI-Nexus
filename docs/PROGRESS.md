@@ -305,6 +305,59 @@ days later, which is what a present tense inside a dated entry costs.
 
 ## 2026-08-18
 
+### Ollama came off the operator's admin login, and the reason it had never moved was a directory mode
+
+`security.md` §7.1(d) has asked for a dedicated non-administrator service
+account since it was written. What ran was `rcslmac1` -- the operator's everyday
+login, a member of `admin`, able to `sudo` -- and this morning's audit found the
+document asserting the safer version in the present tense. The document was
+corrected first and the thing itself the same afternoon.
+
+**The obstacle was never the plist.** Changing `UserName` alone would have
+produced a daemon that could not start, and the reason is one octal digit:
+`/Users/rcslmac1` is mode 750, so no account outside `staff` can traverse into
+it, and `~/.ollama` was inside it. Every version of this change that left the
+weights where they were was going to fail, which is why "just set UserName" had
+been the shape of the plan for months and had never been tried.
+
+So the move came first: `/Users/Shared/ollama`, on the same volume, which made
+214 GB a rename rather than a copy. **The outage was the two seconds the daemon
+took to stop.** Then `_rcslollama` (uid 470, `/usr/bin/false` for a shell,
+hidden, password `*`, not in `admin`), `chown -R _rcslollama:staff` at 750, and
+the plist.
+
+**Group `staff` rather than the service's own group, deliberately.** The gateway
+bind-mounts that directory read-only so the tokenizer can count prompts in the
+serving model's vocabulary. Docker Desktop shares the path as the operator, so
+the operator has to be able to read it: owner writes, `staff` reads, nobody else
+anything.
+
+**The step that would have made it fail silently is the log.**
+`/opt/homebrew/var/log/ollama.log` was `rcslmac1:admin`, and a daemon that
+cannot open its own `StandardOutPath` does not start. It is in the script
+because it is exactly the kind of thing that is obvious once and never again.
+
+Verified rather than assumed, in this order: the daemon runs as `_rcslollama`;
+the API lists eight models; the embedder loads and returns a vector, which is
+the proof the new account can actually read the weights;
+`qwen3.6:35b-a3b-q8_0` loads in **15.5 s** to 40 GB resident and `qwen2.5:7b`
+back to 5.7 GB, so residency is what it was before; the gateway's mount shows 29
+blobs; and the tokenizer builds its vocabulary and returns the same
+estimate-to-exact ratios measured an hour earlier, to two decimal places.
+
+**The one thing that could have broken quietly** is the mount: an empty
+`/ollama-models` drops exact counting back to the character estimator, with
+`/readyz` still answering `true` and nothing user-facing saying so. Hence the
+`ls /ollama-models/blobs` in the runbook rather than a `readyz` check.
+
+Still on the operator's login: Docker Desktop, which on macOS runs in a user
+session, and the four host LaunchDaemons -- `host-metrics`, `health-check`,
+`refresh-geolite2`, `reconcile-port-bindings`. They read the host and send mail
+rather than loading weights fetched from the internet, so they are the same
+argument at lower stakes, and they are recorded as open rather than quietly
+finished.
+
+
 ### A review of the hour-old refusals filters, and the completion the screen offered matched a column that never contains it
 
 Five findings against `c66f370`, four of them mine and two of them defects that

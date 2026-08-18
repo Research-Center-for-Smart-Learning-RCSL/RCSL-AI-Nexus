@@ -19,6 +19,16 @@
 		<string>1</string>
 		<key>OLLAMA_KV_CACHE_TYPE</key>
 		<string>q8_0</string>
+
+		<!-- Both are needed and they are not the same thing. OLLAMA_MODELS is
+		     where the weights live; HOME is where everything else ollama writes
+		     goes, including the id_ed25519 it signs pulls with. Setting only
+		     the first leaves the second at the service account's default home,
+		     which this account does not have. -->
+		<key>HOME</key>
+		<string>/Users/Shared/ollama</string>
+		<key>OLLAMA_MODELS</key>
+		<string>/Users/Shared/ollama/models</string>
 	</dict>
 
 	<key>ProgramArguments</key>
@@ -27,13 +37,24 @@
 		<string>serve</string>
 	</array>
 
-	<!-- A daemon defaults to root, which would look for models in
-	     /var/root/.ollama and find none. Running as the operator keeps the
-	     existing ~/.ollama and avoids root at the same time. security.md
-	     7.1(d) wants a dedicated non-admin service account eventually; that
-	     is a later hardening step, and this key is where it lands. -->
+	<!-- The dedicated non-administrator account security.md 7.1(d) asks for,
+	     adopted 2026-08-18 by launchd/adopt-ollama-service-account.sh.
+	     `_rcslollama` is not in `admin` and cannot sudo, which is the whole
+	     point: this process loads weights downloaded from the internet, and
+	     the format rule on that download was only enforced the same day.
+
+	     It ran as `rcslmac1` until then — an admin login — because a daemon
+	     defaults to root, root looks for models in /var/root/.ollama and finds
+	     none, and running as the operator was the change that avoided root
+	     without moving the model directory. Moving the directory is what
+	     unblocked it: /Users/rcslmac1 is mode 750, so no account outside
+	     `staff` can traverse into it, and the weights had to leave the home
+	     directory before any service account could read them. They now live in
+	     /Users/Shared/ollama, owned by this account and group-readable by
+	     `staff` so that Docker can still bind-mount them read-only for the
+	     tokenizer. -->
 	<key>UserName</key>
-	<string>rcslmac1</string>
+	<string>_rcslollama</string>
 
 	<!-- A LaunchDaemon, not a LaunchAgent: this machine is headless and runs
 	     24/7, so the runtime must come back after a power cut without anyone
