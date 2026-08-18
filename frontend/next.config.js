@@ -69,7 +69,7 @@ const nextConfig = {
     // middleware reads *and* the stream forwarded upstream, while the original
     // Content-Length header goes on unchanged. So the backend is handed a
     // request that declares more bytes than it will ever receive and waits for
-    // the rest until proxyTimeout, twenty-six minutes above. A document upload
+    // the rest until proxyTimeout, thirty-six minutes above. A document upload
     // between 10 MB and the 32 MiB the UI itself permits therefore did not
     // fail: it hung, with no error anywhere the operator could see.
     //

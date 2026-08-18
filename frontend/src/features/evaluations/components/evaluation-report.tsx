@@ -177,9 +177,11 @@ export function EvaluationReportView({ report }: { report: EvaluationReport }) {
             {carrying} of {order.length} task{order.length === 1 ? '' : 's'}{' '}
             separated the models.
           </strong>{' '}
-          The rest were passed by everyone or failed by everyone, and a task
-          nobody is distinguished by contributes nothing to the ranking above,
-          however many of them there are.
+          The rest were passed by everyone, failed by everyone, or scored too
+          close together to tell the models apart, and a task nobody is
+          distinguished by contributes nothing to the ranking above, however
+          many of them there are. The denominator is every task the run named,
+          including any it could not score — those carry no verdict at all.
         </p>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">

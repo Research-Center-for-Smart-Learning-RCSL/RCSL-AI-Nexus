@@ -142,7 +142,7 @@ export function PolicyTable() {
         onRetry={() => void refetch()}
         searchPlaceholder="Search policies"
         emptyTitle="No routing policies"
-        emptyDescription="Without a policy, the gateway answers every request for that capability with 'no model available'."
+        emptyDescription="Without a policy, the gateway answers every request for that capability with no_available_model: 'No model is currently available to serve this request.'"
         getRowId={(row) => row.capability}
         toolbar={
           mayWrite ? (

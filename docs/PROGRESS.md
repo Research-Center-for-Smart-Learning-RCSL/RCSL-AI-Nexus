@@ -15,36 +15,71 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
-## Current state — 2026-08-08
+## Current state — 2026-08-18
 
 **A summary, and therefore the least trustworthy thing here.** Two summaries in
 this file have already contradicted the dated entries below them, one of them
 contradicting a bullet three lines above itself. The rule that follows from
 that: **if this block's date is older than the newest entry below, distrust it
-and read the entry.** It is here because the file is six thousand lines long
+and read the entry.** It is here because the file is ten thousand lines long
 and nothing else answers "what is the state of this, right now".
+
+**This block was dated 2026-08-08 for ten days, and the 2026-08-18
+documentation audit found ten false sentences in it** — the model in service,
+the routing policy, the memory figures, three counts, the agent loop's score,
+and an item still listed as unverified that had been verified on 2026-08-09.
+That is the rule above earning its keep rather than an argument against it, and
+it is why this paragraph now says what a re-date does and does not buy.
+
+**Re-checked in this pass**, against the live database and the suites rather
+than against another document: the four routing policies and the six registry
+rows (`psql` against the running Postgres), resident memory and the headroom
+derived from it, every count in the table below, the number of Playwright paths,
+and the model each capability resolves to. **Not re-checked, and still resting
+on the dated entry that produced it**: the agent-loop rungs (2026-08-16), the
+public entrance's nine checks (2026-08-08), the SSD and oversubscription
+measurements (2026-08-14), the "all green" on the gates row, and everything
+under "Not verified".
 
 **Running.** Eleven containers on the Mac Studio: three ASGI apps (gateway, two
 admin entrances), two frontends, Postgres, Redis, Qdrant, the isolated parser,
 Prometheus and Grafana, with `migrate` exiting 0 ahead of them. Ollama runs
 natively and holds `qwen3.6:35b-a3b-q8_0`, `qwen2.5:7b` and `nomic-embed-text` —
-45.3 GB resident against a 51.2 GB budget. Four routing policies: `chat` and
-`code` (deliberation off) on `qwen36-35b-a3b-q8`, `assist` on `qwen7b`,
-`embedding` on `embedder`. Three former main models stay registered at
+**43.64 GB resident against a 51.2 GB budget**, summed from
+`models.observed_memory_gb` on 2026-08-18 (37.97 + 5.32 + 0.34). **This said
+45.3 GB from 2026-08-16 until 2026-08-18**: the runtime's observed figure for
+`qwen36-35b-a3b-q8` has settled at 37.97 GB against the 40.0 GB measured on the
+day it was registered, and nothing had gone back to re-read the column. Four
+routing policies, read from `routing_policies` the same day: `chat` and `code`
+both on `qwen36-35b-a3b-q8`, `assist` on `qwen7b`, `embedding` on `embedder`.
+**Deliberation is off for `code` alone.** `code.thinking` is `false`;
+`chat.thinking` is `NULL`, and a `NULL` takes the deployment default, which is
+`OLLAMA_THINKING=true` — so `chat` deliberates unless the client sends `think`
+itself. **And `chat` is the only policy carrying a fallback**: `qwen7b` at
+priority 100 behind `qwen36-35b-a3b-q8` at 200, which is right for a person and
+wrong for an agent, and is why `code` has none. This block said "`chat` and
+`code` (deliberation off)" until 2026-08-18, which reads as both, and named no
+fallback at all. Three former main models stay registered at
 `downloaded` and make the switch reversible in either direction:
 `gemma4:31b-it-q8_0`, which held the role from 2026-08-07 until 2026-08-16,
 `glm-4.7-flash:q8_0` before it, and `gemma4:31b-it-qat`, the q4 this ran on for
 part of a day.
 
-**The two count rows were corrected on 2026-08-18 and the five lines above them
-on 2026-08-16; nothing else in this block has been re-checked.** The counts had
-drifted by a third — 742 unit tests against 907, twelve migrations against
-fifteen — which is enough to be quoted at somebody and enough to be wrong. They named `gemma4-31b-q8` and a 36.3 GiB figure, both made
-untrue that day by the entry at the top of this file. The rule above still
-applies to every other sentence here.
+**Every row of the table below was measured on 2026-08-18 while this paragraph
+was written**, not copied: `pytest --collect-only` for the two backend figures,
+`vitest run` for the frontend one, and `ls` for the module, router, folder and
+migration counts. The two count rows had already been corrected once earlier
+that day, and on 2026-08-16 before that, and they had still drifted since: the
+first correction found 742 unit tests recorded against 907 and twelve migrations
+against fifteen, a third out, and named `gemma4-31b-q8` and a 36.3 GiB figure
+that the entry at the top of this file had made untrue the same morning. **The
+frontend row then drifted again inside ten days**, 296 against 308. The rule
+above still applies to every sentence here that is not one of these numbers.
 
-**Built.** Phase 1 is complete, including the five Playwright paths described
-below.
+**Built.** Phase 1 is complete, including the **six** Playwright paths — the
+five described below, and the full-stack one that landed 2026-08-10 and joins
+the browser to a real gateway and a real Postgres. This said five until
+2026-08-18.
 Phase 2 is complete but for **encrypted backups with a rehearsed restore** and
 **Storybook**. The *logging boundaries* half of §9.2 closed on 2026-08-08 — full
 prompt and completion logging, gated by the expiring switch that had been sitting
@@ -54,14 +89,19 @@ last row in security.md §13.0 that said "not implemented".
 | | |
 |---|---|
 | Backend | 32 use cases, 27 routers, 19 entity modules, 15 migrations (head `f3c8a15d27be`), 907 unit tests, 118 integration tests that skip without `TEST_DATABASE_URL` |
-| Frontend | 21 feature folders, 20 screens, 296 tests, types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
-| Gates | ruff, ruff-format, strict mypy, pytest; tsc, eslint, vitest, a real `next build`, five Playwright paths; Trivy, pip-audit and pnpm audit advisory-only. All green — **and this row was false from 2026-08-07 to 2026-08-08**, see below |
+| Frontend | 21 feature folders, 20 screens, **308 tests across 36 files** (296 until 2026-08-18), types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
+| Gates | ruff, ruff-format, strict mypy, pytest; tsc, eslint, vitest, a real `next build`, **six Playwright paths** (five until 2026-08-18, three days after the sixth landed); Trivy, pip-audit and pnpm audit advisory-only. All green — **and this row was false from 2026-08-07 to 2026-08-08**, see below; the claim was not re-run in the 2026-08-18 pass |
 
 **Verified on real hardware**, not only in tests: the full inference path with
-tool calling, an agent loop over ten graduated rungs including a multi-step
-debugging task, the knowledge base end to end, both admin entrances' login
-flows, the least-privilege database split, the unattended-recovery chain
-through two boots with injected faults, and the GeoLite2 refresh.
+tool calling; the agent loop over ten graduated rungs including a multi-step
+debugging task — **ten of ten only on `gemma4-31b-q8`, which serves nothing
+now** (2026-08-07), and **nine of ten on the model `code` actually points at**,
+where rung 8, error recovery, fails five runs out of five (2026-08-16); the
+knowledge base end to end; both admin entrances' login flows; the
+least-privilege database split; the unattended-recovery chain through two boots
+with injected faults; and the GeoLite2 refresh. This said "ten graduated rungs"
+with neither qualifier until 2026-08-18, two days after the model underneath it
+changed.
 
 **One open question, raised 2026-08-05 and still deliberately not acted on.**
 Free memory on this node swings between roughly 12 GB and 37 GB of 64 depending
@@ -71,25 +111,44 @@ minutes, measured twice on 2026-08-07**, the trigger is a single request of any
 size, and the machine spends those nineteen minutes under a gigabyte free with
 swap at 0 bytes and nothing degrading. The leading candidate is still to do
 nothing, now with more behind it. What actually limits the deployment is the
-static budget's 9.87 GiB of headroom, which none of this touches. See the
-2026-08-07 and 2026-08-05 entries and "Open decisions". **2026-08-13 priced the
-trade this question was opened to consider and found the more interesting
-question is next to it**: the present main model is dense, so it reads all of
-itself for every token, and the gain available from a sparse model of the same
-or larger size does not need the SSD at all.
+static budget's headroom — **7.56 GiB on 2026-08-18**, 51.2 GiB less the 43.64
+the runtime reports resident — which none of this touches. **This said 9.87 GiB
+from 2026-08-05 until 2026-08-18**, a subtraction taken against 41.33 GiB of a
+different model set; the headroom moves whenever the registry does, and the
+registry has moved twice since without this line following. See the 2026-08-07
+and 2026-08-05 entries and "Open decisions". **2026-08-13 priced the trade this
+question was opened to consider and found the more interesting question is next
+to it**: the main model *was* dense, so it read all of itself for every token,
+and the gain available from a sparse model of the same or larger size did not
+need the SSD at all. **That was acted on, and this sentence stood in the present
+tense for two days after it stopped being true**: what serves `chat` and `code`
+since 2026-08-16 is `qwen3.6:35b-a3b-q8_0`, 35B total on 3B active — a sparse
+MoE, not a dense model.
 
 **The SSD half is closed as of 2026-08-14, by measurement, and the answer is
 no.** Through the mmap page faults Ollama uses the disk delivers 0.89 GB/s, not
 the 7 GB/s the pricing assumed — and at a measured 1.29x oversubscription prompt
 evaluation collapses 150x, ten times past the per-read timeout. What replaces it
 is better and needs no disk: `qwen3.6:35b-a3b-q8_0` fits in 37 GB and measures
-5.1x the generation and 7.7x the prompt evaluation of the deployed model. It is
-**not** measurably smarter — twelve checked tasks put three candidates within
-noise of each other — so the case for switching rests on the wall clock. Nothing
-has been switched. See the 2026-08-14 entry.
+5.1x the generation and 7.7x the prompt evaluation of the model deployed then.
+It was **not** measurably smarter on the evidence of that day — twelve checked
+tasks put three candidates within noise of each other — so the case for
+switching rested on the wall clock. **The eighteen-task set of 2026-08-15 then
+did separate them, and not in the new model's favour**: 94.4% for
+`gemma4:31b-it-q8_0`, 89.8% for `qwen3.6:35b-a3b-q8_0` and 87.5% for
+`qwen3.6:27b-q8_0`, a 6.9-point spread across the three and 4.6 points between
+the incumbent and its replacement, with the order holding every round. So the
+case still rests on the wall clock — a round in 45% of the time — and it is not
+a claim of a smarter model. **`code` and `chat` were both switched on
+2026-08-16.** This block said "Nothing has been switched" for the two days
+after, which is the most misleading sentence the 2026-08-18 audit found in it.
+See the 2026-08-14, 2026-08-15 and 2026-08-16 entries.
 
-**The public entrance is verified as of today**, under the renamed hosts:
-`verify-public-entrance.sh` passes 9 of 9. What remains there is three items
+**The public entrance was verified on 2026-08-08**, under the renamed hosts:
+`verify-public-entrance.sh` passed 9 of 9 and has not been re-run since. **This
+said "as of today" and kept saying it for the ten days the block's date stopped
+being today**, which is the failure mode the rule at the top of this block
+describes, written into the block itself. What remains there is three items
 the script does not cover — explicit A records (the names are still
 wildcard-synthesised), a `client_max_body_size` on the *inference* host, and
 the administrator's confirmation that nothing logs request bodies.
@@ -97,9 +156,20 @@ the administrator's confirmation that nothing logs request bodies.
 **Not verified, and the list worth reading before trusting anything else.**
 MLX, which has an adapter, no model registered against it and no server
 installed — its tool path is now *refused* rather than silently reachable,
-which closes the trap without doing the verification. A real agent client
-against a real repository. An external dead-man's switch, since a monitor
-on the host it watches cannot report that the host is off.
+which closes the trap without doing the verification. An external dead-man's
+switch, since a monitor on the host it watches cannot report that the host is
+off.
+
+**"A real agent client against a real repository" left this list on 2026-08-09
+and was still sitting on it nine days later.** An operator's own Codex session
+drove the real public entrance that day and found three defects the verification
+harness could not, which is the strongest possible evidence that the client was
+real. Two Codex installations have run against this platform since — the
+operator's for days, and a teacher's through 2026-08-17 and 2026-08-18 — and
+both are unbound at the client end as of today, with their keys deliberately
+left live. What none of those sessions answers is the second half of the item,
+which stays open and is stated under "What is still unverified": the harness
+says the loop can run, and nothing yet says the work is any good.
 
 **The body ceiling came off this list on 2026-08-08.** It had said the running
 images predated it, so the gateway was still the one the 200 MiB probe measured.
@@ -223,6 +293,13 @@ That needs the browser, admin API, Postgres, gateway and a controllable runtime
 in one harness. The current policy path proves the management UI contract; the
 existing backend integration tests prove persistence; their behavioural join
 remains the Phase 3 increment.
+
+**Correction, 2026-08-18: that join closed on 2026-08-10.**
+`e2e/full-stack/routing-selection.spec.ts` and the CI job that runs it drive the
+real admin entrance, the real gateway and a Postgres rebuilt from Alembic, and
+observe a policy edit changing which model the gateway asks its runtime for. The
+sentence above was true when written and was still being quoted as current eight
+days later, which is what a present tense inside a dated entry costs.
 
 ---
 
@@ -411,7 +488,9 @@ reader could not already look up.
 
 **Its own migration rather than an edit to the one written the same morning.**
 `e7b41c9d0a26` is still uncommitted, which made amending it tempting, and it
-has already run against the deployment and three real rows. Amending an applied
+has already run against the deployment and three real rows. **(Correction,
+later on 2026-08-18: it landed in `287940b`. The sentence describes the hour it
+was written in.)** Amending an applied
 revision leaves the machine that ran it without the column while a fresh clone
 gets one — the divergence between what is written down and what is in force
 that this repository keeps finding the hard way. The three existing rows carry

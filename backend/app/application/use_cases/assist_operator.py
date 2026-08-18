@@ -62,6 +62,7 @@ def build_system_prompt(
     issuable_capabilities: Sequence[str],
     gateway_base_url: str,
     max_lifetime_days: int,
+    max_context_length: int,
     today: str,
     context: dict[str, object] | None,
     nonce: str,
@@ -131,7 +132,7 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
       model = "code"
       model_provider = "rcsl"
       [model_providers.rcsl]
-      base_url = {gateway_base_url}/v1
+      base_url = "{gateway_base_url}/v1"
       env_key = "RCSL_API_KEY"
       wire_api = "responses"
   `wire_api` MUST be `"responses"`. Codex removed Chat Completions support in
@@ -149,6 +150,20 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
   rather than guessing; on Windows PowerShell may refuse to run `npm` until
   `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` is run once.
 
+  **`403 capability_not_issued` is usually one of two things, and neither is
+  the key.** First, **the client's own model picker overrides the `model`
+  line**: this gateway answers `GET /v1/models` in OpenAI's shape, Codex fills
+  its picker from a shape of its own, finds nothing it recognises, and falls
+  back to its built-in model names — every one of which this deployment
+  refuses. `codex -c model=code` overrides a selection already made. This cost
+  two integrators an evening on 2026-08-14. Second, **an auxiliary slot sends
+  its own model name**: `codex-auto-review` is the one seen so far, sent before
+  the client escalates a command, so what the operator sees is a blocked
+  command rather than a model error. Nothing needs granting for it — it is not
+  a capability, so there is no capability to issue. Turn the auto-review off,
+  or point that slot at `code`. **Read the refusal for the name it was asked
+  for before believing any other explanation.**
+
   **A `429` is two different problems and the body says which.** Read
   `error.code`. `rate_limited` is the per-minute limit, which an agent rarely
   reaches — roughly one request per step, seldom twenty in a minute — so it
@@ -160,16 +175,22 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
   million. Size `quota_tokens_per_day` against the session length the operator
   expects, not against a per-request figure.
 
-  The refusal states its own wait now, in the message and in `Retry-After`.
-  The window is a rolling 24 hours rather than a calendar day, so the budget
-  returns gradually rather than at midnight — if an operator asks when their
-  key comes back, that projection is the answer, not "tomorrow".
+  The refusal usually states its own wait, in the message and in
+  `Retry-After` — but only when the platform could project a recovery time.
+  When it could not, there is no wait in the message and **no header at all**,
+  which is deliberate: a guessed number carries a false authority a client
+  would act on. The window is a rolling 24 hours rather than a calendar day, so
+  the budget returns gradually rather than at midnight — if an operator asks
+  when their key comes back, that projection is the answer, not "tomorrow".
 
   An older Codex will still report only `exceeded retry limit, last status:
-  429` without the body. Ask them for the request id it prints. It will not be
-  on the Prompt Logs screen — a quota refusal is decided before the request
-  reaches inference, so nothing is logged there — but it is in the gateway's
-  application log, which an administrator can search.
+  429` without the body. **Ask them for the request id it prints, and look it
+  up on the Refusals screen** — every refusal this platform decides is stored
+  there with its code, its status and the figures it carried, including the
+  wait a `429` asked for, which the header no longer preserves by the time
+  anybody reads back. A caller can read their own refusals without an
+  administrator. It will *not* be on the Transcripts screen: a quota refusal is
+  decided before the request reaches inference, so no prompt was ever logged.
 
   **Every local Codex surface reads `~/.codex/config.toml`** — the CLI, the IDE
   extension, and the Codex inside the ChatGPT desktop app. So configuring the
@@ -180,9 +201,12 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
   the file — a hand-written provider block can be gone by the next read — and it
   hands the CLI its own tool definitions, which are resent every turn. Whether
   that matters is a quantity, not a yes or no: one machine measured on
-  2026-08-17 sent 286 tool definitions worth ~122,870 estimated tokens, more
-  than the whole ceiling on its own, so no conversation of any length could be
-  sent; another with fewer plugins ran for days. **The signature is a tool
+  2026-08-17 sent 286 tool definitions worth ~122,870 estimated tokens —
+  more, on their own, than the 98,304 ceiling in force that day, so no
+  conversation of any length could be sent; another with fewer plugins ran for
+  days. Quote that figure with its date: the ceiling has been raised since, the
+  count is exact rather than estimated since, and the same payload measures
+  about 99,000 real tokens. **The signature is a tool
   figure that stays identical while the message count moves** — that is not a
   conversation problem and starting a new conversation cannot fix it. The remedy
   is a separate `CODEX_HOME` holding only the configuration above, set per shell
@@ -236,17 +260,52 @@ only the shape on the wire differs.
 
 Two server-side tools a client may offer are not served: `web_search` is
 refused when the client actually enables it, and any unknown tool type is
-dropped. Dropped names come back in the `X-Dropped-Tools` response header.
+dropped. Dropped names come back in the `X-Dropped-Tools` response header,
+and an input item the gateway does not recognise is dropped the same way and
+named in `X-Dropped-Input-Items`. Both are narrowings rather than failures, and
+both are announced rather than silent.
+
+## `413 context_too_long`, which is what an agent hits most
+
+**The ceiling is {max_context_length} tokens on what a caller may send**, and
+it counts the tool definitions and every replayed turn, not just the newest
+message. Waiting
+does not clear it and neither does retrying: it is a property of the payload.
+
+**Read the `composition` field before recommending anything**, because the
+three parts have different answers and only one of them is "start again":
+
+- **A conversation that accumulated** — start a new one, or have the agent
+  summarise and continue from the summary.
+- **One enormous message** — stop reading that file into the conversation.
+- **Tool definitions taking most of it** — trim the client's tool list. They
+  are resent every turn, so a fresh conversation gets the identical refusal on
+  its first request. A tool share that stays identical while the message count
+  moves is this case.
+
+**The `basis` field says how the figure was arrived at**, and it changes the
+advice. `tokenizer` is an exact count in the serving model's own vocabulary —
+trim by roughly what the overage says. `estimate` is the character-width
+fallback a model with no vocabulary on this host still gets, and it has run
+high on ordinary content, so a caller near the line may in truth be under it.
+`lower_bound` means the payload was too large to count exactly and the figure
+is a floor.
+
+**A `limit` smaller than that is not a bug.** A request is also refused when
+it would outgrow what the model actually chosen for that capability can read,
+and that number is the one reported. It means a smaller model is serving the
+request, not that the ceiling moved.
 
 ## An answer that stops mid-sentence
 
 A context window holds the prompt and the reply in one space, and an agent
 replays the whole conversation every turn — so a long task used to leave no
 room to answer in, and the reply was cut off. Fixed on 2026-08-09: the window
-is now larger than any prompt a caller may send, and a reply that is still cut
-short ends as `response.incomplete` rather than being reported as complete. If
-an operator describes this, ask whether it is recent; before that date it was
-silent, and the answer is to start a fresh conversation.
+of the model serving `chat` and `code` is far larger than the ceiling above,
+and a reply that is still cut short ends as `response.incomplete` rather than
+being reported as complete. If an operator describes this, ask whether it is
+recent; before that date it was silent, and the answer is to start a fresh
+conversation.
 
 ## What this deployment can currently issue keys for
 
@@ -362,6 +421,7 @@ class AssistOperator:
         *,
         gateway_base_url: str,
         max_lifetime_days: int,
+        max_context_length: int,
         max_tokens: int,
     ) -> None:
         self._chat = chat
@@ -369,6 +429,11 @@ class AssistOperator:
         self._clock = clock
         self._gateway_base_url = gateway_base_url
         self._max_lifetime_days = max_lifetime_days
+        # Read rather than written into the prompt text: the ceiling has been
+        # raised four times, and every place that copied the number instead of
+        # asking for it was still quoting an old one when the audit of
+        # 2026-08-18 went looking.
+        self._max_context_length = max_context_length
         self._max_tokens = max_tokens
 
     def build_prompt(
@@ -384,6 +449,7 @@ class AssistOperator:
             issuable_capabilities=issuable_capabilities,
             gateway_base_url=self._gateway_base_url,
             max_lifetime_days=self._max_lifetime_days,
+            max_context_length=self._max_context_length,
             today=self._clock.now().date().isoformat(),
             context=context,
             # Per request. A fixed marker would be guessable by anyone who has

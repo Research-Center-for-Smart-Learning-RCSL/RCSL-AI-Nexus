@@ -57,18 +57,23 @@
 
   ```sh
   git pull
-  git log --oneline -6
+  git log --oneline --grep='knowledge base' --grep='knowledge screen' -i --reverse | head -5
   ```
 
-  應該看到這五個 commit（最新在上）：
+  應該看到這五個 commit（最舊在上）：
 
   ```
-  Record the knowledge base, and correct two documents it contradicted
-  Add the knowledge screen, and a grounding toggle in the chat
-  Ground chat answers on the knowledge base, treating passages as data
-  Index knowledge base documents and make them searchable
   Add knowledge base uploads, with the parser in its own container
+  Index knowledge base documents and make them searchable
+  Ground chat answers on the knowledge base, treating passages as data
+  Add the knowledge screen, and a grounding toggle in the chat
+  Record the knowledge base, and correct two documents it contradicted
   ```
+
+  **這裡原本寫的是 `git log --oneline -6`，那是這份 runbook 寫出來的那天才成立的。**
+  知識庫是 2026-07-29／30 上的，後面已經疊了一百四十幾個 commit，`-6` 現在只會印出最近六個、
+  一個都對不上，而看到對不上的人會以為 `git pull` 沒成功。所以改成用訊息去找它們——
+  它們在不在，才是這一步要問的事。
 
 ---
 
@@ -186,7 +191,7 @@ read-only 金鑰對 `PUT /collections/...` 會被 Qdrant 回 **403**。
 
   註冊後按 **Load**，確認狀態變成 `loaded`。
 
-- [ ] 在 **Routing** 頁新增一條 capability = `embedding` 的 policy，候選指向
+- [ ] 在 **Routing policies** 頁新增一條 capability = `embedding` 的 policy，候選指向
   `embedder`，requirement 勾 node status `online` + model state `loaded`。
 
   這條 policy 就是知識庫找 embedding 模型的唯一途徑 —— 系統裡沒有第二個「指定

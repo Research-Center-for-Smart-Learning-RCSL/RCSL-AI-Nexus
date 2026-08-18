@@ -25,6 +25,7 @@ import {
   issuableCapabilitySchema,
   type IssuableCapability,
 } from '@/features/models/schema';
+import { useGatewayInfo } from '@/features/gateway/hooks/use-gateway';
 import { useChatStream } from '@/features/chat/hooks/use-chat-stream';
 import type { ChatTurn } from '@/features/chat/hooks/use-chat-stream';
 
@@ -79,6 +80,13 @@ function Turn({ turn }: { turn: ChatTurn }) {
 
 export function ChatPanel() {
   const { turns, isStreaming, store, send, cancel, clear } = useChatStream();
+  // What this deployment can actually serve, from the routing policies, rather
+  // than the five names a key may be issued for. The hardcoded list is what a
+  // capability *can* be, and offering a capability no policy names sends a
+  // question to a `no_available_model` that reads as the platform being down.
+  // `GET /gateway` needs only `chat:use`, which everyone on this screen holds.
+  const { data: gateway, isLoading: gatewayLoading } = useGatewayInfo();
+  const servable = new Set(gateway?.capabilities ?? []);
   const [capability, setCapability] = useState<IssuableCapability>('chat');
   // Both positions are sent explicitly, so the box always describes what the
   // request asked for rather than what a server-side default happens to be.
@@ -177,29 +185,44 @@ export function ChatPanel() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {issuableCapabilitySchema.options.map((option) => (
-              <SelectItem
-                key={option}
-                value={option}
-                // Listed rather than hidden, so the picker still shows what a
-                // key can be issued for, but not selectable here: routing would
-                // send the request to a model that does not generate text.
-                disabled={!isConversational(option)}
-              >
-                {option}
-                {/* Its own element rather than appended to the label. As part
-                    of the same string it inherited the item's `nowrap`, tripled
-                    the row's width, and — while the popup was pinned to the
-                    trigger — was clipped to something like "embedding (not a
-                    conv". The disabled state was legible only to whoever
-                    already knew what it said. */}
-                {isConversational(option) ? null : (
-                  <span className="text-xs text-muted-foreground">
-                    not a conversation
-                  </span>
-                )}
-              </SelectItem>
-            ))}
+            {issuableCapabilitySchema.options.map((option) => {
+              // While the list is in flight nothing is known to be unroutable
+              // yet, and disabling everything for a moment makes the composer
+              // look broken. The current selection stays selectable whatever
+              // the answer, so a policy deleted mid-session cannot strand the
+              // picker on a value it will not let go of.
+              const routable =
+                gatewayLoading || servable.has(option) || option === capability;
+              return (
+                <SelectItem
+                  key={option}
+                  value={option}
+                  // Listed rather than hidden, so the picker still shows what a
+                  // key can be issued for, but not selectable here: routing
+                  // would send the request to a model that does not generate
+                  // text, or to no model at all.
+                  disabled={!isConversational(option) || !routable}
+                >
+                  {option}
+                  {/* Its own element rather than appended to the label. As part
+                      of the same string it inherited the item's `nowrap`,
+                      tripled the row's width, and — while the popup was pinned
+                      to the trigger — was clipped to something like "embedding
+                      (not a conv". The disabled state was legible only to
+                      whoever already knew what it said. */}
+                  {isConversational(option) ? null : (
+                    <span className="text-xs text-muted-foreground">
+                      not a conversation
+                    </span>
+                  )}
+                  {isConversational(option) && !routable ? (
+                    <span className="text-xs text-muted-foreground">
+                      nothing serves this yet
+                    </span>
+                  ) : null}
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
 

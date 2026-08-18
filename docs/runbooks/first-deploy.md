@@ -51,8 +51,8 @@ secrets 設定見 [secrets/README.md](../../secrets/README.md)。
 
   ```
   通電/重開 → 自動登入 → LaunchDaemon（Tailscale、Ollama、reconcile-port-bindings、
-                                       health-check）
-           → Docker Desktop 自啟 → 9 個容器 restart: unless-stopped 回來
+                                       health-check、host-metrics）
+           → Docker Desktop 自啟 → 11 個容器 restart: unless-stopped 回來
            → reconcile 等 utun0 有位址、docker 有回應、容器數穩定
            → 補上開機時綁失敗的 port forward
            → health-check 每 5 分鐘複驗，狀態變了寄信（第六環，它不修東西，
@@ -97,8 +97,11 @@ curl -s -o /dev/null -w 'gateway readyz: %{http_code}\n' http://<TAILNET_IP>:800
 ls -l /opt/homebrew/var/nexus-health.state
 ```
 
-通過的條件：tailnet 在線、Ollama 有回應、9 個容器 running（`migrate` 是 `Exited (0)`，
-它是一次性工作，不該重啟）、對帳 log 最後一行是 `all bindings restored` 或
+通過的條件：tailnet 在線、Ollama 有回應、11 個容器 running（`migrate` 是 `Exited (0)`，
+它是一次性工作，不該重啟；權威的清單是 `docker compose config --services` 減掉 `migrate`，
+reconciler 和 health-check 都是這樣推出來的，數字寫在這裡只是為了讓你一眼看出對不對——
+2026-07-26 那幾次測試時是九個，`qdrant` 和 `parser` 是後來加的）、對帳 log 最後一行是
+`all bindings restored` 或
 `all published bindings intact`、readyz 200、**health state 檔的 mtime 距離「你看的當下」
 不超過五分鐘**（監測 daemon 自己也要撐過重開，它跟其他環一樣會無聲地不見）。
 
@@ -249,7 +252,7 @@ Ollama 只 LISTEN 在 `127.0.0.1:11434`。**這次多證明了一件事：監測
 階段，不是一次乾淨的關機開機。但這是一次觀察一個相關性——正是下面「原本寫的原因是錯的」
 那段所記的那種證據量。**所以不要把修法建立在這個假設上**：修法要處理的是「容器沒在跑」，
 不管是什麼讓它沒在跑。這也意味著第二輪之後要多看一件事：`docker compose ps` 不能只看
-`Up` 幾個，要看是不是九個。
+`Up` 幾個，要看是不是十一個（2026-07-26 當時是九個）。
 
 **而 reconciler 回報了成功。** 它的第三個前置條件在等「容器數量不再變動」，寫的條件是
 數量必須大於零才算穩定，所以數量是零時它空轉到十分鐘的 deadline，然後掃過零個容器、
@@ -512,8 +515,8 @@ macOS 更新重置這兩項是有前例的，而它們正好是無人復原鏈�
 沒起來，而當時的 reconciler 對著空平台回報成功。完整的記錄與修法在 §1.1 的第四次開機。
 
 所以這一段要多一句：**更新之後不要只確認上面那兩項**，§1.1 那一整串都要重跑，尤其是
-`docker compose ps` 要數到九個、以及 readyz。更新重開比普通重開多動到什麼，目前沒有人
-真的知道。
+`docker compose ps` 要數到十一個（當時是九個）、以及 readyz。更新重開比普通重開多動到
+什麼，目前沒有人真的知道。
 
 **兩輪都過，才代表這台機器經歷過真實的重開與系統更新並自己完整復原。** 目前是第一輪跑六次
 過五次、第二輪跑一次失敗一次，所以這句話還沒有成立。在它成立之前不要遠端做系統更新——更新失敗
@@ -676,9 +679,10 @@ ls -l /Library/LaunchDaemons/online.rcsl.delay-tailscaled-once.plist   # 要是 
 **這一節原本寫的是「只能靠第二輪重跑」，那是錯的。** 第三種結果也能注入，而且比 §1.1a
 便宜得多。
 
-**做法**：把整個 stack 停掉，然後重開機。機制就寫在 `docker-compose.yml` 裡——八個長期服務
-都是 `restart: unless-stopped`，而 **`unless` 就是全部的重點：被明確 stop 的容器，在 daemon
-回來時不會被拉起來。** 所以下一次開機時 Docker Desktop 面對九個它刻意不還原的容器，而
+**做法**：把整個 stack 停掉，然後重開機。機制就寫在 `docker-compose.yml` 裡——十一個長期
+服務都是 `restart: unless-stopped`（`migrate` 是 `restart: no`，它本來就不該回來），
+而 **`unless` 就是全部的重點：被明確 stop 的容器，在 daemon
+回來時不會被拉起來。** 所以下一次開機時 Docker Desktop 面對十一個它刻意不還原的容器，而
 reconciler 遇到的狀態和 19:09 那次留給它的一模一樣：`docker compose ps --services --status
 running` 是空的、東西都在、沒有一個在跑。
 
@@ -707,7 +711,12 @@ cd ~/dev/RCSL-AI-Nexus
 **它會先拒絕再動手。** 五個前置條件任何一個不成立，它什麼都不改就 exit 1：
 
 - §1.1a 的 plist 還裝著（兩個注入同時來，兩邊的救援路徑會互相擋住）
-- 九個服務沒有全部在跑（從壞的平台開始測復原，回不來的時候分不出是誰造成的）
+- 它清單裡的九個服務沒有全部在跑（從壞的平台開始測復原，回不來的時候分不出是誰造成的）。
+  **注意這份清單還是九個，`qdrant` 和 `parser` 不在裡面**——`stop-stack-once.sh` 的
+  `EXPECTED_SERVICES` 是寫死的，而 reconciler 和 health-check 都改成從
+  `docker compose config --services` 推導了。所以這個前置條件擋不掉「qdrant 沒在跑」的
+  情況；停之前自己 `docker compose ps` 數一次十一個。停下來之後的讀回檢查沒有這個問題，
+  它問的是 `docker compose ps --services --status running` 有沒有清空
 - 有 binding requested 但沒 actual（那是 §1.1a 的狀態，先修那個）
 - reconciler 的 plist 不在
 - **`nexus-reconcile.log` 裡最新的 `reconcile starting` 比這次開機還舊**
@@ -718,8 +727,10 @@ launchd 真的載入了那個 job**——而「停掉 stack 重開、卻沒有�
 那是證據，不是設定。
 
 前置條件過了之後它會把 pre-state 記下來（六個 requested binding），停掉 stack，**再讀回來
-確認九個都真的停了**——半停的 stack 是這裡最糟的結果，Docker 會還原還在跑的那些，reconciler
-會遇到一個既不空也不完整的集合，下一次開機印出來的東西會是在講一個沒有人設計過的故障。
+確認全部都真的停了**——它讀的是 `docker compose ps --services --status running` 有沒有清空，
+所以這一步不受上面那份九個的清單影響。半停的 stack 是這裡最糟的結果，Docker 會還原還在跑的
+那些，reconciler 會遇到一個既不空也不完整的集合，下一次開機印出來的東西會是在講一個沒有人
+設計過的故障。
 
 然後：
 
@@ -742,14 +753,16 @@ tail -40 /opt/homebrew/var/log/nexus-reconcile.log
 通過的條件是依序出現這四行：
 
 ```
-not running: <九個>
+not running: <十一個>
 docker did not restore the stack; bringing it up
 stack up: all expected services running
 all published bindings intact
 ```
 
-那就是第三種結果。接著跑 §1.1 的完整檢查：九個服務、六個 binding requested 與 actual 相符、
-六個入口 200。
+那就是第三種結果。接著跑 §1.1 的完整檢查：十一個服務、六個 binding requested 與 actual
+相符、六個入口 200。（2026-07-26 實測那次第一行是九個，`qdrant` 和 `parser` 是之後加的；
+reconciler 印的是它從 `docker compose config --services` 推出來的那份清單，所以不用改腳本
+就會跟著長。）
 
 **最後一行會是 `all published bindings intact` 而不是 `OK: all bindings restored`，這是對的。**
 reconciler 的第一個前置條件就是等位址上介面，所以它跑 `up -d` 的時候位址早就在了，轉發會
@@ -1146,6 +1159,14 @@ tool schema 高估 1.34x-1.48x，uuid 清單低估到 0.36x。高估會拒掉硬
 （2026-08-17 就發生過一次，140,059 估算、實際約 99,000）；低估則是 runtime 默默截斷提示詞
 的前奏。沒有任何單一常數落在那個區間裡。
 
+**這組比例在 repo 裡有兩份，而且對不起來，兩份都留在這裡而不是挑一份。**
+[`PROGRESS.md`](../PROGRESS.md) 2026-08-17 的六列量測是 1.34x-1.48x 與 uuid 的 **0.36x**
+（上面那一行就是引它的），而 `RouteChatRequest` 的 module docstring 裡那份「對
+`qwen36-35b-a3b-q8` 重量一次」的十列表是 1.22x-1.47x 與 uuid 的 **0.34x**。兩份都標
+2026-08-17、都說是對同一個 tokenizer 量的。差異不影響這一步的結論——兩份都是「高估約
+1.2-1.5 倍、dense identifier 低估到三分之一，沒有常數落在中間」——但**要引用數字的時候
+先確認你引的是哪一份**，不要把兩份的端點混著用。
+
 ---
 
 ## 6. 取得專案並設定
@@ -1301,7 +1322,8 @@ tool schema 高估 1.34x-1.48x，uuid 清單低估到 0.36x。高估會拒掉硬
 
   應該看到 gateway `TAILNET_IP:8000`、admin-public `:8002`、frontend-public `:3001`、
   admin-tailnet `127.0.0.1:8001`、frontend-tailnet `127.0.0.1:3000`、grafana
-  `127.0.0.1:3002`。postgres／redis／prometheus 顯示 `null` 是對的，它們本來就不發布。
+  `127.0.0.1:3002`。postgres／redis／prometheus／qdrant／parser 顯示 `null` 是對的，
+  它們本來就不發布——`null`（沒要求）和 `[]`（要求了、沒拿到）是兩件事，掉的是後者。
 
 - [ ] **裝開機對帳的 LaunchDaemon。** Docker Desktop 開機時會在 `tailscaled` 把位址掛上
   `utun0` 之前就還原容器，那些指名 tailnet 位址的 port forward 於是綁失敗，而它
@@ -1353,11 +1375,38 @@ tool schema 高估 1.34x-1.48x，uuid 清單低估到 0.36x。高估會拒掉硬
   sudo launchctl load -w /Library/LaunchDaemons/online.rcsl.refresh-geolite2.plist
   ```
 
-  每週三 05:30。**失敗不會有人通知你**（health-check daemon 不看這個），但下一次執行開頭
-  的 STALENESS 檢查會在檔案超過 30 天時大聲抱怨，log 在
+  每週三 05:30。**失敗現在有人會說了**：health-check 的第十二項從外面 `stat` 那個
+  `.mmdb` 的 mtime，超過 10 天（它每週更新，所以那是至少兩次失敗）就進每日摘要——Tier 2，
+  不會單獨寄信，一份舊掉的資料庫有的是前置時間。這一行到 2026-08-18 為止都還寫著「失敗不會
+  有人通知你（health-check daemon 不看這個）」，而那句話正是 2026-08-04 加上第十二項的理由：
+  這個 script 自己的 STALENESS 檢查只在它有跑的時候才出聲，而「它沒跑」正是要偵測的那件事。
+  它自己的檢查仍然在，檔案超過 30 天時會在下一次執行開頭大聲抱怨，log 在
   `/opt/homebrew/var/log/nexus-geolite2.log`。
 
-- [ ] **裝健康監測的 LaunchDaemon（狀態變了會寄信）。** 上面那個 daemon 修的是開機那一
+- [ ] **裝主機指標的 LaunchDaemon（`host-metrics`）。** 容器在 macOS 上讀到的記憶體和磁碟
+  是那個 Linux VM 的，不是這台 Mac 的——數字看起來完全合理而且是錯的，比沒有更糟。所以這支
+  只用標準函式庫的 script 原生跑、綁 `127.0.0.1:9101`，後端從
+  `host.docker.internal:9101/host` 讀它（`host_metrics_url`）。
+
+  ```sh
+  sudo install -o root -g wheel -m 644 \
+    launchd/online.rcsl.host-metrics.plist /Library/LaunchDaemons/
+  sudo launchctl bootstrap system /Library/LaunchDaemons/online.rcsl.host-metrics.plist
+  curl -s http://127.0.0.1:9101/host    # 應該回一段 JSON
+  ```
+
+  plist 裡的路徑寫死成 `/Users/rcslmac1/dev/RCSL-AI-Nexus/launchd/host-metrics.py`，
+  repo 放在別的地方就要改；`UserName` 跟其他 job 一樣是操作者帳號，因為 `vm_stat`、
+  `sysctl`、`statfs` 誰都讀得到，不需要 root。
+
+  **這一步在 2026-08-18 之前不在這份清單裡，而下一步裝的健康監測會因為它而失敗。**
+  健康監測的第八項就是打這個 endpoint：它同時是這個 daemon 的存活檢查，也是第九項之外
+  那組磁碟／記憶體數字的唯一來源。沒裝的話第一次真的執行就會寄一封 `host-metrics` 失敗
+  的信，而那封信說的是真的——前端的主機面板同時也是瞎的。log 在
+  `/opt/homebrew/var/log/nexus-host-metrics.log`，`Address already in use` 那種是
+  KeepAlive 重啟得比舊 socket 釋放快，它自己會好。
+
+- [ ] **裝健康監測的 LaunchDaemon（狀態變了會寄信）。** 開機對帳那個 daemon 修的是開機那一
   刻。它修不好、或者它自己沒跑的時候，狀態會跟 2026-07-26 那次一模一樣：容器 running、
   gateway healthy、平台從 tailnet 打不到，而**沒有任何東西會說**。那次是靠人坐下來讀四份
   log 才發現的，那不是可以依賴的偵測方式。
@@ -1391,8 +1440,8 @@ tool schema 高估 1.34x-1.48x，uuid 清單低估到 0.36x。高估會拒掉硬
 
   **改 plist 之後一定要重裝＋重載，改腳本不用。** plist 上的 `ProgramArguments` 指向工作樹
   裡的 `.sh`，所以腳本一存檔下次執行就是新的；但 `/Library/LaunchDaemons/` 裡那份 plist 是
-  **複本**，repo 裡改了不會自動生效。這四個 daemon 都一樣（ollama、reconcile-port-bindings、
-  health-check、refresh-geolite2）。確認的方式是比對，不是相信：
+  **複本**，repo 裡改了不會自動生效。這五個 daemon 都一樣（ollama、reconcile-port-bindings、
+  health-check、refresh-geolite2、host-metrics）。確認的方式是比對，不是相信：
 
   ```sh
   diff <(plutil -p /Library/LaunchDaemons/online.rcsl.health-check.plist) \
@@ -1414,9 +1463,16 @@ tool schema 高估 1.34x-1.48x，uuid 清單低估到 0.36x。高估會拒掉硬
   `stop-stack-once.sh` 是 §1.1b 的，它**沒有 plist**（故障在重開之前就設好了，不需要開機時
   的零件），平常不執行。
 
-  每五分鐘查七件事：`.env` 讀得到 `TAILNET_IP`、位址在介面上、docker 有回應、**預期清單裡
-  的九個服務都在跑**、每個要求了 host binding 的容器真的拿到了、六個入口都答得出來、Ollama
-  在 loopback 上而且**沒有**在 tailnet 位址上答話。第四項是跟一份寫死的清單比對而不是列舉
+  每五分鐘跑**十四項**檢查，編號跟腳本裡的段落標題一致：1 `.env` 讀得到 `TAILNET_IP`、
+  2 位址在介面上、3 docker 有回應、**4 預期清單裡的十一個服務都在跑**、5 每個容器一次
+  `docker inspect`（要求了 host binding 的有沒有真的拿到、有沒有東西發布在不該發布的位址
+  上、healthcheck 有沒有在失敗、重啟次數有沒有往上跳）、6 六個入口都答得出來、7 Ollama
+  在 loopback 上而且**沒有**在 tailnet 位址上答話、8 host-metrics daemon 答不答得出來
+  （以及它報的記憶體與磁碟）、9 容器真正寫進去的那顆磁碟（Docker VM 的那顆，不是 Mac 的）、
+  10 Docker 可回收的空間、11 Prometheus 有沒有真的抓到每一個 target、12 GeoLite2 資料庫的
+  新舊、13 tailscale node key 的到期、14 資料庫自己回答的四件事（快到期的金鑰、還開著的
+  debug window、保留政策、最舊的一列有沒有超過政策）。8 到 14 這七項是 2026-08-04 加的，
+  第五項也是那天重寫的；在那之前只有前七項。第四項是跟一份寫死的清單比對而不是列舉
   現有容器——不然整個消失的容器不會出現在列舉裡，掃過去會回報「一切正常」。那正是
   reconciler 第三個前置條件在防的錯，也是 `tailscale status --json` 那次的錯。
 
@@ -1574,7 +1630,7 @@ tool schema 高估 1.34x-1.48x，uuid 清單低估到 0.36x。高估會拒掉硬
     python3 -c "import json,sys; [print(m['name'], m.get('capabilities')) for m in json.load(sys.stdin)['models']]"
   ```
 
-  `capabilities` 裡沒有 `thinking` 的那顆就是。在 Routing 頁面替 `assist` 建一條策略指
+  `capabilities` 裡沒有 `thinking` 的那顆就是。在 **Routing policies** 頁面替 `assist` 建一條策略指
   向它即可（別名，不是模型檔名）。
 
   確認方式有兩個，第二個比第一個重要：
@@ -1699,7 +1755,7 @@ security: ... User interaction is not allowed.
   容器是 `restart: unless-stopped`（已預設）。
 
   **容器回來了但打不到** → 這是 2026-07-26 實際發生的那一種。`docker compose ps` 顯示
-  九個 running、gateway 標 healthy，而 `curl http://<TAILNET_IP>:8000/readyz` 沒有回應。
+  容器全部 running、gateway 標 healthy，而 `curl http://<TAILNET_IP>:8000/readyz` 沒有回應。
   `restart: unless-stopped` 對這種情況**完全無效**——綁定失敗不會讓容器退出，沒有東西
   退出就沒有東西重啟。查法：
 

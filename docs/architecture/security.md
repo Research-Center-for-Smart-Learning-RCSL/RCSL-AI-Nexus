@@ -110,22 +110,42 @@ data plane and the control plane therefore have separate database segments.
 networks:
   gateway-egress:        # non-internal; the gateway's route to the host runtime
   gateway-data:
-    internal: true       # gateway <-> postgres/redis, no internet
+    internal: true       # gateway <-> postgres/redis/qdrant, no internet
   control-tailnet:       # non-internal; frontend-tailnet <-> admin-tailnet + host
   control-public:        # non-internal; frontend-public <-> admin-public + host
   admin-data:
-    internal: true       # both admin entrances <-> postgres/redis, no internet
+    internal: true       # both admin entrances <-> postgres/redis/qdrant, no internet
+  parser-net:
+    internal: true       # both admin entrances <-> parser, and nothing else (§7.3)
+  metrics-gateway:
+    internal: true       # prometheus -> gateway:/metrics
+  metrics-admin:
+    internal: true       # prometheus -> both admin entrances:/metrics
+  metrics-viz:
+    internal: true       # grafana -> prometheus, and no egress for either
+  viz-ingress:           # non-internal; carries grafana's host port and nothing else
 ```
 
 | Service | Networks | Host publish |
 |---|---|---|
-| gateway | gateway-egress, gateway-data | `100.x.x.x:8000` (tailnet only) |
-| admin-tailnet | control-tailnet, admin-data | `127.0.0.1:8001` |
-| admin-public | control-public, admin-data | `100.x.x.x:8002` (tailnet only) |
+| gateway | gateway-egress, gateway-data, metrics-gateway | `100.x.x.x:8000` (tailnet only) |
+| admin-tailnet | control-tailnet, admin-data, metrics-admin, parser-net | `127.0.0.1:8001` |
+| admin-public | control-public, admin-data, metrics-admin, parser-net | `100.x.x.x:8002` (tailnet only) |
 | frontend-tailnet | control-tailnet | `127.0.0.1:3000` |
 | frontend-public | control-public | `100.x.x.x:3001` (tailnet only) |
-| postgres, redis | gateway-data, admin-data | none |
+| parser | parser-net | none |
+| postgres, redis, qdrant | gateway-data, admin-data | none |
+| prometheus | metrics-gateway, metrics-admin, metrics-viz | none |
+| grafana | metrics-viz, viz-ingress | `127.0.0.1:3002` |
 | migrate (one-shot) | admin-data | none |
+
+**This table listed five networks and eight services until 2026-08-18**, having
+been written when that was the whole of `docker-compose.yml` and never revisited
+as the parser (§7.3) and the observability stack (§6) landed. Ten networks and
+twelve services is what the file declares today. The invariant the section is
+about survived the growth — the intersection of the gateway's networks with
+either admin entrance's is still empty — but a segmentation model that omits
+half the segments cannot be used to check that, which is the only thing it is for.
 
 What this buys, service by service: the **gateway** touches only the database
 and the host runtime, and has no path to any admin entrance. **frontend-public**,
@@ -135,10 +155,14 @@ because they are the same trust tier (§1); a compromise of one is already a
 control-plane compromise, so reaching the other over that segment is not an
 escalation across the boundary that matters.
 
-**postgres and redis are the only members of both database segments, and that
+**postgres, redis and qdrant are the only members of both database segments, and that
 is safe** because they accept connections and never open one. A shared datastore
 is not a shared path: the gateway reaching postgres does not let it reach an
-admin entrance through postgres.
+admin entrance through postgres. This paragraph named only the first two until
+2026-08-18; qdrant has been dual-homed the same way since the knowledge base was
+built, and the property it rests on is the same one — with the least-privilege
+split of §6 on top of it, since the gateway holds Qdrant's read-only key and its
+own database account rather than the admin ones.
 
 **Model runtimes do not appear here.** Ollama and MLX run natively on the macOS
 host bound to `127.0.0.1`; containers reach them through `host.docker.internal`,
@@ -258,13 +282,29 @@ Because the public entrance is openresty rather than a CDN, this is enforced **i
 
 ```python
 # interfaces/http/middleware/geo_filter.py
-ALLOWED_COUNTRIES = frozenset({"TW", "AU"})
+class GeoFilter:
+    def __init__(self, allowed: frozenset[str], database_path: Path) -> None: ...
 
-def assert_allowed_country(client_ip: IPv4Address | IPv6Address) -> None:
-    country = geoip_reader.country(str(client_ip)).country.iso_code
-    if country not in ALLOWED_COUNTRIES:
-        raise CountryNotAllowedError()
+    def assert_allowed(self, client_ip: IPv4Address | IPv6Address) -> None:
+        try:
+            country = self._reader.country(str(client_ip)).country.iso_code
+        except geoip2.errors.AddressNotFoundError:
+            return                      # private and unrouted addresses: the
+                                        # tailnet and the health probes
+        if country not in self._allowed:
+            logger.info("rejected request from %s (%s)", client_ip, country)
+            raise CountryNotAllowedError(detail=f"country={country} ip={client_ip}")
 ```
+
+The list is `ALLOWED_COUNTRIES` in configuration (`"TW,AU"`) rather than a
+constant in the module, so the deployment that runs the filter is what decides
+the countries — and `build_geo_filter` **refuses to start under `ENV=production`
+when the setting is present and the GeoLite2 database is not**, rather than
+serving every country while appearing configured. The two details the sketch
+above used to omit are both refusals to guess: an address the database does not
+know is allowed through, because rejecting it would break the tailnet and the
+health probes, and the country that failed is logged rather than returned,
+because telling a caller which rule rejected them is free reconnaissance.
 
 **This filter applies to the public admin entrance as well as the gateway.** The control plane's worst-case damage is strictly greater, and its legitimate callers are a smaller and more predictable set, so there is no argument for restricting it less.
 
@@ -305,15 +345,19 @@ Address/credential: allowlist     -> API key + per-key CIDR -> quota      <- onc
 ### 4.2 API Key Design
 
 ```python
-KEY_PREFIX = "nx_live_"
+# domain/services/api_key_service.py     token shape: nx_live_<key_id>.<secret>
+KEY_PREFIX, SEPARATOR = "nx_live_", "."
+KEY_ID_BYTES, SECRET_BYTES = 8, 32
 
-def issue(pepper: bytes) -> tuple[str, ApiKeyRecord]:
-    """Return (plaintext, record). The plaintext is shown once and never stored."""
-    secret = secrets.token_urlsafe(32)                  # 256 bits of entropy
-    plaintext = f"{KEY_PREFIX}{secret}"
-    return plaintext, ApiKeyRecord(
-        key_id=secrets.token_hex(8),                    # independent lookup handle
-        digest=hmac.new(pepper, plaintext.encode(), hashlib.sha256).hexdigest(),
+def issue(self) -> IssuedKey:
+    """The plaintext is shown once, at issue, and never recoverable afterwards."""
+    key_id = secrets.token_hex(KEY_ID_BYTES)            # independent lookup handle
+    secret = secrets.token_urlsafe(SECRET_BYTES)        # 256 bits of entropy
+    plaintext = f"{KEY_PREFIX}{key_id}{SEPARATOR}{secret}"
+    return IssuedKey(
+        plaintext=plaintext,
+        key_id=key_id,
+        digest=hmac.new(self._peppers[0], plaintext.encode(), hashlib.sha256).hexdigest(),
     )
 ```
 
@@ -322,7 +366,8 @@ Deliberate choices:
 - **SHA-256 HMAC rather than bcrypt or argon2.** Unlike a password, the key is a 256-bit random value, so brute force is infeasible regardless of hash speed and a slow KDF buys nothing. Meanwhile this code runs on every gateway request; bcrypt at roughly 100 ms per verification would destroy throughput.
 - **A server-side pepper**, held in a mounted secret rather than the database. A database dump alone is not enough to forge a key.
 - **A separate random `key_id` as the lookup handle**, not a prefix of the secret. An earlier draft stored the first 16 characters of the key in plaintext for indexing, which put part of the secret into logs and the database for no benefit and left collision handling undefined. `key_id` carries a unique index, appears in logs and in the UI for identification, and reveals nothing.
-- Comparison uses `hmac.compare_digest`.
+- **`key_id` travels inside the presented token**, after the prefix and before a dot, and this section's sketch omitted that until 2026-08-18 — which made the scheme as written unimplementable: with nothing but a digest on the wire, verification would have to scan every row and HMAC each one. The separator is a dot because `secrets.token_urlsafe` emits `[A-Za-z0-9_-]` and never a dot, so the split is unambiguous where an underscore would not be. A malformed token and an unknown one both return `None` from `parse_key_id`, so neither the response nor its timing distinguishes them.
+- Comparison uses `hmac.compare_digest`, against **every** accepted pepper rather than only the current one, which is what makes the staged rotation below possible.
 
 Bound metadata:
 
@@ -331,10 +376,15 @@ Bound metadata:
 | `scopes` | Allowed capabilities, minimal by default. Carried onto `Actor.allowed_capabilities` and checked against the capability each request names; a key is refused, as 403, any capability it does not hold. This description was aspirational until 2026-07-28: the list decided only whether a key worked at all, so a key issued for `chat` reached every capability the deployment served ([PROGRESS.md](../PROGRESS.md) 2026-07-28) |
 | `rate_limit_rpm` | Requests per minute |
 | `quota_tokens_per_day` | Daily token ceiling |
-| `allowed_cidrs` | Source restriction, §4.1(d) |
-| `expires_at` | **Required**, default 90 days, forcing rotation |
+| `allowed_cidrs` | Source restriction, §4.1(d). Empty means unrestricted |
+| `expires_at` | **Required**, `NOT NULL` in the schema. The issuing form defaults to 90 days and the use case refuses anything beyond **365**, forcing rotation. The maximum reaches the caller as `maximum_days` on the refusal, for the reason §9.2 gives |
 | `owner_id` | Which team member holds it, revoked when they leave |
 | `revoked_at` | Revocation timestamp |
+| `tenant_id` | The tenant the key belongs to, carried onto `Actor.tenant_id` so a key reaches only its own tenant's data (§7.3). Omitted from this table until 2026-08-18, though it is the field the whole isolation boundary rests on |
+| `debug_logging_until` | The expiring full-logging and error-detail window, §9.2. A disclosure control living on the credential rather than on the platform |
+| `name` | A label the owner chooses, shown in the UI. Attacker-controlled text that reaches a prompt when the assistant reads the screen, which is why §7.5 fences it |
+
+There is deliberately **no `last_used_at`**. Keeping one current would mean the gateway writing to `api_keys` on every request, which is exactly what the account split in §6 exists to prevent; the same fact is derived from `usage_records`.
 
 Revocation takes effect immediately, because every request re-reads the row. An earlier draft described a 60-second Redis verification cache; that was never built, and its absence is strictly safer, so it is recorded here as a deliberate non-feature rather than a gap. Adding it later would introduce a revocation window that has to be closed explicitly.
 
@@ -347,8 +397,8 @@ Critical on this hardware. Under unified memory, **unbounded concurrent inferenc
 | Global inference concurrency | Semaphore sized to the deployment (`4`) | Queueing depth rather than throughput: the GPU serves one generation at a time, so this decides whether a caller waits or is refused |
 | Per-request `max_tokens` | Hard cap (`16384`), overriding larger client requests | Bounds a single runaway generation. Counts a thinking model's reasoning as well as its answer, which is why it is not 4096 |
 | Per-request context length | Hard cap | Memory cost grows non-linearly |
-| Per-read request timeout | `600` s | A stalled upstream (no bytes for the interval) fails fast rather than holding a slot. **This is also what bounds prompt evaluation**, which sends no bytes at all, so it is sized against the context cap above rather than chosen freely: at the measured 117.9 tok/s a full context costs 556 s |
-| Wall-clock generation deadline | `900` s, from the **first chunk** | Bounds a slow-but-steady stream that stays under the per-read timeout yet never reaches the token cap; on unified memory near swap it would otherwise hold a slot for hours. Counted from the first chunk since 2026-08-05, so reading a long prompt does not spend the budget for writing the answer. The two therefore **compose**: one request's worst case is 1500 s, and the frontend's `experimental.proxyTimeout` must stay above that sum rather than above this row alone, or the cut arrives as a socket reset with no reason attached |
+| Per-read request timeout | `1200` s | A stalled upstream (no bytes for the interval) fails fast rather than holding a slot. **This is also what bounds prompt evaluation**, which sends no bytes at all, so it is sized against the context cap above rather than chosen freely. 300 → 600 on 2026-08-05 and 600 → 1200 on 2026-08-14, each move made with the context ceiling; this row still said `600` on 2026-08-18, four days after the second one. The margin has widened rather than narrowed since it was sized: at the 117.9 tok/s measured on the dense model then serving, a 65536 context cost 556 s; at the 711-730 tok/s measured on `qwen36-35b-a3b-q8` on 2026-08-17, today's 122880 costs 173 s |
+| Wall-clock generation deadline | `900` s, from the **first chunk** | Bounds a slow-but-steady stream that stays under the per-read timeout yet never reaches the token cap; on unified memory near swap it would otherwise hold a slot for hours. Counted from the first chunk since 2026-08-05, so reading a long prompt does not spend the budget for writing the answer. The two therefore **compose**: one request's worst case is 2100 s, and the frontend's `experimental.proxyTimeout` must stay above that sum rather than above this row alone, or the cut arrives as a socket reset with no reason attached. It is `2_160_000` ms, and `test_config_failfast.py` reads both files and fails if it drops below the sum — which is what caught it being left at the old figure when the read timeout doubled |
 | Cancel on client disconnect | Required | Otherwise generation continues for a departed client |
 | Model memory budget | Loaded total must stay under a fraction of node capacity | Checked before load, refuses with a message to unload first |
 | Runner context sizing | The model's registered `resource_profile.context_length`, sent to the runtime on load *and* on every generation | Told nothing, Ollama reserves for the model's own declared maximum: 55.8 GiB predicted for a 262144-token context on a deployment that never sends more than 65536, and it evicted every other resident model to fit — taking `assist` and `embedding` down with it. The registered value existed and reached nothing until 2026-08-07. `glm-4.7-flash`'s single KV head hid this for three months; the first dense model made it fatal on the first load |
@@ -367,7 +417,7 @@ proxy timeout sits above it; raising one without the other moves the failure to 
 layer that reports no reason. The ordering between those two is asserted by a test
 that reads both files, because a comment in each cannot enforce it.
 
-The memory budget in Phase 1 is **static**: `nodes.total_memory_gb` minus the sum of `resource_profile.memory_gb` over currently loaded models, all from the database. Live metrics through `MetricsPort` arrive in Phase 2, and this check must not wait for them.
+The memory budget in Phase 1 is **static**: `nodes.total_memory_gb` times a headroom fraction of **0.8**, minus the sum over currently loaded models of `observed_memory_gb or resource_profile.memory_gb`, all from the database. Live metrics through `MetricsPort` arrive in Phase 2, and this check must not wait for them. Two things in that sentence were missing from it until 2026-08-18 and both change the arithmetic. The fifth of the machine held back is for the OS, the containers, and the inference working memory no resource profile counts — it is why the budget on this node is 51.2 of 64 GiB rather than 64. And **the heartbeat's observed figure outranks the declared profile** for anything already resident, because it includes the KV cache the profile does not: 5.7 GB measured against 4.7 GB of declared weights for a 7B model. The declared figure remains the estimate for the model being loaded, which nothing has observed yet, and for anything the heartbeat has not seen.
 
 The Phase 2 observability stack (Prometheus and Grafana, §13.0) ships the *emission* side: each application exposes what it is doing at `/metrics`. It does not yet change this check. The `MetricsPort` the budget would read is the *ingestion* side, a live free-memory figure for the node, and a real one only exists on the Mac Studio. So the budget stays static and authoritative until that figure is real, which is the conservative reading of the rule above rather than a gap.
 
@@ -398,7 +448,9 @@ One number remains unverified and bears on this row: whether the OS actually evi
 - Request body size limits, at every layer that can impose one, ordered so the innermost fires. From the outside in on the management host: nginx `64m`, Next's `middlewareClientMaxBodySize` 40 MiB, the application's `ADMIN_MAX_BODY_BYTES` 40 MiB, and `upload_policy.MAX_UPLOAD_BYTES` 32 MiB, which is the only one that names the reason. **The ordering is load-bearing in both directions**: a layer smaller than the one inside it either pre-empts the error that explains itself (nginx's HTML 413) or, in Next's case, truncates the body and forwards the original `Content-Length` so the backend waits it out — a hang rather than an error, which is what 10 MB to 32 MiB did until 2026-08-07 ([frontend.md](./frontend.md) §1). **This line claimed a control that did not exist on either side, and said so in the present tense from the start.** On 2026-08-07 the application had no ceiling at all, and `client_max_body_size` was unset on the inference host — a 200 MiB body from an unauthenticated caller was accepted and passed through. The application half now exists (`middleware/body_limit.py`, §4.3); the nginx half is an open item in [ROADMAP.md](../ROADMAP.md). They are not redundant: nginx keeps the bytes off the machine, the middleware keeps them out of the process, and only the second is a control this deployment can verify or restore by itself.
 - **`/openapi.json` and `/docs` are disabled on the gateway** and served only by the admin applications. Public API documentation is written separately rather than exposing internal schemas. That documentation now exists, as the `/api-docs` page of the management UI: the endpoint, the bearer header, the capability-rather-than-model convention, the request fields and the error code table. Until 2026-07-28 it did not, which made this a trade with nothing on the other side of it — an integrator had no description of the wire contract from any source. The page renders the live base URL and capability list rather than prose, so it cannot describe a deployment other than the one serving it. `GET /v1/models` answers the same question on the wire, for client libraries that ask before a person does.
 
-  **The trade is only as good as the page is complete, and on 2026-07-30 it was audited against the wire for the first time.** Everything the page says is accurate; five things it does not say are not. The one that matters here rather than in [ROADMAP.md](../ROADMAP.md) is that `use_knowledge` and `knowledge_collection` are part of the gateway's public request schema and the page never mentions them — so a capability of this deployment is reachable by anyone who guesses the field name and discoverable by nobody who reads the documentation, which is the opposite of what disabling the schema endpoints was meant to achieve. Also missing: that `temperature`, `top_p`, `n`, `stop`, `tools` and `response_format` are accepted and silently ignored; that a stream failing after the first byte is a 200 carrying an error frame with no `[DONE]`; that streaming reports no usage at all; and five reachable error codes (`vector_store_unavailable`, `runtime_capability_unsupported`, `model_not_found`, `untrusted_proxy`, and the 500 `internal_error` fallback). Recorded in [PROGRESS.md](../PROGRESS.md) 2026-07-30; **until they are closed, this bullet describes an intention more completely than it describes the deployment.**
+  **The trade is only as good as the page is complete, and on 2026-07-30 it was audited against the wire for the first time.** Everything the page said was accurate; five things it did not say were not. The one that mattered here rather than in [ROADMAP.md](../ROADMAP.md) was that `use_knowledge` and `knowledge_collection` are part of the gateway's public request schema and the page never mentioned them — so a capability of this deployment was reachable by anyone who guessed the field name and discoverable by nobody who read the documentation, which is the opposite of what disabling the schema endpoints was meant to achieve. Also missing: that `temperature`, `top_p`, `n`, `stop`, `tools` and `response_format` were accepted and silently ignored; that a stream failing after the first byte is a 200 carrying an error frame with no `[DONE]`; that streaming reported no usage at all; and five reachable error codes. Recorded in [PROGRESS.md](../PROGRESS.md) 2026-07-30.
+
+  **Closed on 2026-08-03, except one.** Grounding, the ignored fields, the mid-stream failure shape, `prompt_tokens` and four of the five codes are all on the page now, and the tool-calling work of 2026-08-05 turned three of those documented absences into behaviours — `tools` and the sampling fields are honoured, and `stream_options: {"include_usage": true}` adds a final usage frame — each stated on the page with the date it changed rather than quietly rewritten. What is still absent is **`vector_store_unavailable`**, which is reachable (`VectorStoreError`, "The knowledge index is not available") and has no row in the page's error table, so the one code a grounded request can fail with is the one code the grounding documentation does not name. This paragraph read as though nothing had been closed until 2026-08-18, which is its own version of the defect it was written about.
 
 ## 5. Identity and Authorization
 
@@ -457,7 +509,7 @@ This is the same reasoning as §1: **isolation is guaranteed by socket binding, 
 
 **You may grant a role only if you already hold everything it confers.** `USER_WRITE` says an account may be created or edited, not with which role, and nothing enforced the difference until 2026-08-04 — so a `tenant_admin` could invite an `admin`, take the single-use onboarding link from the same response, and hold every scope a minute later, including the `TENANT_WRITE` this table says it cannot have. `domain/services/grantable_roles.py` is the whole rule; it needs no table of its own and stays true for roles added later. In practice `tenant_admin` may staff its own tenant (`curator`, `auditor`, `user`, itself) and may not reach `operator` or `admin`.
 
-**Two invariants are enforced by `tests/unit/test_role_scopes.py` rather than by review.** `_ADMIN_SCOPES` is `frozenset(Scope)`, so a scope added later reaches `admin` automatically and no other role — which is how the roles above would quietly rot, a new feature at a time. The test requires every scope to reach some non-`admin` role, or to be listed in `ADMIN_ONLY_SCOPES` with its reason. Only `tenant:write` is listed: a tenant is the boundary the others are confined by, so granting the power to draw one is granting the power to step outside it.
+**Two invariants are enforced by `tests/unit/test_role_scopes.py` rather than by review.** `_ADMIN_SCOPES` is `frozenset(Scope)`, so a scope added later reaches `admin` automatically and no other role — which is how the roles above would quietly rot, a new feature at a time. The test requires every scope to reach some non-`admin` role, or to be listed in `ADMIN_ONLY_SCOPES` with its reason. **Three are listed**, and this paragraph named only the first until 2026-08-18 while §12.1 and §7.4 argued the other two. `tenant:write`, because a tenant is the boundary the others are confined by, so granting the power to draw one is granting the power to step outside it. `retention:write` since 2026-08-04, because held by a `tenant_admin` it would let them erase the record of what they did inside the tenant they administer (§12.1). And `prompt_log:read` since 2026-08-08, the mirror of it: the tenant boundary confines every other authority that role holds and offers the tenant's own members no protection from the person administering them (§7.4).
 
 **The chat UI is served by the admin API (`/admin/chat`), not the public gateway.** It reuses the same `RouteChatRequest` use case but authorizes by user identity rather than an API key, so operators need not mint keys for themselves and internal traffic is not subject to the public geo and CIDR restrictions. The §4.3 resource guardrails still apply, because they protect the hardware rather than the perimeter.
 
@@ -529,9 +581,9 @@ Even on an `internal: true` network, every service requires authentication. This
 
 | Service | Default risk | Required action |
 |---|---|---|
-| Redis | **No password at all by default** | Set `requirepass`; disable `FLUSHALL`, `CONFIG`, `DEBUG` |
-| Qdrant | **No API key by default** | Set `QDRANT__SERVICE__API_KEY` |
-| MinIO | **Defaults to `minioadmin`/`minioadmin`** | Replace root credentials; give the application a least-privilege service account |
+| Redis | **No password at all by default** | Set `requirepass`. **Implemented**, read from the mounted secret through a shell so the password appears in no `environment` block. The second half of this row — renaming or disabling `FLUSHALL`, `CONFIG` and `DEBUG` — is **not** done: the `command:` sets `requirepass` and `appendonly` and nothing else, so anything holding the password holds those verbs too. Open, and narrow, because the password is a file secret and Redis is on the two internal database segments only |
+| Qdrant | **No API key by default** | Set `QDRANT__SERVICE__API_KEY`. **Implemented**, and a required production value with no opt-out (§7.3); the gateway is given `QDRANT__SERVICE__READ_ONLY_API_KEY` instead |
+| MinIO | **Defaults to `minioadmin`/`minioadmin`** | **Not deployed.** ARCHITECTURE.md listed it for document storage and the knowledge base was built on a mounted `documents` volume instead — one node, one filesystem, and MinIO would have added a service, a set of default credentials to replace, and a CVE surface for presigned URLs and multi-node replication this deployment does not use. This row is kept because the reasoning is the interesting part: the strongest answer to a default credential is not having the service |
 | Grafana | **Defaults to `admin`/`admin`** | Replace; disable anonymous access and self-registration. **Implemented** (`docker-compose.yml`): password from a file secret, `GF_AUTH_ANONYMOUS_ENABLED=false`, `GF_USERS_ALLOW_SIGN_UP=false` |
 | Prometheus | **No authentication at all** | Publish no port; reachable only by Grafana. **Implemented**: no host port, on the internal metrics networks only, and `/metrics` on each app additionally requires a bearer token (`metrics_scrape_token`) |
 | Postgres | Password from configuration | **Separate database users per service**, see below |
@@ -539,13 +591,13 @@ Even on an `internal: true` network, every service requires authentication. This
 
 The Postgres split is the important one, and it **is implemented** (`infrastructure/db_roles.py`, `docker-compose.yml`). Three accounts, not one:
 
-- The **gateway** account may read every table except two, and may INSERT into `usage_records`, `prompt_logs` and `refusals`, nothing else. It cannot write `api_keys`, `routing_policies`, or `users`, so a compromised public service cannot mint itself an admin key. The gateway does need INSERT on those two, so "read-only" is the wrong shape: the restriction is per table, and the writable set is named in code (`GATEWAY_WRITABLE_TABLES`) where it is subject to review.
+- The **gateway** account may read every table except two, and may INSERT into `usage_records`, `prompt_logs` and `refusals`, nothing else. It cannot write `api_keys`, `routing_policies`, or `users`, so a compromised public service cannot mint itself an admin key. The gateway does need INSERT on those three, so "read-only" is the wrong shape: the restriction is per table, and the writable set is named in code (`GATEWAY_WRITABLE_TABLES`) where it is subject to review.
 - **`refusals` is the second table in that shape, added 2026-08-18 with §9.5.** The gateway writes a row for every request it turns away and may read none of them. The argument is weaker than the one below it and still holds: the table carries no request content — only the code, the status, the message a caller was already sent and the figures that came with it — so a gateway reading it would not be reading anybody's ideas. What it would be reading is every tenant's refusal history from the one process exposed to the internet, which is a map of who is doing what and where their clients break. Nothing is lost by revoking it: the read path is on the admin entrances, and the gateway has no use for a row it wrote.
 - **`prompt_logs` is the exception in both directions, added 2026-08-08 with §9.2's full-text logging.** It is the second table the gateway may write, and the first it may *not* read: `GATEWAY_DENIED_READ_TABLES` revokes `SELECT` on it after the blanket grant. The blanket grant was defensible while every table held platform state — a compromised gateway reading `api_keys` learns digests it cannot reverse and an expiry it cannot change. This table is different in kind: it holds the plaintext of what researchers typed, and the process holding this account is the one exposed to the internet, so being able to read it would mean being able to hand back every tenant's conversations. The gateway appends its own transcripts and reads nobody's — the same split Qdrant already makes in the other direction, where the gateway's read-only key means retrieving a passage cannot become writing one. Nothing is lost by it: the read path is on the admin entrances, whose account holds full DML. **The ordering is load-bearing and is asserted by a test of its own**, because `GRANT SELECT ON ALL TABLES` includes this table and a revoke placed before it would be undone in the same transaction while leaving both statements present for a naive assertion to find.
 - The **admin** account, shared by `admin-tailnet` and `admin-public` (same trust tier, §1), has full DML and no DDL.
 - The **owner** account owns the schema and holds DDL. Only the `migrate` job connects as it.
 
-Each service mounts its own account's connection URL as the `database_url` secret; the account name inside that URL is the single source of truth. The `migrate` job, connecting as the owner, creates the gateway and admin roles from their URLs and re-asserts their grants on every deploy, so a table added by a later migration is regranted and the gateway's writable set stays exactly one table. The grants are declarative: the gateway's privileges are revoked and re-granted each run, so a prior over-grant cannot survive. §1's earlier caveat, that splitting the containers did nothing about what a compromised gateway could do to the database, no longer holds.
+Each service mounts its own account's connection URL as the `database_url` secret; the account name inside that URL is the single source of truth. The `migrate` job, connecting as the owner, creates the gateway and admin roles from their URLs and re-asserts their grants on every deploy, so a table added by a later migration is regranted and the gateway's writable set stays exactly the three tables `GATEWAY_WRITABLE_TABLES` names — `usage_records`, `prompt_logs` and `refusals` — with `SELECT` revoked on the last two afterwards. (This sentence said "exactly one table" until 2026-08-18, having been written when that was true and not revisited when `prompt_logs` joined on 2026-08-08 and `refusals` on 2026-08-18, both of them changes the two bullets above describe at length.) The grants are declarative: the gateway's privileges are revoked and re-granted each run, so a prior over-grant cannot survive. §1's earlier caveat, that splitting the containers did nothing about what a compromised gateway could do to the database, no longer holds.
 
 **Metrics scraping does not reopen the gateway/admin isolation.** Prometheus scrapes all three applications, so it is on both a gateway-side scrape network (`metrics-gateway`) and an admin-side one (`metrics-admin`). The gateway and the admin entrances still share no network with each other, which is the invariant §1 and §3.2 rest on; the only node on both is Prometheus. Unlike Postgres and Redis, which are also on two segments but never initiate a connection, Prometheus does initiate. What makes it safe is that it is a scraper, not a forwarding proxy: it issues only the fixed `GET /metrics` requests in `prometheus/prometheus.yml`, so a compromised gateway cannot use it to reach an admin entrance. The `/metrics` endpoints themselves require a bearer token, so scraping does not depend on network placement being perfect, and neither Prometheus nor Grafana publishes a port a client outside the tailnet could reach.
 
@@ -586,10 +638,12 @@ MODEL_REF = re.compile(
     rf"(?P<name>{SEGMENT})"
     rf"(?::(?P<tag>[a-zA-Z0-9._-]{{1,64}}))?$"
 )
-ALLOWED_REGISTRIES = frozenset({"registry.ollama.ai", "huggingface.co"})
+ALLOWED_REGISTRIES = frozenset({"registry.ollama.ai", "huggingface.co", "hf.co"})
 ```
 
-An earlier version of this pattern disallowed `/` entirely, which rejected ordinary references such as `library/qwen2.5` and made the registry allowlist unreachable. The registry is parsed out of the reference and checked explicitly, because Ollama's pull API takes a single `name` string with the registry embedded in it and offers no separate parameter to constrain.
+An earlier version of this pattern disallowed `/` entirely, which rejected ordinary references such as `library/qwen2.5` and made the registry allowlist unreachable. The registry is parsed out of the reference and checked explicitly, because Ollama's pull API takes a single `name` string with the registry embedded in it and offers no separate parameter to constrain. The allowlist has three entries rather than the two this section listed until 2026-08-18: `hf.co` is HuggingFace's own short host and reaches the same registry, so omitting it refused references that were inconvenient rather than unsafe.
+
+**MLX references do not use this grammar at all**, and that is worth stating here because the allowlist above is what this section offers as the control on the download path. An MLX model is a bare HuggingFace repository id (`mlx-community/Qwen2.5-7B-Instruct-4bit`), with no registry host to parse and therefore nothing for `ALLOWED_REGISTRIES` to constrain; `adapters/runtime/hf_validation.py` validates it against its own pattern — at most one `/`, each segment starting and ending alphanumeric, `..` rejected explicitly because a `.` is legal inside a segment (`Qwen2.5`) and so the path-traversal case has to be named. That value reaches `snapshot_download(repo_id=...)`, which is (c) below.
 
 Validation lives at the adapter boundary rather than in a router, so every call path passes through it.
 
@@ -600,24 +654,30 @@ Validation lives at the adapter boundary rather than in a router, so every call 
 However, the enforcement point differs by path, and the earlier draft claimed more than it could deliver:
 
 - **Pulling through Ollama**: the transfer is opaque blobs. The application cannot inspect file formats or verify digests. The only control available is the registry allowlist in (b), plus trusting Ollama's own handling.
-- **Downloading weights directly** (vLLM and MLX in Phase 2): the application controls the download, so extension restriction and digest verification are enforced here and must be implemented when that path is built.
+- **Downloading weights directly**: the application controls the download, so extension restriction and digest verification could be enforced here. **Neither is. — OPEN, 2026-08-18.**
+
+  This bullet said the two controls "must be implemented when that path is built", which described the MLX download as future work. It is not future work and has not been since MLX shipped: `POST /admin/models/{id}/download` on a model whose `runtime` is `mlx` reaches `MlxAdapter.pull`, which calls `snapshot_download(repo_id=ref)` (`adapters/runtime/mlx_adapter.py`) with **no `allow_patterns` and no digest check**. `snapshot_download` fetches every file in the repository. So the format rule stated one paragraph above — that only `.safetensors` and `.gguf` are acceptable, because loading a `.bin`, `.pt` or `.ckpt` is equivalent to executing arbitrary code — is asserted by this document and enforced by nothing on the one path that could enforce it.
+
+  What does hold: the caller must hold `model:write`, so this is an authenticated control-plane action by an operator or an administrator rather than anything a gateway caller can provoke; the reference is validated by `assert_valid_hf_repo_id` before it travels, so it cannot be a URL or a traversal; the download is audited (`model.download_started`); and the repository is one a person typed into the registry deliberately. That is a trusted-operator argument, not a technical control, and it is the argument that would have to carry a malicious or compromised upstream repository — which is precisely the threat §2 lists as "downloaded weights contain a malicious pickle payload".
+
+  The fix is small and is not written here as a design: `allow_patterns` on the `snapshot_download` call, restricting to the two acceptable formats plus the tokeniser and config files, and checking the returned files against the repository's own `sha256` metadata. Recorded as an open risk rather than closed quietly, because the value of this section is that the difference between what is enforced and what is intended is visible in it.
 
 **(d) Runtime hardening on the host, not in a container.**
 
 Because runtimes run natively on macOS ([../ARCHITECTURE.md](../ARCHITECTURE.md) §0.1), container primitives such as `cap_drop`, `read_only`, and read-only mounts are unavailable. An earlier draft specified exactly those, and additionally set the model directory read-only, which would have made model downloads fail outright. Host-level equivalents:
 
-- Run Ollama and MLX under a **dedicated non-administrator service account**, not the operator's login.
+- Run Ollama and MLX under a **dedicated non-administrator service account**, not the operator's login. **This is the intent and it is not what runs. — OPEN, 2026-08-18.** `launchd/online.rcsl.ollama.plist` sets `UserName` to `rcslmac1`, which is the operator's everyday login and a member of the local `admin` group; the same is true of every other LaunchDaemon this project ships (`host-metrics`, `health-check`, `refresh-geolite2`, `reconcile-port-bindings`). The plist says so in its own comment and calls the dedicated account "a later hardening step", and [ROADMAP.md](../ROADMAP.md) has the item correctly unchecked — this bullet and the one in §11 were the two places that read as though it were done, and they said it in the present tense from the first draft. What that costs is the whole of the containment argument in this subsection: the runtime that loads downloaded weights, on the path (c) above records as unverified, runs as an account that can `sudo`. The reason it has not moved is `~/.ollama`: a daemon defaults to `root`, which would look for models in `/var/root/.ollama` and find none, so running as the operator was the change that avoided `root` without moving the model directory. Doing this properly means creating the account, moving or re-owning the model directory, and re-running the §14 checklist item that asserts it.
 - `OLLAMA_HOST=127.0.0.1` so the runtime is not reachable from the network; only containers on the same host connect, through `host.docker.internal`.
-- The model directory is owned by the service account, and no other account has write access.
-- The service account has no access to `/config`, the Docker socket, or backup destinations.
-- Supervised by launchd with automatic restart.
+- The model directory is owned by the service account, and no other account has write access. Follows from the bullet above and is therefore also outstanding: today the directory is `~/.ollama` under the operator's login.
+- The service account has no access to `/config`, the Docker socket, or backup destinations. Same dependency; today the account running the runtime is the account that owns all three.
+- Supervised by launchd with automatic restart. **This half is in force**: `RunAtLoad` and `KeepAlive` are set, and it is a LaunchDaemon rather than a LaunchAgent so the runtime returns after a power cut with nobody logged in.
 
 **(e) Downloads are long-running asynchronous work.**
 
 A pull takes minutes to hours, so it cannot be a synchronous request. Phase 1 uses `asyncio.create_task` inside the admin application with progress in Redis (`JobProgressPort`), rather than adding a Celery or RQ service; a single machine does not need a separate worker tier.
 
-- `POST /admin/models/{id}/download` returns a job identifier immediately.
-- `GET /admin/jobs/{id}` returns progress, consumed by the frontend's `useDownloadJob`.
+- `POST /admin/models/{id}/download` returns a job identifier immediately, with a `202`.
+- `GET /admin/download-jobs/{job_id}` returns progress, behind `model:read`, consumed by the frontend's `useDownloadJob`. This was written here as `GET /admin/jobs/{id}`, a path that has never existed; the knowledge base's unrelated `GET /admin/knowledge/jobs/{job_id}` (§7.3) is the nearest thing to it, which is exactly how a wrong path in a document survives being read.
 - The task consumes Ollama's NDJSON stream line by line and updates progress.
 - Because progress lives in Redis rather than process memory, a restart during a pull leaves a visibly stale job rather than a silently lost one.
 
@@ -627,15 +687,18 @@ A node's `address` causes the gateway to make outbound HTTP requests to it, a te
 
 ```python
 # adapters/http/egress_guard.py
-TAILNET = ipaddress.ip_network("100.64.0.0/10")
+TAILNET_RANGES = (
+    ipaddress.ip_network("100.64.0.0/10"),        # Tailscale IPv4, the CGNAT range
+    ipaddress.ip_network("fd7a:115c:a1e0::/48"),  # Tailscale IPv6 ULA
+)
 
-def assert_allowed_node_address(host: str) -> None:
+def resolve_node_ips(address: str) -> list[IpAddress]:
     """Compute nodes always live inside the tailnet. One rule blocks loopback,
     link-local, LAN pivoting, and cloud metadata endpoints."""
-    ip = ipaddress.ip_address(socket.gethostbyname(host))
-    if ip not in TAILNET:
-        raise InvalidNodeAddressError(host)
+    ...  # every resolved answer must be in range; see the status note below
 ```
+
+**Both ranges, not just the first.** This sketch named only the IPv4 CGNAT range until 2026-08-18, and a tailnet address is as often `fd7a:115c:a1e0::/48` — a guard that knew only the first would refuse every legitimate IPv6 node rather than admit an illegitimate one, so the omission was a description error rather than a hole, but it is the kind that gets copied into a second implementation.
 
 Since every compute node is necessarily on the tailnet, the allowlist can be extremely tight. Outbound requests additionally **do not follow redirects**, set timeouts, and cap response size.
 
@@ -676,7 +739,7 @@ async def search(self, vector, *, limit, collection_id=None):
     )
 ```
 
-**Qdrant's own credentials are the other half.** It ships with no authentication at all, so its API key is a required production secret with no flag that makes it optional, unlike the metrics token: there is no deployment shape in which an unauthenticated knowledge base is intended. And the §6 least-privilege split extends to it — the gateway is given Qdrant's **read-only** key, mounted at the same target name, so retrieving a passage to answer a request cannot become writing one, exactly as its database account may read every table and write only `usage_records`.
+**Qdrant's own credentials are the other half.** It ships with no authentication at all, so its API key is a required production secret with no flag that makes it optional, unlike the metrics token: there is no deployment shape in which an unauthenticated knowledge base is intended. And the §6 least-privilege split extends to it — the gateway is given Qdrant's **read-only** key, mounted at the same target name, so retrieving a passage to answer a request cannot become writing one, exactly as its database account may read every table but two and write only the three append-only tables of its own traffic (§6).
 
 Scope so far is the foundation plus minimal management (create and list tenants, first-admin bootstrap into a new tenant); there is no platform-super-admin versus tenant-admin split, since admins are platform-trusted for a single research centre. See [ROADMAP.md](../ROADMAP.md) and §13.0.
 
@@ -755,9 +818,14 @@ Two places needed the distinction re-applied by hand, and both are easy to miss:
 | Model weights | Low | No encryption needed |
 | Knowledge base documents | **High** (unpublished research) | Encrypted backups, access auditing |
 | Prompts and completions | **Highest** | Not persisted by default, see below |
+| Prompt transcripts (`prompt_logs`) | **Highest** | Written only while a credential's debug window is open; retention is a **ceiling** of 30 days on a default of 7; the gateway writes and may not read; reading one is audited (§9.2) |
 | API key digests | High | HMAC with pepper |
 | Audit log | Medium | Append-only, stored separately |
 | Refusals | Medium | Append-only; what the platform told a caller, never what they sent (§9.5) |
+| Usage records | Medium | Metadata only — actor, capability, model, token counts, latency. The one dataset here the gateway both writes and reads, because quota enforcement is a gateway decision |
+| Evaluation runs | Low | Benchmark scores about the fleet's own models, no tenant scope and no caller content. Written under `model:write` and read under `model:read` on the admin entrances only; import and deletion are audited |
+
+The first table in this document to describe a dataset that did not yet exist would be a failure of the kind §13.0 is about; the failure this table actually had, until 2026-08-18, was the opposite — three of the datasets above had shipped and had no row, so the classification was complete about the schema of an earlier month.
 
 ### 9.2 Logging Boundaries
 
@@ -774,20 +842,46 @@ Prompt content is the most sensitive data here, because researchers type unpubli
 
 When full logging is genuinely needed for debugging, it is enabled by an **expiring** switch: `debug_logging_until` on the API key **and on the user record** (the management chat path has no API key attached). Full-text retention is configured separately and is markedly shorter than ordinary log retention. The expiry exists to prevent the common ending where full logging is enabled for an afternoon and left on for a year.
 
-**What the switch does, as of 2026-08-08 — two things now, not one.** While the window is open, error responses to that credential carry `error.detail` (the **first** of three deliberate exceptions to "no internal detail in responses", §5 and `interfaces/http/errors.py` — it was the only one until 2026-08-17, and this line said so until the other two landed), **and the platform records the full prompt and completion text of every request that credential makes**. One hour per press, capped at 24 by the backend, closing by itself, and audited because it loosens an information control. The second use is the one this section described from the first draft and nothing implemented until 2026-08-08; the switch existed from the first migration and was consumed by nothing at all until the error-detail use landed on 2026-08-05. The two rows of the metadata table were likewise aspirational on one point — `request id` is logged *and returned* (header `X-Request-Id`, `error.request_id`) only since the same date.
+**What the switch does, as of 2026-08-08 — two things now, not one.** While the window is open, error responses to that credential carry `error.detail` (the **only** way `detail` itself ever leaves the process, §5 and `interfaces/http/errors.py`; every other exception to "no internal detail in responses" is a named *figure* rather than the detail string, and six error classes carry one rather than the two this line counted on 2026-08-17), **and the platform records the full prompt and completion text of every request that credential makes**. One hour per press, capped at 24 by the backend, closing by itself, and audited because it loosens an information control. The second use is the one this section described from the first draft and nothing implemented until 2026-08-08; the switch existed from the first migration and was consumed by nothing at all until the error-detail use landed on 2026-08-05. The two rows of the metadata table were likewise aspirational on one point — `request id` is logged *and returned* (header `X-Request-Id`, `error.request_id`) only since the same date.
 
-**The other two are narrower than this one and rest on a stated test**, added
-2026-08-17 after two operators each lost an evening to a refusal that was
-correct, permanent, and silent about which of the things they had just changed
-had caused it. `ContextTooLongError` carries `estimated`, `limit` and
-`composition`; `ApiKeyLifetimeError` carries `maximum_days`. **A figure may
-reach a caller when it describes the caller's own payload back to them, or when
-it is a policy this deployment publishes; it may not when it describes the
-inventory.** That is why `limit` was weighed rather than assumed harmless — on a
-fallback it is half a specific model's registered context — and why the model's
-alias is still withheld and `detail` still does not leave the process. Unlike
-the switch above, neither is time-boxed or audited, because neither discloses
-anything the caller did not send or could not read in this documentation.
+**The figures are narrower than the switch and rest on a stated test.** The two
+that prompted the test were added 2026-08-17 and 2026-08-18, after two operators
+each lost an evening to a refusal that was correct, permanent, and silent about
+which of the things they had just changed had caused it: `ContextTooLongError`
+carries `estimated`, `limit`, `composition` and `basis`, and `ApiKeyLifetimeError`
+carries `maximum_days`. **A figure may reach a caller when it describes the
+caller's own payload back to them, or when it is a policy this deployment
+publishes; it may not when it describes the inventory.** That is why `limit` was
+weighed rather than assumed harmless — on a fallback it is half a specific
+model's registered context — and why the model's alias is still withheld and
+`detail` still does not leave the process. Unlike the switch above, none of them
+is time-boxed or audited, because none discloses anything the caller did not
+send or could not read in this documentation.
+
+**`public_details` is where the whole set lives: six error classes and one
+cross-cutting rule, not two exceptions.** One function, because there are two
+readers that must not disagree — the response body renders it and `refusals`
+stores it (§9.5). Besides the two above
+it returns `capability` and `available` on `CapabilityNotIssuedError` (the
+caller's own key and the list `GET /v1/models` would hand them anyway), `reason`
+on `WeakPasswordError` and on `UploadRejectedError` (the caller's own password
+and the caller's own file — an operator told only "this file cannot be accepted"
+cannot tell a size limit from a type one), `retry_after_seconds` wherever an
+error carries one (a published policy, and the figure a caller reading their own
+refusals a day later has no header for), and `required_gb` / `available_gb` on
+`InsufficientMemoryError`. **The memory one is the exception to the rule stated
+above and is worth naming rather than counting**: it describes the inventory, not
+the caller's payload. It is tolerated because it is an admin-entrance refusal
+behind `model:write` — the caller being told the machine's memory is the person
+administering the machine — and it would not be tolerable on the gateway. The
+rule is what makes that visible; a count of "three" was what hid it.
+
+`basis` is the field that says which of three things produced `estimated`:
+`tokenizer` when the model's own vocabulary and chat template counted it,
+`estimate` for the character-width fallback, `lower_bound` for the cheap guard
+that runs before a model is chosen. It is always present when `estimated` is,
+because its absence would be read as "exact" by anyone who met the field on one
+deployment and not another. See §13.0's row on exact token counting.
 
 **How the full-text half works.** `domain/entities/prompt_log.py` and its table `prompt_logs`, written by `RouteChatRequest` in the same `finally` that records usage, and read only through `prompt_log:read` on the admin entrances (`ReadPromptLogs`, `routers/prompt_logs.py`). Six decisions in it are load-bearing:
 
@@ -825,7 +919,7 @@ The practical position:
 
 Built 2026-08-18. **Two people lost an evening each on 2026-08-17 to refusals that were correct, permanent, and silent about which of several things they had just changed had caused them.** A `413` said only that the conversation was too long; the operator opened three new ones, each refused identically, because the tool definitions filling the ceiling are resent every turn. A `409` on an API key's expiry said "The model is not in a state that allows this operation" — the platform's general conflict, while the reason sat in `detail`, which does not leave the process — and was sent seven times in three minutes by somebody who concluded the capability edit beside it had failed. Both messages were fixed the same day. Neither fix helps the next error nobody has thought about, and nothing on this platform stored a refusal at all, so answering "what happened at 19:16?" meant an administrator reading container logs.
 
-`refusals`, written from the shared exception handler and read under `refusal:read_own` or `refusal:read_all` (`domain/entities/refusal.py`, `application/use_cases/read_refusals.py`, `routers/refusals.py`). Six decisions in it are load-bearing.
+`refusals`, written from the shared exception handler and read under `refusal:read_own` or `refusal:read_all` (`domain/entities/refusal.py`, `application/use_cases/read_refusals.py`, `routers/refusals.py`). Seven decisions in it are load-bearing.
 
 - **A row is a second copy of what the caller was already told.** The code, the status, the public message, and the caller-facing figures — built by the same function that builds the response body (`public_details` in `interfaces/http/errors.py`), so the two cannot disagree. `detail` is absent by construction: it is not read there at all. The model's alias is withheld exactly as it is from the response, and no request content is stored. That is what makes the whole table safe to show its own subject, which is the point of the feature.
 - **The write point is the exception handler, not the inference path.** The feature was specified as a row written in the same `finally` that records usage, so one write point would serve all three entrances as `prompt_logs` does. That works for the inference path and only for it: the `409` above was an API key's expiry on the admin surface and never reaches `RouteChatRequest`. Storing every `DomainError` — plus the `500` fallback, which is the refusal with least for a caller to act on — means writing from the one place all of them already pass through.
@@ -843,15 +937,15 @@ The gateway writes this table and may not read it; see §6.
 |---|---|
 | Python | `uv` or Poetry with hashes pinned; `pip-audit` in CI |
 | Node | `pnpm` lockfile; `pnpm audit` in CI |
-| Docker images | **Pin digests, not `:latest`**; scan with Trivy |
-| Third-party services | Open WebUI, Grafana, and MinIO have all had significant CVEs; subscribe to advisories and schedule updates |
+| Docker images | **Pin digests, not `:latest`** — *stated here since the first draft and not what `docker-compose.yml` does.* Every image carries a version tag (`postgres:17-alpine`, `qdrant/qdrant:v1.13.0`, `redis:7-alpine`, `prom/prometheus:v3.1.0`, `grafana/grafana:11.5.1`) and not one carries a `@sha256:` digest. A tag is mutable, so this is "the version we chose" rather than "the bytes we reviewed": it closes `:latest`, which is the larger half, and leaves a tag repush able to change what a redeploy runs. Open, 2026-08-18. Trivy **is** in CI |
+| Third-party services | Grafana, Qdrant and the base images all have CVE histories worth watching; subscribe to advisories and schedule updates. Open WebUI and MinIO were named here from the first draft and neither is deployed — Open WebUI is a possible *client* of the gateway rather than a service this platform runs, and document storage was built on a mounted volume instead of MinIO (§6) |
 
 **shadcn/ui deserves specific mention.** It copies component source into the repository rather than being an npm dependency. That makes it fully controllable, at the cost of **not receiving upstream fixes automatically**. The underlying Radix packages remain npm dependencies and are covered by audit tooling, but the shadcn layer itself requires deliberate tracking of upstream changes. The same caveat applies to any chart library adopted on the same distribution model ([frontend.md](./frontend.md) §7).
 
 ## 11. Host Hardening (macOS)
 
 - Gatekeeper and SIP remain enabled. **FileVault is off for the first deployment** — a sequenced decision, not an oversight: §9.3 argues for it, §15.6 records why it waits for the UPS and what carries the load meanwhile. Startup Security stays at Full Security, which with FileVault off is the primary control against booting from external media rather than a second layer behind encryption.
-- **Run Docker and the runtimes under dedicated service accounts, not the operator's everyday administrator login.**
+- **Run Docker and the runtimes under dedicated service accounts, not the operator's everyday administrator login.** **Outstanding, 2026-08-18** — every LaunchDaemon this project ships names `rcslmac1`, which is that everyday administrator login, and Docker Desktop runs in its session. §7.1(d) has the detail and what it costs; this bullet is a requirement, not a report, and reading it as a report is the error that kept it unexamined.
 - SSH: **Tailscale SSH, with macOS Remote Login off.** `tailscaled` serves SSH on the Tailscale interface only, so the requirement to listen nowhere else is met by not running a second SSH server rather than by an `sshd_config` edit, and there is no password or key to leak: identity comes from the tailnet and the `ssh` block in §3.4 gates it, with `action: check` forcing re-authentication every 12 hours. Enable with `sudo tailscale up --ssh --advertise-tags=tag:ai-server` (carry the tags flag, or a bare `tailscale up` can drop the tag), then turn Remote Login **off** in System Settings. macOS Remote Login binds every interface including the LAN and accepts passwords, which is the shape this bullet used to describe hardening away; with Tailscale SSH there is no reason to run it at all. Verify by confirming nothing answers on `127.0.0.1:22` while a tailnet SSH session still connects — Tailscale SSH does not bind loopback, so loopback silence is the check that the system daemon is the one that stopped.
 - Disable unused services: screen sharing, file sharing, AirDrop, printer sharing.
 - Set a firmware password to prevent booting from external media.
@@ -877,11 +971,16 @@ The gateway writes this table and may not read it; see §6.
 | Node registration and removal | `node.registered`, `node.updated`, `node.removed` |
 | User role changes | `user.role_changed`, plus `user.updated`, `user.disabled`, `user.enabled`, `user.deleted` |
 | Knowledge base uploads, deletions, collection lifecycle | `knowledge.document_uploaded`, `knowledge.document_deleted`, `knowledge.collection_created`, `knowledge.collection_deleted` |
+| **Prompt template authoring** (§7.4) | `prompt_template.created`, `prompt_template.updated`, `prompt_template.deleted`. A template is the one message the model treats as authoritative and every answer that selects it is shaped by it, so who changed it is the same class of question as who changed routing |
+| **Retention policy and purge** (§12.1) | `retention.policy_set` and `retention.purged`. The second is the row that a subsequent purge of `audit_log` can itself remove, which is the whole of what §12.1 is about — it is recorded like any other administrative action and is not protected from the power it records |
+| **Tenant creation** (§7.3) | `tenant.created`. The boundary every other authority is confined by, and `tenant:write` is one of the three scopes in `ADMIN_ONLY_SCOPES` for that reason |
+| **Password change and step-up refusal** | `user.password_changed` when somebody replaces their own password (which also ends every other session for that user), and `user.password_verified` with `outcome="denied"` from the shared `_verify_current_password` that guards both a password change and a TOTP re-enrolment. Only the denial is recorded there: a successful step-up is followed by the event that needed it, and a failed one is somebody at a keyboard who could not produce the password for an account they are already signed in to |
+| **Evaluations imported and deleted** | `evaluation.imported`, `evaluation.deleted`. Audited although a run changes no configuration and grants nobody anything, because what it does change is the evidence a later routing decision cites — and an import replaces any earlier run carrying the same label, so this is the only record that the numbers on that screen were once different |
 | **Refusals read across accounts** (§9.5) | `refusal.read_any`, one row per request that reaches for somebody else's refusals, naming whose. Reading your own writes nothing: that is the feature working as designed and a row per screen refresh would be the noise `prompt_log.list` was denied for. What is recorded is a reader reaching across accounts, because a month of somebody's 413s describes how they work even though it contains nothing they typed |
 | Authorization failures | `authz.denied`, recorded in the shared exception handler (`interfaces/http/errors.py`) rather than in `AuthorizationPort.require`, so no use case can forget and refusals raised directly — an administrator changing their own role, a key that does not exist — are caught too. **Admin entrances only; see below** |
 | Alerting on repeated failures | **Not built.** `user.sign_in_throttled` and `authz.denied` are the rows a rule would query; the rule is a §13 Phase 3 item |
 
-**Nine of the fourteen classes above have been observed on the deployment, not just implemented.** (Twelve until 2026-08-08, when transcript reads joined them, and thirteen until 2026-08-18, when refusals read across accounts did. Neither of those two has rows here yet, for the same kind of reason as the three named below: nobody has opened a debug window on this deployment, and nobody has yet read somebody else's refusals through the screen rather than through a script.) As of 2026-08-02 the live `audit_log` holds rows for sign-in, sign-out, failed attempts, the limiter firing, bootstrap, invitation reissue and acceptance, TOTP enrolment, API key issuance, model download/load/unload, routing policy saves, all four knowledge-base actions, and authorization refusals. The three with no rows — **recovery code use, node registration, and user role changes** — are absent because those actions have never been performed here: one user, so no role to change; a single node written by `provision` rather than through the write endpoint; and no reason to spend one of ten recovery codes to watch a row appear. That is a different thing from a recording that does not work, and keeping the two apart is the point of this list: this document's own history is of controls that were designed, written down, marked done, and not actually in force.
+**Nine of the twenty-one classes above have been observed on the deployment, not just implemented, and that survey is from 2026-08-02.** (Fourteen classes were listed until 2026-08-08, when transcript reads joined them, and fifteen until 2026-08-18, when refusals read across accounts did. Neither of those two has rows in the table yet, for the same kind of reason as the three named below: nobody has opened a debug window on this deployment, and nobody has yet read somebody else's refusals through the screen rather than through a script. **The last five classes — prompt templates, retention, tenants, password changes and evaluations — were added to this table on 2026-08-18, when it was audited against `AuditAction` and found to be missing them.** Every one of those events was already being written by a shipped feature; what was missing was the row. They postdate the survey entirely, so nothing here says whether any of them has fired, and the honest count against today's table is nine of twenty-one rather than nine of sixteen.) As of 2026-08-02 the live `audit_log` holds rows for sign-in, sign-out, failed attempts, the limiter firing, bootstrap, invitation reissue and acceptance, TOTP enrolment, API key issuance, model download/load/unload, routing policy saves, all four knowledge-base actions, and authorization refusals. The three with no rows — **recovery code use, node registration, and user role changes** — are absent because those actions have never been performed here: one user, so no role to change; a single node written by `provision` rather than through the write endpoint; and no reason to spend one of ten recovery codes to watch a row appear. That is a different thing from a recording that does not work, and keeping the two apart is the point of this list: this document's own history is of controls that were designed, written down, marked done, and not actually in force.
 
 ### 12.1 The Audit Log Is Deletable, and by Whom
 
@@ -911,11 +1010,11 @@ machine as they are written — a syslog sink or an append-only bucket — so th
 deleting the table locally stops being the same as deleting the record. That is
 a Phase 3 item and is not built.
 
-**The gateway does not write audit rows, and that is a decision rather than an omission.** Its database account may INSERT into `usage_records` and nothing else (§6). Granting it `audit_log` would let a compromised gateway write into the record that exists to describe the compromise, which is a poor trade for capturing one event: a key reaching for a capability it was not issued for. That refusal is a 403 in the application log and in the usage series, and it is the one item on this list the audit log does not hold.
+**The gateway does not write audit rows, and that is a decision rather than an omission.** Its database account may INSERT into `usage_records`, `prompt_logs` and `refusals`, and nothing else — and it may not `SELECT` the last two (§6). Granting it `audit_log` would let a compromised gateway write into the record that exists to describe the compromise, which is a poor trade for capturing one event: a key reaching for a capability it was not issued for. That refusal is a 403 in the application log and in the usage series, and it is the one item on this list the audit log does not hold. The three tables it may write are all append-only records of its own traffic, two of which it cannot read back — which is a shape `audit_log` would not have, since the value of that table is that it is written by a wider authority than the one being recorded.
 
 **A value that does not fit is trimmed, not dropped.** Postgres refuses an over-long string rather than truncating it, and `PostgresAudit.record` swallows its own failures so that a failed audit write cannot turn a successful action into a 500. Those two together mean an unbounded value silently loses the event — and `target` on an authorization failure is the request path, which nothing bounds. The writer trims to each column's width with a marker, so padding a URL cannot suppress the record of someone probing.
 
-The audit log is stored separately from application logs, designed append-only, and retained for at least a year. After any incident it is the only thing that can answer what was actually accessed.
+The audit log is stored separately from application logs and designed append-only. **Its retention is 360 days by default with a floor of 30**, both settable by a `retention:write` holder — which is not "at least a year", as this line said until 2026-08-18, and the difference is the whole of §12.1 above: the default is a year-ish, the guarantee is a month, and the guarantee is the number an incident response can rely on. 360 rather than 365 is the value as given and nothing depends on it being either. After any incident this table is the only thing that can answer what was actually accessed, which is why the floor exists at all: a week of history is too little to investigate anything reported late.
 
 ## 13. Phased Rollout
 
@@ -975,7 +1074,7 @@ looking for the risk. The state below is checked against the code.
 | Targeted key and user updates that cannot revert a concurrent revoke or disable | `adapters/persistence/repositories.py` |
 | `user` role limited to chat, own keys, own usage and reading their tenant's prompt templates; no registry or node read | `adapters/authz/role_authorization.py`, pinned exactly by `test_review_hardening.py` |
 | Data plane and control plane on separate Docker networks; the gateway can reach no admin entrance | `docker-compose.yml` §3.2 |
-| Separate database accounts per service: gateway reads every table and writes only `usage_records`, admin has full DML and no DDL, owner has DDL and is used only by `migrate`; the denial is proven against a live Postgres | `infrastructure/db_roles.py`, `docker-compose.yml`, `tests/integration/test_db_role_grants.py` |
+| Separate database accounts per service: the gateway reads every table except two and writes exactly three — `GATEWAY_WRITABLE_TABLES` is `usage_records`, `prompt_logs`, `refusals`, and `GATEWAY_DENIED_READ_TABLES` revokes its `SELECT` on the last two after the blanket grant; admin has full DML and no DDL; owner has DDL and is used only by `migrate`. The denial is proven against a live Postgres, and the ordering of the revoke after the grant is asserted by a test of its own. (This row said "writes only `usage_records`" until 2026-08-18, ten days after `prompt_logs` joined and on the day `refusals` did — the inventory carrying the old version of a fact §6 already stated correctly is the exact failure this section's opening paragraph names) | `infrastructure/db_roles.py`, `docker-compose.yml`, `tests/integration/test_db_role_grants.py` |
 | Secrets as Docker file mounts rather than environment variables | `docker-compose.yml` secrets, `config.py` `secrets_dir`, `secrets/README.md` |
 | SSRF egress guard: every node address validated against the tailnet range before it is stored, rejecting loopback, the LAN, and the cloud metadata endpoint; all resolved answers of a hostname must be in range | `adapters/http/egress_guard.py`, `application/use_cases/manage_nodes.py`, `tests/unit/test_egress_guard.py` |
 | Node writes (register, edit, delete, health check) shipping with the guard, refusing to delete a node with models attached, audited | `interfaces/http/routers/nodes.py`, `application/use_cases/manage_nodes.py`, `tests/unit/test_manage_nodes.py` |
@@ -990,8 +1089,11 @@ looking for the risk. The state below is checked against the code.
 | Prompt templates with **no variable substitution**: a named system prompt an operator authors and a caller selects by name, resolved through a tenant-scoped repository, refused with a 404 when the name does not resolve (§7.4) | `domain/entities/prompt_template.py`, `domain/services/prompt_assembly.py`, `apply_prompt_template.py`, `manage_prompt_templates.py` |
 | Frontend schemas checked against the backend's own OpenAPI document at compile time, with dropped nullability caught separately from deliberate narrowing | `frontend/src/lib/api-contract.ts`, `scripts/generate-api-types.sh`, CI |
 | Request body ceiling ahead of authentication, on all three entrances: refused on a declared `Content-Length`, and counted over the stream for a body that is chunked or that declared a length it then exceeded (§4.3) | `interfaces/http/middleware/body_limit.py`, `tests/unit/test_body_limit.py` |
+| **Exact prompt token counting, replacing the four-characters-per-token estimate the Phase 1 list below records as a defect.** The context guardrail is counted with the model's own vocabulary and chat template, both read out of the GGUF that `ref` resolves to, over the same payload the runtime adapter will serialise — so the count cannot describe a different model than the one about to answer. Measured against the runtime's own `prompt_eval_count` on 2026-08-17: exact on six of six content types with no template applied, and a constant `+2` to `+14` through `/api/chat` that does not grow with the payload, which at the 122880 ceiling is about one part in ten thousand and errs on the safe side. The residual is measured continuously rather than trusted — `_log_estimate_drift` compares whatever counted a request against what the runtime charged for it — and the caller is told which of the three bases produced the figure (`tokenizer`, `estimate`, `lower_bound`) so the estimate is never mistaken for the exact one. Encoding runs on a worker thread because 50 ms for a 300 KB payload on the event loop is 50 ms of every other stream on the process stopping | `adapters/tokenizer/gguf_token_counter.py`, `adapters/tokenizer/gguf.py`, `domain/exceptions.py` (`COUNT_BY_*`), `RouteChatRequest`, `tests/unit/test_exact_token_counting.py` |
+| **Retention as a policy with bounds, per dataset, and a sweep that applies it.** Four append-only tables accumulate — `audit_log` and `usage_records` with a default of 360 days and a **floor** of 30, `prompt_logs` with a default of 7 and a **ceiling** of 30, `refusals` with a default of 30, a ceiling of 180 and a floor of 7. The bound is not the same shape for every dataset and that is the point: for the metadata the danger is forgetting too soon, for the content it is keeping too long. Days rather than a cutoff date, so a value nobody revisits cannot silently stop deleting. The dataset reaching the `DELETE` is a closed enum, so a purge can never be pointed at `users` or `api_keys`. `retention:write` is in `ADMIN_ONLY_SCOPES`, setting and purging are both audited, and §12.1 states plainly what the feature costs | `domain/entities/retention.py`, `application/use_cases/manage_retention.py`, `infrastructure/retention_sweep.py`, `routers/retention.py`, `tests/unit/test_manage_retention.py` |
+| **Stored capability evaluations, on the admin entrances only.** A run of the task set is imported under `model:write` and read under `model:read`; import and deletion are audited, an import replaces any earlier run with the same label, and the caveats a run earned — which tasks carried no signal, how few the spread rests on, whether it is comparable with the run before — are stored against that run and rendered from it rather than written as page copy that would keep asserting them about the next run. No tenant scope: the runs describe the shared fleet, not tenant data. Nothing here is a live measurement, so `ran_at` is a field rather than a detail | `domain/entities/evaluation.py`, `application/use_cases/manage_evaluations.py`, `routers/evaluations.py`, `tests/unit/test_manage_evaluations.py`, `tests/integration/test_evaluation_repository.py` |
 
-**Once listed here as not implemented. Five of the six no longer are**
+**Once listed here as not implemented. Six of the seven no longer are**
 
 This table's heading read "Not implemented, and nothing in the repository
 arranges it" until 2026-08-07, by which point five of its six rows opened with
@@ -1019,8 +1121,8 @@ table is.
 - The public entrance strips all `Tailscale-*` headers unconditionally
 - Network segmentation; nothing published on `0.0.0.0`; tailnet-only binds for proxy-facing ports
 - Tailscale ACL including the proxy tag, so members cannot bypass the proxy
-- Default credentials replaced everywhere (Redis, Qdrant, MinIO, Grafana, Postgres)
-- Separate database accounts; the gateway cannot write `api_keys` or `users`
+- Default credentials replaced everywhere (Redis, Qdrant, Grafana, Postgres). MinIO was in this list and is not deployed; Redis's `requirepass` is set and the `FLUSHALL`/`CONFIG`/`DEBUG` half of its §6 row is not done
+- Separate database accounts; the gateway cannot write `api_keys` or `users`, and cannot read `prompt_logs` or `refusals`
 - Trusted-proxy client address resolution ([deployment.md](./deployment.md) §7)
 - Application-layer country filter on **both** the gateway and the public admin entrance
 - Per-key CIDR allowlists
@@ -1031,7 +1133,7 @@ table is.
 - First-administrator bootstrap, tailnet-only
 - Model reference validation; no shell string construction
 - Host-level runtime hardening (service account, loopback binding, directory ownership)
-- **Resource guardrails: concurrency cap, `max_tokens`, context bound, per-read timeout, wall-clock generation deadline, cancel on disconnect.** With no edge protection these are the only defence. The context bound went from 32768 to 65536 tokens on 2026-08-05, to 98304 on 2026-08-14 and to 122880 on 2026-08-17, each time for agent clients, and **the per-read timeout had to move with it** (300 to 600 to 1200 s, where it has stayed: the model now serving `code` measured 711-730 tok/s against the 105.5 the coupling was originally sized on, so a full context is 173 s rather than 932): prompt evaluation sends no bytes, so that timeout is what bounds it, and a context ceiling above what it can survive is one the guardrail admits and the transport then kills. That kill does not heal — a cancelled prefill is discarded rather than kept in the prefix cache, measured 2026-08-14 — so the same request fails identically on every retry. **A third bound was found the same day and is not a timeout at all**: Ollama evaluates at most `num_ctx / 2` prompt tokens and silently drops the rest under a `done_reason` that a long generation also uses, so the ceiling must stay below half of every serving model's registered context or the guardrail's remedy becomes an answer given without the start of the conversation. **That invariant was maintained by hand until 2026-08-17 and was not holding**: the ceiling sat exactly on `qwen36-35b-a3b-q8`'s truncation point rather than below it, and `assist` — whose only candidate was an 8192-token model — was being served truncated whenever a conversation reached a second turn, which is the failure this bound exists to prevent and the one an operator cannot see. `RouteChatRequest._refuse_what_this_target_would_truncate` now applies the rule against whichever model routing picked, so the global value bounds hardware cost and that one bounds correctness. **And the bound was applied in the wrong unit**: it was counted at a flat four characters per token, which is right for English prose and admits 2.9x the ceiling in Traditional Chinese, so a limit stated in tokens was enforced at anything from 0.3x to 1.5x its stated value depending on what the caller wrote in. **The bound counts tool definitions and replayed tool calls, not only `messages`** — `tools` is arbitrary JSON that no person types, so counting messages alone would have been an unbounded payload straight past the guardrail
+- **Resource guardrails: concurrency cap, `max_tokens`, context bound, per-read timeout, wall-clock generation deadline, cancel on disconnect.** With no edge protection these are the only defence. The context bound went from 32768 to 65536 tokens on 2026-08-05, to 98304 on 2026-08-14 and to 122880 on 2026-08-17, each time for agent clients, and **the per-read timeout had to move with it** (300 to 600 to 1200 s, where it has stayed: the model now serving `code` measured 711-730 tok/s against the 105.5 the coupling was originally sized on, so a full context is 173 s rather than 932): prompt evaluation sends no bytes, so that timeout is what bounds it, and a context ceiling above what it can survive is one the guardrail admits and the transport then kills. That kill does not heal — a cancelled prefill is discarded rather than kept in the prefix cache, measured 2026-08-14 — so the same request fails identically on every retry. **A third bound was found the same day and is not a timeout at all**: Ollama evaluates at most `num_ctx / 2` prompt tokens and silently drops the rest under a `done_reason` that a long generation also uses, so the ceiling must stay below half of every serving model's registered context or the guardrail's remedy becomes an answer given without the start of the conversation. **That invariant was maintained by hand until 2026-08-17 and was not holding**: the ceiling sat exactly on `qwen36-35b-a3b-q8`'s truncation point rather than below it, and `assist` — whose only candidate was an 8192-token model — was being served truncated whenever a conversation reached a second turn, which is the failure this bound exists to prevent and the one an operator cannot see. `RouteChatRequest._refuse_what_this_target_would_truncate` now applies the rule against whichever model routing picked, so the global value bounds hardware cost and that one bounds correctness. **And the bound was applied in the wrong unit until 2026-08-18**: it was counted at a flat four characters per token, which is right for English prose and admits 2.9x the ceiling in Traditional Chinese, so a limit stated in tokens was enforced at anything from 0.3x to 1.5x its stated value depending on what the caller wrote in. **What replaced it is the model's own vocabulary**, read out of the GGUF the reference resolves to and applied over the model's own chat template — exact to about one part in ten thousand at this ceiling, measured against the runtime's `prompt_eval_count`, with the character-width rule kept only as a labelled fallback and a cheap `lower_bound` guard for the refusal that has to happen before any model is chosen. The caller is told which of the three counted their request, so an estimate is never read as exact; the row in the table above has the measurements. **The bound counts tool definitions and replayed tool calls, not only `messages`** — `tools` is arbitrary JSON that no person types, so counting messages alone would have been an unbounded payload straight past the guardrail
 - `AuditPort` plus auditing for key issuance and revocation and model download and load. These features ship in Phase 1, so their audit trail cannot wait for Phase 2
 - `AUTH_MODE=dev` refuses to start under `ENV=production`
 - gitleaks pre-commit
@@ -1050,7 +1152,7 @@ table is.
 
 **Phase 3**
 
-- Trivy, pip-audit, and pnpm audit in CI
+- Trivy, pip-audit, and pnpm audit in CI: **shipped**, as an `audit` job whose scanning steps are each `continue-on-error` while the job itself is not — a scanner that found something is somebody else's advisory and does not block an unrelated fix, but a scanner that failed to *run* is this repository's problem and fails the job. Findings go to the run summary rather than only the log, because reading a log needs repository admin rights that the person most likely to look does not have. Trivy runs `vuln,secret` and deliberately not `misconfig`, which would publish a wall of untriaged findings including several this deployment chose on purpose and recorded in §15. What is still outstanding from this line is digest pinning (§10)
 - Credentials and trust model for additional compute nodes
 - Alerting on authorization failures and anomalous usage. The rows to alert *on* now exist (`authz.denied`, `user.sign_in_throttled`); what is missing is the rule that reads them and the channel it reports to, which is the same mail path `launchd/check-platform-health.sh` already uses
 - Periodic access review
@@ -1210,7 +1312,7 @@ Recorded explicitly so they are not later mistaken for oversights, with the cond
 
 **What it was.** `gateway` and `admin-tailnet` shared the `app` Compose network. The tailnet entrance binds `0.0.0.0` inside its container and trusts `Tailscale-User-Login` outright, so a process with code execution in the gateway could `curl http://admin-tailnet:8001/...` with a forged identity header and obtain administrator access, with no tailnet and no session. Socket binding isolates the host-published port, not the Docker service name. An adversarial review surfaced it once the tailnet entrance grew from health-only into a full API.
 
-**How it was closed.** The single `app` network was split so that the gateway shares no network with either admin entrance (§3.2). The data plane has its own database segment (`gateway-data`) and its own host-egress network (`gateway-egress`); the control plane has `admin-data` and a per-entrance control network. postgres and redis are dual-homed across the two database segments, which is safe because they accept connections and never open one. The invariant is verifiable from `docker compose config`: the intersection of the gateway's networks with each admin entrance's is empty. As a bonus of the same change, `frontend-public` — which faces the internet — can no longer reach `admin-tailnet` either.
+**How it was closed.** The single `app` network was split so that the gateway shares no network with either admin entrance (§3.2). The data plane has its own database segment (`gateway-data`) and its own host-egress network (`gateway-egress`); the control plane has `admin-data` and a per-entrance control network. postgres, redis and qdrant are dual-homed across the two database segments, which is safe because they accept connections and never open one. The invariant is verifiable from `docker compose config`: the intersection of the gateway's networks with each admin entrance's is empty. As a bonus of the same change, `frontend-public` — which faces the internet — can no longer reach `admin-tailnet` either.
 
 **Residual.** None from this vector, and the deeper defence has since landed too: the §6 per-service database credential split is now implemented, so a compromised gateway can neither forge a header to the admin socket (closed here) nor write `api_keys` or `users` directly (denied by its database grants).
 
@@ -1232,7 +1334,7 @@ Recorded explicitly so they are not later mistaken for oversights, with the cond
 
 **Reconsider when.** The UPS is installed. That is the trigger to enable FileVault, verify `authrestart`, disable automatic login, and write the unplanned-power-loss procedure into the operations runbook — bearing in mind the two paragraphs above, since the UPS closes less of the gap than it first appears. Sooner if the platform starts handling personal or IRB-regulated data, where an unencrypted disk in a shared facility stops being acceptable whatever the reboot cost.
 
-**Status.** Acted on 2026-07-26: `sudo fdesetup disable` run on the Mac Studio, `fdesetup status` reports `FileVault is Off`. `fdesetup supportsauthrestart` returned true beforehand, so the `authrestart` path is available whenever FileVault is turned back on. What the machine now holds unencrypted is worth naming plainly, because it is what the compensating controls are carrying: the eleven plaintext credential files under `secrets/`, the TOTP encryption key among them, and whatever research data passes through the platform. The unattended-recovery chain this was done for is recorded in [runbooks/first-deploy.md](../runbooks/first-deploy.md) §1 together with the acceptance test that is meant to prove it.
+**Status.** Acted on 2026-07-26: `sudo fdesetup disable` run on the Mac Studio, `fdesetup status` reports `FileVault is Off`. `fdesetup supportsauthrestart` returned true beforehand, so the `authrestart` path is available whenever FileVault is turned back on. What the machine now holds unencrypted is worth naming plainly, because it is what the compensating controls are carrying: the **sixteen** plaintext credential files under `secrets/`, the TOTP encryption key among them, and whatever research data passes through the platform. Eleven when this paragraph was written on 2026-07-26; the count grew with the deployment, most recently on 2026-07-30 when the MaxMind licence key and Qdrant's two keys landed, and it is the kind of figure that goes stale without anyone deciding it should. The unattended-recovery chain this was done for is recorded in [runbooks/first-deploy.md](../runbooks/first-deploy.md) §1 together with the acceptance test that is meant to prove it.
 
 **That test has now been run twice: the chain failed round one, was repaired, and passed the re-run.** This matters here specifically, because the whole trade in this section — accept an unencrypted disk in exchange for a machine that recovers by itself — is only worth making if the second half is true. On 2026-07-26 the first reboot brought back automatic login, both LaunchDaemons, Docker Desktop and all nine containers, and still left the platform unreachable: Docker Desktop had bound its published ports before `tailscaled` had the tailnet address up, the binds failed, and nothing retried or restarted. A LaunchDaemon now reconciles that after boot (deployment.md §9), and the re-run later the same day passed every item of §1.1 with all six published ports bound.
 
@@ -1244,7 +1346,7 @@ Recorded explicitly so they are not later mistaken for oversights, with the cond
 
 **Why accepted.** An app password is materially weaker than the account password in the ways that matter here: it cannot sign in to the web account, cannot change account settings or security options, cannot pass 2-Step Verification, and can be revoked individually without disturbing anything else. What it can do is send and read mail over SMTP and IMAP. That is not nothing — mail access alone is enough to drive a password reset on a third-party service — but the blast radius is a mailbox rather than an identity, and the alternative cost is maintaining a second Google account whose own recovery path then has to be looked after. Sending to oneself also removes a delivery hop and a spam-classification risk that a new, unknown sending address would introduce, which matters because this design makes an *absent* mail the alarm.
 
-**What carries the load.** The same controls §15.6 already names, because this file lives on the same unencrypted disk as the other eleven: Full Security startup, an access-controlled room, and no remote login path other than Tailscale SSH. Additionally the file is `0600` and git-ignored, and the recipient address is deliberately *not* a secret — it is a constant in the script, where a change to it is visible in review rather than sitting in an untracked file.
+**What carries the load.** The same controls §15.6 already names, because this file lives on the same unencrypted disk as the other fifteen: Full Security startup, an access-controlled room, and no remote login path other than Tailscale SSH. Additionally the file is `0600` and git-ignored, and the recipient address is deliberately *not* a secret — it is a constant in the script, where a change to it is visible in review rather than sitting in an untracked file.
 
 **Reconsider when.** Any of: FileVault is enabled and this stops being a plaintext-on-an-unencrypted-disk question; a second person operates the platform, since a shared credential to one person's mailbox is a different proposition; or the alerting grows beyond the health daemon, at which point a dedicated account costs no more than the second consumer would. Rotating it is one revocation and one file, so this is cheap to reverse and should be reversed rather than argued about if the situation changes.
 

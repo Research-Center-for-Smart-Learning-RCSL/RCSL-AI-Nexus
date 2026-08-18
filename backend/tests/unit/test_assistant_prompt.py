@@ -36,6 +36,7 @@ def prompt(**overrides: object) -> str:
         "issuable_capabilities": ["chat", "code"],
         "gateway_base_url": "https://api.example.test",
         "max_lifetime_days": 90,
+        "max_context_length": 122880,
         "today": "2026-07-29",
         "context": None,
         "nonce": "deadbeefdeadbeef",
@@ -157,6 +158,7 @@ def build() -> AssistOperator:
         clock=FixedClock(NOW),
         gateway_base_url="https://api.example.test",
         max_lifetime_days=90,
+        max_context_length=122880,
         max_tokens=1536,
     )
 

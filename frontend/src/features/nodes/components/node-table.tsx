@@ -20,6 +20,12 @@ import { RUNTIME_LABELS, type Node } from '@/features/nodes/schema';
 export function NodeTable() {
   const { can } = useSession();
   const mayWrite = can('node:write');
+  // Probing a node writes only the status it observed, so `ManageNodes.
+  // check_health` requires `node:read` rather than `node:write`. Gated on
+  // `node:write` here, the one action an `auditor` or a `tenant_admin` may
+  // take on this screen was hidden from exactly the people whose whole
+  // authority is looking.
+  const mayCheck = can('node:read');
   const { data, isLoading, error, refetch } = useNodes();
   const check = useCheckNodeHealth();
   const remove = useDeleteNode();
@@ -72,42 +78,50 @@ export function NodeTable() {
         cell: ({ row }) => {
           const node = row.original;
           // Role gating here is a usability affordance only; the use case layer
-          // authorises every one of these actions server-side.
-          if (!mayWrite) return null;
+          // authorises every one of these actions server-side. Each button
+          // carries the scope its own use case requires, which is not the same
+          // scope for all three.
+          if (!mayWrite && !mayCheck) return null;
           return (
             <div className="flex justify-end gap-1">
-              <Button
-                variant="outline"
-                size="xs"
-                disabled={check.isPending}
-                onClick={() => check.mutate(node.id)}
-              >
-                Check
-              </Button>
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => {
-                  setEditing(node);
-                  setFormOpen(true);
-                }}
-              >
-                Edit
-              </Button>
-              <Button
-                variant="ghost"
-                size="xs"
-                className="text-destructive"
-                onClick={() => setDeleting(node)}
-              >
-                Remove
-              </Button>
+              {mayCheck && (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  disabled={check.isPending}
+                  onClick={() => check.mutate(node.id)}
+                >
+                  Check
+                </Button>
+              )}
+              {mayWrite && (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => {
+                      setEditing(node);
+                      setFormOpen(true);
+                    }}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-destructive"
+                    onClick={() => setDeleting(node)}
+                  >
+                    Remove
+                  </Button>
+                </>
+              )}
             </div>
           );
         },
       },
     ],
-    [mayWrite, check],
+    [mayWrite, mayCheck, check],
   );
 
   return (
@@ -151,7 +165,7 @@ export function NodeTable() {
           if (!open) setDeleting(null);
         }}
         title={`Remove ${deleting?.name ?? 'this node'}?`}
-        description="A node with models still registered to it cannot be removed; move or delete those models first."
+        description="A node with models still registered to it cannot be removed. Only a model that has never been downloaded can be repointed at another node, so in practice the rest have to be unloaded and deleted first."
         confirmLabel="Remove"
         destructive
         onConfirm={async () => {

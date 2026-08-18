@@ -103,7 +103,7 @@ export function NodeFormDialog({ open, onOpenChange, node }: NodeFormDialogProps
               name="address"
               label="Tailnet address"
               placeholder="100.101.102.103"
-              description="A 100.x tailnet address or a MagicDNS name that resolves into it."
+              description="A tailnet address — 100.64.0.0/10 or fd7a:115c:a1e0::/48 — or a MagicDNS name that resolves entirely inside one of them."
             />
             <FormField
               control={form.control}

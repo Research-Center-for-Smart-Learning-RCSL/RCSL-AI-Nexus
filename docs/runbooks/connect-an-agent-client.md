@@ -1,8 +1,11 @@
 # Runbook: Point a Coding Agent at This Deployment
 
 For connecting Codex, or any other OpenAI-compatible agent client, to the
-gateway. Written for Codex because that is what it was built for; nothing here
-is specific to it beyond the configuration file in section 3.
+gateway. Written for Codex because that is what it was built for. The gateway
+side of it is not Codex-specific, but three parts of this file are: the
+configuration file in section 3, the ChatGPT desktop app's tool injection in
+3.2, and the sign-in prompts in 3.4. All three are the client's behaviour rather
+than this platform's, and another client will not have them.
 
 **The direction of the connection is the thing to get straight first.** The
 agent is the client and this platform is the server. Nothing is installed here
@@ -76,7 +79,12 @@ producing an answer at all. The setting is per capability precisely so that
 
 **On this deployment steps 1–3 are already done**, and there are measured
 numbers under step 3 rather than an argument. The `code` policy points at
-`gemma4-31b` with deliberation off (`glm47-flash` until 2026-08-07). Running the same
+`qwen36-35b-a3b-q8` with deliberation off (`glm47-flash` until 2026-08-07,
+`gemma4-31b` until 2026-08-16, when `chat` and `code` both moved to
+`qwen36-35b-a3b-q8`). The table below was measured on `gemma4-31b` and has not
+been re-run on the model now serving; the saving it reports is a property of
+deliberation rather than of either model, which is the point the two-model
+comparison under it makes. Running the same
 five-tool-call debugging task three times each way:
 
 | on `gemma4-31b` (2026-08-07) | wall clock | output tokens |
@@ -219,8 +227,10 @@ configures all three, which is a correction — this file and the `/agent-setup`
 page both said the desktop app could not be pointed here, and on 2026-08-09 an
 operator connected the CLI and watched the app switch over with nothing
 configured inside it. Neither document had tested it; both stated it anyway.
-**The sharing runs the other way too, and that direction breaks the connection
-outright — see 3.2 before connecting a machine that has the desktop app.**
+**The sharing runs the other way too, and that direction can break the
+connection — how much it costs depends on the plugin set the app injects, which
+is why one machine has worked for days and another was refused before a word was
+typed. See 3.2 before connecting a machine that has the desktop app.**
 
 What remains true is narrower: **Codex on the web** (`chatgpt.com/codex`) runs
 on OpenAI's machines, reads no file on yours, and cannot be pointed at a custom
@@ -302,7 +312,7 @@ plugin set, not the presence of the app:
 | CLI the app bundles | `0.148.0` | `0.148.0` |
 | Bundled plugins | **2** — `browser`, `visualize` | **5** — `chrome`, `sites`, `browser`, `computer-use`, `visualize`, plus `codex-app-tools` after the update |
 | `[mcp_servers.node_repl]` | present | present |
-| Tool definitions sent | **not measured** | **286, an estimated 122,870 tokens** |
+| Tool definitions sent | **not measured** | **286, estimated at 122,870 tokens — about 99,000 counted exactly** |
 | Outcome | connected and working for days, until unbound by choice | every request refused before a word was typed |
 
 **Machine A's tool count is missing and that is a real gap**, not an omission:
@@ -311,14 +321,26 @@ the gateway's retained log held no inference request to read a composition line
 from. Anyone connecting a desktop-app machine should capture that figure while
 it still has traffic — one successful request logs it.
 
-Machine B's numbers, measured against app build `26.810.52044`: every request
-carried **286 tool definitions estimated at 122,870 tokens** — more than the
-entire 98,304 ceiling on its own, so no conversation of any length could be
-sent. The conversation was 17,000 tokens across four messages, seven per cent of
-the payload. Four attempts over twenty minutes produced a byte-identical tool
+Machine B's numbers, measured against app build `26.810.52044` on 2026-08-17,
+**when the ceiling was 98,304 and a prompt was counted by the character
+estimator**: every request carried **286 tool definitions estimated at 122,870
+tokens** — more than that day's entire ceiling on its own, so no conversation of
+any length could be sent. The conversation was 17,000 tokens across four
+messages, seven per cent of the payload. Four attempts over twenty minutes produced a byte-identical tool
 figure while the message count moved, which is the signature to recognise: **a
 share that does not change when the conversation does is not a conversation
 problem.**
+
+**Both conditions under that measurement have since moved, and the same payload
+would be admitted today.** The ceiling is 122,880, and since 2026-08-18 a prompt
+is counted with the target model's own vocabulary rather than estimated from
+character widths: those 286 definitions were re-counted against the tokenizer
+the same night at **about 99,000 real tokens**, inside the 131,072 the model can
+read and inside today's ceiling. What refused machine B was the estimator, not
+the hardware. That does not make a tool share this size harmless — it is still
+four fifths of the window, resent on every turn, and it leaves the conversation
+the little that is left — but the failure it produces now is a session that runs
+out part way rather than one that cannot start.
 
 The source was `[mcp_servers.node_repl]` — the app's computer-use and browser
 runtime — plus the five bundled plugins in the table above.
@@ -391,9 +413,12 @@ Two rules come out of that, and they are cheap:
 **A new conversation does not start at zero, and the part that is not zero is
 the part a client controls.** Three sessions opened on 2026-08-17 began at
 42,005, 42,427 and 42,080 estimated tokens -- tool definitions, the agent's
-instruction file, and whatever was pasted to start. Against that day's ceiling
-that left about 38,000 for the work, and the turns that wrote files cost around
-10,000 each, so the session had roughly four turns in it. **The operator read
+instruction file, and whatever was pasted to start. Against the 98,304 ceiling
+in force when they were measured that left about 56,000 for the work, and the
+turns that wrote files cost around 10,000 each, so the session had five or six
+turns in it; against today's 122,880 the same start leaves about 81,000, which
+is eight. Either way it is a small number, and it is fixed before the first
+prompt. **The operator read
 that as the platform getting weaker over the evening.** It was the starting
 position.
 
@@ -407,7 +432,7 @@ Three things to check on the client, in order of what they usually cost:
 
 - **The tool list.** Resent whole on every turn, so it is charged once per step
   of a task rather than once per task. See 3.2 for the case where it exceeded
-  the entire ceiling on its own.
+  that day's entire ceiling on its own.
 - **The instructions file** (`AGENTS.md` and whatever the client layers on top).
   Also resent every turn.
 - **What gets read into the conversation.** A large file read once stays in the
@@ -524,7 +549,7 @@ you about. Try a different model before touching anything else.
 | `400 runtime_capability_unsupported` | The client sent `tool_choice: "required"` or named a function. Neither runtime can constrain decoding, so it is refused rather than quietly served as `auto`. Configure the client to send `auto` |
 | `403 capability_not_issued` | The `model` field named something this key may not call — most often the client's own default model name rather than a capability. The message names what you asked for and what you may ask for instead; `GET /v1/models` is the same list. See section 3 |
 | `429` early in a task | The key's requests-per-minute limit. See section 2 |
-| `503 runtime_timeout` on long conversations | Prompt evaluation outran the platform's read timeout. Retry immediately, once — the prompt is now in the runtime's prefix cache and the retry is nearly free. If the agent's SDK timeout is shorter than ~1600s it will kill the connection first and you will never see this code; size it up (see `/api-docs`, Timeouts) |
+| `503 runtime_timeout` on long conversations | Prompt evaluation outran the platform's read timeout. **Do not retry it unchanged — send less**, which is what the platform's own message says. A prefill cancelled at the timeout is discarded, so the retry re-evaluates from nothing at the full cold rate: measured 2026-08-14, by aborting a cold prefill part way and re-sending it, the retry evaluated 20,919 tokens in 33.5 seconds having kept nothing. It then fails identically after the same wait. **This row said "retry immediately, the prompt is in the prefix cache" until 2026-08-14, and the prefix-cache reasoning is not wrong so much as inapplicable**: the cache is real and does make an agent's *next turn* nearly free, but it does not survive a cancellation, and a cancellation is the only way this code is reached. If the agent's SDK timeout is shorter than 2100s it will kill the connection first and you will never see this code; size it up (see `/api-docs`, Timeouts) |
 | `503 overloaded` | Every inference slot was busy for the whole two-minute queue wait. The deployment is full, not broken; back off for `Retry-After` |
 | `400 runtime_capability_unsupported` on a replayed conversation | An assistant turn in the history carries `arguments` that are not valid JSON, and Ollama takes arguments as an object, so the platform refuses before sending. Repair or drop that turn — retrying replays the failure |
 | `422` naming `functions` or `function_call` | The client sent the deprecated OpenAI spellings, which are refused rather than silently ignored (before 2026-08-05 they were dropped, and the client stalled with prose and no error). Configure it to send `tools` / `tool_choice` |
@@ -570,17 +595,19 @@ of window, in the middle of a sentence.
 **Two things made this worse than it needed to be, both ours, both fixed the
 same day.**
 
-**The guardrail was at the wrong height.** `MAX_CONTEXT_LENGTH` is 65536 — the
-ceiling on what a caller may *send* — against a registered window of 32768.
+**The guardrail was at the wrong height.** `MAX_CONTEXT_LENGTH` was 65536 that
+day — the ceiling on what a caller may *send* — against a registered window of
+32768. (It is **122880** today: 65536 → 98304 on 2026-08-14, 98304 → 122880 on
+2026-08-17. Every figure in the rest of this section is the 2026-08-09 one.)
 The check that exists to refuse an oversized prompt was admitting prompts that
 left no room for an answer, and `413 context_too_long` never fired because the
 prompt was never the thing that was too long. `num_predict = 16384` could not
 help either: it bounds an answer from above, and this one was bounded from
 below by what was left over.
 
-**`gemma4-31b-q8` now registers `context_length = 131072`**, twice what a
-caller may send, so a full 65536-token prompt still leaves 65536 to answer in
-and the window cannot be the thing that binds. This cost almost nothing, which
+**`gemma4-31b-q8` was raised that day to `context_length = 131072`**, twice what
+a caller could then send, so a full 65536-token prompt still left 65536 to answer
+in and the window could not be the thing that binds. This cost almost nothing, which
 is the part worth recording — measured on 2026-08-09 by loading the same
 weights at both sizes:
 
@@ -599,6 +626,20 @@ it: same architecture, same layer count, and a KV cache that does not depend on
 weight quantisation — **inferred from the measurement above rather than
 separately measured**. `glm47-flash` is left at 32768 for the opposite reason:
 different attention, and nobody has measured it.
+
+**None of those three models serves a capability now, so read the paragraphs
+above as the record of a fix rather than as today's numbers.** `gemma4-31b-q8`
+is still registered — at 196608 now, not the 131072 above — and routes to
+nothing; `chat` and `code` have both reached `qwen36-35b-a3b-q8` since
+2026-08-16, registered at its native **262144**. The
+relationship that matters is the same one and it still holds with room:
+Ollama evaluates at most `num_ctx / 2` prompt tokens and silently drops the
+rest, which puts the truncation point at **131072**, above the 122880 a caller
+may send. That gap is now maintained against whichever model routing actually
+picked (`RouteChatRequest._refuse_what_this_target_would_truncate`) rather than
+by hand — on 2026-08-17 the ceiling was sitting exactly *on* one target's
+truncation point, and `assist`, which routes to `qwen7b`, was being served
+truncated from its second turn.
 
 **And nothing told the client.** Ollama reports `done_reason: "length"`, and
 `/v1/chat/completions` passes it through as `finish_reason: "length"` — the
@@ -660,8 +701,12 @@ What is still worth doing is the opposite of what this section used to ask for.
 `86400s` is a day, which is generous to the point of not being a backstop at
 all: `proxy_read_timeout` is what reclaims a connection from an upstream that
 has genuinely hung, and worker connections are finite. Lowering it to `3600s`
-— comfortably above the 556-second worst case a full `MAX_CONTEXT_LENGTH`
-prompt costs, and above the platform's own 1500-second per-request budget —
+— comfortably above the **173-second** worst case a full `MAX_CONTEXT_LENGTH`
+prompt costs (122880 / 711 tok/s, measured 2026-08-17 on `qwen36-35b-a3b-q8`
+from three cold session starts; this line read 556 seconds while the ceiling was
+65536 and the dense model then serving evaluated at 117.9 tok/s), and above the
+platform's own **2100-second** per-request budget (a 1200-second per-read
+timeout for the prompt, then 900 seconds of wall clock for the answer) —
 would restore that property. **It is a tidy-up with no user-visible symptom
 behind it, not a fix**, and it should be described that way to whoever owns
 that machine.
@@ -693,7 +738,10 @@ request is stored — no messages, no tool definitions, no model name — so wha
 is there is exactly the answer that was sent.
 
 For an active debugging session, open a **debug window** on the key (API keys
-page, the Debug button: one hour per press, capped at 24, audited). While it
+page, the Debug button: one press opens an hour, and pressing it again **closes**
+the window rather than adding another — the button carries the time remaining
+and is a toggle. The backend's ceiling is 24 hours, and opening and closing are
+both audited). While it
 is open, error responses to that key carry `error.detail` — the
 operator-facing explanation that is otherwise log-only, which turns "401
 Authentication required" into "source 203.0.113.9 not permitted for
@@ -702,7 +750,18 @@ nx_live_abc" at exactly the moment you are debugging a CIDR list.
 ## 7. Do not point an agent at MLX yet
 
 The MLX tool path is written but has never run against a live `mlx_lm.server`.
-A build without tool support will accept the `tools` field and answer with
+A build without tool support would accept the `tools` field and answer with
 prose, which is indistinguishable from a model that chose not to call anything.
+
+**Since 2026-08-05 that failure is refused rather than served**, so pointing an
+agent at MLX by accident costs an error and not a silently useless session: the
+adapter raises before the network unless somebody has set
+`MLX_TOOL_CALLING_VERIFIED=true`, and the caller gets `400
+runtime_capability_unsupported` naming the reason. The default is false, and it
+cannot be replaced by a probe — a model offered tools that legitimately declines
+to call one looks exactly like a server that discarded the field, so absence of
+a call is evidence of nothing and the flag has to be a person's assertion.
+Plain MLX completion is untouched, and so is `tool_choice: none`.
+
 Keep agent capabilities routed to Ollama until that is verified; the open item
 is in [`ROADMAP.md`](../ROADMAP.md) Phase 2.

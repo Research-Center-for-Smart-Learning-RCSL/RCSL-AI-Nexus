@@ -28,9 +28,9 @@ export default function EvaluationsPage() {
         <p className="mt-2 max-w-prose text-sm text-muted-foreground">
           A ranking is worth exactly as much as the tasks that produced it, so
           each task carries what it did to the field of models — separated them,
-          or was passed or failed by all of them alike. A task nobody is
-          distinguished by contributes nothing, however many of them a run
-          contains.
+          was passed or failed by all of them alike, or was scored without ever
+          separating anybody. A task nobody is distinguished by contributes
+          nothing, however many of them a run contains.
         </p>
       </div>
       <EvaluationView />

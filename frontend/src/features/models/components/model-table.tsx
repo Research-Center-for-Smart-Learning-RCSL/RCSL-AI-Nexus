@@ -159,18 +159,31 @@ export function ModelTable() {
             model.state === 'loading' ||
             model.state === 'unloading' ||
             model.state === 'downloading';
+          // What `load` and `unload` decide on: the runtime's observation
+          // outranks the registry's intent, exactly as `ManageModels` and
+          // `RoutingService._satisfies` do. `download` is deliberately not on
+          // this, because it reads the registry's own state.
+          const effective = model.observed_state ?? model.state;
           // Role gating here is a usability affordance only. The use case layer
           // authorises every one of these actions server-side.
           if (!mayWrite) return null;
           return (
             <div className="flex justify-end gap-1">
               {/* The offered actions mirror the use cases' own preconditions,
-                  so a button that is present is a button that can succeed.
-                  Download is refused only for a loaded model (unload first)
-                  and the transient states; Load requires `downloaded`, and
-                  offering it on `not_downloaded` — as this table did until
-                  2026-07-26 — guarantees a 409 and leaves a freshly
-                  registered model with no way forward at all. */}
+                  so a button that is present is a button that can succeed —
+                  which means reading the same field each use case reads, and
+                  they do not all read the same one. Load and Unload go on
+                  `observed_state or state`: a model the runtime has evicted
+                  while the registry still records it as loaded is precisely
+                  the case Load exists for, and gating on `state` alone hid it
+                  there while offering Unload, which is the one action that
+                  could not work. Download is refused only for a loaded model
+                  (unload first) and the transient states, and it is about what
+                  is on disk, so it stays on the registry's own state. Load
+                  requires `downloaded`, and offering it on `not_downloaded` —
+                  as this table did until 2026-07-26 — guarantees a 409 and
+                  leaves a freshly registered model with no way forward at
+                  all. */}
               {model.state !== 'loaded' && (
                 <Button
                   variant="outline"
@@ -185,7 +198,7 @@ export function ModelTable() {
                   {model.state === 'downloaded' ? 'Re-download' : 'Download'}
                 </Button>
               )}
-              {model.state === 'loaded' && (
+              {effective === 'loaded' && (
                 <Button
                   variant="outline"
                   size="xs"
@@ -195,7 +208,7 @@ export function ModelTable() {
                   Unload
                 </Button>
               )}
-              {model.state === 'downloaded' && (
+              {effective === 'downloaded' && (
                 <Button
                   variant="outline"
                   size="xs"
@@ -284,7 +297,7 @@ export function ModelTable() {
           if (!open) setDeleting(null);
         }}
         title={`Remove ${deleting?.alias ?? 'this model'}?`}
-        description="Routing policies that reference this alias will stop resolving. The downloaded weights are not deleted."
+        description="Refused while a routing policy still binds this alias, and refused while the model is loaded or mid-transfer — repoint the policy and unload it first. The downloaded weights are not deleted."
         confirmLabel="Remove"
         destructive
         onConfirm={async () => {

@@ -22,7 +22,7 @@ A `rewrites()` entry in `next.config.js` was the original shape and does not wor
 
 So `experimental.proxyTimeout` is set explicitly, and **above the backend's `GENERATION_DEADLINE_SECONDS`**: whichever limit fires first decides the failure, and only the backend's can end the stream with a reason (`finish_reason=length`). Raising one without the other moves the silent cut rather than removing it. A test reads both files and fails if the ordering inverts. Unlike `ADMIN_API_URL` this is a static value, so baking it in at build time is safe — that distinction is exactly why the proxy itself lives in middleware.
 
-**The proxy also has a body limit, and it was worse than the timeout because it did not even reset the socket.** Middleware matches `/admin/:path*`, so every admin request has its body run through `getCloneableBody` (`server/body-streams.js`), whose default ceiling is 10 MB. Past it that function does not reject: it pushes EOF into the stream forwarded upstream as well as the clone the middleware reads, and the caller's original `Content-Length` is forwarded untouched. The backend then waits for bytes nobody will send, until `proxyTimeout` — twenty-six minutes. Found 2026-08-07, present since this file described the proxy, and the cost was that **every document upload between 10 MB and the 32 MiB the UI itself offers hung with no error anywhere**.
+**The proxy also has a body limit, and it was worse than the timeout because it did not even reset the socket.** Middleware matches `/admin/:path*`, so every admin request has its body run through `getCloneableBody` (`server/body-streams.js`), whose default ceiling is 10 MB. Past it that function does not reject: it pushes EOF into the stream forwarded upstream as well as the clone the middleware reads, and the caller's original `Content-Length` is forwarded untouched. The backend then waits for bytes nobody will send, until `proxyTimeout` — thirty-six minutes, since that value moved to 2,160,000 ms with the read timeout on 2026-08-14. Found 2026-08-07, present since this file described the proxy, and the cost was that **every document upload between 10 MB and the 32 MiB the UI itself offers hung with no error anywhere**.
 
 So `experimental.middlewareClientMaxBodySize` is set explicitly too, and **at or above the backend's `ADMIN_MAX_BODY_BYTES`**. The reasoning is the mirror image of the timeout's: there the outer limit must be *larger* so the inner one can report a reason, and here the same ordering holds for a different reason — the failure lives in the gap, because only below the backend's ceiling can Next truncate a body the backend would have accepted. Equal is the smallest value that closes it, and smallest is what is wanted: Next buffers up to this much in the Node process for a caller who has not authenticated yet. The same test reads both files.
 
@@ -99,6 +99,17 @@ frontend/
       prompt-templates/       # Phase 2, built 2026-08-05. A named system
                               #   prompt selected by name; no variable
                               #   substitution, deliberately (security.md §7.4)
+      prompt-logs/            # Phase 2, built 2026-08-08. Screen label is
+                              #   "Transcripts", not "Prompt logs": it shows
+                              #   what was typed while a debug window was open
+                              #   (security.md §9.2), behind `prompt_log:read`
+      evaluations/            # Phase 2, built 2026-08-17. A run's verdicts,
+                              #   with what the run does not establish above
+                              #   the numbers rather than beneath them
+      refusals/               # Phase 2, built 2026-08-18. Every DomainError
+                              #   the caller received, second copy of the
+                              #   response they already had; `refusal:read_own`
+                              #   is a base scope, so a member reads their own
 
     app/
       (dashboard)/
@@ -189,6 +200,8 @@ a type derived from the backend cannot be build output there and a fresh clone
 would fail `pnpm build`. Committing also makes the diff the place a contract
 change is reviewed.
 
+**The same script emits two catalogues beside the types, and they are not types at all.** `lib/generated/role-scopes.ts` carries what each role holds, read out of `adapters/authz/role_authorization.py` through its public `scopes_for`; `lib/generated/audit-actions.ts` carries every action name the platform writes, read out of `domain/entities/audit.py`. Both replaced hand-kept copies that had drifted — the role map twice in one day, with the tests passing while asserting a navigation no real role is shown, and the action list by eight names, each of which was a filter option `/admin/logs` could not offer. They are values rather than types because they are needed at runtime: a filter has to enumerate, and a test has to *follow* what a role holds rather than restate it. Consuming them does not weaken a test — what a role can see is still asserted explicitly, so a scope change that alters the navigation fails loudly. CI regenerates all three files and fails if the committed result differs.
+
 **The generated types do not replace the zod schemas.** Types are erased; every
 response is still `parse`d at runtime, which is what catches a deployment
 serving something its own schema does not describe and turns a wrong shape into
@@ -273,7 +286,7 @@ security defect is covered, the two authentication state machines and the API
 key management lifecycle are driven in Chromium, and presentation is not
 exhaustively covered.
 
-Currently 233 Vitest tests across 27 files — the SSE reader and frame schema, the API
+Currently 308 Vitest tests across 36 files (2026-08-18) — the SSE reader and frame schema, the API
 client's CSRF and 401 handling, `safe-redirect`, the password schema, the key
 form's own rules, and the assistant's proposal parsing, transcript handling and
 page-context registry — plus five Playwright paths, and one more under §9.1 that
@@ -358,6 +371,6 @@ being fixed was never executed (see [PROGRESS.md](../PROGRESS.md) 2026-07-29).
 
 What is still outstanding:
 
-- **Storybook** for `components/ui` and `components/composed`. The composed layer is reused across eighteen feature folders, so a break there is expensive; stories cover loading, empty, error, and large-dataset states. Not started, and one of the two items left in Phase 2.
+- **Storybook** for `components/ui` and `components/composed`. The composed layer is reused across twenty-one feature folders, so a break there is expensive; stories cover loading, empty, error, and large-dataset states. Not started, and one of the two items left in Phase 2.
 - **Vitest with Testing Library** across the remaining `features/*/hooks`. Started: `useChatStream` and `useAssistant` are driven through `renderHook` with the API module mocked, which is the pattern the rest should follow.
 - **Playwright**, beyond the paths now present. The full-stack join landed 2026-08-10 (§9.1): a policy edited in the browser is observed changing which model the gateway asks its runtime for, against a real Postgres. What remains is breadth rather than a missing kind of coverage — the same harness could carry key issue to first gateway call, and a model unload to the refusal that follows. Not every module needs an end-to-end test.

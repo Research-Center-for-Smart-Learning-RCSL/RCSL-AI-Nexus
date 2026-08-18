@@ -45,8 +45,10 @@ export function SearchPanel({ collectionId }: SearchPanelProps) {
       {search.data?.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           Nothing matched. A document has to finish indexing before it can be
-          found, and the <code>embedding</code> capability needs a routing
-          policy.
+          found, so check the table&apos;s status column — and a search narrowed
+          to one collection looks in that collection only. A missing{' '}
+          <code>embedding</code> policy cannot produce this: it fails the search
+          outright rather than returning nothing.
         </p>
       ) : null}
 

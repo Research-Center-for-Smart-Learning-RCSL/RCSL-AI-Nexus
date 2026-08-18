@@ -32,7 +32,7 @@ export function DashboardOverview() {
           value={
             data ? `${data.models_loaded} / ${data.models_total}` : '-'
           }
-          hint="Loaded against registered"
+          hint="Registered as loaded — Models shows where the runtime disagrees, and routing follows the runtime"
           icon={<BoxIcon className="size-4" />}
           isLoading={isLoading}
         />

@@ -130,11 +130,14 @@ export function AgentSetup() {
                 <strong>Daily token quota.</strong> An agent replays the whole
                 conversation every turn, and prompt tokens count. Consumption
                 grows roughly with the square of a task&apos;s length, not
-                linearly. Size it generously — a measured Codex session on
-                2026-08-14 ran twenty requests in eleven minutes and spent{' '}
-                <strong>1.03 million tokens</strong>, of which 99.6% was prompt:
-                the context grew from 38k to 62k and every turn paid for all of
-                it. A one-million quota is one session, not one day.
+                linearly. Size it generously — measured on 2026-08-14, one
+                Codex session ran{' '}
+                <strong>sixteen requests in eleven minutes</strong>, its context
+                growing from 38,738 tokens to 61,920 with every turn charged the
+                whole of it. That key&apos;s whole day came to twenty requests
+                and <strong>1.03 million tokens</strong>, of which 99.6% was
+                prompt and 4,564 tokens were generated output. A one-million
+                quota is one session, not one day.
               </li>
             </ul>
             <p>
@@ -399,8 +402,12 @@ wire_api = "responses"`}
             One carried a computer-use runtime and{' '}
             <strong>five bundled plugins</strong>, and sent{' '}
             <strong>286 tool definitions, an estimated 122,870 tokens</strong> —
-            more than this whole ceiling on its own, so nothing could be sent at
-            any conversation length. The other carried{' '}
+            more than the entire ceiling as it stood that day (98,304), so
+            nothing could be sent at any conversation length. Both figures have
+            moved since: the ceiling is 122,880, and counted with the model&apos;s
+            own vocabulary rather than estimated, the same payload is about
+            99,000 real tokens — which leaves room for a first message and very
+            little after it. The other carried{' '}
             <strong>two plugins</strong> and worked for days. Between 2026-08-17
             and 2026-08-18 this page said a machine with the app could not be
             connected at all, generalised from the first of those two. It is a
@@ -461,6 +468,41 @@ wire_api = "responses"`}
             exit in the wrong place does this too.
           </dd>
 
+          <dt className="font-mono text-xs text-muted-foreground">
+            403 capability_not_issued
+          </dt>
+          <dd>
+            <strong>Read which name was refused before anything else.</strong>{' '}
+            The key is usually right and the name that reached the gateway is
+            not the one in your file, which is what makes this the most
+            expensive recurring failure here. The message names what was sent
+            and lists what the key may use.
+            <br />
+            <strong>
+              Your client&apos;s own model picker overrides step 3.
+            </strong>{' '}
+            Codex <code>0.148.0</code> builds that list from{' '}
+            <code>GET /v1/models</code> in a shape of its own and does not read
+            the OpenAI one this gateway answers in, so it falls back to its
+            built-in models — none of which this deployment serves. Anything
+            chosen there is refused however correctly{' '}
+            <code>model = &quot;code&quot;</code> is written in{' '}
+            <code>config.toml</code>. <code>codex -c model=code</code> overrides
+            a selection already made.
+            <br />
+            <strong>
+              Some slots never read <code>model</code> at all.
+            </strong>{' '}
+            <code>codex-auto-review</code> is sent under its own slug before a
+            command the client wants to escalate, so it is refused whatever your
+            configuration says — and because the refused call is the review,
+            what you see is the escalated command failing rather than a model
+            error, which reads convincingly as a filesystem permission problem.
+            Nothing needs granting: it is not a capability, so there is no
+            capability to issue. Turn the auto-review off, or point that slot at{' '}
+            <code>code</code> if your version exposes the setting.
+          </dd>
+
           <dt className="font-mono text-xs text-muted-foreground">401</dt>
           <dd>
             Wrong, expired or revoked key — or a CIDR list that does not include
@@ -514,9 +556,13 @@ wire_api = "responses"`}
             your prompt is tokenized with the vocabulary and chat template of the
             model that would have read it, so the figure in the refusal is the
             one that model would have charged. The response says which in{' '}
-            <code>basis</code> — <code>tokenizer</code> for a real count,{' '}
-            <code>estimate</code> for the character-width fallback a model with
-            no vocabulary on this host still gets. The estimate ran 20% to 50%
+            <code>basis</code>, and there are three of them:{' '}
+            <code>tokenizer</code> for a real count, <code>estimate</code> for
+            the character-width fallback a model with no vocabulary on this host
+            still gets, and <code>lower_bound</code> for the cheap guard that
+            runs before a model has been chosen at all — it refuses only what no
+            tokeniser could bring under the ceiling, so on that basis the true
+            figure is somewhere above the number shown. The estimate ran 20% to 50%
             high on ordinary content and refused at least one conversation that
             would have fitted; a <code>tokenizer</code> figure does not.
             <br />
@@ -534,8 +580,11 @@ wire_api = "responses"`}
             Three sessions measured here on 2026-08-17 began at about 42,000
             tokens before any work — tool definitions, the agent&apos;s
             instruction file, and whatever was pasted to open with — and the
-            turns that wrote files cost around 10,000 each, which is four turns
-            of room. All three of those are the client&apos;s, and raising the
+            turns that wrote files cost around 10,000 tokens each. Against the
+            122,880-token ceiling that leaves roughly 80,000 tokens, or about
+            eight such turns. This said four until 2026-08-18, computed against
+            the 98,304 ceiling of the day before and on an estimator that ran
+            20% to 50% high. All three of those are the client&apos;s, and raising the
             ceiling only changes how long a session runs before it stops.
             <br />
             Reached sooner than the character count suggests if you work in

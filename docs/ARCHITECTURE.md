@@ -60,7 +60,8 @@ NTNU proxy; the tailnet rides over it.
                             | HTTP (OpenAI-compatible + admin API)
 +---------------------------v-------------------------------+
 |  Gateway                                                    |
-|  - Unified public API (/v1/chat/completions, /v1/models)    |
+|  - Unified public API (/v1/chat/completions,                |
+|    /v1/responses, /v1/models)                               |
 |  - API key authentication, rate limiting, usage accounting  |
 |  - Selects a target runtime from capability + routing policy|
 +---------------------------+-------------------------------+
@@ -132,7 +133,7 @@ The set is defined once, in `domain/entities/capability.py`. Three places have t
 
 **The name is what a caller puts in the `model` field**, which is the platform's one departure from the OpenAI convention and the thing an integrator is least able to guess. `GET /v1/models` exists to answer it, listing the capabilities a routing policy currently serves, narrowed to the calling key.
 
-**Only chat-shaped capabilities are reachable today.** The gateway mounts `/v1/chat/completions` and nothing else, so `embedding` and `rerank` can be named in a policy and issued on a key but have no endpoint whose request and response shapes fit them. They are part of the model, not yet part of the API; `/v1/embeddings` belongs with the knowledge base in Phase 2, which is the first thing that will need it.
+**Only chat-shaped capabilities are reachable today.** The gateway mounts `/v1/chat/completions` and `/v1/responses` and nothing else — the second added 2026-08-07 for agent clients that dropped Chat Completions, and a translation onto the same use case rather than a second inference path — so `embedding` and `rerank` can be named in a policy and issued on a key but have no endpoint whose request and response shapes fit them. They are part of the model, not yet part of the API; `/v1/embeddings` belongs with the knowledge base in Phase 2, which is the first thing that will need it.
 
 ### 2.4 Routing Policy
 
@@ -177,7 +178,7 @@ A human who can sign in to the management UI. Identity arrives from one of two s
 | `password_hash` | argon2id, nullable. Absent for tailnet-only users |
 | `totp_secret` | Encrypted at rest, nullable. **Required whenever `password_hash` is set** |
 | `totp_last_counter` | Replay prevention, see [security.md](./architecture/security.md) §5.3 |
-| `role` | `admin` / `user` |
+| `role` | `admin` / `tenant_admin` / `operator` / `curator` / `auditor` / `user`. Not a ladder: `curator` writes knowledge `operator` may not touch, and `operator` restarts a node `tenant_admin` may not. A seventh, `service`, exists in the enum but belongs to an API key rather than a person and never appears in this table (`domain/entities/actor.py`) |
 | `debug_logging_until` | Optional timestamp, see [security.md](./architecture/security.md) §9.2 |
 
 Accounts are **invitation only**; there is no self-registration. A user who only ever works over the tailnet needs no password at all, so both credential columns are nullable. A user who needs the public entrance is issued a single-use invitation link and sets their own password and TOTP; the platform never transmits a credential. See [security.md](./architecture/security.md) §5.3 and §5.4.
@@ -189,14 +190,30 @@ Supporting tables: `invitations` (token hash, expiry, consumed timestamp) and `r
 The runtime representation of "who is making this request", assembled by the interface layer and passed into use cases. It unifies the three authentication sources so that authorization logic has a single shape.
 
 ```python
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Actor:
     id: str
-    display: str                                  # login or key prefix, safe for logs
-    role: Role                                    # admin / user / service
-    source: Literal["tailnet", "local", "api_key"]
+    display: str                                  # login or key id, safe for logs
+    role: Role                                    # one of the seven in §2.6
+    source: Literal["tailnet", "local", "api_key", "dev"]
     scopes: frozenset[Scope]
+
+    tenant_id: str = DEFAULT_TENANT_ID            # §2.8; the tenant-scoped
+                                                  #   repositories are built with it
+    api_key_id: str | None = None                 # the key handle when source is
+                                                  #   api_key; usage accounting and
+                                                  #   the per-key quota both key on it
+    allowed_capabilities: frozenset[str] | None = None
+    debug_logging_until: datetime | None = None   # §9.2's window, carried here so the
+                                                  #   application layer can read it
 ```
+
+`allowed_capabilities` is deliberately not expressed as scopes. `Scope.CHAT_USE`
+answers "may this caller reach inference at all" and is drawn from a hardcoded
+table no database row can widen; *which* capability is then asked for is data,
+chosen per request, so it travels here and is checked where the capability is
+read. `None` is unrestricted and belongs to a person on an admin entrance; a set
+belongs to an API key, and an empty one permits nothing.
 
 ### 2.8 Tenancy: single tenant in Phase 1, multi-tenant foundation in Phase 2
 
@@ -223,8 +240,9 @@ A named system prompt, tenant-scoped, that a caller selects by name with `"promp
 Frontend pages correspond to backend resources. Phase annotations show what actually exists when.
 
 This table said "None of the admin API exists yet" and marked almost every row
-"frontend only" until 2026-07-28, by which point all but the last two rows had
-been built and exercised against a real Postgres. The Phase column is a plan;
+"frontend only" until 2026-07-28, by which point every row it then carried,
+except the knowledge base and prompt templates, had been built and exercised
+against a real Postgres. Everything below those two postdates that reading. The Phase column is a plan;
 the Built column is a status, and a status that is only ever written once is
 worse than none. [ROADMAP.md](./ROADMAP.md) and
 [PROGRESS.md](./PROGRESS.md) are the maintained versions.
@@ -232,7 +250,7 @@ worse than none. [ROADMAP.md](./ROADMAP.md) and
 | Module | Backend resource | Phase | Built |
 |---|---|---|---|
 | Dashboard | `/admin/dashboard` | 1 (counts), 2 (real metrics) | yes; live metrics wait on hardware producing them |
-| Model Management | `/admin/models` | 1 | yes, end to end including download progress (`/admin/models/download-jobs/{id}`) |
+| Model Management | `/admin/models` | 1 | yes, end to end including download progress (`GET /admin/download-jobs/{job_id}`, on the same router that starts the download) |
 | Routing Policy | `/admin/routing-policies` | 1 (API), 2 (UI editor) | yes, both; the capability named is validated against `ROUTABLE_CAPABILITIES`, the wider of the two sets — a policy may be written for something no key can be issued for ([security.md](./architecture/security.md) §7.5.1) |
 | API Keys | `/admin/api-keys` | 1 | yes, end to end: issue, edit, revoke |
 | Gateway information | `/admin/gateway` | 1 | yes; the base URL and servable capabilities the UI needs to explain a key |
@@ -242,15 +260,27 @@ worse than none. [ROADMAP.md](./ROADMAP.md) and
 | Node management | `/admin/nodes` | 2 | yes, end to end (register/edit/delete/health, SSRF guard, heartbeat) |
 | Logs | `/admin/logs` | 2 | yes, read-only audit view behind `logs:read` |
 | Usage analytics | `/admin/usage` | 2 | yes, aggregation and charts |
-| Knowledge base | `/admin/knowledge` | 2 | no |
+| Knowledge base | `/admin/knowledge` | 2 | yes, built 2026-07-30: collections, upload, isolated extraction in the `parser` container, Qdrant passage index, and tenant isolation enforced in three further places (§2.8) |
 | Prompt templates | `/admin/prompt-templates` | 2 | yes, end to end: authored in the UI, selected by name on both chat paths. **No variable substitution**, deliberately — §7.4's rule is that values go in their own slot rather than into a template body, and a slot filled from a request would let a caller write into the one message the model treats as authoritative ([security.md](./architecture/security.md) §7.4) |
+| Transcripts | `/admin/prompt-logs` | 2 | yes, read-only. Behind `prompt_log:read`, which is admin-only and withheld from `tenant_admin`: this reads what somebody typed, not that they typed ([security.md](./architecture/security.md) §9.2) |
+| Refusals | `/admin/refusals` | 2 | yes, built 2026-08-17. Every `DomainError` is stored where its caller can read it; `refusal:read_own` is a base scope, `refusal:read_all` is granted like `usage:read_all` ([security.md](./architecture/security.md) §9.5) |
+| Retention | `/admin/retention` | 2 | yes: per-dataset policy, preview and purge, behind `retention:write`. Admin-only, because a tenant administrator who could purge could remove the record of what they did inside their own tenant |
+| Host status | `/admin/host` | 2 | yes; free memory, disk, uptime and load, read from `launchd/host-metrics.py` over loopback rather than from inside a container, which on macOS would describe the Linux VM (§0.1) |
+| Model evaluation | `/admin/evaluations` | 2 | yes, shipped 2026-08-17 |
+| Management assistant | `/admin/assistant` | 2 | yes, and **advisory only**: it answers about this deployment's settings and may propose values on the two key forms, never apply them. Routes on `assist`, which is routable but deliberately not issuable ([security.md](./architecture/security.md) §7.5, §7.5.1) |
+| API reference | none; the page is served by the frontend | 2 | yes — the documentation §4.4 promises in exchange for disabling `/openapi.json` in production |
+| Connect an agent | none; the page is served by the frontend | 2 | yes; the setup an agent client needs, alongside [runbooks/connect-an-agent-client.md](./runbooks/connect-an-agent-client.md) |
 
 The inference path is complete and tested end to end. The gateway mounts
-`POST /v1/chat/completions` and `GET /v1/models`, and nothing else — the second
-because every OpenAI client library calls it at startup, and because `model`
-takes a capability rather than a model name, which is a convention no caller
-guesses and which `/openapi.json` cannot tell them either (it is disabled in
-production, [security.md](./architecture/security.md) §4.4).
+`POST /v1/chat/completions`, `POST /v1/responses` and `GET /v1/models`, and
+nothing else — the third because every OpenAI client library calls it at
+startup, and because `model` takes a capability rather than a model name, which
+is a convention no caller guesses and which `/openapi.json` cannot tell them
+either (it is disabled in production,
+[security.md](./architecture/security.md) §4.4). `/v1/responses` landed
+2026-08-07 for agent clients that dropped Chat Completions; it translates onto
+the same `RouteChatRequest`, so routing, quota, rate limiting, the resource
+guardrails, cancellation and usage recording are the ones already in force.
 
 The chat interface lives on the admin API rather than calling the public gateway. It reuses the same `RouteChatRequest` use case but authorizes by user identity instead of an API key, so operators do not need to mint a key for themselves and admin traffic is not subject to the public geo and CIDR restrictions. The same resource guardrails still apply. See [security.md](./architecture/security.md) §5.2.
 
@@ -269,9 +299,10 @@ The chat interface lives on the admin API rather than calling the public gateway
 - `gateway`: data plane, `/v1/*`, reachable from the public internet through an external reverse proxy, authenticated by API key.
 - `admin-tailnet`: control plane over the tailnet, authenticated by Tailscale identity.
 - `admin-public`: control plane over the public internet, authenticated by an invitation-only local account with mandatory TOTP.
-- `frontend`: the Next.js application.
+- `parser`: document extraction for the knowledge base. The same image running a different ASGI app (`app.parser.main`), on an isolated network with no database, no secrets and no egress at all, because it is the one process that reads a file a person uploaded. See [architecture/security.md](./architecture/security.md) §7.3.
+- `frontend-tailnet` and `frontend-public`: the Next.js application, one instance per entrance from one image, differing only in which admin API the middleware rewrite targets. Two rather than one for the same reason the admin API is two: an entrance that trusts a Tailscale header must not share a socket with one reachable from the internet.
 
-All backend containers run from the same image and share the entire `domain/` and `application/` layers. Only the routers mounted by `interfaces/http` differ, so splitting them costs no duplicated code.
+Five containers run from the backend image: those three, `parser`, and the one-shot `migrate` job. The three application entrances share the entire `domain/` and `application/` layers, and only the routers mounted by `interfaces/http` differ, so splitting them costs no duplicated code. `parser` shares the image rather than the layers — the isolation that matters there is the process, network and credential boundary, not which layers the code was built from.
 
 Detailed internal design:
 
@@ -290,5 +321,5 @@ Settled:
 - **First capability to complete end to end**: `chat`.
 - **First runtime**: Ollama, running natively on the macOS host.
 - **Model downloads use each runtime's HTTP API, never a shell.** Where a runtime offers only a CLI, it must be invoked with an argument array and `shell=False` after validating the model reference. See [security.md](./architecture/security.md) §7.1, the highest-risk feature in the system.
-- **Authentication**: dual entrance for the admin UI (Tailscale identity on the tailnet; invitation-only local accounts with mandatory TOTP on the public internet); API keys for the gateway. Roles are `admin` and `user`. No external identity provider is involved, and no account exists that an administrator did not create. See [security.md](./architecture/security.md) §5.
+- **Authentication**: dual entrance for the admin UI (Tailscale identity on the tailnet; invitation-only local accounts with mandatory TOTP on the public internet); API keys for the gateway. There are six roles for people — `admin`, `tenant_admin`, `operator`, `curator`, `auditor`, `user` — plus `service` for an API key; they do not nest, and §2.6 records why the operator/administrator split is the one that matters most. No external identity provider is involved, and no account exists that an administrator did not create. See [security.md](./architecture/security.md) §5.
 - **Public entrance**: the existing openresty reverse proxy at NTNU, forwarding over the tailnet, using the existing `*.rcsl.online` wildcard. See [deployment.md](./architecture/deployment.md).
