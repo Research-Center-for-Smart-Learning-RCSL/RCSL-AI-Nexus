@@ -49,6 +49,27 @@ class ApiKey:
     rate_limit_rpm: int = 60
     quota_tokens_per_day: int | None = None
 
+    default_capability: str | None = None
+    """What to serve when a caller names a capability this key was not issued
+    for, or `None` to refuse — which is the default and remains the behaviour
+    of every key that does not set it.
+
+    **Opt-in, per key, because the refusal is worth more than the convenience
+    to almost everybody.** `model` taking a capability rather than a model name
+    is this platform's one real divergence, and `capability_not_issued` is the
+    only channel that tells an integrator their client overrode the model line
+    they configured — Codex's own picker does exactly that, and the refusal is
+    how three separate integrations found out. A platform-wide fallback would
+    have bought convenience by making that misconfiguration permanent and
+    invisible. Set here, it is the issuer's explicit choice for one key, it is
+    visible in the key's own settings, and it can be withdrawn.
+
+    Constrained to a capability the key already holds, at issue and again at
+    use. It is a substitution, never a widening: a key issued `chat` can be
+    defaulted to `chat` and to nothing else, so the field can shorten the path
+    to what the key may already reach and can never add to it.
+    """
+
     created_at: datetime | None = None
     """Assigned by the database on first write. `None` means "not persisted
     yet", which is why it is not required at construction.

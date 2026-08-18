@@ -455,6 +455,14 @@ class ApiKeyResponse(BaseModel):
     operator-facing `detail`. Null or past means the normal rule applies:
     detail stays in the log. Set via POST /{key_id}/debug."""
 
+    default_capability: str | None
+    """Served when a caller names a capability this key was not issued for.
+
+    Null is the default and the behaviour every key had before the field
+    existed: refuse, and say what the key may call. Always one of `scopes`,
+    which is what makes it a shortcut rather than a grant.
+    """
+
     @classmethod
     def of(
         cls,
@@ -480,6 +488,7 @@ class ApiKeyResponse(BaseModel):
             revoked_at=key.revoked_at,
             created_at=key.created_at,
             debug_logging_until=key.debug_logging_until,
+            default_capability=key.default_capability,
             last_used_at=last_used_at,
         )
 
@@ -510,6 +519,16 @@ class CreateApiKeyRequest(BaseModel):
     """Mandatory, with no "never" option, so that rotation is forced rather
     than encouraged."""
 
+    default_capability: str | None = Field(default=None, max_length=64)
+    """Optional, and omitting it is the ordinary case: a capability this key was
+    not issued for is refused.
+
+    Not an enum here, because the check that matters is not "is this a
+    capability" but "is this one of *this key's* capabilities", which only the
+    use case holds. Naming something outside `scopes` is a 409 that says which
+    list it had to be in.
+    """
+
 
 class UpdateApiKeyRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
@@ -518,6 +537,16 @@ class UpdateApiKeyRequest(BaseModel):
     quota_tokens_per_day: int | None = Field(default=None, ge=1)
     allowed_cidrs: list[str] | None = None
     expires_at: UtcDatetime | None = None
+
+    default_capability: str | None = Field(default=None, max_length=64)
+    """The one field on this model where `null` is a value rather than silence.
+
+    Every other field here reads `None` as "not mentioned, leave it alone",
+    which works because none of them has a meaningful null. This one does —
+    null is "refuse, as before" — so absent and null have to stay apart, and
+    the router tells them apart with `model_fields_set` rather than by their
+    value. Without that, a default could be set and never cleared.
+    """
 
 
 class AdminErrorResponse(BaseModel):

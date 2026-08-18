@@ -186,6 +186,14 @@ async def chat_completions(
         )
         passages = [(p.document_id, p.index) for p in retrieved]
 
+    # Both paths carry both headers, so the two cannot answer differently about
+    # the same request. `capability_defaulted_header` is empty unless this key
+    # has a default and it is about to fire.
+    headers = {
+        **sse.citation_header(passages),
+        **sse.capability_defaulted_header(actor, body.model),
+    }
+
     if body.stream:
         generation = use_case.execute(
             actor,
@@ -204,17 +212,17 @@ async def chat_completions(
             model=body.model,
             generation=generation,
             first=first,
-            # A header rather than a frame: the envelope is OpenAI's, and an
+            # Headers rather than frames: the envelope is OpenAI's, and an
             # extra frame shape is a protocol error to a strict client.
-            extra_headers=sse.citation_header(passages),
+            extra_headers=headers,
             include_usage=bool(body.stream_options and body.stream_options.include_usage),
         )
 
-    # The same citations on this path as on the streaming one. `use_knowledge`
-    # promises them in the header without qualifying which path, and a grounded
+    # The same headers on this path as on the streaming one. `use_knowledge`
+    # promises its citations without qualifying which path, and a grounded
     # non-streaming answer whose sources were computed and then dropped is the
     # kind of gap nothing complains about.
-    for name, value in sse.citation_header(passages).items():
+    for name, value in headers.items():
         response.headers[name] = value
 
     return await _collect(

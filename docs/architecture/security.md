@@ -374,6 +374,7 @@ Bound metadata:
 | Field | Purpose |
 |---|---|
 | `scopes` | Allowed capabilities, minimal by default. Carried onto `Actor.allowed_capabilities` and checked against the capability each request names; a key is refused, as 403, any capability it does not hold. This description was aspirational until 2026-07-28: the list decided only whether a key worked at all, so a key issued for `chat` reached every capability the deployment served ([PROGRESS.md](../PROGRESS.md) 2026-07-28) |
+| `default_capability` | What to serve when a request names a capability this key does not hold, or null to refuse — which is the default and what every key did before 2026-08-18. Constrained at issue, at edit and again at use to a capability already in `scopes`, so it is a substitution and never a widening: `Actor.capability_for` re-checks it rather than trusting the row, and a value outside the list decides nothing. Opt-in per key because the refusal it removes is load-bearing — `capability_not_issued` is the only channel that tells an integrator their client overrode the `model` line they configured. Every substituted request is announced to the caller in `X-Capability-Defaulted` and kept in `usage_records.requested_capability` |
 | `rate_limit_rpm` | Requests per minute |
 | `quota_tokens_per_day` | Daily token ceiling |
 | `allowed_cidrs` | Source restriction, §4.1(d). Empty means unrestricted |

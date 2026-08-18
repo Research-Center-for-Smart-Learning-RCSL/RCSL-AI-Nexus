@@ -438,6 +438,7 @@ class FakeApiKeys:
             rate_limit_rpm=values["rate_limit_rpm"],
             quota_tokens_per_day=values["quota_tokens_per_day"],
             allowed_cidrs=tuple(ip_network(c) for c in values["allowed_cidrs"]),  # type: ignore[union-attr]
+            default_capability=values["default_capability"],
         )
         return True
 

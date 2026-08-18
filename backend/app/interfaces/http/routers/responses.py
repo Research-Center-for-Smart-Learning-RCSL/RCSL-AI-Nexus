@@ -414,6 +414,11 @@ async def create_response(
         )
         passages = [(p.document_id, p.index) for p in retrieved]
     headers.update(sse.citation_header(passages))
+    # Last of the three, and computed before the generator is primed: once the
+    # first frame is written the headers are gone, and a substitution nobody
+    # was told about is the silence this key setting was allowed on condition
+    # of breaking.
+    headers.update(sse.capability_defaulted_header(actor, body.model))
 
     generation = use_case.execute(
         actor,

@@ -33,8 +33,10 @@ import { useAssistantSurface } from '@/features/assistant/context';
 import { applyProposalPatch, draftFor } from '@/features/api-keys/assistant-bridge';
 import {
   createApiKeySchema,
+  defaultCapabilityPayload,
   defaultExpiry,
   DEFAULT_EXPIRY_DAYS,
+  NO_DEFAULT,
   parseCidrText,
   type CreateApiKeyInput,
   type CreateApiKeyValues,
@@ -76,6 +78,7 @@ export function CreateApiKeyDialog({
       allowed_cidrs_text: '',
       expires_at: defaultExpiry(),
       owner_id: ownerId,
+      default_capability: NO_DEFAULT,
     },
   });
 
@@ -113,6 +116,7 @@ export function CreateApiKeyDialog({
       quota_tokens_per_day: values.quota_tokens_per_day,
       allowed_cidrs: parseCidrText(values.allowed_cidrs_text),
       expires_at: values.expires_at,
+      default_capability: defaultCapabilityPayload(values.default_capability),
     });
     // The first capability, which is what a one-capability key makes obvious
     // and what a multi-capability key can reasonably start from.
@@ -227,6 +231,35 @@ export function CreateApiKeyDialog({
                     form.setValue('scopes', next, { shouldValidate: true })
                   }
                   error={form.formState.errors.scopes?.message}
+                />
+
+                {/* Under the capability picker, because it can only ever name
+                    one of the boxes above it and the order says so. */}
+                <FormField
+                  control={form.control}
+                  name="default_capability"
+                  label="When a request names something else"
+                  description="A request names a capability in its model field. Most clients send a model name instead — Codex's own picker overrides a configured model line — and refusing is what tells the integrator that. Choose a capability here only when you would rather this key just worked."
+                  render={(field) => (
+                    <Select
+                      value={field.value as string}
+                      onValueChange={(value) => field.onChange(value)}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={NO_DEFAULT}>
+                          Refuse, and say what this key may call
+                        </SelectItem>
+                        {scopes.map((capability) => (
+                          <SelectItem key={capability} value={capability}>
+                            Serve {capability}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 />
 
                 <div className="grid gap-4 sm:grid-cols-2">

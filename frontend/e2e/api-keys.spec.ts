@@ -15,6 +15,11 @@ type KeyWrite = Pick<
   | 'quota_tokens_per_day'
   | 'allowed_cidrs'
   | 'expires_at'
+  // Both verbs always send this one, and the update verb's `null` is a value
+  // rather than silence: the server tells absent from null and only null
+  // clears a default. A stub that dropped it would let the form stop sending
+  // it and nothing here would notice.
+  | 'default_capability'
 >;
 
 function json(

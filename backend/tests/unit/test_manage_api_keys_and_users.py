@@ -133,6 +133,76 @@ async def test_an_unknown_capability_is_refused() -> None:
         await harness.issue(scopes=["chatt"])
 
 
+async def test_a_key_is_issued_without_a_default_capability() -> None:
+    """The setting is opt-in, and this is what "opt" means: a key issued by the
+    ordinary form refuses a capability it was not issued for, which is the
+    refusal that tells an integrator their client sent a model name."""
+    harness = KeyHarness()
+
+    issued = await harness.issue()
+
+    assert issued.key.default_capability is None
+
+
+async def test_a_default_capability_outside_the_key_s_own_list_is_refused() -> None:
+    """A substitution, never a widening.
+
+    Stored, it would let a key issued for `chat` alone serve `code` to anything
+    that asked — which is the field quietly becoming a second capability list,
+    and a worse one, since the form that grants capabilities would not show it.
+    """
+    harness = KeyHarness()
+
+    with pytest.raises(ApiKeyStateConflictError):
+        await harness.issue(scopes=["chat"], default_capability="code")
+
+
+async def test_a_default_capability_within_the_key_s_own_list_is_stored() -> None:
+    harness = KeyHarness()
+
+    issued = await harness.issue(scopes=["chat", "code"], default_capability="code")
+
+    assert issued.key.default_capability == "code"
+    assert harness.keys.rows[issued.key.key_id].default_capability == "code"
+
+
+async def test_narrowing_the_capabilities_out_from_under_a_default_is_refused() -> None:
+    """One request, both halves, or neither.
+
+    Silently clearing the default instead would leave the key working
+    differently from the settings the operator was last shown, and nothing
+    would say when it changed.
+    """
+    harness = KeyHarness()
+    issued = await harness.issue(scopes=["chat", "code"], default_capability="code")
+
+    with pytest.raises(ApiKeyStateConflictError):
+        await harness.use_case.update(ADMIN, issued.key.key_id, scopes=["chat"])
+
+    assert harness.keys.rows[issued.key.key_id].default_capability == "code"
+
+
+async def test_an_edit_that_does_not_mention_the_default_leaves_it_alone() -> None:
+    harness = KeyHarness()
+    issued = await harness.issue(scopes=["chat", "code"], default_capability="code")
+
+    await harness.use_case.update(ADMIN, issued.key.key_id, rate_limit_rpm=30)
+
+    assert harness.keys.rows[issued.key.key_id].default_capability == "code"
+
+
+async def test_an_explicit_null_clears_the_default() -> None:
+    """The reason the sentinel exists. Every other field on this verb reads
+    `None` as "not mentioned"; this one has a meaningful null, so a default
+    that could be set and never withdrawn would be a one-way door."""
+    harness = KeyHarness()
+    issued = await harness.issue(scopes=["chat", "code"], default_capability="code")
+
+    await harness.use_case.update(ADMIN, issued.key.key_id, default_capability=None)
+
+    assert harness.keys.rows[issued.key.key_id].default_capability is None
+
+
 async def test_an_unparsable_cidr_is_refused() -> None:
     harness = KeyHarness()
 

@@ -435,6 +435,21 @@ export function ApiReference() {
           instead and named in the <code>X-Dropped-Tools</code> response header,
           so a capability the model never saw is findable rather than a mystery.
         </p>
+        <p className="text-sm text-muted-foreground">
+          <strong>
+            A key may carry a default capability, and the response says when it
+            fired.
+          </strong>{' '}
+          The <code>model</code> field takes a capability, and a key issued with
+          a default serves one of its own rather than refusing when a request
+          names anything else — which is what makes a client that insists on
+          sending its own model name work. It is off unless an administrator
+          turned it on for that key, it can only ever name a capability the key
+          already holds, and every substituted request carries{' '}
+          <code>X-Capability-Defaulted</code> with the capability that actually
+          ran. Read that header before concluding your <code>model</code> line
+          is the one in use.
+        </p>
       </section>
 
       <section className="space-y-3">
@@ -744,7 +759,10 @@ data: [DONE]`}
                   is the same list, and since 2026-08-18 the two are fields as
                   well as prose — <code>capability</code> and{' '}
                   <code>available</code> — so a client can branch on them
-                  instead of parsing a sentence. Retrying will not help.
+                  instead of parsing a sentence. Retrying will not help. A key
+                  can be issued with a default capability, which serves one of
+                  its own instead of refusing; the response then carries{' '}
+                  <code>X-Capability-Defaulted</code> naming what actually ran.
                 </td>
               </tr>
               <tr>

@@ -379,6 +379,10 @@ The admin API uses a plainer shape:
 
 `capability_not_issued` split off from `not_authorized` on 2026-08-14, on the rule the `no_available_model` split follows: a separate remedy earns a separate code. It is also the one refusal here that names what it refused, which it can afford because the capability came from the caller and the list is what `GET /v1/models` already returns them.
 
+**A key may opt out of that refusal, and nothing else may.** `api_keys.default_capability` names what to serve when a request asks for a capability the key does not hold; null, the default, refuses as before. The pressure to make this deployment-wide is real — `model` taking a capability rather than a model name is its one true divergence, Codex's picker overrides a configured `model` line and sends its own slugs, and three integrations have lost time to it — and it is refused for one reason: the refusal is the only channel that tells an integrator their client overrode them, so a platform-wide fallback would buy convenience by making that misconfiguration permanent and invisible. Per key, it is the issuer's stated choice, visible in the key's settings, audited when set, and withdrawable.
+
+Three properties keep it honest. It is **a substitution, never a widening** — the value must already be in `scopes`, checked at issue, at edit, and once more in `Actor.capability_for`, which re-derives rather than trusts, so a row written by another hand still reaches nothing new. It is **announced**, in `X-Capability-Defaulted` on the response, the same channel and the same rule as `X-Dropped-Tools`. And it is **recorded**: `usage_records.requested_capability` keeps what the caller actually sent, null when the two agree, because turning the setting on removes the refusal and the evidence has to outlive both a header the client may not read and a log line that rotates. The response body still echoes `model` as it arrived.
+
 ## 6. The Streaming Contract
 
 Streaming crosses every layer, and most of the subtle failure modes in this system live here. The rules are fixed rather than left to each implementation.

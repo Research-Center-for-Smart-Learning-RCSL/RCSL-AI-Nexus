@@ -47,6 +47,23 @@ class UsageRecord:
     """The tenant of the actor the usage is attributed to, so per-tenant usage
     reads only see their own. Stamped by the scoped usage repository on write."""
 
+    requested_capability: str | None = None
+    """What the caller actually put in `model`, when it is not `capability`.
+
+    Null on every row where the two agree, which is every row this platform
+    wrote before keys could carry a `default_capability` and almost every row
+    since. Null therefore means "asked for what it got" rather than "unknown",
+    and no existing row is reinterpreted by the column arriving.
+
+    It exists because the substitution has to stay legible after the fact. A
+    key with a default no longer produces the `capability_not_issued` refusal
+    that tells an integrator their client is sending a model name — that is the
+    whole point of the setting — so without this the evidence would live only
+    in a response header the caller may not read and a log line that rotates.
+    Here it outlives both, and "which of these requests asked for something
+    else, and what?" is a query rather than an investigation.
+    """
+
     prompt_tokens: int = 0
     """Tokens read. Zero on every row written before 2026-08-04, and on any
     runtime that does not report the figure.
