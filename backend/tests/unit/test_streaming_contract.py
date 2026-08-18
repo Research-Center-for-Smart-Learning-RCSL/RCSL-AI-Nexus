@@ -746,7 +746,7 @@ async def test_an_estimate_that_disagrees_with_the_tokenizer_is_logged(caplog) -
 
 
 async def test_the_known_calibration_is_not_reported_as_drift(caplog) -> None:
-    """The estimator runs 1.2x-1.5x high on everything this platform serves, so
+    """The estimator runs 1.2x-1.6x high on everything this platform serves, so
     a threshold that called 1.2x a deviation would fire on every request and
     measure nothing. 2026-08-17's refusal was at 1.21x and belongs inside the
     band; what was wrong that day was the ceiling, not the calibration."""
@@ -755,6 +755,24 @@ async def test_the_known_calibration_is_not_reported_as_drift(caplog) -> None:
 
     with caplog.at_level(logging.INFO):
         # ~200 estimated against 165 actual, i.e. 1.21x.
+        await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 120)])
+
+    assert "outside its measured band" not in caplog.text
+
+
+async def test_the_prose_ratio_the_third_measurement_found_is_inside_the_band(
+    caplog,
+) -> None:
+    """1.61x on English prose, measured 2026-08-18. The band's top was 1.5 until
+    then, taken from the 1.47x maximum of the day before, so this ratio sat just
+    outside it — and on an `estimate` basis ordinary prose is the common case,
+    which would have made this instrument log over-counting on essentially every
+    request it saw. Nothing between 1.5 and 1.65 was covered before this test."""
+    runtime = FakeRuntime(chunks=1, prompt_tokens=125)
+    use_case, _, _ = build(runtime)
+
+    with caplog.at_level(logging.INFO):
+        # ~200 estimated against 125 actual, i.e. 1.6x.
         await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 120)])
 
     assert "outside its measured band" not in caplog.text

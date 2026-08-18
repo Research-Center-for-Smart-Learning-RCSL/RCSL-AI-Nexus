@@ -88,7 +88,7 @@ last row in security.md §13.0 that said "not implemented".
 
 | | |
 |---|---|
-| Backend | 32 use cases, 27 routers, 19 entity modules, 16 migrations (head `a4c1e07f2b9d`), 943 unit tests, 120 integration tests that skip without `TEST_DATABASE_URL` |
+| Backend | 32 use cases, 27 routers, 19 entity modules, 16 migrations (head `a4c1e07f2b9d`), 944 unit tests, 120 integration tests that skip without `TEST_DATABASE_URL` |
 | Frontend | 21 feature folders, 20 screens, **366 tests across 40 files** (296, then 308, 345 and 359, earlier on 2026-08-18), types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
 | Gates | ruff, ruff-format, strict mypy, pytest; tsc, eslint, vitest, a real `next build`, **six Playwright paths** (five until 2026-08-18, three days after the sixth landed); Trivy, pip-audit and pnpm audit advisory-only. All green — **and this row was false from 2026-08-07 to 2026-08-08**, see below; the claim was not re-run in the 2026-08-18 pass |
 

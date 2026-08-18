@@ -201,8 +201,7 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
   429` without the body. **Ask them for the request id it prints, and look it
   up on the Refusals screen** — every refusal with an identified caller is
   stored there with its code, its status and the figures it carried, including
-  the
-  wait a `429` asked for, which the header no longer preserves by the time
+  the wait a `429` asked for, which the header no longer preserves by the time
   anybody reads back. A caller can read their own refusals without an
   administrator. It will *not* be on the Transcripts screen: a quota refusal is
   decided before the request reaches inference, so no prompt was ever logged.
@@ -222,8 +221,8 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
   days. Quote that figure with its date: the ceiling has been raised since, the
   count is exact rather than estimated since, and the same payload measures
   about 99,000 real tokens. **The signature is a tool figure that stays
-  identical while the message count moves** — that is not a
-  conversation problem and starting a new conversation cannot fix it. The remedy
+  identical while the message count moves** — that is not a conversation
+  problem, and starting a new conversation cannot fix it. The remedy
   is a separate `CODEX_HOME` holding only the configuration above, set per shell
   (machine-wide moves the app too). Never tell an operator their machine cannot
   be connected because the app is installed; ask what the refusal says the tools
