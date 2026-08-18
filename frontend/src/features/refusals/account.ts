@@ -66,10 +66,14 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  *   API key's handle in `actor_display`, so a name search misses every one of
  *   them. Resolving to an id where one is knowable is a coverage decision, not
  *   a tidiness one.
- * - **By name**, otherwise. A substring of `actor_display`, which finds the
- *   deleted account whose name survives on the row and nowhere else, and finds
- *   a key by the handle it is known by. It is also what a half-remembered name
- *   matches while it is still being typed.
+ * - **By name, otherwise — and "name" here means the string the row actually
+ *   holds.** `actor_display` is written once, from `actor.display`, which is
+ *   the account's **login** on an admin entrance and the API key's handle on
+ *   the gateway. It is never a `display_name`. So this branch finds the
+ *   deleted account whose login survives on the row and nowhere else, and
+ *   finds a key by the handle it is known by — and it will not find anybody by
+ *   a display name that differs from their login, because no row contains one.
+ *   `accountOptions` offers logins for exactly that reason.
  *
  * A pasted uuid is taken as an id whether or not the reader can list it: the
  * accounts fetch is a convenience, and an id quoted out of an audit row must
@@ -93,18 +97,38 @@ export function accountQuery(text: string, users?: Map<string, User>): AccountQu
   return { actor_display: typed };
 }
 
+/** One completion: the value that goes in the box, and the name beside it. */
+export type AccountOption = { value: string; label: string };
+
 /**
- * The names to offer as completions, deduplicated and sorted.
+ * The accounts to offer as completions.
+ *
+ * **The value is the login, not the display name, and that is the whole point
+ * of this function.** An earlier version offered display names, which are what
+ * the table shows — and they are the one string that works on neither of the
+ * paths a completion can take. `accountQuery` resolves an unambiguous one to
+ * an id, so it worked by accident; two colleagues called "Sam" fall through to
+ * the name search instead, and `refusals.actor_display` holds
+ * `sam.one@example.test` and `sam.two@example.test`, so picking "Sam" from the
+ * list the screen offered returned nothing at all. A completion that cannot
+ * match is worse than no completion: it reads as an answer.
+ *
+ * The login works on both paths. It resolves exactly, because `accountQuery`
+ * matches it; and if it ever falls through, it is a substring of what the row
+ * stores. The display name rides along as the option's label, which is what a
+ * reader recognises and what the browser shows beside the value.
  *
  * Only ever non-empty for a reader who may see other people's, because that is
  * the only reader for whom the accounts are fetched at all — and the only one
  * for whom the filter does anything.
  */
-export function accountOptions(users?: Map<string, User>): string[] {
-  const names = new Set<string>();
+export function accountOptions(users?: Map<string, User>): AccountOption[] {
+  const options: AccountOption[] = [];
   for (const user of users?.values() ?? []) {
-    const name = user.display_name.trim() || user.login.trim();
-    if (name) names.add(name);
+    const value = user.login.trim();
+    if (!value) continue;
+    const name = user.display_name.trim();
+    options.push({ value, label: name && name !== value ? name : value });
   }
-  return [...names].sort((a, b) => a.localeCompare(b));
+  return options.sort((a, b) => a.label.localeCompare(b.label));
 }

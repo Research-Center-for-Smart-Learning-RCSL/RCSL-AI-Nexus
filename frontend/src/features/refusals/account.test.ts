@@ -66,8 +66,11 @@ describe('accountQuery', () => {
       ].map((u) => [u.id, u]),
     );
 
-    // A search returns both and says so. Resolving to whichever came first in
-    // the map would show one person's refusals under the other's name.
+    // Resolving to whichever came first in the map would show one person's
+    // refusals under the other's name, so it stays a search — and a search for
+    // "Sam" finds nothing, because `actor_display` holds logins rather than
+    // display names. That is why `accountOptions` completes to the login: the
+    // reader is never handed the string that lands here.
     expect(accountQuery('Sam', twins)).toEqual({ actor_display: 'Sam' });
   });
 
@@ -92,13 +95,47 @@ describe('accountQuery', () => {
 });
 
 describe('accountOptions', () => {
-  it('offers each name once, in an order somebody can scan', () => {
-    expect(accountOptions(USERS)).toEqual(['Chen', 'Wu Mei']);
+  it('completes to the login, and labels it with the name', () => {
+    /**
+     * **The value has to be a string that works, and a display name is the one
+     * string that works on neither path.** `accountQuery` resolves an
+     * unambiguous one to an id, so offering names looked correct; two people
+     * called "Sam" fall through to the name search instead, and
+     * `refusals.actor_display` holds `sam.one@…` and `sam.two@…` — it is
+     * written from `actor.display`, which is the *login* on an admin entrance
+     * and the API key's handle on the gateway, never a display name. So the
+     * completion the screen itself offered returned nothing.
+     *
+     * A login resolves exactly, and is a substring of what the row stores if
+     * it ever falls through. The name rides along as the label.
+     */
+    expect(accountOptions(USERS)).toEqual([
+      { value: 'chen@example.test', label: 'Chen' },
+      { value: 'wu@example.test', label: 'Wu Mei' },
+    ]);
   });
 
-  it('falls back to the login where an account has no display name', () => {
+  it('offers a completion that a search would actually match', () => {
+    const twins = new Map(
+      [
+        user({ id: 'a1', display_name: 'Sam', login: 'sam.one@example.test' }),
+        user({ id: 'a2', display_name: 'Sam', login: 'sam.two@example.test' }),
+      ].map((u) => [u.id, u]),
+    );
+
+    // The ambiguous case, which is the one that falls through to a search.
+    // Both completions resolve to an id; neither is the string "Sam" that no
+    // row contains.
+    for (const option of accountOptions(twins)) {
+      expect(accountQuery(option.value, twins).actor_id).toBeTruthy();
+    }
+  });
+
+  it('labels with the login where an account has no display name', () => {
     const nameless = new Map([['x', user({ id: 'x', display_name: '  ', login: 'x@example.test' })]]);
-    expect(accountOptions(nameless)).toEqual(['x@example.test']);
+    expect(accountOptions(nameless)).toEqual([
+      { value: 'x@example.test', label: 'x@example.test' },
+    ]);
   });
 
   it('is empty before the accounts arrive', () => {
