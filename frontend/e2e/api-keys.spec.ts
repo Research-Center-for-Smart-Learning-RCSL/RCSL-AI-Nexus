@@ -133,7 +133,11 @@ test('issues, edits, and revokes an API key', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Issue key' }).click();
   const createDialog = page.getByRole('dialog');
-  await createDialog.getByLabel('Name').fill('browser-agent');
+  // `exact` because getByLabel matches a case-insensitive substring by default,
+  // and the capability-defaulting field added on 2026-08-18 is labelled "When a
+  // request names something else" — which contains "name" and made this
+  // locator ambiguous rather than wrong.
+  await createDialog.getByLabel('Name', { exact: true }).fill('browser-agent');
   await createDialog.getByRole('button', { name: 'Issue key' }).click();
 
   expect(api.issuedBody()).toMatchObject({
@@ -162,11 +166,16 @@ test('issues, edits, and revokes an API key', async ({ page }) => {
 
   const editDialog = page.getByRole('dialog');
   await expect(editDialog.getByText('Edit browser-agent')).toBeVisible();
-  await editDialog.getByLabel('Name').fill('browser-agent-renamed');
+  await editDialog.getByLabel('Name', { exact: true }).fill('browser-agent-renamed');
   await editDialog.getByLabel('Rate limit (rpm)').fill('30');
   await editDialog.getByRole('button', { name: 'Save changes' }).click();
 
   expect(api.updatedBody()).toEqual({
+    // Sent on every edit since 2026-08-18, seeded from the key's current value
+    // by `edit-api-key-dialog`, so an edit that does not touch it cannot clear
+    // it. `toEqual` rather than `toMatchObject` here on purpose: the assertion
+    // is that the form sends this and nothing else.
+    default_capability: null,
     name: 'browser-agent-renamed',
     scopes: ['chat'],
     rate_limit_rpm: 30,
