@@ -124,7 +124,7 @@ export function ApiKeyTable() {
       {
         id: 'scopes',
         accessorFn: (row) => row.scopes.join(', '),
-        header: 'Scopes',
+        header: 'Capabilities',
         // The default rides in this cell rather than in a column of its own.
         // It is null on almost every key, so a column would be mostly empty
         // while costing width on a table that already has eight — and where it

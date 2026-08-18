@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 
 import { LogsTable } from '@/features/logs/components/logs-table';
 
-export const metadata: Metadata = { title: 'Logs' };
+export const metadata: Metadata = { title: 'Audit log' };
 
 export default function LogsPage() {
   return (
