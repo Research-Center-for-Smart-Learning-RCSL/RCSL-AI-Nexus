@@ -123,8 +123,16 @@ function startUvicorn(repoRoot, env, { module: moduleName, port, label }) {
       '127.0.0.1',
       '--port',
       String(port),
+      // `info` rather than `warning`, which is what turns uvicorn's access log
+      // on. It is noise on a green run and it is the only server-side record
+      // that exists on a red one: when `routing-selection.spec.ts` failed on
+      // 2026-08-18 with the admin entrance answering a GET from before a PUT
+      // it had already acknowledged, the browser's trace could show both
+      // requests and nothing could show what the server thought it was doing.
+      // A few hundred lines in a job log is a cheap price for not having to
+      // reproduce an intermittent failure to find out.
       '--log-level',
-      'warning',
+      'info',
     ],
     {
       cwd: join(repoRoot, 'backend'),
