@@ -29,6 +29,7 @@ from app.infrastructure.di import (
 from app.infrastructure.logging_config import configure_logging
 from app.interfaces.http.errors import install_error_handlers
 from app.interfaces.http.middleware.body_limit import BodySizeLimitMiddleware
+from app.interfaces.http.middleware.cache_control import CacheControlMiddleware
 from app.interfaces.http.middleware.geo_filter import build_geo_filter
 from app.interfaces.http.middleware.metrics import MetricsMiddleware
 from app.interfaces.http.request_context import RequestContextMiddleware
@@ -97,6 +98,11 @@ def create_app() -> FastAPI:
     # the geo filter inline in key auth), so /metrics rests on its bearer token
     # alone; see interfaces/http/routers/metrics.py.
     app.add_middleware(MetricsMiddleware)
+    # Every response that has not chosen for itself says it must not be stored.
+    # Placed inside RequestContextMiddleware so the two do not compete for
+    # outermost, and outside the perimeter middlewares so a rejection they build
+    # carries it too. See middleware/cache_control.py.
+    app.add_middleware(CacheControlMiddleware)
     # Added last, so it is outermost: every response, including one a rejected
     # middleware builds, passes back through it and gets the X-Request-Id
     # header. The 500 path is the one exception and sets its own; see
