@@ -251,7 +251,7 @@ const NAV_GROUPS: NavGroup[] = [
       },
       {
         href: '/logs',
-        label: 'Logs',
+        label: 'Audit log',
         icon: <ScrollTextIcon className="size-4" />,
         requires: 'logs:read',
       },

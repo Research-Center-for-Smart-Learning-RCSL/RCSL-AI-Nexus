@@ -63,7 +63,7 @@ export function CollectionList({ selectedId, onSelect }: CollectionListProps) {
         </button>
 
         {isLoading ? (
-          <p className="px-2 py-1.5 text-sm text-muted-foreground">Loading…</p>
+          <p className="px-2 py-1.5 text-sm text-muted-foreground">Loading...</p>
         ) : null}
 
         {collections?.map((collection) => (

@@ -216,7 +216,7 @@ export function DocumentTable({ collectionId }: DocumentTableProps) {
             onClick={() => fileInput.current?.click()}
           >
             <UploadIcon />
-            {upload.isPending ? 'Uploading…' : 'Upload'}
+            {upload.isPending ? 'Uploading...' : 'Upload'}
           </Button>
         }
       />

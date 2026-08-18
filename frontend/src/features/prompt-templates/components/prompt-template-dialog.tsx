@@ -92,7 +92,7 @@ export function PromptTemplateDialog({
               name="name"
               label="Name"
               placeholder="code-review"
-              description="What a caller writes in `prompt_template`. Unique within your tenant."
+              description={<>What a caller writes in <code>prompt_template</code>. Unique within this tenant.</>}
             />
             <FormField
               control={form.control}

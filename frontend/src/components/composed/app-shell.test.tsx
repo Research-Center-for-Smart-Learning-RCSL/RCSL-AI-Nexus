@@ -134,7 +134,7 @@ describe('the links a role can see', () => {
       'Knowledge',
       'Dashboard',
       'Usage',
-      'Logs',
+      'Audit log',
       'Transcripts',
       'Refusals',
       'Users',

@@ -41,7 +41,7 @@ export default function ApiKeysPage() {
             href: '/routing-policies',
             label: 'Routing policies',
             requires: 'routing:read',
-            note: 'a key can only be scoped to a capability that has a policy, so a capability has to exist there before it can be granted here',
+            note: 'a capability with no policy is greyed out on the key form and answers no_available_model for any key that already holds one, so a policy has to exist there before granting it here is worth anything',
           },
         ]}
       />

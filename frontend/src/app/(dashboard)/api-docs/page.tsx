@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 
 import { ApiReference } from '@/features/gateway/components/api-reference';
 
-export const metadata: Metadata = { title: 'API' };
+export const metadata: Metadata = { title: 'API reference' };
 
 export default function ApiDocsPage() {
   return (

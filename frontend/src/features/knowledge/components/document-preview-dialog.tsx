@@ -52,7 +52,7 @@ export function DocumentPreviewDialog({
 
         {isLoading ? (
           <p className="py-8 text-center text-sm text-muted-foreground">
-            Loading the extracted text…
+            Loading the extracted text...
           </p>
         ) : error ? (
           <ErrorState

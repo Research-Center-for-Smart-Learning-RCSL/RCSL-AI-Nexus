@@ -39,7 +39,7 @@ export const DATASET_LABELS: Record<string, string> = {
 
 export const DATASET_DESCRIPTIONS: Record<string, string> = {
   audit_log:
-    'Who did what: sign-ins, refusals, and every administrative action. Deleting these removes the record of what was done, including the record of this deletion.',
+    'Who did what: sign-ins, authorization denials, and every administrative action. Deleting these removes the record of what was done, including the record of this deletion.',
   usage_records:
     'What each request cost, per capability and per account. Quotas are measured against these, so a window shorter than the longest quota period would make enforcement wrong rather than merely forgetful.',
   prompt_logs:

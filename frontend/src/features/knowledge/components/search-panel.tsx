@@ -38,7 +38,7 @@ export function SearchPanel({ collectionId }: SearchPanelProps) {
         />
         <Button type="submit" disabled={search.isPending || !query.trim()}>
           <SearchIcon />
-          {search.isPending ? 'Searching…' : 'Search'}
+          {search.isPending ? 'Searching...' : 'Search'}
         </Button>
       </form>
 
