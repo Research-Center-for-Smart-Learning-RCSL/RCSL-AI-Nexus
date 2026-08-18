@@ -320,11 +320,11 @@ than to the `.next` that `pnpm build` produces.
 ### 9.1 The full-stack path, and why it is a separate command
 
 Everything above stops at the browser's network boundary. That is the right
-bound for a form's contract and it cannot answer one question: does editing a
-routing policy change which model the **gateway** serves? `routing-policies.spec.ts`
+bound for a form's contract and it leaves one question unanswered: whether
+editing a routing policy changes which model the **gateway** serves. `routing-policies.spec.ts`
 proves the form sends the right PUT and the backend integration suite proves the
 gateway routes on what is stored, so both stay green if the two are connected to
-different things -- an alias the form writes and the gateway never reads, a save
+different things — an alias the form writes and the gateway never reads, a save
 that lands in a different tenant.
 
 `pnpm test:e2e:full` runs the paths under `e2e/full-stack` against the real admin
@@ -339,7 +339,7 @@ difference, and configuration refuses it under `ENV=production`.
 
 **A separate mode rather than an addition to the default run**, because the
 default paths must stay runnable with no database. Making all of them depend on
-one is how this join went untested for as long as it did -- the local Docker
+one is how this join went untested for as long as it did — the local Docker
 daemon was unavailable on the day the browser paths were written, and a harness
 nobody could run would not have been written honestly. In CI it is its own job
 with its own Postgres service.

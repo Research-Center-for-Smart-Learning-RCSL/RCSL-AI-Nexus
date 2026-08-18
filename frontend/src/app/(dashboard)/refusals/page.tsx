@@ -12,7 +12,7 @@ export default function RefusalsPage() {
         <h1 className="font-heading text-lg font-semibold">Refusals</h1>
         <p className="max-w-prose text-sm text-muted-foreground">
           Every request this platform turned away, with the message the caller
-          was given and the figures that came with it. Your own by default;
+          was given and the figures that came with it. Each reader sees their own by default;
           everyone’s with <code className="font-mono">refusal:read_all</code>.
         </p>
         <p className="mt-2 max-w-prose text-sm text-muted-foreground">

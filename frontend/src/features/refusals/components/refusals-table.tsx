@@ -580,7 +580,7 @@ export function RefusalsTable() {
           somebody mistakes for "there is nothing there". */}
       {data?.scoped_to_self ? (
         <p className="text-xs text-muted-foreground">
-          Showing refusals from your own account and its API keys. Seeing
+          Showing refusals from this account and its API keys. Seeing
           everyone’s needs <code className="font-mono">refusal:read_all</code>.
         </p>
       ) : null}

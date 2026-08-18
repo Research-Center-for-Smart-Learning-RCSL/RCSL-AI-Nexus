@@ -25,7 +25,7 @@ that cost. Anything that produces a figure this repository will later reason fro
 cd scripts/model-eval
 python3 validate.py        # must print 18/18 before anything else is worth doing
 python3 run.py pilot2      # calibration against the incumbent only (section 4.2)
-python3 analyse.py pilot2  # is it inside the 40-70% band?
+python3 analyse.py pilot2  # reports whether the incumbent is inside the 40-70% band
 python3 run.py full        # three candidates, three interleaved rounds
 python3 analyse.py full
 python3 run.py restore     # put the deployment's model back, pinned
@@ -55,7 +55,7 @@ The first version of this task set scored **100%, thirty-seven samples, every on
 and the cause was not the checks — the deliberately wrong answers scored 0.57 to 0.88 against
 them. The cause was that the prompts announced their own traps: `merge_disjoint` supplied the
 worked example of the deviation, the complexity tasks named the required asymptotics, and
-`cache_decorator` listed the three properties to fix. A trap you signpost is a reading
+`cache_decorator` listed the three properties to fix. A signposted trap is a reading
 comprehension exercise, and these models read well. The rewrite states the same requirements
 without flagging which one is load-bearing.
 

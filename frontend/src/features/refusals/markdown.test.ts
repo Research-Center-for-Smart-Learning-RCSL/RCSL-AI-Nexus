@@ -113,7 +113,7 @@ describe('refusalsToMarkdown', () => {
       filter: 'code context_too_long',
     });
 
-    expect(md).toContain('1 of 57 shown, from your own account and its API keys');
+    expect(md).toContain('1 of 57 shown, from one account and its API keys');
     expect(md).toContain('filtered by code context_too_long');
   });
 

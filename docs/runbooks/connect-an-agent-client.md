@@ -10,7 +10,7 @@ than this platform's, and another client will not have them.
 **The direction of the connection is the thing to get straight first.** The
 agent is the client and this platform is the server. Nothing is installed here
 for the agent's benefit: the gateway gained tool calling, and any client that
-speaks the OpenAI chat API can now use it. You configure the agent to point at
+speaks the OpenAI chat API can now use it. The agent is configured to point at
 the gateway, not the other way round.
 
 ```
@@ -98,7 +98,7 @@ Stated both ways because an earlier version of this line said "40% of the
 clock", directly under the table, where it reads as the ratio between the rows
 rather than the saving. The same measurement on `glm-4.7-flash` gave 42% and
 46%; two different models agreeing that closely suggests this is a property of
-the task rather than of either model. Reproduce with `scripts/measure-agent-loop.py`. Note that the saving is in
+the task rather than of either model. Reproduce with `scripts/measure-agent-loop.py`. The saving is in
 *output* tokens: reasoning is never replayed into the next prompt, so it costs
 per turn rather than compounding through the conversation the way tool output
 does.
@@ -108,8 +108,8 @@ to `qwen7b` when the main model is not loaded, which is right for a person — a
 smaller answer beats no answer. It is wrong for an agent: a weaker model does
 not fail, it writes worse code, and nothing in the transcript says which model
 wrote it. So `code` returns `503 no_available_model` instead, which is a thing
-the operator can act on. Add a fallback only if you would rather have the work
-done badly than not at all.
+the operator can act on. A fallback belongs here only where work done badly is
+preferable to work not done at all.
 
 ## 2. Issue a key sized for an agent
 
@@ -151,7 +151,7 @@ Four things are easy to get wrong:
 - **`model` takes a capability, not a model name.** `code`, not
   `qwen2.5-coder:32b`. This is the platform's one real divergence from other
   providers and it is deliberate; the routing policy decides what actually
-  serves the request. `GET /v1/models` lists what your key may ask for.
+  serves the request. `GET /v1/models` lists what a given key may ask for.
 - **`wire_api = "responses"` is required**, and this line is the one that has
   changed. Codex dropped Chat Completions in February 2026; the gateway grew
   `/v1/responses` on 2026-08-07 to meet it. A client old enough to accept
@@ -186,7 +186,7 @@ Four things are easy to get wrong:
 
   Nothing needs granting: `codex-auto-review` is not a capability, so there is
   no capability to issue. Turn the auto-review off, or point that slot at `code`
-  if your version exposes a setting for it. Check the gateway log for the slug —
+  if that version exposes a setting for it. Check the gateway log for the slug —
   `capability_not_issued` names it — before believing any other explanation of a
   blocked write.
 
@@ -215,7 +215,7 @@ Four things are easy to get wrong:
   issued with a `default_capability`: a capability the key already holds, which
   serves anything it was not issued for instead of refusing. It ends the picker
   trap for that key at the cost of the signal — with it on, a client sending
-  `gpt-5.6-luna` simply works, and nobody learns that the `model` line was
+  `gpt-5.6-luna` works, and nobody learns that the `model` line was
   never being used. Ask for it when a machine has to work more than it has to
   be diagnosable; the substitution is still announced in
   `X-Capability-Defaulted` and still recorded, so it is a quieter platform
@@ -223,7 +223,7 @@ Four things are easy to get wrong:
 
   The gateway does not answer in Codex's shape, and that is a decision rather
   than a gap. `construct_model_info_from_candidates` takes a matched remote
-  entry **whole**, so a slug we advertise no longer falls back to the client's
+  entry **whole**, so a slug this gateway advertises no longer falls back to the client's
   local metadata — and that metadata is where the agent's entire system prompt
   comes from. Advertising `code` without also serving some 20,000 characters of
   Codex's own instructions, re-checked against every client release, would
@@ -243,12 +243,12 @@ is why one machine has worked for days and another was refused before a word was
 typed. See 3.2 before connecting a machine that has the desktop app.**
 
 What remains true is narrower: **Codex on the web** (`chatgpt.com/codex`) runs
-on OpenAI's machines, reads no file on yours, and cannot be pointed at a custom
+on OpenAI's machines, reads no local file, and cannot be pointed at a custom
 endpoint.
 
-**Confirm the field names against your installed version** (`codex --version`)
+**Confirm the field names against the installed version** (`codex --version`)
 before spending time debugging. This file records what the gateway needs; the
-client's configuration schema is not ours and has changed between releases.
+client's configuration schema belongs to the client and has changed between releases.
 
 ### 3.1 Undoing it, and running both
 
@@ -294,10 +294,10 @@ them than one they chose per invocation.
   model=code`.
 
 **None of these disconnect anything on this side**, and it is worth being clear
-with an integrator about that. They are settings on a machine you control, and
+with an integrator about that. They are settings on a machine the integrator controls, and
 a copy of the configuration elsewhere keeps working. The disconnect this
 platform enforces is **revoking the key** (section 2), which is also the only
-one that helps if the key has reached somewhere you did not intend.
+one that helps if the key has reached somewhere it was not meant to.
 
 ### 3.2 The same sharing, in the direction that can break it
 
@@ -415,8 +415,7 @@ Two rules come out of that, and they are cheap:
 - **PowerShell's `-match` is case-insensitive and `[regex]::Matches` is not.**
   `$raw -match 'rcsl'` returning `True` and `[regex]::Matches($raw,'rcsl')`
   returning nothing is not a contradiction — the file said `RCSL_API_KEY`. Put
-  `(?i)` at the front of any pattern used for a search whose answer you intend
-  to act on.
+  `(?i)` at the front of any pattern whose result is going to be acted on.
 
 ### 3.3 What a conversation costs before anybody types
 
@@ -452,10 +451,10 @@ Three things to check on the client, in order of what they usually cost:
 None of these are settings on this platform, and the ceiling is not the lever
 that fixes them: doubling it doubles how long a session runs before it stops.
 
-### 3.4 Accounts and sign-in, which are not ours but arrive addressed to us
+### 3.4 Accounts and sign-in, which are not this platform's but arrive addressed to it
 
-**An integrator whose machine you touched will attribute the next unrelated
-problem on it to you.** That is reasonable of them, and the way out is evidence
+**An integrator whose machine has been touched will attribute the next unrelated
+problem on it to whoever touched it.** That is reasonable of them, and the way out is evidence
 rather than assurance. This section is what a day of collecting it produced —
 none of it is platform behaviour, and all of it was asked as though it were.
 
@@ -489,7 +488,7 @@ than pasting the file.
 single account and offer no in-app switcher: changing account means signing out
 and signing back in. Confirmed on two machines, one on `team` and one on `plus`,
 so it is neither a plan difference nor a broken installation — and the machine
-we had configured behaved identically to the one we had not.
+that had been configured behaved identically to the one that had not.
 
 **A sign-out that reports an error can still have worked.** After
 `26.814.41407`, the sign-out button returned `Oops, an error has occurred` while
@@ -517,7 +516,7 @@ Two things follow, and the second is the reason this section exists:
 **The general form**, worth saying to an integrator in the same breath as the
 configuration: this client updates itself, changes its plugin set, and changes
 its account handling between builds, all on its own schedule and none of it
-announced. When something changes on their machine the day after you were on it,
+announced. When something changes on their machine the day after somebody was on it,
 **compare against a second machine before assuming either answer** — that is
 what settled every question in this section, and it took minutes each time.
 
@@ -548,8 +547,8 @@ curl https://llmapi.rcsl.online/v1/chat/completions \
 
 **What the interesting failure looks like:** 200, `finish_reason: "stop"`, and
 a `content` full of prose about listing files. That is the model declining or
-being unable to call tools, and it is the one failure mode no error will tell
-you about. Try a different model before touching anything else.
+being unable to call tools, and it is the one failure mode no error reports.
+Try a different model before touching anything else.
 
 ## 5. Known limits
 
@@ -557,13 +556,13 @@ you about. Try a different model before touching anything else.
 |---|---|
 | `413 context_too_long` mid-task | The conversation grew past `MAX_CONTEXT_LENGTH`. Tool definitions and replayed calls count towards it, so a long agent session reaches it by accumulation. Start a fresh conversation, or raise the setting knowing what section 4.3 of security.md says about it |
 | `400 runtime_capability_unsupported` | The client sent `tool_choice: "required"` or named a function. Neither runtime can constrain decoding, so it is refused rather than quietly served as `auto`. Configure the client to send `auto` |
-| `403 capability_not_issued` | The `model` field named something this key may not call — most often the client's own default model name rather than a capability. The message names what you asked for and what you may ask for instead; `GET /v1/models` is the same list. See section 3. A key can be issued with a `default_capability` that serves one of its own capabilities instead of refusing; ask an administrator, and read section 3 first, because this refusal is usually telling you something true about your client |
+| `403 capability_not_issued` | The `model` field named something this key may not call — most often the client's own default model name rather than a capability. The message names what was asked for and what may be asked for instead; `GET /v1/models` is the same list. See section 3. A key can be issued with a `default_capability` that serves one of its own capabilities instead of refusing; ask an administrator, and read section 3 first, because this refusal is usually telling you something true about your client |
 | `429` early in a task | The key's requests-per-minute limit. See section 2 |
-| `503 runtime_timeout` on long conversations | Prompt evaluation outran the platform's read timeout. **Do not retry it unchanged — send less**, which is what the platform's own message says. A prefill cancelled at the timeout is discarded, so the retry re-evaluates from nothing at the full cold rate: measured 2026-08-14, by aborting a cold prefill part way and re-sending it, the retry evaluated 20,919 tokens in 33.5 seconds having kept nothing. It then fails identically after the same wait. **This row said "retry immediately, the prompt is in the prefix cache" until 2026-08-14, and the prefix-cache reasoning is not wrong so much as inapplicable**: the cache is real and does make an agent's *next turn* nearly free, but it does not survive a cancellation, and a cancellation is the only way this code is reached. If the agent's SDK timeout is shorter than 2100s it will kill the connection first and you will never see this code; size it up (see `/api-docs`, Timeouts) |
+| `503 runtime_timeout` on long conversations | Prompt evaluation outran the platform's read timeout. **Do not retry it unchanged — send less**, which is what the platform's own message says. A prefill cancelled at the timeout is discarded, so the retry re-evaluates from nothing at the full cold rate: measured 2026-08-14, by aborting a cold prefill part way and re-sending it, the retry evaluated 20,919 tokens in 33.5 seconds having kept nothing. It then fails identically after the same wait. **This row said "retry immediately, the prompt is in the prefix cache" until 2026-08-14, and the prefix-cache reasoning is not wrong so much as inapplicable**: the cache is real and does make an agent's *next turn* nearly free, but it does not survive a cancellation, and a cancellation is the only way this code is reached. If the agent's SDK timeout is shorter than 2100s it kills the connection first and this code never appears; size it up (see `/api-docs`, Timeouts) |
 | `503 overloaded` | Every inference slot was busy for the whole two-minute queue wait. The deployment is full, not broken; back off for `Retry-After` |
 | `400 runtime_capability_unsupported` on a replayed conversation | An assistant turn in the history carries `arguments` that are not valid JSON, and Ollama takes arguments as an object, so the platform refuses before sending. Repair or drop that turn — retrying replays the failure |
 | `422` naming `functions` or `function_call` | The client sent the deprecated OpenAI spellings, which are refused rather than silently ignored (before 2026-08-05 they were dropped, and the client stalled with prose and no error). Configure it to send `tools` / `tool_choice` |
-| `422` on **every** request, naming an `input` tag that "does not match any of the expected tags" | A Codex newer than the shapes this endpoint was built against sent an input item the gateway did not know. `additional_tools` did this on 2026-08-14, before the fix that accepted it and offered the tools it carries. Any *other* unknown tag now costs that item alone, so this should no longer be a total failure — report the tag if you see it, and check `X-Dropped-Input-Items` on the response |
+| `422` on **every** request, naming an `input` tag that "does not match any of the expected tags" | A Codex newer than the shapes this endpoint was built against sent an input item the gateway did not know. `additional_tools` did this on 2026-08-14, before the fix that accepted it and offered the tools it carries. Any *other* unknown tag now costs that item alone, so this should no longer be a total failure — report any such tag, and check `X-Dropped-Input-Items` on the response |
 | Very slow first token on every step | Deliberation is still on for the capability. See section 1, step 3 |
 | Tool calls never happen, no error | The model does not do function calling. See section 4 |
 | The reply stops mid-sentence, no error | The conversation has crowded the answer out of the model's context window. See 5.1 |
@@ -582,11 +581,10 @@ Two behaviours that are correct but surprising:
   *not* in that category — they are offered to the model like any other.
 - **A key carrying a `default_capability` is served rather than refused when it
   names something else**, and the response says so in `X-Capability-Defaulted`,
-  which names the capability that actually ran. Read it if you are debugging:
-  it is how you find out that your `model` line is not the one being used.
-  Nothing is hidden by the setting — the substitution is also kept against the
-  request in the platform's usage records, so an administrator can see what
-  your client has been sending.
+  which names the capability that actually ran. It is the channel that reveals a
+  `model` line that is not the one being used. Nothing is hidden by the setting
+  — the substitution is also kept against the request in the platform's usage
+  records, so an administrator can see what the client has been sending.
 
 ### 5.1 The reply that stops mid-sentence
 
@@ -762,7 +760,7 @@ both audited). While it
 is open, error responses to that key carry `error.detail` — the
 operator-facing explanation that is otherwise log-only, which turns "401
 Authentication required" into "source 203.0.113.9 not permitted for
-nx_live_abc" at exactly the moment you are debugging a CIDR list.
+nx_live_abc" at exactly the moment a CIDR list is being debugged.
 
 ## 7. Do not point an agent at MLX yet
 

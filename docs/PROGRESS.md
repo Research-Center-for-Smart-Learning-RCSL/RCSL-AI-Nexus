@@ -657,7 +657,7 @@ Rows now carry a tick box and the copy button copies the selection when there
 is one; `refusalsToMarkdown` already took an arbitrary list, so the export
 layer needed only to be told *which* kind of excerpt it was making. A
 hand-picked paste is headed "3 hand-picked out of 120 matching" rather than "3
-of 120 shown" — a page is a window and the numbers say how much of it you hold,
+of 120 shown" — a page is a window and the numbers say how much of it the reader holds,
 but a selection is a choice, and nothing in the numbers says which of the other
 hundred-and-seventeen were passed over or why. It is the more misleading of the
 two to paste into a ticket unlabelled, so it is the one that says what it is.
@@ -720,10 +720,10 @@ was the one the app fetched models with, not the one the operator installed --
 and since both machines are identical here, the CLI was never a variable in
 yesterday's diagnosis at all.
 
-### The state file I told an operator to delete held nothing I said it held
+### The state file an operator was told to delete held nothing it was said to hold
 
-Yesterday `findstr /M /S /I "rcsl" *` named `.codex-global-state.json`, and I
-read that as the app's global state remembering the provider. **`findstr /M`
+Yesterday `findstr /M /S /I "rcsl" *` named `.codex-global-state.json`, and that
+was read as the app's global state remembering the provider. **`findstr /M`
 prints filenames, not matches.** Read properly today on two machines, that file
 holds no provider block, no `base_url`, no `env_key` -- and no account of any
 kind. The hits were project paths and conversation titles containing
@@ -741,14 +741,14 @@ PowerShell's `-match` is case-insensitive and `[regex]::Matches` is not; the
 file said `RCSL_API_KEY`. Two searches for the same thing disagreeing is a fact
 about the searches.
 
-### An integrator's unrelated problem arrived addressed to us, and the evidence was cheap
+### An integrator's unrelated problem arrived addressed to this platform, and the evidence was cheap
 
 The teacher reported this morning that his business workspace had disappeared
-from the ChatGPT desktop app, and reasonably suspected the configuration we had
+from the ChatGPT desktop app, and reasonably suspected the configuration that had been
 edited on his machine the night before. It had not: the app signs into one
 account at a time and has no in-app switcher, so he was looking at his personal
 account with no way back except signing out. **Confirmed against the operator's
-machine, which is on `team` and behaves identically** -- and which we had also
+machine, which is on `team` and behaves identically** -- and which had also been
 configured, and unconfigured, that day.
 
 Three things came out of settling it, and they are now section 3.4 of the
@@ -766,15 +766,16 @@ runbook:
   file was gone afterwards. That message arrived with the build the app
   installed on its own that morning.
 
-**Why any of this is in our runbook.** None of it is platform behaviour. But an
-integrator whose machine you touched will attribute the next thing that breaks
-on it to you, which is a reasonable thing for them to do, and the reply that
+**Why any of this is in this project's runbook.** None of it is platform
+behaviour. But an integrator whose machine has been touched will attribute the
+next thing that breaks on it to whoever touched it, which is a reasonable thing
+for them to do, and the reply that
 works is a second machine rather than an assurance. Each question here took
 minutes to settle that way and would have taken an afternoon to argue.
 
 **He then uninstalled and reinstalled the app, and the sign-out error came back
 on the first attempt** -- which settles more than the fix that followed it did.
-A fault that survives a clean install was never local state, so every file we
+A fault that survives a clean install was never local state, so every file that
 had been reading was the wrong place, including the ones edited the night
 before. **He found the remedy himself: Settings, log out all sessions.** The
 ordinary sign-out worked afterwards. And the account switcher he was originally
@@ -1003,7 +1004,7 @@ month appears in the paste without anyone editing that file.
 
 **The page copy says what it left out.** Three refusals out of fifty-seven,
 pasted with no note, read as the whole of what happened — and this screen
-narrows to your own by default. The header line carries the count, the scope
+narrows to the reader's own by default. The header line carries the count, the scope
 and the filter.
 
 **There were three implementations of "copy, say Copied for two seconds" and
@@ -1128,9 +1129,9 @@ refusals that matter are already in `audit_log` by §12: a failed sign-in, an
 authorization denial, a recovery code replayed. That table is for events about
 who somebody is; this one is for events about what they sent.
 
-**Reading your own is in the base scopes, and that is the decision the feature
+**Reading one's own is in the base scopes, and that is the decision the feature
 turns on.** `refusal:read_own` reaches every human role, beside
-`usage:read_own`. Being unable to look up why you were refused is precisely the
+`usage:read_own`. Being unable to look up the reason for a refusal is precisely the
 condition that cost two people an evening, so putting the answer behind an
 administrator would have left them where they were. `refusal:read_all` is
 granted like `usage:read_all` — to `tenant_admin`, `operator` and `auditor` —
@@ -1144,7 +1145,7 @@ own id and the page carries `scoped_to_self`; the screen prints a line saying
 what it is showing. A page that quietly returns a subset of what its controls
 imply is the shape somebody mistakes for "there is nothing there".
 
-**Reading across accounts is audited; reading your own is not.**
+**Reading across accounts is audited; reading one's own is not.**
 `refusal.read_any` fires once per request that reaches for somebody else's,
 naming whose. The judgement is `prompt_log.list`'s: an event that fires on every
 screen refresh describes no disclosure and is noise. What is worth recording is
@@ -1435,7 +1436,7 @@ guardrail bypass the rule exists to stop -- so correcting it needs an
 unload/edit/load. What is stale is the admission estimate for a future load; the
 live accounting uses the observed figure.
 
-### A client that could not send an empty conversation, and a slug I got wrong
+### A client that could not send an empty conversation, and a slug recorded wrongly
 
 A teacher's Windows machine, 20:44 to 21:21. The platform half verified at 20:51
 -- `finish_reason: tool_calls`, 264 prompt tokens, 1.1 seconds -- and then every
@@ -1472,7 +1473,7 @@ operator's own machine, which had the app and worked; the difference is the
 plugin set. And the app's global state was never holding the provider: that came
 from `findstr /M`, which prints filenames rather than matches.
 
-**And the correction to my own entry from four hours earlier.** `ef503dc`
+**And the correction to this file's own entry from four hours earlier.** `ef503dc`
 recorded 78 refusals of `gpt-5.6-luna` clustering after each 413, said the
 mechanism was not established, and then guessed at automatic compaction -- and
 built the entry's emphasis on that guess. `models_cache.json`, read off the
@@ -1846,7 +1847,7 @@ its code is worth reading is still only answerable by real work.
 The same user, an hour after the quota entry below, hit `413 Payload Too Large`
 two work items into a coding task — `req_b72383c071a84eac`, 270,182 characters
 against a limit of 262,144. Their own assessment named the platform rather than
-the model as the risk, and it was right, though not for the reason either of us
+the model as the risk, and it was right, though not for the reason either party
 assumed: the ceiling was not too low. It was not being applied in the unit it
 was written in.
 

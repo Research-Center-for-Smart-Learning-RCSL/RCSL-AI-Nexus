@@ -23,7 +23,7 @@ export function describeError(error: unknown): string {
   if (error instanceof NetworkError) return error.message;
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;
-  return 'Something went wrong.';
+  return 'An unexpected error occurred.';
 }
 
 export function ErrorState({

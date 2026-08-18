@@ -83,7 +83,7 @@ export function OneTimeSecret({
       </p>
       {copyFailed ? (
         <p role="alert" className="text-sm text-destructive">
-          Could not reach the clipboard — your browser refused it. Select the
+          Could not reach the clipboard — the browser refused it. Select the
           text above and copy it manually before continuing.
         </p>
       ) : null}
