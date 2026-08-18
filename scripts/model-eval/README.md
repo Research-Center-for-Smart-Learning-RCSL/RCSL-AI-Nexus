@@ -28,8 +28,17 @@ python3 run.py pilot2      # calibration against the incumbent only (section 4.2
 python3 analyse.py pilot2  # reports whether the incumbent is inside the 40-70% band
 python3 run.py full        # three candidates, three interleaved rounds
 python3 analyse.py full
+python3 run.py repair      # re-run named tasks whose prompt, not the model, was measured
 python3 run.py restore     # put the deployment's model back, pinned
 ```
+
+**A `repair` phase supersedes `full` task by task, and nothing here merges them for you.**
+`analyse.py` reads one phase, so its `full` tables still carry the figures the re-run replaced;
+the published numbers are `full` with `repair` overriding the tasks it covers, which is the rule
+`backend/app/infrastructure/import_evaluation.py` implements and the importer takes as
+`--phase full --phase repair`. Getting it wrong in either direction restores the defect the
+re-run removed: `full` alone puts `qwen3.6:27b-q8_0` at 81.9% against its real 87.5%, and
+concatenating both phases without letting the later one win puts it at 83.5%.
 
 No dependencies beyond the standard library. `OLLAMA_HOST` overrides the runtime address.
 

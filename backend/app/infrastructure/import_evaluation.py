@@ -70,10 +70,12 @@ def parse_samples(lines: Sequence[str], *, phases: Sequence[str] = ()) -> list[E
     formatting rather than a model's capability, and the fix was to rewrite
     them and re-run those three tasks for every candidate under a `repair`
     phase. The published figures are `full` with `repair` replacing the tasks
-    it covers, and averaging the two together instead reproduces the defect the
-    re-run existed to remove — `qwen3.6:27b` comes out at 81.9% against its
-    real 87.5%, because the run where it scored zero for an `IndentationError`
-    is still in the mean.
+    it covers. Get that wrong in either direction and the defect the re-run
+    existed to remove comes back, because the run where `qwen3.6:27b` scored
+    zero for an `IndentationError` is still in the mean: importing `full` alone
+    puts it at **81.9%** against its real 87.5%, and concatenating both phases
+    without letting the later one win puts it at **83.5%**. Neither is a
+    rounding difference, and neither raises.
 
     So the phases are given in order and the last one wins for any task it
     contains. With no phases named, everything in the file is used, which is

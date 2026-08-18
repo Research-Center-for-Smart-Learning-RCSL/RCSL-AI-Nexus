@@ -382,6 +382,45 @@ turn: `test_a_file_the_repository_does_not_describe_is_refused`. An allowlisted
 extension is not a licence to arrive unannounced.
 
 
+### Four the morning's audit named and left open, and one of them turned out not to be a disagreement at all
+
+**The password form now scores against the account it is for.** The API passes
+the login and display name to zxcvbn and the browser passed nothing, so
+`jocelyn.tanaka2026` scored 4 in the form and was refused by the API — the one
+direction `frontend.md` section 3 says must never happen. `expandUserInputs`
+mirrors `_expand` in `adapters/crypto/zxcvbn_policy.py`, including the part that
+does the work: the local part is kept whole, because split into `jocelyn` and
+`tanaka` the dot between them is unmatched and zxcvbn charges a brute-force
+segment for it, carrying that password back to a 4. Verified element for element
+against the Python function, which is also how two test expectations turned out
+to be wrong rather than the code. All three password screens pass what they know,
+and the strength meter scores against the same inputs as the schema. The 128
+character ceiling is mirrored too, past which both sides length-check without
+scoring, because zxcvbn's matching is superlinear in length.
+
+**`stop-stack-once.sh` derives its service list** like its two siblings, instead
+of carrying nine names beside a comment claiming all three were in step. It was
+the last of the three to find out that keeping such a list by hand does not work,
+and what it cost is precisely the check it exists to make: the precondition
+asserts the platform is healthy before a fault is injected, and a platform with
+`qdrant` or `parser` already down would have passed it.
+
+**The two estimator tables were not in disagreement, and that is the finding.**
+Re-measured against the same tokeniser on fresh samples: prose 1.61x, Python
+1.47x, TypeScript 1.25x, Markdown 1.22x, a twelve-tool JSON schema 1.24x, a
+120-line uuid list 0.37x — agreeing with neither table to two decimal places.
+**The ratio is a property of the sample rather than a constant of the content
+type**, and prose swings widest because it is decided by how much of it is common
+short words. So the two-decimal precision both tables carry is spurious, and the
+honest reading of all three measurements is a range: **1.2x-1.6x over natural
+language and source, 0.34x-0.40x over dense identifiers**. Both tables keep their
+figures; neither may be quoted as a per-type constant. The constants are not
+retuned to it, for the reason the uuid row has given since 2026-08-14.
+
+(The fourth, the download allowlist, is the entry above: `security.md` section
+7.1(c) went to PARTLY OPEN on it, and the digest half closed later the same day.)
+
+
 ### Ollama came off the operator's admin login, and the reason it had never moved was a directory mode
 
 `security.md` §7.1(d) has asked for a dedicated non-administrator service

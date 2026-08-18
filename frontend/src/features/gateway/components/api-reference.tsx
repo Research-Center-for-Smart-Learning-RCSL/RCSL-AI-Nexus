@@ -436,6 +436,11 @@ export function ApiReference() {
           one, and any tool type this platform does not recognise, is dropped
           instead and named in the <code>X-Dropped-Tools</code> response header,
           so a capability the model never saw is findable rather than a mystery.
+          An input item on <code>/v1/responses</code> whose type this gateway
+          does not recognise is dropped the same way — part of the conversation
+          never reaches the model — and named in{' '}
+          <code>X-Dropped-Input-Items</code>. Both are narrowings rather than
+          failures, and both are announced rather than silent.
         </p>
         <p className="text-sm text-muted-foreground">
           <strong>
