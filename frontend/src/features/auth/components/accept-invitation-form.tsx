@@ -148,4 +148,3 @@ export function AcceptInvitationForm({ token }: { token: string }) {
     </Form>
   );
 }
-
