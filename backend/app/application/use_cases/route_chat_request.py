@@ -115,6 +115,23 @@ qwen36-35b-a3b-q8, whose tokenizer is a different one. Re-measured against it on
 | git sha table        | 1.21        | 0.40x         |
 | UUID list            | **1.02**    | **0.34x**     |
 
+**Two tables in this repository gave different figures for the same content
+types, and 2026-08-18 settled why.** `docs/PROGRESS.md`'s 2026-08-17 catalogue
+reads 1.34x-1.48x over prose, source and tool schemas with UUIDs at 0.36x; the
+table above reads 1.22x-1.47x with UUIDs at 0.34x. Re-measured that day against
+this same tokenizer on freshly written samples — English prose 1.61x, Python
+1.47x, TypeScript 1.25x, Markdown 1.22x, a twelve-tool JSON schema 1.24x, a
+120-line UUID list 0.37x, each net of the twelve tokens the chat template costs
+on an empty turn — and the third set agrees with neither to two decimal places.
+
+**Neither table is wrong. The ratio is a property of the sample, not a constant
+of the content type**, and prose is the widest: how much of it is common short
+words decides most of the figure. So the two-decimal precision both tables
+carry is spurious, and the honest reading of all three is a range — roughly
+1.2x-1.6x over natural language and source, and 0.34x-0.40x over dense
+identifiers. That range is what the constants below have to survive, and it is
+wider than either table alone suggested.
+
 The constants are not retuned to it, and the second table is why: qwen36 is
 *both* more efficient than gemma4 on everything this platform serves and more
 fragmented on dense identifiers, so the gap between the honest case and the
@@ -756,7 +773,14 @@ class RouteChatRequest:
         # role. Refused rather than routed, and deliberately not folded into
         # the "no available model" answer below: the caller can fix this one,
         # and telling them it is a capacity problem sends them nowhere.
-        if not actor.may_use(capability):
+        #
+        # A key may name a substitute for this case, and `capability_for`
+        # returns it. Everything below reads `served` rather than the value the
+        # caller sent, so the policy that runs, the model that is chosen, the
+        # vocabulary the prompt is counted in and the capability written to
+        # `usage_records` are all the one that actually did the work.
+        served = actor.capability_for(capability)
+        if served is None:
             # Named in the response, unlike every other refusal here. The
             # caller sent this value and the list is what `GET /v1/models`
             # already returns them, so nothing is disclosed that they could not
@@ -768,6 +792,26 @@ class RouteChatRequest:
                 available=await self._capabilities.execute(actor),
                 detail=f"key {actor.display} is not issued for {capability}",
             )
+
+        if served != capability:
+            # Logged at every substitution, and deliberately not only when the
+            # header is read. A default is the one setting on a key that makes
+            # the platform serve something other than what was asked for, and
+            # the whole argument for allowing it per key rather than globally
+            # is that it stays visible: `X-Capability-Defaulted` says so to the
+            # caller, this says so to whoever runs the deployment, and the
+            # audit log says who turned it on.
+            logger.info(
+                "capability_defaulted key=%s asked=%s served=%s",
+                actor.display,
+                capability,
+                served,
+            )
+        # Kept for the usage row, which is the only durable record of the
+        # substitution: the header is read by a client or by nobody, and the
+        # log line above is gone with the container.
+        requested_capability = capability if served != capability else None
+        capability = served
 
         # A ceiling on input as well as output. Context cost grows faster than
         # linearly on unified memory, so a single enormous prompt is a
@@ -887,6 +931,10 @@ class RouteChatRequest:
                     # backstop, which needs the figure the guardrail judged.
                     counted,
                     basis,
+                    # None on every ordinary request. Carried down because the
+                    # usage row is written in `finally` here, and it is the one
+                    # place the substitution outlives the request.
+                    requested_capability,
                 )
             ) as generation:
                 async for chunk in generation:
@@ -1045,6 +1093,7 @@ class RouteChatRequest:
         sampling: SamplingOptions | None = None,
         counted_prompt_tokens: int = 0,
         counted_basis: str = COUNT_BY_ESTIMATE,
+        requested_capability: str | None = None,
     ) -> AsyncGenerator[CompletionChunk, None]:
         # The caller's request is honoured only where it is stricter than ours.
         # An unbounded generation is a hardware problem, not a client choice.
@@ -1255,6 +1304,7 @@ class RouteChatRequest:
                         actor_id=actor.id,
                         api_key_id=actor.api_key_id,
                         capability=capability,
+                        requested_capability=requested_capability,
                         model_alias=target.alias,
                         tokens=produced,
                         # Zero when the stream did not reach its terminal

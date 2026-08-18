@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils';
 import { usePasswordStrength } from '@/features/auth/hooks/use-password-strength';
 import { PASSWORD_MIN_LENGTH } from '@/features/auth/password-schema';
 
+const EMPTY: readonly string[] = [];
 const LABELS = ['Very weak', 'Weak', 'Fair', 'Good', 'Strong'] as const;
 const TONES = [
   'bg-destructive',
@@ -15,12 +16,19 @@ const TONES = [
 
 export function PasswordStrengthMeter({
   password,
+  userInputs,
   className,
 }: {
   password: string;
+  /**
+   * What this screen knows about the account. The meter scores against it for
+   * the same reason the schema does: a password built out of the login is weak
+   * in a way the estimator cannot see unless it is told the login.
+   */
+  userInputs?: readonly string[];
   className?: string;
 }) {
-  const strength = usePasswordStrength(password);
+  const strength = usePasswordStrength(password, userInputs ?? EMPTY);
   const tooShort = password.length > 0 && password.length < PASSWORD_MIN_LENGTH;
 
   return (
