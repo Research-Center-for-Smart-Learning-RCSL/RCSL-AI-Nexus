@@ -28,10 +28,16 @@ const LABELS: Record<string, string> = {
   quota_tokens_per_day: 'Daily token quota',
   allowed_cidrs: 'Allowed source CIDRs',
   expires_at: 'Expires',
+  default_capability: 'When a request names something else',
 };
 
 function describe(field: string, value: unknown): string {
   if (Array.isArray(value)) return value.length ? value.join(', ') : 'none';
+  // `null` is this field's "refuse", and the bare word would read as a value
+  // that failed to arrive rather than as the setting it is.
+  if (field === 'default_capability') {
+    return value === null ? 'refuse' : `serve ${String(value)}`;
+  }
   // Shown as the day it will become, because that is what applying it writes:
   // the API and the form's date input both take `YYYY-MM-DD`, and
   // `proposalToFormPatch` truncates the proposal's timestamp to one. Printing

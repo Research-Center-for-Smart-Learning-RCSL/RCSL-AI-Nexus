@@ -81,6 +81,15 @@ class ApiKeyDraftIn(BaseModel):
     quota_tokens_per_day: str | None = Field(default=None, max_length=40)
     allowed_cidrs: Annotated[list[str], Field(max_length=40)] | None = None
     expires_at: str | None = Field(default=None, max_length=60)
+    default_capability: str | None = Field(default=None, max_length=64)
+    """What the form's default-capability select currently holds.
+
+    `extra="forbid"` above is why this is not optional to add: a form that
+    published a field this model does not declare would have its whole draft
+    refused, and the assistant would answer about the key it could not see.
+    Absent here means the form holds "refuse", which is also what the frontend
+    sends for it — the sentinel the select uses is a frontend concern and does
+    not travel."""
 
 
 class AssistRequest(BaseModel):

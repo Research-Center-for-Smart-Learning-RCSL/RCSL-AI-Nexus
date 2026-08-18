@@ -32,6 +32,7 @@ import {
 } from '@/components/ui/select';
 import {
   defaultCapabilityField,
+  defaultCapabilityOptions,
   defaultCapabilityPayload,
   defaultExpiry,
   keyStatus,
@@ -107,6 +108,11 @@ export function EditApiKeyDialog({
   });
 
   const scopes = form.watch('scopes');
+
+  const defaultOptions = defaultCapabilityOptions(
+    scopes,
+    form.watch('default_capability') ?? NO_DEFAULT,
+  );
 
   function onSubmit(values: UpdateApiKeyValues) {
     update.mutate(
@@ -200,9 +206,12 @@ export function EditApiKeyDialog({
                     <SelectItem value={NO_DEFAULT}>
                       Refuse, and say what this key may call
                     </SelectItem>
-                    {scopes.map((capability) => (
+                    {defaultOptions.map((capability) => (
                       <SelectItem key={capability} value={capability}>
                         Serve {capability}
+                        {(scopes as string[]).includes(capability)
+                          ? ''
+                          : ' (not among this key\u2019s capabilities)'}
                       </SelectItem>
                     ))}
                   </SelectContent>

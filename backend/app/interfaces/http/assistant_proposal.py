@@ -70,7 +70,13 @@ Rules for that block:
 - `fields` may contain any of: `name` (string), `scopes` (list of capability
   names), `rate_limit_rpm` (integer, 1 to 100000), `quota_tokens_per_day`
   (integer, 1 or more), `allowed_cidrs` (list of CIDR strings), `expires_at`
-  (ISO 8601 timestamp with a UTC offset, e.g. "2026-10-27T00:00:00Z").
+  (ISO 8601 timestamp with a UTC offset, e.g. "2026-10-27T00:00:00Z"),
+  `default_capability` (a capability name, or null to refuse).
+- `default_capability` must be one of the capabilities in `scopes`. It is what
+  the key serves when a request names a capability it does not hold; `null`
+  refuses instead, which is the ordinary setting and the one that tells an
+  integrator their client is sending a model name. Only recommend a capability
+  here when the operator has said they would rather the key just worked.
 - Omit any field you have no recommendation for. Do not guess a value to fill
   the shape; an omitted field leaves what the operator already typed alone.
 - `rationale` is one short sentence saying why, in the same language as the
@@ -205,7 +211,25 @@ class ProposalCollector:
     async def trailer(self) -> dict[str, object] | None:
         if self._proposal is None:
             return None
-        return {"proposal": self._proposal.model_dump(mode="json", exclude_none=True)}
+        dumped = self._proposal.model_dump(mode="json", exclude_none=True)
+
+        # `exclude_none` is right for every field but one. On this model `None`
+        # means "the assistant made no recommendation", and dropping those is
+        # what keeps a card from claiming edits it did not propose — except on
+        # `default_capability`, where `None` is the recommendation: it is the
+        # setting that says stop substituting. Excluded, the one card that can
+        # withdraw a default would arrive with the field missing, and applying
+        # it would leave the default in place while the card said otherwise.
+        #
+        # The same distinction `PATCH /admin/api-keys/{key_id}` draws with
+        # `model_fields_set`, at the other end of the same field. Both exist
+        # because absence and null are different answers here and nowhere else.
+        fields = self._proposal.fields
+        dumped_fields = dumped.get("fields")
+        if "default_capability" in fields.model_fields_set and isinstance(dumped_fields, dict):
+            dumped_fields["default_capability"] = fields.default_capability
+
+        return {"proposal": dumped}
 
     # --- parsing ---------------------------------------------------------
 
@@ -266,6 +290,20 @@ class ProposalCollector:
             unknown = sorted(set(fields.scopes) - self._servable)
             if unknown:
                 logger.info("assistant proposed unservable capabilities %s", unknown)
+                return False
+
+        if fields.default_capability is not None and fields.scopes is not None:
+            # Only when the proposal carries both, which is the only case this
+            # function can decide. A proposal naming a default and no scopes is
+            # asking about the key's stored list, which is not in hand here —
+            # the form's own rule catches that one against the values the
+            # operator is looking at, and puts the message on the field rather
+            # than dropping the card.
+            if fields.default_capability not in fields.scopes:
+                logger.info(
+                    "assistant proposed a default outside the capabilities beside it: %s",
+                    fields.default_capability,
+                )
                 return False
 
         if fields.expires_at is not None:

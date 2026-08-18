@@ -92,6 +92,26 @@ export function defaultCapabilityField(value: string | null): string {
 }
 
 /**
+ * Which capabilities the default select offers: the ones ticked, plus whatever
+ * the field already holds.
+ *
+ * The second half is not tidiness. Unticking the capability a default names is
+ * refused rather than silently cleared, so that state is reachable and
+ * expected — and a Select whose value matches none of its items renders its
+ * trigger blank, which would leave the operator being told to fix a field that
+ * was showing them nothing.
+ */
+export function defaultCapabilityOptions(
+  scopes: IssuableCapability[],
+  current: string,
+): string[] {
+  if (current === NO_DEFAULT || current === '') return scopes;
+  return scopes.includes(current as IssuableCapability)
+    ? scopes
+    : [...scopes, current];
+}
+
+/**
  * The default must be one of the capabilities being granted in the same form.
  *
  * Checked here as well as on the server because the server's refusal is a 409

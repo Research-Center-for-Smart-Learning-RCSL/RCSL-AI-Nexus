@@ -33,6 +33,7 @@ import { useAssistantSurface } from '@/features/assistant/context';
 import { applyProposalPatch, draftFor } from '@/features/api-keys/assistant-bridge';
 import {
   createApiKeySchema,
+  defaultCapabilityOptions,
   defaultCapabilityPayload,
   defaultExpiry,
   DEFAULT_EXPIRY_DAYS,
@@ -83,6 +84,11 @@ export function CreateApiKeyDialog({
   });
 
   const scopes = form.watch('scopes');
+
+  const defaultOptions = defaultCapabilityOptions(
+    scopes,
+    form.watch('default_capability') ?? NO_DEFAULT,
+  );
 
   // Published only while the form is on screen. Once `plaintext` is set the
   // dialog is showing a secret rather than a form, and there is nothing left to
@@ -252,9 +258,12 @@ export function CreateApiKeyDialog({
                         <SelectItem value={NO_DEFAULT}>
                           Refuse, and say what this key may call
                         </SelectItem>
-                        {scopes.map((capability) => (
+                        {defaultOptions.map((capability) => (
                           <SelectItem key={capability} value={capability}>
                             Serve {capability}
+                            {(scopes as string[]).includes(capability)
+                              ? ''
+                              : ' (not among this key\u2019s capabilities)'}
                           </SelectItem>
                         ))}
                       </SelectContent>
