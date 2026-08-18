@@ -211,6 +211,16 @@ Four things are easy to get wrong:
   hidden, and it settled in one read a question two evenings of gateway logs
   could not.
 
+  **There is an escape, and it is deliberately not the default.** A key can be
+  issued with a `default_capability`: a capability the key already holds, which
+  serves anything it was not issued for instead of refusing. It ends the picker
+  trap for that key at the cost of the signal — with it on, a client sending
+  `gpt-5.6-luna` simply works, and nobody learns that the `model` line was
+  never being used. Ask for it when a machine has to work more than it has to
+  be diagnosable; the substitution is still announced in
+  `X-Capability-Defaulted` and still recorded, so it is a quieter platform
+  rather than a silent one.
+
   The gateway does not answer in Codex's shape, and that is a decision rather
   than a gap. `construct_model_info_from_candidates` takes a matched remote
   entry **whole**, so a slug we advertise no longer falls back to the client's
@@ -547,7 +557,7 @@ you about. Try a different model before touching anything else.
 |---|---|
 | `413 context_too_long` mid-task | The conversation grew past `MAX_CONTEXT_LENGTH`. Tool definitions and replayed calls count towards it, so a long agent session reaches it by accumulation. Start a fresh conversation, or raise the setting knowing what section 4.3 of security.md says about it |
 | `400 runtime_capability_unsupported` | The client sent `tool_choice: "required"` or named a function. Neither runtime can constrain decoding, so it is refused rather than quietly served as `auto`. Configure the client to send `auto` |
-| `403 capability_not_issued` | The `model` field named something this key may not call — most often the client's own default model name rather than a capability. The message names what you asked for and what you may ask for instead; `GET /v1/models` is the same list. See section 3 |
+| `403 capability_not_issued` | The `model` field named something this key may not call — most often the client's own default model name rather than a capability. The message names what you asked for and what you may ask for instead; `GET /v1/models` is the same list. See section 3. A key can be issued with a `default_capability` that serves one of its own capabilities instead of refusing; ask an administrator, and read section 3 first, because this refusal is usually telling you something true about your client |
 | `429` early in a task | The key's requests-per-minute limit. See section 2 |
 | `503 runtime_timeout` on long conversations | Prompt evaluation outran the platform's read timeout. **Do not retry it unchanged — send less**, which is what the platform's own message says. A prefill cancelled at the timeout is discarded, so the retry re-evaluates from nothing at the full cold rate: measured 2026-08-14, by aborting a cold prefill part way and re-sending it, the retry evaluated 20,919 tokens in 33.5 seconds having kept nothing. It then fails identically after the same wait. **This row said "retry immediately, the prompt is in the prefix cache" until 2026-08-14, and the prefix-cache reasoning is not wrong so much as inapplicable**: the cache is real and does make an agent's *next turn* nearly free, but it does not survive a cancellation, and a cancellation is the only way this code is reached. If the agent's SDK timeout is shorter than 2100s it will kill the connection first and you will never see this code; size it up (see `/api-docs`, Timeouts) |
 | `503 overloaded` | Every inference slot was busy for the whole two-minute queue wait. The deployment is full, not broken; back off for `Retry-After` |
@@ -570,6 +580,13 @@ Two behaviours that are correct but surprising:
   a narrowed request is a failed one, and the alternative to a header is
   narrowing it in silence. Tools declared in an `additional_tools` item are
   *not* in that category — they are offered to the model like any other.
+- **A key carrying a `default_capability` is served rather than refused when it
+  names something else**, and the response says so in `X-Capability-Defaulted`,
+  which names the capability that actually ran. Read it if you are debugging:
+  it is how you find out that your `model` line is not the one being used.
+  Nothing is hidden by the setting — the substitution is also kept against the
+  request in the platform's usage records, so an administrator can see what
+  your client has been sending.
 
 ### 5.1 The reply that stops mid-sentence
 

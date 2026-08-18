@@ -88,8 +88,8 @@ last row in security.md §13.0 that said "not implemented".
 
 | | |
 |---|---|
-| Backend | 32 use cases, 27 routers, 19 entity modules, 15 migrations (head `f3c8a15d27be`), 911 unit tests, 118 integration tests that skip without `TEST_DATABASE_URL` |
-| Frontend | 21 feature folders, 20 screens, **345 tests across 39 files** (296, then 308, earlier on 2026-08-18), types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
+| Backend | 32 use cases, 27 routers, 19 entity modules, 16 migrations (head `a4c1e07f2b9d`), 932 unit tests, 120 integration tests that skip without `TEST_DATABASE_URL` |
+| Frontend | 21 feature folders, 20 screens, **366 tests across 40 files** (296, then 308, 345 and 359, earlier on 2026-08-18), types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
 | Gates | ruff, ruff-format, strict mypy, pytest; tsc, eslint, vitest, a real `next build`, **six Playwright paths** (five until 2026-08-18, three days after the sixth landed); Trivy, pip-audit and pnpm audit advisory-only. All green — **and this row was false from 2026-08-07 to 2026-08-08**, see below; the claim was not re-run in the 2026-08-18 pass |
 
 **Verified on real hardware**, not only in tests: the full inference path with
@@ -304,6 +304,139 @@ days later, which is what a present tense inside a dated entry costs.
 ---
 
 ## 2026-08-18
+
+### A review of the hour-old refusals filters, and the completion the screen offered matched a column that never contains it
+
+Five findings against `c66f370`, four of them mine and two of them defects that
+would have made the feature worse than not having it.
+
+**The account box completed to display names, and `actor_display` never holds
+one.** That column is written once, from `actor.display`, which is the
+account's *login* on an admin entrance and the API key's handle on the gateway
+(`errors.py`, `middleware/identity.py`, `middleware/api_key_auth.py`) —
+`schema.ts` and the entity both say so, and the datalist was built out of
+`user.display_name` anyway. It worked by accident: `accountQuery` resolves an
+unambiguous display name to an id before the search is reached. Two colleagues
+both display-named "Sam" fall through instead, the rows hold
+`sam.one@example.test` and `sam.two@example.test`, and picking "Sam" from the
+list the screen itself offered returned nothing. **A completion that cannot
+match is worse than no completion, because it reads as an answer.** The value
+is the login now, which resolves exactly *and* is a substring of what the row
+stores if it ever falls through; the display name is the option's label, which
+is what a reader recognises.
+
+**Every keystroke was a request, on the most expensive filter here.** A partial
+name is `ILIKE '%…%'` with a leading wildcard on an unindexed column, run twice
+per request — the page and its `COUNT` — against an append-only table every
+refused gateway call adds to. Twelve characters typed was twenty-four scans of
+the tenant's partition. It was also **twelve `refusal.read_any` audit rows**,
+each naming a successive prefix of the name, in the table whose use case
+explains at length why it records once per request rather than once per row.
+
+The audit log found this defect first and fixed it in `logs-table.tsx` with the
+finding written beside it. This repository has extracted a helper on the third
+copy before; this is the second, so `lib/use-debounced.ts` exists and
+`logs-table` keeps its own for now, because it also guards the page offset
+against resetting inside the wait. That guard turned out to be the right shape
+here too, and the reset moved off the keystroke and onto the settled value.
+
+**The resolved account filter was pinned before the accounts existed.** It was
+computed in the change handler to break a circle — the accounts are fetched
+only for a reader the refusals response identifies, and that response is
+fetched with these filters — so a name typed before the accounts loaded stayed
+a name *search* for the session. Combined with the finding above that was an
+empty result rather than a narrower one. The circle is broken with a latch on
+`scoped_to_self` instead, and the filter is derived while rendering, so it
+sharpens the moment the accounts land.
+
+**Two smaller ones.** Clicking a row's account had started routing the id back
+through the text box, so an id that is not uuid-shaped would have been guessed
+into a name search — the row already knows the answer exactly, and it is pinned
+now rather than re-parsed. And the empty state quoted the window in UTC to
+somebody who typed local time: an operator in UTC+8 who enters 19:00 under a
+box labelled "From" and is told "no refusal matches from 11:00Z" reads the
+filter as broken rather than the result as empty. The paste keeps the instant,
+because it is read somewhere else; the screen gets the reader's own clock.
+
+### A key may now stop refusing the model name its client insists on sending, and the argument was about what that costs
+
+The proposal was to make the gateway serve a default — `code` — whenever a
+request named a capability it did not recognise, rather than answering `403
+capability_not_issued`. The pressure behind it is real and this file records
+three instances of it: two integrators lost an evening on 2026-08-14, one key
+was refused 78 times for `gpt-5.6-luna` on 2026-08-17, and the same key was
+refused six more times at 06:42 this morning before its holder fixed her own
+client a minute later.
+
+**It is not done deployment-wide, and the reason is that the refusal is the
+diagnostic.** `model` taking a capability rather than a model name is this
+platform's one true divergence from every other provider, Codex's own picker
+overrides a configured `model` line and sends its built-in slugs instead, and
+`capability_not_issued` is the only channel through which an integrator ever
+learns that. A platform-wide fallback would buy the convenience by making that
+misconfiguration permanent and invisible: the client would keep sending
+`gpt-5.6-luna`, it would keep working, and nobody could tell whether the
+`model` line in `config.toml` had ever been read. Two smaller things argue the
+same way. A refusal costs the caller nothing, where a served request costs a
+full prompt evaluation — 41,313 tokens for the first turn of this morning's
+session — so an auxiliary slot like `codex-auto-review` firing before every
+escalated command would silently spend quota nobody asked for. And `chat` and
+`code` are not interchangeable here: `code` has deliberation off and one
+candidate, `chat` deliberates and falls back to `qwen7b`, so any single default
+silently changes behaviour for whoever wanted the other one.
+
+**So it is a per-key setting, `api_keys.default_capability`, null by default.**
+It names a capability to serve when a request asks for one the key does not
+hold. Three properties are what make it defensible rather than a fallback with
+extra steps:
+
+- **A substitution, never a widening.** The value must already be in the key's
+  own `scopes`, checked at issue, at edit, and once more at use in
+  `Actor.capability_for`, which re-derives rather than trusts the row. Without
+  that third check a single direct database write against a `code` key would
+  reach `assist`, which serves the management assistant and is deliberately not
+  issuable at all. Narrowing a key's capabilities out from under an existing
+  default is refused rather than quietly clearing it.
+- **Announced.** `X-Capability-Defaulted` names the capability that actually
+  ran, on both endpoints and on both the streaming and non-streaming paths —
+  the same channel and the same rule as `X-Dropped-Tools`. The response body
+  still echoes `model` as it arrived, because a client matching the echo
+  against what it sent is entitled to and the header already tells the truth.
+- **Recorded**, and this half was missing from the first draft. Turning the
+  setting on removes the refusal, so the evidence has to outlive a header the
+  client may not read and a log line that goes with the container.
+  `usage_records.requested_capability` keeps what the caller actually sent,
+  null when the two agree — so null means "asked for what it got" rather than
+  "unknown", and no row written before the column existed is reinterpreted.
+  "Is this key being defaulted, and what is its client sending?" is a query
+  now, not an investigation.
+
+**One field needed a third state and it is worth saying why.** Every other
+editable setting on a key reads `None` on PATCH as "not mentioned, leave it
+alone", which works because none of them has a meaningful null. This one does —
+null is "refuse, as before" — so absence and null are told apart by
+`model_fields_set` on the request and carried down as an explicit sentinel.
+Without that a default could be set and never withdrawn.
+
+The form field sits directly under the capability picker, offers only the
+capabilities selected in the same form, and defaults to *Refuse, and say what
+this key may call*. Its select holds the word `refuse` rather than an empty
+string, because an empty string is the one value a select cannot distinguish
+from "nothing chosen yet" — it renders the placeholder, which would make the
+setting almost every key should have the one the control declines to show.
+
+**Found on the way**, and it is the shape this file keeps recording: the fake
+routing-policy repository in `test_streaming_contract.py` had carried a comment
+since it was written saying the capability list "would answer honestly if a
+test ever refused a capability". None ever had, so the method that reader needs
+was missing, and the first test to refuse one got an `AttributeError` instead of
+a refusal.
+
+**Nothing has been turned on.** No key carries a default; the migration adds
+two nullable columns and changes no behaviour until somebody chooses it. The
+management assistant's proposal allowlist is deliberately unchanged — whether an
+advisory model may recommend this setting is a separate decision from whether
+an operator may set it.
 
 ### Three things the refusals screen could not be asked, one of which the backend had been able to answer all along
 

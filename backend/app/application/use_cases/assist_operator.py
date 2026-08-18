@@ -164,6 +164,19 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
   or point that slot at `code`. **Read the refusal for the name it was asked
   for before believing any other explanation.**
 
+  **A key can be issued to stop refusing, and it is a trade rather than a
+  fix.** `default_capability` on an API key names one of that key's own
+  capabilities to serve when a request asks for anything else; it is null by
+  default, it can never name a capability the key was not issued for, and
+  narrowing a key's capabilities out from under it is refused rather than
+  quietly clearing it. What it costs is the signal: with it on, a client
+  sending `gpt-5.6-luna` simply works and nobody discovers that the `model`
+  line was never in use. Suggest it when a machine has to work more than it has
+  to be diagnosable, and say what is given up. Nothing goes dark — the response
+  carries `X-Capability-Defaulted` naming what actually ran, and the usage
+  record keeps what the caller asked for, so "what is this client actually
+  sending?" stays answerable afterwards.
+
   **A `429` is two different problems and the body says which.** Read
   `error.code`. `rate_limited` is the per-minute limit, which an agent rarely
   reaches — roughly one request per step, seldom twenty in a minute — so it

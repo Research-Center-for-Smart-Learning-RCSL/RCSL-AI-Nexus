@@ -16,7 +16,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Response
 
 from app.adapters.persistence.repositories import PostgresUserRepository
-from app.application.use_cases.manage_api_keys import ManageApiKeys
+from app.application.use_cases.manage_api_keys import UNCHANGED, ManageApiKeys
 from app.domain.entities.actor import Actor
 from app.infrastructure.di import build_manage_api_keys, get_user_repository_scoped
 from app.interfaces.http.middleware.identity import current_actor
@@ -75,6 +75,7 @@ async def create_api_key(
         # special case and the field means one thing.
         quota_tokens_per_day=payload.quota_tokens_per_day,
         allowed_cidrs=payload.allowed_cidrs,
+        default_capability=payload.default_capability,
     )
     return IssuedApiKeyResponse(key=ApiKeyResponse.of(issued.key), plaintext=issued.plaintext)
 
@@ -95,6 +96,15 @@ async def update_api_key(
         rate_limit_rpm=payload.rate_limit_rpm,
         quota_tokens_per_day=payload.quota_tokens_per_day,
         allowed_cidrs=payload.allowed_cidrs,
+        # Absence and null mean different things for this one field, and only
+        # the request object can still tell them apart: by the time the value
+        # is read they are both `None`. Omitted leaves the setting alone;
+        # `"default_capability": null` clears it. See `UpdateApiKeyRequest`.
+        default_capability=(
+            payload.default_capability
+            if "default_capability" in payload.model_fields_set
+            else UNCHANGED
+        ),
     )
     return ApiKeyResponse.of(key)
 

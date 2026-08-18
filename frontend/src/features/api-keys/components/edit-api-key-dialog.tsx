@@ -24,8 +24,18 @@ import {
   draftFor,
 } from '@/features/api-keys/assistant-bridge';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  defaultCapabilityField,
+  defaultCapabilityPayload,
   defaultExpiry,
   keyStatus,
+  NO_DEFAULT,
   parseCidrText,
   toDateInput,
   updateApiKeySchema,
@@ -75,6 +85,7 @@ export function EditApiKeyDialog({
       quota_tokens_per_day: apiKey.quota_tokens_per_day,
       allowed_cidrs_text: apiKey.allowed_cidrs.join('\n'),
       expires_at: expired ? defaultExpiry() : toDateInput(apiKey.expires_at),
+      default_capability: defaultCapabilityField(apiKey.default_capability),
     },
   });
 
@@ -105,6 +116,12 @@ export function EditApiKeyDialog({
         rate_limit_rpm: values.rate_limit_rpm,
         quota_tokens_per_day: values.quota_tokens_per_day,
         allowed_cidrs: parseCidrText(values.allowed_cidrs_text),
+        // Always sent, unlike the expiry below, and that is the point of the
+        // field being handled specially on the server: `null` here clears a
+        // default rather than meaning "leave it alone". Omitting it when
+        // unchanged would work, and would also make "refuse again" the one
+        // edit this dialog could not express.
+        default_capability: defaultCapabilityPayload(values.default_capability),
         // Sent only when it is actually meant to change, which is what the
         // endpoint being a PATCH is for. A date input holds a calendar day, so
         // resubmitting an untouched value rewrites an `18:00Z` expiry to
@@ -162,6 +179,36 @@ export function EditApiKeyDialog({
               Narrowing these is what limits a key that has leaked; the change
               is recorded in the audit log by name.
             </p>
+
+            {/* Directly under the capabilities, because it can only ever name
+                one of them — and narrowing them out from under it is refused
+                rather than silently clearing it, so the two belong together. */}
+            <FormField
+              control={form.control}
+              name="default_capability"
+              label="When a request names something else"
+              description="A request names a capability in its model field. Most clients send a model name instead — Codex's own picker overrides a configured model line — and refusing is what tells the holder that. Choose a capability only when you would rather this key just worked; substituted requests are recorded either way."
+              render={(field) => (
+                <Select
+                  value={field.value as string}
+                  onValueChange={(value) => field.onChange(value)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_DEFAULT}>
+                      Refuse, and say what this key may call
+                    </SelectItem>
+                    {scopes.map((capability) => (
+                      <SelectItem key={capability} value={capability}>
+                        Serve {capability}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
 
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField

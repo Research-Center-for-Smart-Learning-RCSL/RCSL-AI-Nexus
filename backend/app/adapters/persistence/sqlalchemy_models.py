@@ -181,6 +181,14 @@ class ApiKeyRow(Base):
     rate_limit_rpm: Mapped[int] = mapped_column(Integer, default=60)
     quota_tokens_per_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    default_capability: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    """Nullable, and null is the behaviour every key had before the column
+    existed: a capability this key was not issued for is refused. A name here
+    is served instead, and `ManageApiKeys` will only store one that is already
+    in `scopes`. No foreign key and no enum — the issuable set is a domain
+    constant (`domain/entities/capability.py`), and a second copy of it in the
+    schema is the drift that constant exists to end."""
+
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     """NOT NULL, because `is_active` reads a null expiry as "never expires".
     The docs call expiry mandatory and the entity comment claimed a use case
@@ -220,6 +228,15 @@ class UsageRecordRow(Base):
     previous width made the ambiguity easy to miss."""
 
     capability: Mapped[str] = mapped_column(String(64))
+    requested_capability: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    """What the caller sent, when a key's `default_capability` made it differ
+    from the capability that served. Null when the two agree, which is every
+    row written before the column existed — so null means "the same", not
+    "unknown", and nothing already stored is reinterpreted.
+
+    Not indexed. The question it answers ("is this key being defaulted, and
+    what is its client sending?") is asked of one key at a time, and
+    `ix_usage_key_at` already narrows that to a handful of rows."""
     model_alias: Mapped[str] = mapped_column(String(128))
     tokens: Mapped[int] = mapped_column(Integer)
     """Tokens generated. Still means only that after `prompt_tokens` arrived,

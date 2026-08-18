@@ -103,6 +103,16 @@ class FakePolicies:
     async def get(self, capability: str) -> RoutingPolicy | None:
         return self._policy
 
+    async def list_all(self) -> list[RoutingPolicy]:
+        """What `ListCapabilities` reads when the use case is refusing.
+
+        `build` has wired that reader from this fake since it was written, on
+        the stated ground that it would answer honestly if a test ever refused
+        a capability — and nothing did, so the method it needs was missing and
+        the first such test got an `AttributeError` instead of a refusal.
+        """
+        return [] if self._policy is None else [self._policy]
+
 
 class RecordingUsage:
     def __init__(self) -> None:

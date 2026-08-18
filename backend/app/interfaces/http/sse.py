@@ -40,6 +40,7 @@ from contextlib import aclosing
 
 from fastapi.responses import StreamingResponse
 
+from app.domain.entities.actor import Actor
 from app.domain.entities.chat import CompletionChunk
 from app.domain.exceptions import DomainError
 from app.interfaces.http.request_context import current_request_id, debug_detail_active
@@ -126,6 +127,43 @@ def citation_header(passages: list[tuple[str, int]]) -> dict[str, str]:
     if not passages:
         return {}
     return {CITATION_HEADER: ",".join(f"{doc}:{index}" for doc, index in passages)}
+
+
+CAPABILITY_DEFAULTED_HEADER = "X-Capability-Defaulted"
+"""The capability that served this request, when it is not the one asked for.
+
+Present only when a key's `default_capability` actually fired, so its absence
+is the ordinary case and says nothing. `X-Dropped-Tools` and
+`X-Dropped-Input-Items` are the same channel used the same way: the gateway
+served something narrower or other than what arrived, and the alternative to
+saying so is a caller who cannot tell.
+
+It carries the capability rather than the pair, because the other half is the
+value the caller just sent and still holds. The gateway log line
+(`capability_defaulted`) carries both, for the reader who has neither.
+
+**The response body still echoes the model field as it arrived.** A client that
+matches the echo against what it sent is entitled to, and the substitution is
+already stated here — trading a header nothing breaks on for a body field some
+client might is the wrong way round.
+"""
+
+
+def capability_defaulted_header(actor: Actor, requested: str) -> dict[str, str]:
+    """Empty unless this key's default is about to be substituted.
+
+    Asks `Actor.capability_for`, the same method `RouteChatRequest` routes on,
+    rather than re-deriving the rule: the header exists to describe what the
+    use case is about to do, and a second statement of an authorization rule is
+    how the description comes to differ from the act. Called before the
+    generator is primed, because headers are gone once the body starts.
+    """
+    served = actor.capability_for(requested)
+    if served is None or served == requested:
+        # None is a refusal, which this function has no part in: the use case
+        # raises and the error handler writes the response.
+        return {}
+    return {CAPABILITY_DEFAULTED_HEADER: served}
 
 
 def created_now() -> int:

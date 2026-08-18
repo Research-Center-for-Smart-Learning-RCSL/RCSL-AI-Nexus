@@ -125,6 +125,20 @@ export function ApiKeyTable() {
         id: 'scopes',
         accessorFn: (row) => row.scopes.join(', '),
         header: 'Scopes',
+        // The default rides in this cell rather than in a column of its own.
+        // It is null on almost every key, so a column would be mostly empty
+        // while costing width on a table that already has eight — and where it
+        // belongs is beside the list it has to be drawn from.
+        cell: ({ row }) => (
+          <div>
+            {row.original.scopes.join(', ')}
+            {row.original.default_capability ? (
+              <div className="text-xs text-muted-foreground">
+                anything else → {row.original.default_capability}
+              </div>
+            ) : null}
+          </div>
+        ),
       },
       {
         id: 'limits',

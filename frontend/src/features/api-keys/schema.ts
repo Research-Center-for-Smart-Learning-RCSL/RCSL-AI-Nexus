@@ -27,6 +27,16 @@ export const apiKeySchema = z.object({
    *  response is exactly such a path. */
   created_at: z.string().nullable(),
   last_used_at: z.string().nullable(),
+  /** Served when a request names a capability this key was not issued for;
+   *  null refuses, which is the default and what every key did before the
+   *  field existed. Always one of `scopes`, which is what makes it a shortcut
+   *  rather than a grant.
+   *
+   *  A plain string rather than the capability enum on purpose: the server
+   *  constrains the value, and a row that somehow held something else should
+   *  make the gateway refuse it — which it does — rather than make this screen
+   *  fail to parse and show an administrator nothing at all. */
+  default_capability: z.string().nullable(),
   debug_logging_until: z.string().nullable(),
   /** While this is in the future, error responses to this key carry the
    * operator-facing detail that is otherwise log-only. Set from the table's
@@ -60,18 +70,67 @@ export const cidrTextSchema = z
     'Expected addresses with a prefix, for example 203.0.113.0/24.',
   );
 
-export const createApiKeySchema = z.object({
-  name: z.string().min(1, 'Required').max(80),
-  scopes: z
-    .array(issuableCapabilitySchema)
-    .min(1, 'Choose at least one capability.'),
-  rate_limit_rpm: z.coerce.number().int().positive(),
-  quota_tokens_per_day: z.coerce.number().int().positive(),
-  allowed_cidrs_text: cidrTextSchema,
-  // Expiry is mandatory by design: it forces rotation. There is no "never".
-  expires_at: z.string().min(1, 'An expiry is required.'),
-  owner_id: z.string().min(1, 'Required'),
-});
+/**
+ * What the select holds for "no default", and why it is a word.
+ *
+ * The wire value is `null` and the obvious form value would be `''`, but an
+ * empty string is the one value a select cannot distinguish from "nothing
+ * chosen yet" — it renders the placeholder, so the setting most keys should
+ * have would be the one the control refuses to show. A named option says
+ * out loud what happens.
+ */
+export const NO_DEFAULT = 'refuse';
+
+/** The select's sentinel back to what the request carries. */
+export function defaultCapabilityPayload(value: string): string | null {
+  return value === NO_DEFAULT ? null : value;
+}
+
+/** And back again, for a form opened on a stored key. */
+export function defaultCapabilityField(value: string | null): string {
+  return value ?? NO_DEFAULT;
+}
+
+/**
+ * The default must be one of the capabilities being granted in the same form.
+ *
+ * Checked here as well as on the server because the server's refusal is a 409
+ * on a request that also carried the capability edit, and a form that can only
+ * learn this by being rejected makes the operator guess which half was wrong.
+ * The rule itself lives in `ManageApiKeys`; this is the same rule stated where
+ * it can land on the field.
+ */
+function defaultWithinScopes<
+  T extends { scopes: IssuableCapability[]; default_capability: string },
+>(values: T, ctx: z.RefinementCtx): void {
+  if (values.default_capability === NO_DEFAULT) return;
+  if (values.scopes.includes(values.default_capability as IssuableCapability)) {
+    return;
+  }
+  ctx.addIssue({
+    code: 'custom',
+    path: ['default_capability'],
+    message: 'Choose a capability this key is being issued for.',
+  });
+}
+
+export const createApiKeySchema = z
+  .object({
+    name: z.string().min(1, 'Required').max(80),
+    scopes: z
+      .array(issuableCapabilitySchema)
+      .min(1, 'Choose at least one capability.'),
+    rate_limit_rpm: z.coerce.number().int().positive(),
+    quota_tokens_per_day: z.coerce.number().int().positive(),
+    allowed_cidrs_text: cidrTextSchema,
+    // Expiry is mandatory by design: it forces rotation. There is no "never".
+    expires_at: z.string().min(1, 'An expiry is required.'),
+    owner_id: z.string().min(1, 'Required'),
+    /** Defaulted rather than required, so the safe answer is what an input
+     *  missing the field parses to. `NO_DEFAULT` is "refuse". */
+    default_capability: z.string().default(NO_DEFAULT),
+  })
+  .superRefine(defaultWithinScopes);
 /**
  * Input and output types differ here and must be kept apart: `z.coerce`
  * accepts the string a number input actually produces, so `z.infer` (the
@@ -90,6 +149,7 @@ export type CreateApiKeyPayload = {
   quota_tokens_per_day: number;
   allowed_cidrs: string[];
   expires_at: string;
+  default_capability: string | null;
 };
 
 /**
@@ -98,16 +158,19 @@ export type CreateApiKeyPayload = {
  * only ever leave a key where it is, and offering the field would promise a
  * transfer that does not exist.
  */
-export const updateApiKeySchema = z.object({
-  name: z.string().min(1, 'Required').max(80),
-  scopes: z
-    .array(issuableCapabilitySchema)
-    .min(1, 'Choose at least one capability.'),
-  rate_limit_rpm: z.coerce.number().int().positive(),
-  quota_tokens_per_day: z.coerce.number().int().positive(),
-  allowed_cidrs_text: cidrTextSchema,
-  expires_at: z.string().min(1, 'An expiry is required.'),
-});
+export const updateApiKeySchema = z
+  .object({
+    name: z.string().min(1, 'Required').max(80),
+    scopes: z
+      .array(issuableCapabilitySchema)
+      .min(1, 'Choose at least one capability.'),
+    rate_limit_rpm: z.coerce.number().int().positive(),
+    quota_tokens_per_day: z.coerce.number().int().positive(),
+    allowed_cidrs_text: cidrTextSchema,
+    expires_at: z.string().min(1, 'An expiry is required.'),
+    default_capability: z.string().default(NO_DEFAULT),
+  })
+  .superRefine(defaultWithinScopes);
 /** Input and output differ for the same reason they do on create. */
 export type UpdateApiKeyInput = z.input<typeof updateApiKeySchema>;
 export type UpdateApiKeyValues = z.output<typeof updateApiKeySchema>;
@@ -123,6 +186,9 @@ export type UpdateApiKeyPayload = {
   quota_tokens_per_day: number;
   allowed_cidrs: string[];
   expires_at: string;
+  /** Always sent, and `null` clears rather than meaning "unchanged" — the one
+   *  field on this verb where the server tells absence and null apart. */
+  default_capability: string | null;
 };
 
 /** Issue response. `plaintext` exists here and nowhere else, ever. */

@@ -4,6 +4,9 @@ import {
   canManageKey,
   cidrTextSchema,
   createApiKeySchema,
+  defaultCapabilityField,
+  defaultCapabilityPayload,
+  NO_DEFAULT,
   parseCidrText,
   toDateInput,
   updateApiKeySchema,
@@ -145,6 +148,52 @@ describe('updateApiKeySchema', () => {
     const result = parseUpdate();
     expect(result.success).toBe(true);
     if (result.success) expect('owner_id' in result.data).toBe(false);
+  });
+});
+
+describe('the default capability', () => {
+  it('parses to "refuse" when the form never mentions it', () => {
+    const result = parseUpdate();
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.default_capability).toBe(NO_DEFAULT);
+    }
+  });
+
+  it('accepts a capability the key is being issued for', () => {
+    expect(
+      parseCreate({ scopes: ['chat', 'code'], default_capability: 'code' })
+        .success,
+    ).toBe(true);
+  });
+
+  it('refuses one outside the capabilities in the same form', () => {
+    // The server refuses this too, with a 409 on a request that also carried
+    // the capability edit. Catching it here is what puts the message on the
+    // field rather than leaving the operator to guess which half was wrong.
+    const result = parseCreate({
+      scopes: ['chat'],
+      default_capability: 'code',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].path).toEqual(['default_capability']);
+    }
+  });
+
+  it('refuses it on an edit that narrows the capabilities out from under it', () => {
+    expect(
+      parseUpdate({ scopes: ['chat'], default_capability: 'code' }).success,
+    ).toBe(false);
+  });
+
+  it('carries null on the wire and a word in the control', () => {
+    // `''` would be indistinguishable from "nothing chosen" in a select, which
+    // is the one value the ordinary setting must not render as.
+    expect(defaultCapabilityPayload(NO_DEFAULT)).toBeNull();
+    expect(defaultCapabilityPayload('code')).toBe('code');
+    expect(defaultCapabilityField(null)).toBe(NO_DEFAULT);
+    expect(defaultCapabilityField('code')).toBe('code');
   });
 });
 

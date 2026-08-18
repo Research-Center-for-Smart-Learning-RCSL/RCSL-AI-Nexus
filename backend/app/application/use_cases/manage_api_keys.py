@@ -21,7 +21,7 @@ See docs/architecture/security.md section 4.2.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from ipaddress import IPv4Network, IPv6Network, ip_network
@@ -57,6 +57,21 @@ readers that kept its own copy had drifted from the others. The *issuable* set
 specifically, which is narrower than the routable one — a key must not be
 issued for a capability that exists only to serve an internal surface. See
 `domain/entities/capability.py`."""
+
+
+class Unchanged:
+    """The third state a PATCH field needs, and the reason it needs one.
+
+    `default_capability` is the first editable setting whose *null* is a
+    meaningful value — "refuse, as every key did before this field existed" —
+    so the convention every other field here uses, where `None` means "the
+    caller did not mention this", would make the setting impossible to clear
+    once set. An explicit sentinel keeps absent and null apart all the way from
+    `model_fields_set` on the request to the column.
+    """
+
+
+UNCHANGED = Unchanged()
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +128,26 @@ class ManageApiKeys:
                 detail=f"expiry {expires_at} is beyond the {self._max_lifetime.days} day maximum",
             )
 
+    def _assert_default_capability(self, default: str | None, scopes: Collection[str]) -> None:
+        """A substitution within the key's own list, or nothing.
+
+        The whole safety of the field is here: whatever a caller names in
+        `model`, a key with a default reaches exactly the capabilities it was
+        issued for, so the setting can shorten the path to one of them and can
+        never add one. Refused rather than silently dropped, because a key
+        whose stated default does nothing is the shape an operator reads as
+        "the platform ignored me".
+        """
+        if default is None:
+            return
+        if default not in scopes:
+            raise ApiKeyStateConflictError(
+                detail=(
+                    f"default capability {default} is not one of this key's "
+                    f"capabilities {sorted(scopes)}"
+                )
+            )
+
     async def list_visible(self, actor: Actor) -> tuple[list[ApiKey], dict[str, datetime]]:
         """Returns the keys and, separately, when each was last used.
 
@@ -140,6 +175,7 @@ class ManageApiKeys:
         rate_limit_rpm: int,
         quota_tokens_per_day: int | None,
         allowed_cidrs: Sequence[str],
+        default_capability: str | None = None,
     ) -> IssuedApiKey:
         self._require_owner_permission(actor, owner_id)
 
@@ -155,6 +191,10 @@ class ManageApiKeys:
         if unknown:
             raise ApiKeyStateConflictError(detail=f"unknown capabilities {unknown}")
 
+        # After the check above, so a default naming something that is not a
+        # capability at all is answered by the message about capabilities.
+        self._assert_default_capability(default_capability, scopes)
+
         issued = self._service.issue()
         key = ApiKey(
             id=str(uuid.uuid4()),
@@ -167,6 +207,7 @@ class ManageApiKeys:
             allowed_cidrs=_parse_cidrs(allowed_cidrs),
             rate_limit_rpm=rate_limit_rpm,
             quota_tokens_per_day=quota_tokens_per_day,
+            default_capability=default_capability,
         )
         await self._keys.save(key)
 
@@ -181,7 +222,14 @@ class ManageApiKeys:
             actor,
             AuditAction.API_KEY_ISSUED,
             target=key.key_id,
-            detail={"name": key.name, "owner": owner_id},
+            detail={
+                "name": key.name,
+                "owner": owner_id,
+                # Recorded from the start rather than only on edit: a key
+                # issued with a default behaves differently from one without,
+                # and the audit log is where that is read back.
+                "default_capability": default_capability or "",
+            },
         )
         return IssuedApiKey(key=stored, plaintext=issued.plaintext)
 
@@ -196,6 +244,7 @@ class ManageApiKeys:
         rate_limit_rpm: int | None = None,
         quota_tokens_per_day: int | None = None,
         allowed_cidrs: Sequence[str] | None = None,
+        default_capability: str | None | Unchanged = UNCHANGED,
     ) -> ApiKey:
         key = await self._require(key_id)
         self._require_owner_permission(actor, key.owner_id)
@@ -213,6 +262,19 @@ class ManageApiKeys:
             if unknown:
                 raise ApiKeyStateConflictError(detail=f"unknown capabilities {unknown}")
 
+        resulting_scopes = frozenset(scopes) if scopes is not None else key.scopes
+        resulting_default = (
+            key.default_capability
+            if isinstance(default_capability, Unchanged)
+            else default_capability
+        )
+        # Against the scopes this edit *results in*, not the ones it started
+        # with. Narrowing a key's capabilities out from under a default it
+        # already had is refused rather than quietly clearing it: the two edits
+        # are one request, and dropping half of it is how a setting comes to
+        # differ from what the operator was last shown.
+        self._assert_default_capability(resulting_default, resulting_scopes)
+
         updated = replace(
             key,
             name=name.strip() if name is not None else key.name,
@@ -227,6 +289,7 @@ class ManageApiKeys:
             allowed_cidrs=(
                 _parse_cidrs(allowed_cidrs) if allowed_cidrs is not None else key.allowed_cidrs
             ),
+            default_capability=resulting_default,
         )
         # A targeted update of the editable columns only, guarded on
         # `revoked_at IS NULL`. The revoked check above is a courtesy that
@@ -242,6 +305,7 @@ class ManageApiKeys:
                 "rate_limit_rpm": updated.rate_limit_rpm,
                 "quota_tokens_per_day": updated.quota_tokens_per_day,
                 "allowed_cidrs": [str(n) for n in updated.allowed_cidrs],
+                "default_capability": updated.default_capability,
             },
         ):
             raise ApiKeyStateConflictError(detail=f"key {key_id} was revoked concurrently")
@@ -252,7 +316,10 @@ class ManageApiKeys:
             actor,
             AuditAction.API_KEY_UPDATED,
             target=key.key_id,
-            detail={"scopes": ",".join(sorted(updated.scopes))},
+            detail={
+                "scopes": ",".join(sorted(updated.scopes)),
+                "default_capability": updated.default_capability or "",
+            },
         )
         return updated
 

@@ -220,6 +220,18 @@ class Actor:
     with no capabilities should be.
     """
 
+    default_capability: str | None = None
+    """The capability to serve when the one asked for is not in
+    `allowed_capabilities`, or None to refuse.
+
+    From `api_keys.default_capability`, and meaningful only alongside a set:
+    an admin-entrance person carries `allowed_capabilities=None`, is already
+    unrestricted, and never reaches the substitution. `capability_for` is the
+    one reader, and it re-checks the value against the set rather than trusting
+    it — the issuing use case constrains the pair, and this is what holds if a
+    row is written by some other hand.
+    """
+
     debug_logging_until: datetime | None = None
     """When this credential's debug window closes, or None when it is shut.
 
@@ -251,3 +263,26 @@ class Actor:
         if self.allowed_capabilities is None:
             return True
         return capability in self.allowed_capabilities
+
+    def capability_for(self, requested: str) -> str | None:
+        """Which capability actually serves `requested`, or None to refuse.
+
+        Three answers in one function so that the rule has one statement: the
+        request is served as asked, served by this credential's declared
+        default, or refused. Both callers need the same answer for different
+        reasons — the use case to route, the HTTP layer to announce a
+        substitution in a response header before the body is committed — and a
+        rule about authorization derived twice is how the two come to disagree.
+
+        **The default is re-checked against `allowed_capabilities`, not
+        trusted.** `ManageApiKeys` will not store a default outside the key's
+        own list, so this can only fire on a row that reached the table some
+        other way. It costs a set lookup on a path that is already ending, and
+        without it one direct write would turn a convenience into a way to
+        reach a capability the key was never issued.
+        """
+        if self.may_use(requested):
+            return requested
+        if self.default_capability is not None and self.may_use(self.default_capability):
+            return self.default_capability
+        return None

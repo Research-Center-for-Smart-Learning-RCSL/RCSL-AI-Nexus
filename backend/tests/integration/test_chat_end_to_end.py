@@ -471,6 +471,50 @@ async def test_a_capability_refusal_names_what_the_key_may_call(client) -> None:
     assert "primary" not in json.dumps(refused.json())
 
 
+async def test_a_key_with_a_default_capability_is_served_and_told_so(client) -> None:
+    """The opt-in escape from the refusal above, end to end.
+
+    The whole case for allowing it per key rather than deployment-wide is that
+    it stays visible, so the header is asserted beside the answer: a caller
+    that reads it can still discover their client is sending a model name, and
+    an operator reading a capture can tell which requests were substituted.
+    """
+    test_client, _, _ = client
+
+    token = await issue_key(scopes=frozenset({"chat"}), default_capability="chat")
+    test_client.headers["Authorization"] = f"Bearer {token}"
+
+    served = test_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert served.status_code == 200
+    assert served.headers["X-Capability-Defaulted"] == "chat"
+    # Echoed as it arrived. A client matching the echo against what it sent is
+    # entitled to, and the substitution is already stated in the header.
+    assert served.json()["model"] == "gpt-5.6-luna"
+
+
+async def test_a_default_capability_does_not_widen_what_a_key_may_reach(client) -> None:
+    """A row that named a capability outside the key's own list would have to
+    have arrived by a direct write — `ManageApiKeys` refuses the pair — and it
+    still decides nothing when it does."""
+    test_client, _, _ = client
+
+    token = await issue_key(scopes=frozenset({"chat"}), default_capability="code")
+    test_client.headers["Authorization"] = f"Bearer {token}"
+
+    refused = test_client.post(
+        "/v1/chat/completions",
+        json={"model": "code", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert refused.status_code == 403
+    assert refused.json()["error"]["code"] == "capability_not_issued"
+    assert "X-Capability-Defaulted" not in refused.headers
+
+
 async def test_streaming_usage_is_persisted(client) -> None:
     """A streaming response is produced after the endpoint returns, so this
     asserts the session outlives it and the row is actually committed. No test

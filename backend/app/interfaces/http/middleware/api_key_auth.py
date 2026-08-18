@@ -219,6 +219,12 @@ def _actor_for_key(key: ApiKey) -> Actor:
         # write would let a gateway key reach `assist`, which serves the
         # management assistant.
         allowed_capabilities=key.scopes & ISSUABLE_CAPABILITIES,
+        # This key's declared substitute for a capability it was not issued
+        # for, or None to refuse — which is what every key without one does.
+        # Passed through rather than intersected, because `Actor.capability_for`
+        # re-checks it against the set above and a value outside it therefore
+        # decides nothing. The one rule, in the one place that reads it.
+        default_capability=key.default_capability,
         # The key-side debug window, carried onto the actor so the application
         # layer can read it. `grant_debug_detail` above sets the same value
         # into a contextvar for the error envelope; `RouteChatRequest` decides

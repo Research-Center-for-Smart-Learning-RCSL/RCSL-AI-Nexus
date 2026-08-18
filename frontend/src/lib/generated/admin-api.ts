@@ -1442,6 +1442,8 @@ export interface components {
             created_at: string | null;
             /** Debug Logging Until */
             debug_logging_until: string | null;
+            /** Default Capability */
+            default_capability: string | null;
             /**
              * Expires At
              * Format: date-time
@@ -1569,6 +1571,8 @@ export interface components {
         CreateApiKeyRequest: {
             /** Allowed Cidrs */
             allowed_cidrs?: string[];
+            /** Default Capability */
+            default_capability?: string | null;
             /**
              * Expires At
              * Format: date-time
@@ -2433,6 +2437,8 @@ export interface components {
         UpdateApiKeyRequest: {
             /** Allowed Cidrs */
             allowed_cidrs?: string[] | null;
+            /** Default Capability */
+            default_capability?: string | null;
             /** Expires At */
             expires_at?: string | null;
             /** Name */
