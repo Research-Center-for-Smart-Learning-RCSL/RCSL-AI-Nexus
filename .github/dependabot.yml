@@ -1,0 +1,67 @@
+# What this file is for, and -- more usefully -- what it deliberately leaves out.
+#
+# Dependabot *security* updates are switched on in the repository settings, not
+# here, and have been since before this file existed. That is the setting that
+# raises the alerts; this file only governs *version* updates, which are a
+# different thing and are wanted for exactly one ecosystem.
+
+version: 2
+
+updates:
+  # The workflow pins actions by tag -- actions/checkout@v4, setup-uv@v5,
+  # pnpm/action-setup@v4, setup-node@v4, upload-artifact@v4 and
+  # aquasecurity/trivy-action@v0.36.0 -- and those are direct references with no
+  # indirection between the pin and the thing being pinned. That makes them the
+  # one ecosystem here where Dependabot's fix is the same fix a person would
+  # write: move the tag, let CI prove it.
+  #
+  # There is a concrete reason to want it. `aquasecurity/trivy-action` produced
+  # a *critical* alert on this repository when the Trivy ecosystem's supply
+  # chain was briefly compromised, and the comment on the `audit` job in
+  # ci.yml records the other half of the problem: a `uses:` that cannot be
+  # resolved kills the job in "Set up job" before a single step runs, and the
+  # run still reports success. A stale or wrong action tag is not a visible
+  # failure here -- it is a scanner that silently stops scanning. Something
+  # that keeps these current and proves each bump through CI is worth more than
+  # the pull requests cost.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: wednesday
+    # One pull request for however many actions moved, rather than one each.
+    # Version updates only: a security advisory against an action should arrive
+    # on its own and be read on its own, not batched with routine bumps.
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns: ['*']
+
+  # npm and uv are deliberately absent, and this is the part worth reading
+  # before "completing" the file.
+  #
+  # Almost every advisory this repository has had to answer was against a
+  # *transitive* package, and the fix for those is an entry in
+  # frontend/pnpm-workspace.yaml's `overrides` block -- which is not something
+  # Dependabot can author. Its only available move is to bump the lockfile, and
+  # that move is wrong here in a way that looks right: on 2026-08-18,
+  # `pnpm update --depth Infinity js-yaml` left js-yaml resolved at 4.3.0 *and*
+  # 4.3.1 simultaneously, because three parents pull it in and only some of
+  # their ranges moved. The lockfile looked updated, nothing failed, and the
+  # alert would have stayed open. A floor in `overrides` collapses it to one
+  # copy; a bot cannot write the floor or the paragraph explaining why that
+  # version.
+  #
+  # The record already shows how this goes. The one Dependabot pull request
+  # this repository has received (#3, cryptography) was closed on 2026-08-04
+  # and the upgrade was made by hand; #1, #2 and #4 are likewise human answers
+  # to Dependabot alerts. Turning on version updates for npm or uv would
+  # manufacture more of a pull request this repository has already declined
+  # once, each needing the same rework.
+  #
+  # None of that weakens the security side: alerts still arrive, and security
+  # updates for npm and uv are unaffected by which ecosystems are listed here.
+  # The weekly `audit` job in ci.yml is the other half -- it runs pip-audit,
+  # pnpm audit and Trivy against the locked resolutions on a schedule, and it
+  # is what surfaced five brace-expansion advisories that had been
+  # auto-dismissed and so appeared in no alert list at all.
