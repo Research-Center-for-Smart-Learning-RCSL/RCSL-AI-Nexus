@@ -11,10 +11,12 @@ refuses rather than lying about having freed memory.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import time
 from contextlib import aclosing
+from pathlib import Path
 
 import httpx
 import pytest
@@ -22,6 +24,7 @@ import pytest
 from app.adapters.runtime.mlx_adapter import (
     ALLOWED_FILE_PATTERNS,
     MlxAdapter,
+    _git_blob_sha1_of,
     is_allowed_file,
 )
 from app.domain.entities.chat import Message, MessageRole
@@ -329,6 +332,150 @@ async def test_the_download_call_carries_the_allowlist(monkeypatch: pytest.Monke
             return "snapshot-path"
 
     monkeypatch.setitem(sys.modules, "huggingface_hub", FakeHub)
-    MlxAdapter("http://mlx.invalid")._download_snapshot(REF)
+    adapter = MlxAdapter("http://mlx.invalid")
+    # Verification is exercised by the tests below; this one is about the
+    # argument, and the seam deliberately does both.
+    monkeypatch.setattr(adapter, "_verify_snapshot", lambda ref, path: None)
+    adapter._download_snapshot(REF)
 
     assert calls == [{"repo_id": REF, "allow_patterns": list(ALLOWED_FILE_PATTERNS)}]
+
+
+# --- digest verification ----------------------------------------------------
+#
+# huggingface_hub 1.24.0 checks the length of what it downloaded and nothing
+# else: `file_download` does not import hashlib. Everything below is therefore
+# the only thing standing between a store that serves the wrong bytes and a
+# runtime that loads them.
+
+
+class _Lfs:
+    def __init__(self, sha256: str) -> None:
+        self.sha256 = sha256
+
+
+class _Sibling:
+    def __init__(self, rfilename: str, *, sha256: str | None = None, blob_id: str | None = None):
+        self.rfilename = rfilename
+        self.lfs = _Lfs(sha256) if sha256 else None
+        self.blob_id = blob_id
+        self.size = 0
+
+
+def _hub(siblings: list[_Sibling]) -> object:
+    class FakeInfo:
+        def __init__(self) -> None:
+            self.siblings = siblings
+
+    class FakeApi:
+        def model_info(self, ref: str, files_metadata: bool = False) -> FakeInfo:
+            return FakeInfo()
+
+    class FakeHub:
+        HfApi = FakeApi
+
+    return FakeHub
+
+
+def test_the_git_blob_hash_is_the_one_git_itself_computes(tmp_path: Path) -> None:
+    """`blob_id` is a git object id, not a hash of the contents.
+
+    Getting the framing wrong — the `blob <len>\0` prefix — produces a digest
+    that never matches and would refuse every small file in every repository,
+    so this is pinned against a value git printed rather than against itself.
+    """
+    f = tmp_path / "x"
+    f.write_bytes(b"hello")
+    assert _git_blob_sha1_of(f) == "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0"
+
+
+def test_a_snapshot_whose_digests_match_verifies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    weights = tmp_path / "model.safetensors"
+    weights.write_bytes(b"weights")
+    config = tmp_path / "config.json"
+    config.write_bytes(b"{}")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        _hub(
+            [
+                _Sibling("model.safetensors", sha256=hashlib.sha256(b"weights").hexdigest()),
+                _Sibling("config.json", blob_id=_git_blob_sha1_of(config)),
+            ]
+        ),
+    )
+
+    MlxAdapter("http://mlx.invalid")._verify_snapshot(REF, tmp_path)
+    assert weights.exists() and config.exists()
+
+
+def test_a_file_whose_sha256_disagrees_is_refused_and_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deleted, not merely reported: the next `load` reads this directory, so
+    leaving the bytes there makes the check theatre."""
+    weights = tmp_path / "model.safetensors"
+    weights.write_bytes(b"not what the repository describes")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        _hub([_Sibling("model.safetensors", sha256=hashlib.sha256(b"weights").hexdigest())]),
+    )
+
+    with pytest.raises(DomainError) as caught:
+        MlxAdapter("http://mlx.invalid")._verify_snapshot(REF, tmp_path)
+
+    assert "sha256" in str(caught.value)
+    assert not weights.exists()
+
+
+def test_a_small_file_is_checked_by_its_git_object_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "config.json"
+    config.write_bytes(b"{}")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        _hub([_Sibling("config.json", blob_id=_git_blob_sha1_of(tmp_path / "config.json"))]),
+    )
+    MlxAdapter("http://mlx.invalid")._verify_snapshot(REF, tmp_path)
+
+    config.write_bytes(b'{"changed": true}')
+    with pytest.raises(DomainError):
+        MlxAdapter("http://mlx.invalid")._verify_snapshot(REF, tmp_path)
+
+
+def test_a_file_the_repository_does_not_describe_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An allowlisted extension is not a licence to arrive unannounced."""
+    stray = tmp_path / "extra.safetensors"
+    stray.write_bytes(b"surprise")
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", _hub([]))
+
+    with pytest.raises(DomainError) as caught:
+        MlxAdapter("http://mlx.invalid")._verify_snapshot(REF, tmp_path)
+
+    assert "not described" in str(caught.value)
+    assert not stray.exists()
+
+
+def test_a_file_with_no_stated_digest_is_refused_rather_than_trusted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    weights = tmp_path / "model.safetensors"
+    weights.write_bytes(b"weights")
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", _hub([_Sibling("model.safetensors")]))
+
+    with pytest.raises(DomainError) as caught:
+        MlxAdapter("http://mlx.invalid")._verify_snapshot(REF, tmp_path)
+
+    assert "no digest" in str(caught.value)
