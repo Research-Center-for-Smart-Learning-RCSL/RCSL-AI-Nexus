@@ -245,7 +245,7 @@ export function CreateApiKeyDialog({
                   control={form.control}
                   name="default_capability"
                   label="When a request names something else"
-                  description="A request names a capability in its model field. Most clients send a model name instead — Codex's own picker overrides a configured model line — and refusing is what tells the integrator that. Choose a capability here only when you would rather this key just worked."
+                  description="A request names a capability in its model field. Most clients send a model name instead — Codex's own picker overrides a configured model line — and refusing is what tells the integrator that. Set a capability here only where convenience is worth more than that signal."
                   render={(field) => (
                     <Select
                       value={field.value as string}

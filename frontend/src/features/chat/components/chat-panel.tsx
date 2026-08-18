@@ -118,7 +118,7 @@ export function ChatPanel() {
         {turns.length === 0 && !isStreaming ? (
           <EmptyState
             title="No messages yet"
-            description="This talks to the admin chat endpoint, which authorises by your identity rather than an API key. The same resource guardrails apply."
+            description="This screen calls the admin chat endpoint, which authorises by the signed-in identity rather than an API key. The same resource guardrails apply."
           />
         ) : null}
 

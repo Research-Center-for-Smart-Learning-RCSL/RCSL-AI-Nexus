@@ -120,7 +120,7 @@ export function refusalsToMarkdown(
   // Saying what was left out is the difference between evidence and a
   // misleading excerpt.
   const shown = refusals.length;
-  const scope = context.scopedToSelf ? 'your own account and its API keys' : 'all accounts';
+  const scope = context.scopedToSelf ? 'one account and its API keys' : 'all accounts';
   const filtered = context.filter ? `, filtered by ${context.filter}` : '';
   const count = context.picked
     ? `${shown} hand-picked out of ${context.total} matching`

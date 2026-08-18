@@ -8,8 +8,8 @@ Design documentation lives in [`docs/`](./docs). Start with
 reasoning are recorded there rather than here.
 
 [`docs/PROGRESS.md`](./docs/PROGRESS.md) is the running record of what has
-actually been built and what was learned building it. Read that first if you
-want the current state rather than the design.
+actually been built and what was learned building it. It, rather than the design
+documents, is where the current state is recorded.
 
 ## Layout
 
@@ -47,7 +47,7 @@ docker rm -fv nexus-pg-tmp
 ```
 
 These tests drop and recreate the schema on every run, which is why they must
-never be pointed at anything you care about.
+never be pointed at a database whose contents matter.
 
 **The `--tmpfs` line is not a speed trick, though it is also that.** The
 `postgres` image declares `/var/lib/postgresql/data` as a `VOLUME`, so without
@@ -128,13 +128,13 @@ Licensed under the **GNU Affero General Public License v3.0**. See
 
 One clause deserves attention because this project's architecture triggers it
 directly. AGPL section 13 treats **network interaction as distribution**: where
-the GPL obliges you to release source only when you hand someone a copy, the
-AGPL obliges you to offer source to anyone who merely uses your modified
-version over a network.
+the GPL obliges a distributor to release source only on handing someone a copy,
+the AGPL obliges an operator to offer source to anyone who merely uses a
+modified version over a network.
 
 This platform exposes both a public inference API and a public management UI,
-which is precisely the scenario that clause was written for. In practice, if
-you deploy a modified version, everyone reaching those endpoints is entitled to
-the corresponding source. The straightforward way to satisfy that is to publish
-your fork and link to it from the running instance rather than treating it as
+which is precisely the scenario that clause was written for. In practice a
+deployed modification entitles everyone reaching those endpoints to the
+corresponding source. The straightforward way to satisfy that is to publish the
+fork and link to it from the running instance rather than treating it as
 something to handle on request.

@@ -677,7 +677,7 @@ data: [DONE]`}
           <strong>
             the stream ends without <code>data: [DONE]</code>
           </strong>
-          . Note that this frame carries no <code>type</code>: it is written by
+          . This frame carries no <code>type</code>: it is written by
           the stream itself rather than by the error response above, so{' '}
           <code>code</code> is the only field to branch on here.
         </p>

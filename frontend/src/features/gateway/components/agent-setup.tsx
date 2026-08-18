@@ -123,8 +123,8 @@ export function AgentSetup() {
                   A <code>429</code> mid-task is more often the client retrying
                   after a failure than this limit being reached
                 </strong>{' '}
-                — check Usage before raising it, or you will change the wrong
-                thing and still be stuck.
+                — check Usage before raising it, or the change lands on the
+                wrong limit and the failure continues.
               </li>
               <li>
                 <strong>Daily token quota.</strong> An agent replays the whole
@@ -607,7 +607,7 @@ wire_api = "responses"`}
           </dt>
           <dd>
             <strong>The one failure nothing reports.</strong> Every layer
-            succeeded and the model simply did not call the tool. Try a
+            succeeded and the model did not call the tool. Try a
             different model before changing anything else — no amount of client
             configuration fixes it.
           </dd>

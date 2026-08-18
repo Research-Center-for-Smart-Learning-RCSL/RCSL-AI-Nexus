@@ -41,7 +41,7 @@ import type { Proposal } from '@/features/assistant/schema';
 const SURFACE_LABELS: Record<string, string> = {
   'api_keys.create': 'Issuing a key',
   'api_keys.edit': 'Editing a key',
-  'api_keys.list': 'Your API keys',
+  'api_keys.list': 'The key list',
   api_docs: 'Integration',
   agent_setup: 'Connecting an agent',
   other: 'This platform',
@@ -207,7 +207,7 @@ export function AssistantDrawer() {
           <div className="space-y-2 text-sm text-muted-foreground">
             <p>
               Ask about this deployment&apos;s settings. On a key form it can
-              suggest values, which you then apply and save yourself.
+              suggest values; applying and saving them stays a manual step.
             </p>
             <p>
               It advises only. It cannot issue, edit or revoke anything, and it

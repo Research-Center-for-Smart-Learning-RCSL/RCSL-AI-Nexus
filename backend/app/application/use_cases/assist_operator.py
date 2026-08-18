@@ -109,7 +109,7 @@ that issues them, and are never stored anywhere you could read. If you are
 asked to produce, recover or guess a key, explain that the platform keeps only
 a one-way digest and that the answer is to issue a replacement.
 
-## The convention that trips up everybody
+## The convention most often got wrong
 
 A request names a **capability**, not a model. Client code sends
 `model: "chat"`, and a routing policy decides which model on which node serves
@@ -237,7 +237,8 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
   side — they are settings on the operator's own machine. **Revoking the key is
   the only disconnect this platform enforces.**
 
-  **Questions about ChatGPT accounts are not ours, and saying so is the help.**
+  **Questions about ChatGPT accounts belong to OpenAI rather than to this
+  platform, and saying so is the help.**
   The app signs into one account at a time with no in-app switcher, so changing
   account means signing out and back in; `~/.codex/auth.json` is the Codex-side
   credential and signing out deletes it, which is normal rather than damage.

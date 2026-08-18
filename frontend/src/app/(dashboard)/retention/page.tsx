@@ -19,7 +19,7 @@ export default function RetentionPage() {
         </p>
         <p className="mt-2 max-w-prose text-sm text-muted-foreground">
           Set each window to the shortest period that still answers the
-          questions you have to be able to answer — the reason to keep a record
+          questions an investigation has to be able to answer — the reason to keep a record
           is investigating an incident, and the reason not to is that a record
           kept is a record that can leak. <strong>The audit log is not
           exempt</strong>: deleting it removes the record of what was done,

@@ -11,7 +11,7 @@ export default function ApiKeysPage() {
       <div>
         <h1 className="font-heading text-lg font-semibold">API keys</h1>
         <p className="max-w-prose text-sm text-muted-foreground">
-          Keys let your own code and tools call this deployment from outside.
+          A key lets code and tools outside this deployment call it.
           A key is <strong>shown once, when it is created</strong> — only a
           one-way hash is stored, so a lost key is replaced rather than
           recovered. Each key is scoped to the capabilities it may ask for;
