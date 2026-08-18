@@ -14,7 +14,7 @@ documents, is where the current state is recorded.
 ## Layout
 
 ```
-backend/      FastAPI, hexagonal architecture. One image, three ASGI apps
+backend/      FastAPI, hexagonal architecture. One image, four ASGI apps
 frontend/     Next.js management UI, one instance per admin entrance
 docs/         Architecture, security, deployment
 ```

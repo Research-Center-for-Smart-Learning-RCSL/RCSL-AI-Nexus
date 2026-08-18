@@ -577,7 +577,7 @@ wire_api = "responses"`}
             still gets, and <code>lower_bound</code> for the cheap guard that
             runs before a model has been chosen at all — it refuses only what no
             tokeniser could bring under the ceiling, so on that basis the true
-            figure is somewhere above the number shown. The estimate ran 20% to 50%
+            figure is somewhere above the number shown. The estimate ran roughly 20% to 60%
             high on ordinary content and refused at least one conversation that
             would have fitted; a <code>tokenizer</code> figure does not.
             <br />
@@ -599,7 +599,7 @@ wire_api = "responses"`}
             122,880-token ceiling that leaves roughly 80,000 tokens, or about
             eight such turns. This said four until 2026-08-18, computed against
             the 98,304 ceiling of the day before and on an estimator that ran
-            20% to 50% high. All three of those are the client&apos;s, and raising the
+            roughly 20% to 60% high. All three of those are the client&apos;s, and raising the
             ceiling only changes how long a session runs before it stops.
             <br />
             Reached sooner than the character count suggests if you work in

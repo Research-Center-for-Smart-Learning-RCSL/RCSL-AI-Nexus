@@ -67,6 +67,16 @@ def test_the_lifetime_ceiling_quoted_is_the_configured_one() -> None:
     assert "365" not in prompt(max_lifetime_days=90)
 
 
+def test_the_context_ceiling_quoted_is_the_configured_one() -> None:
+    """The number an operator is told is the number `RouteChatRequest` will
+    apply. `config.py` records four raises in thirteen days, and the helper
+    above passes the current default -- so a regression that wrote the ceiling
+    into the prompt text as a literal would pass every other test in this file.
+    """
+    assert "65536 tokens" in prompt(max_context_length=65536)
+    assert "122880" not in prompt(max_context_length=65536)
+
+
 def test_the_gateway_origin_quoted_is_the_configured_one() -> None:
     assert "https://api.example.test/v1" in prompt()
 

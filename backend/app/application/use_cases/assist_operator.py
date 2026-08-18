@@ -14,8 +14,9 @@ Two properties are worth stating because they are easy to lose:
 **The system prompt is assembled here, from live values.** The rules it recites
 — which capabilities may be issued for, how long a key may live, how large an
 input may be, that `model` names a capability — are read from the domain and
-from the same settings the use cases are constructed with, never transcribed. A transcription would be a
-further copy of a set this project has already had drift on twice
+from the same settings the use cases are constructed with, never transcribed. A
+transcription would be a further copy of a set this project has already had
+drift on twice
 (`domain/entities/capability.py` exists because of it), and the assistant is the
 worst possible place for a stale copy: it states the rule confidently to the one
 person who does not already know it.
@@ -198,8 +199,9 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
 
   An older Codex will still report only `exceeded retry limit, last status:
   429` without the body. **Ask them for the request id it prints, and look it
-  up on the Refusals screen** — every refusal this platform decides is stored
-  there with its code, its status and the figures it carried, including the
+  up on the Refusals screen** — every refusal with an identified caller is
+  stored there with its code, its status and the figures it carried, including
+  the
   wait a `429` asked for, which the header no longer preserves by the time
   anybody reads back. A caller can read their own refusals without an
   administrator. It will *not* be on the Transcripts screen: a quota refusal is
@@ -219,8 +221,8 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
   conversation of any length could be sent; another with fewer plugins ran for
   days. Quote that figure with its date: the ceiling has been raised since, the
   count is exact rather than estimated since, and the same payload measures
-  about 99,000 real tokens. **The signature is a tool
-  figure that stays identical while the message count moves** — that is not a
+  about 99,000 real tokens. **The signature is a tool figure that stays
+  identical while the message count moves** — that is not a
   conversation problem and starting a new conversation cannot fix it. The remedy
   is a separate `CODEX_HOME` holding only the configuration above, set per shell
   (machine-wide moves the app too). Never tell an operator their machine cannot
@@ -283,8 +285,8 @@ both are announced rather than silent.
 
 **The ceiling is {max_context_length} tokens on what a caller may send**, and
 it counts the tool definitions and every replayed turn, not just the newest
-message. Waiting
-does not clear it and neither does retrying: it is a property of the payload.
+message. Waiting does not clear it and neither does retrying: it is a property
+of the payload.
 
 **Read the `composition` field before recommending anything**, because the
 three parts have different answers and only one of them is "start again":

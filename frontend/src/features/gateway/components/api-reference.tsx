@@ -882,8 +882,10 @@ data: [DONE]`}
                   and you can budget against it directly.{' '}
                   <code>estimate</code> means no vocabulary was available for
                   that model and the figure was inferred from character widths,
-                  which runs 20% to 50% above the real count on prose, source and
-                  tool schemas and can run well below it on dense identifiers
+                  which runs roughly 20% to 60% above the real count on prose,
+                  source and tool schemas — the ratio is a property of the
+                  sample rather than a constant of the content type — and can
+                  run well below it on dense identifiers
                   such as uuids or base64 — so treat it as an upper bound on
                   ordinary content and nothing at all on the rest.{' '}
                   <code>lower_bound</code> means the request was turned away
@@ -1043,7 +1045,8 @@ data: [DONE]`}
           made, so the budget returns in the pieces it was spent in. The{' '}
           <code>Retry-After</code> on <code>quota_exceeded</code> is the
           projected moment enough of that spend has aged out, and the message
-          states the same wait in round hours.
+          states the same wait coarsely — “a moment” under 90 seconds, round
+          minutes under an hour, and round hours above it.
         </p>
         <p className="text-sm text-muted-foreground">
           <strong>
