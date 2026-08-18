@@ -24,9 +24,11 @@ export default function RefusalsPage() {
           19:16?” meant an administrator reading container logs.
         </p>
         <p className="mt-2 max-w-prose text-sm text-muted-foreground">
-          Nothing here is more than you were already told. No request content is
-          stored, no model is named, and the operator-facing detail that
-          accompanies an error never leaves the server.
+          Nothing here is more than the caller was already told. No request
+          content is stored, no model is named, and the operator-facing detail
+          that accompanies an error is never written to the row — it reaches a
+          response only while an administrator has a debug window open on that
+          credential, and not this table even then.
         </p>
       </div>
       <RefusalsTable />

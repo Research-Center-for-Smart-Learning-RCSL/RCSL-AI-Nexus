@@ -76,9 +76,12 @@ backend/
         invitation.py               # Invitation, RecoveryCode
         actor.py                    # Actor, Scope
         usage.py                    # UsageRecord
+        refusal.py                  # Refusal: the stored copy of what a caller was told
+        evaluation.py               # EvaluationRun and its per-model, per-task scores
       services/
         routing_service.py          # Pure logic: capability + node state -> target model
-        usage_service.py            # Usage accounting and quota checks
+        debug_window.py             # The one ceiling on the debug-logging window,
+                                    #   shared by both credential kinds
         memory_budget_service.py    # Refuses loads that would exceed node capacity
       ports/
         model_runtime_port.py
@@ -250,6 +253,7 @@ Ports the domain defines, and what implements them:
 | `JobProgressPort` | `CacheJobProgress`, over Redis | yes |
 | `KnowledgeRepositoryPort` | `PostgresKnowledgeRepository` | yes, built 2026-07-30 |
 | `EvaluationRepositoryPort` | `PostgresEvaluationRepository` | yes, built 2026-08-17 |
+| `RefusalWriterPort`, `RefusalRepositoryPort` | `PostgresRefusalWriter`, `PostgresRefusalRepository` | yes, built 2026-08-18. Two ports rather than one: the gateway holds only the writer, so it records what it refused without being able to read any of it back — the same split `db_roles.py` enforces at the database |
 | `MetricsPort` | Phase 2 | correctly absent; the memory budget still uses static node capacity |
 | `TokenCounterPort` | `GgufTokenCounter` | yes |
 
@@ -554,7 +558,7 @@ It does **not** inject a fixed admin `Actor`, contrary to an earlier version of 
 
 ## 11. Migrations
 
-Alembic. Phase 1 creates `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `invitations`, `recovery_codes`, `usage_records`, and `audit_log`.
+Alembic. Phase 1 creates `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `invitations`, `recovery_codes`, `usage_records`, and `audit_log`. Phase 2 has added, in migration order, `tenants` (`d4e8f1a2b6c9`), `knowledge_collections` and `knowledge_documents` (`e5f2c8d71a43`), `retention_policies` (`a1b2c3d4e5f6`), `prompt_templates` (`c2f7b90e4a15`), `prompt_logs` (`a1d6e93c7f52`), the three evaluation tables `evaluation_runs`, `evaluation_model_scores` and `evaluation_task_scores` (`d3f5b81a04c7`), and `refusals` (`e7b41c9d0a26`, with `f3c8a15d27be` adding the denormalised actor display) — nineteen tables across sixteen migrations, counted 2026-08-18, head `a4c1e07f2b9d`.
 
 Migrations run as a **one-shot Compose service** that the application services depend on with `condition: service_completed_successfully`. They are not run from an application entrypoint, because five containers start from the same image — the gateway, the two admin entrances, `parser` and the migration job itself — and the three that open the database would race each other.
 

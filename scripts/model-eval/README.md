@@ -14,7 +14,7 @@ that cost. Anything that produces a figure this repository will later reason fro
 |---|---|
 | `tasks.py` | the eighteen tasks: prompt, checks, a reference answer, a deliberately wrong answer |
 | `specdoc.py` | the ~4,500-token policy document group E reads, generated deterministically |
-| `harness.py` | the Ollama call, answer extraction, and the sandboxed scorer |
+| `harness.py` | the Ollama call, answer extraction, and the subprocess scorer — not a sandbox, see below |
 | `validate.py` | section 4.1: the scorer is checked in both directions before any model runs |
 | `run.py` | drives a phase; appends every sample to `results.jsonl` as it completes |
 | `analyse.py` | the tables, including the saturation verdict section 4.4 asks for |
@@ -42,7 +42,12 @@ rename the phase to keep an old read on the record beside a new one.
 **It takes the deployment down.** Loading a candidate evicts what is serving, and on 64 GiB only
 one 30 GB-class model is resident at a time. `chat` and `code` return 503 for the duration —
 roughly 30 minutes for a pilot, two hours for a full run. `run.py restore` puts
-`gemma4:31b-it-q8_0` back with `keep_alive: -1`, which is how the deployment pins it. Check with
+`qwen3.6:35b-a3b-q8_0` back with `keep_alive: -1` and `num_ctx: 196608`, which is how the
+deployment pins it. **That constant is not `INCUMBENT` and must not be set back to it**: `chat`
+and `code` both moved to this model on 2026-08-16 acting on this harness's own run, so a restore
+written against `INCUMBENT` would evict what is serving to reload what the evaluation retired. It
+said `gemma4:31b-it-q8_0` until 2026-08-18. Whoever runs this next has to check the line still
+describes the deployment; nothing here can detect that it has gone stale. Check with
 `curl -s 127.0.0.1:11434/api/ps`.
 
 **It executes model-generated Python.** Code tasks are scored by running what the model wrote, in
