@@ -5,6 +5,7 @@ import {
   cidrTextSchema,
   createApiKeySchema,
   defaultCapabilityField,
+  defaultCapabilityOptions,
   defaultCapabilityPayload,
   NO_DEFAULT,
   parseCidrText,
@@ -185,6 +186,21 @@ describe('the default capability', () => {
     expect(
       parseUpdate({ scopes: ['chat'], default_capability: 'code' }).success,
     ).toBe(false);
+  });
+
+  it('keeps offering a value the capabilities no longer contain', () => {
+    // Reachable and expected: unticking the capability a default names is
+    // refused rather than cleared, and a Select whose value matches no item
+    // renders blank — telling the operator to fix a field showing nothing.
+    expect(defaultCapabilityOptions(['chat'], 'code')).toEqual(['chat', 'code']);
+    expect(defaultCapabilityOptions(['chat', 'code'], 'code')).toEqual([
+      'chat',
+      'code',
+    ]);
+  });
+
+  it('offers only the ticked capabilities when nothing is chosen', () => {
+    expect(defaultCapabilityOptions(['chat'], NO_DEFAULT)).toEqual(['chat']);
   });
 
   it('carries null on the wire and a word in the control', () => {

@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
 import { issuableCapabilitySchema } from '@/features/models/schema';
+// The select's sentinel for "refuse". This module already names form fields
+// (`allowed_cidrs_text`) and already carries the key draft, so the direction of
+// this import matches the coupling that was already here.
+import { NO_DEFAULT } from '@/features/api-keys/schema';
 
 /**
  * The management assistant's wire contract, mirroring the backend's
@@ -56,6 +60,11 @@ export const apiKeyDraftSchema = z.object({
   quota_tokens_per_day: z.string().max(40).optional(),
   allowed_cidrs: z.array(z.string()).max(40).optional(),
   expires_at: z.string().max(60).optional(),
+  /** What the default-capability select holds, as a capability name — or
+   *  absent, which is "refuse". The select's own sentinel does not travel; the
+   *  backend declares `extra="forbid"` on this draft, so a field published
+   *  here and undeclared there costs the whole draft. */
+  default_capability: z.string().max(64).optional(),
 });
 export type ApiKeyDraft = z.infer<typeof apiKeyDraftSchema>;
 
@@ -88,6 +97,13 @@ export const proposalFieldsSchema = z
     quota_tokens_per_day: z.number().int().min(1).optional(),
     allowed_cidrs: z.array(z.string()).optional(),
     expires_at: z.string().optional(),
+    /** Nullable, unlike every other field here, because `null` is the value
+     *  that means "refuse" rather than an omission. Added the day
+     *  `UpdateApiKeyRequest` gained it: `strict()` drops the entire card on an
+     *  unknown key, so a field the backend will happily validate and this
+     *  schema does not know costs the operator the whole proposal, including
+     *  the recommendations that were fine. */
+    default_capability: z.string().nullable().optional(),
   })
   .strict();
 export type ProposalFields = z.infer<typeof proposalFieldsSchema>;
@@ -141,6 +157,12 @@ export function proposalToFormPatch(
   }
   if (fields.allowed_cidrs !== undefined) {
     patch.allowed_cidrs_text = fields.allowed_cidrs.join('\n');
+  }
+  if (fields.default_capability !== undefined) {
+    // `null` is the wire's "refuse"; the select holds a word for it, because an
+    // empty string renders as the placeholder. Imported rather than repeated so
+    // the two spellings cannot drift.
+    patch.default_capability = fields.default_capability ?? NO_DEFAULT;
   }
   if (fields.expires_at !== undefined) {
     // The form's date input takes `YYYY-MM-DD`; the proposal carries a full

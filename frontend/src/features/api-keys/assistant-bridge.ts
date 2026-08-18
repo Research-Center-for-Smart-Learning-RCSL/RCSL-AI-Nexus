@@ -16,7 +16,7 @@
 import type { ApiKeyDraft } from '@/features/assistant/schema';
 import type { FormPatch } from '@/features/assistant/context';
 import type { IssuableCapability } from '@/features/models/schema';
-import { parseCidrText } from '@/features/api-keys/schema';
+import { NO_DEFAULT, parseCidrText } from '@/features/api-keys/schema';
 
 /**
  * The fields a proposal is allowed to touch, and the only names passed to
@@ -36,6 +36,7 @@ export const APPLICABLE_FIELDS = [
   'quota_tokens_per_day',
   'allowed_cidrs_text',
   'expires_at',
+  'default_capability',
 ] as const;
 
 export type ApplicableField = (typeof APPLICABLE_FIELDS)[number];
@@ -53,6 +54,7 @@ export type KeyFormValues = {
   quota_tokens_per_day?: unknown;
   allowed_cidrs_text?: string;
   expires_at?: string;
+  default_capability?: string;
 };
 
 function text(value: unknown): string {
@@ -77,6 +79,12 @@ export function draftFor(values: KeyFormValues): ApiKeyDraft {
     quota_tokens_per_day: text(values.quota_tokens_per_day),
     allowed_cidrs: parseCidrText(values.allowed_cidrs_text ?? ''),
     expires_at: values.expires_at ?? '',
+    // Omitted when the form holds "refuse", which is what its absence means on
+    // the backend's draft too. Sending the sentinel word would put a value in
+    // the prompt that names nothing on this platform.
+    ...(values.default_capability && values.default_capability !== NO_DEFAULT
+      ? { default_capability: values.default_capability }
+      : {}),
   };
 }
 

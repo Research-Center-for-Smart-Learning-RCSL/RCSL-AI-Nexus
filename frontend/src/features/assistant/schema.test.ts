@@ -9,6 +9,7 @@ import {
   applyProposalPatch,
   draftFor,
 } from '@/features/api-keys/assistant-bridge';
+import { NO_DEFAULT } from '@/features/api-keys/schema';
 
 /**
  * The last gate before a language model's output lands in a form the operator
@@ -170,5 +171,73 @@ describe('draftFor', () => {
 
     expect(draft.rate_limit_rpm).toBe('');
     expect(draft.scopes).toEqual([]);
+  });
+});
+
+describe('the default capability, which the strict schema had to be told about', () => {
+  it('does not drop the whole card when a proposal carries it', () => {
+    // `proposalFieldsSchema` is `.strict()`, and the backend's proposal shape
+    // is `UpdateApiKeyRequest` — so the day that model gained the field, a
+    // proposal the backend happily validated became a card this parse threw
+    // away entire, taking the recommendations beside it with it.
+    const found = readProposalFrame({
+      proposal: {
+        action: 'create',
+        fields: { scopes: ['chat', 'code'], default_capability: 'code' },
+        rationale: 'They asked for it to just work.',
+      },
+    });
+
+    expect(found).not.toBeNull();
+    expect(found?.fields.default_capability).toBe('code');
+  });
+
+  it('carries an explicit null, which is the card that withdraws a default', () => {
+    const found = readProposalFrame({
+      proposal: {
+        action: 'update',
+        key_id: 'k1',
+        fields: { default_capability: null },
+        rationale: 'Refusing again will show what the client is sending.',
+      },
+    });
+
+    expect(found?.fields.default_capability).toBeNull();
+  });
+
+  it('turns that null into the word the select holds', () => {
+    // The form cannot hold `null` here: an empty value renders the
+    // placeholder, so "refuse" is a named option.
+    const patch = proposalToFormPatch({
+      default_capability: null,
+    } as ProposalFields);
+
+    expect(patch.default_capability).toBe(NO_DEFAULT);
+  });
+
+  it('leaves the field alone when the proposal did not name it', () => {
+    const patch = proposalToFormPatch({ name: 'ci' } as ProposalFields);
+
+    expect('default_capability' in patch).toBe(false);
+  });
+
+  it('applies through the allowlist rather than being silently dropped', () => {
+    const written: Record<string, unknown> = {};
+    applyProposalPatch({ default_capability: 'code' }, (field, value) => {
+      written[field] = value;
+    });
+
+    expect(written.default_capability).toBe('code');
+  });
+
+  it('publishes the setting in the draft, and omits it when it is "refuse"', () => {
+    // Omitted rather than sent as the sentinel: the backend's draft model
+    // forbids unknown keys and knows nothing of a capability called "refuse".
+    expect(draftFor({ default_capability: 'code' }).default_capability).toBe(
+      'code',
+    );
+    expect(
+      'default_capability' in draftFor({ default_capability: NO_DEFAULT }),
+    ).toBe(false);
   });
 });

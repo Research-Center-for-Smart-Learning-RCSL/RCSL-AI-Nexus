@@ -433,10 +433,42 @@ was missing, and the first test to refuse one got an `AttributeError` instead of
 a refusal.
 
 **Nothing has been turned on.** No key carries a default; the migration adds
-two nullable columns and changes no behaviour until somebody chooses it. The
-management assistant's proposal allowlist is deliberately unchanged — whether an
-advisory model may recommend this setting is a separate decision from whether
-an operator may set it.
+two nullable columns and changes no behaviour until somebody chooses it.
+
+**A review found four things, and the first of them says the "separate
+decision" above was not one.** Leaving the management assistant alone had
+looked like restraint. It was not available: `ProposalOut.fields` *is*
+`UpdateApiKeyRequest`, deliberately — its docstring calls the reuse
+load-bearing, because it makes a proposal the API would refuse impossible to
+render as a filled-in form. So widening that model widened what the backend
+accepts in a proposal, while the frontend's `proposalFieldsSchema`, which is
+`.strict()`, still did not know the field. The failure is not a dropped field
+but a **dropped card**: the model mentions the setting it had just been taught
+about, the whole proposal fails to parse, and the operator reads prose
+referring to a card that never appears — losing the scopes and expiry
+recommendations beside it. The setting is now carried end to end, which is also
+the smaller argument: the assistant may already propose `scopes`, and a default
+that must be a subset of scopes is strictly weaker than granting one.
+
+The other three: `_within_policy`, which exists so an operator is never handed
+a card that errors the moment they apply it, did not check the new 409 rule —
+it does now, when the proposal carries both halves, and leaves the case it
+cannot decide to the form. The bridge's `APPLICABLE_FIELDS` and `draftFor` had
+not been extended, so the assistant was being asked to advise about a setting
+the published draft never showed it. And the Select rendered **completely
+blank** when the capability its value named was unticked — a state the design
+deliberately makes reachable, since that narrowing is refused rather than
+silently cleared, so the operator was being told to fix a field that was
+showing them nothing.
+
+**One more turned up while fixing the first.** `trailer()` dumps the proposal
+with `exclude_none=True`, which is right for every field where `None` means
+"no recommendation" — and wrong for this one, where `None` *is* the
+recommendation to stop substituting. Excluded, the single card that can
+withdraw a default arrived with the field missing and applying it changed
+nothing. This is the same absence-versus-null distinction the PATCH verb draws
+with `model_fields_set`, at the other end of the same field, and it is worth
+noting that it recurred at a boundary nobody was looking at.
 
 ### Three things the refusals screen could not be asked, one of which the backend had been able to answer all along
 

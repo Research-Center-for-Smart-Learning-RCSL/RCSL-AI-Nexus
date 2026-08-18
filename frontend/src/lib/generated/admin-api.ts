@@ -1423,6 +1423,8 @@ export interface components {
         ApiKeyDraftIn: {
             /** Allowed Cidrs */
             allowed_cidrs?: string[] | null;
+            /** Default Capability */
+            default_capability?: string | null;
             /** Expires At */
             expires_at?: string | null;
             /** Name */

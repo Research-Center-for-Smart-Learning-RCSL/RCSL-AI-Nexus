@@ -294,3 +294,75 @@ def test_the_proposal_format_is_withheld_where_no_form_exists() -> None:
         "an empty ending let the model fall back on a block seen earlier in the "
         "conversation; the replacement has to say what this screen wants instead"
     )
+
+
+# --- the default capability ----------------------------------------------
+
+
+async def test_a_default_outside_the_capabilities_beside_it_is_not_offered() -> None:
+    """`_within_policy` exists so the operator is never handed a card that
+    errors the moment they apply it and submit. `ManageApiKeys` refuses this
+    pair with a 409, which is exactly that class of rule."""
+    c = collector()
+
+    await drain(
+        c,
+        [
+            block(
+                valid_payload(
+                    fields={"scopes": ["chat"], "default_capability": "code"},
+                )
+            )
+        ],
+    )
+
+    assert await c.trailer() is None
+
+
+async def test_a_default_among_them_is_offered() -> None:
+    c = collector()
+
+    await drain(
+        c,
+        [
+            block(
+                valid_payload(
+                    fields={"scopes": ["chat", "code"], "default_capability": "code"},
+                )
+            )
+        ],
+    )
+
+    trailer = await c.trailer()
+    assert trailer is not None
+    assert trailer["proposal"]["fields"]["default_capability"] == "code"
+
+
+async def test_a_default_with_no_capabilities_beside_it_is_left_to_the_form() -> None:
+    """Nothing here knows the key's stored capability list, so this proposal
+    cannot be decided against it. Refusing every such card would drop advice
+    that is usually right; the form validates it against the values the
+    operator is looking at and puts the message on the field."""
+    c = collector()
+
+    await drain(
+        c,
+        [block(valid_payload(action="update", key_id="k1", fields={"default_capability": "chat"}))],
+    )
+
+    assert await c.trailer() is not None
+
+
+async def test_clearing_the_default_travels_as_null() -> None:
+    """`null` is a value on this field rather than an omission, and the card
+    that says "stop substituting" is the one it has to be able to carry."""
+    c = collector()
+
+    await drain(
+        c,
+        [block(valid_payload(action="update", key_id="k1", fields={"default_capability": None}))],
+    )
+
+    trailer = await c.trailer()
+    assert trailer is not None
+    assert trailer["proposal"]["fields"]["default_capability"] is None
