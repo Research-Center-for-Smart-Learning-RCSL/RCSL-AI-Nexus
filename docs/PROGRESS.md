@@ -232,6 +232,36 @@ filter, which reads `app.state` that only the lifespan populates, so it was
 measuring a 500 from an unstarted application rather than a perimeter refusal.
 It aims at the tailnet entrance's CSRF check now, which needs no state.
 
+**Deployed and verified on the machine the same evening.** The image was rebuilt
+and gateway, both admin entrances and the parser recreated onto it — the four
+services that share `rcsl-ai-nexus:latest`; the frontend image was untouched
+because no frontend source changed. Before the recreate the new image was
+checked for the code rather than assumed to carry it, by importing the
+middleware inside it.
+
+What the live platform now answers: `cache-control: no-store` on `/healthz` from
+all three entrances, **and on a 401 from both the admin API and the gateway** —
+the perimeter-built response the middleware's placement exists for. `/readyz`
+reports `ready: true` with `database`, `cache` and `runtime` all true on the two
+applications that name their checks, the frontend answers 200 through its proxy
+to the entrance that had just been replaced, Ollama still holds all three models
+(it runs natively and no container touched it), and
+`check-platform-health.sh --dry-run` reports `state OK` with no warnings across
+all fifteen checks.
+
+**One property is covered by test rather than by the deployment**: that a stream
+keeps its own `no-cache`. Verifying it on the machine needs a real streaming
+completion, which needs somebody's API key, so it was not done.
+
+*A note on the verification itself.* The first health sweep here reported `000`
+from all three entrances and looked exactly like the port-binding fault of
+2026-07-26. It was the checking script: zsh does not word-split an unquoted
+variable, so `set -- $u` left the URL unparsed and curl was handed nothing. The
+platform was answering 200 throughout. Worth recording because the failure it
+imitated is one this repository has actually had, and for ten seconds the
+evidence for "the deploy broke the bindings" and for "the loop is wrong" was
+identical.
+
 **And four of the seventeen `secrets/*.example` files carried a trailing
 newline**, against the rule `secrets/README.md` states in its own second
 paragraph: the content of these files *is* the secret, so a newline is part of
