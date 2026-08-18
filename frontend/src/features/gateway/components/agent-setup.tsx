@@ -29,6 +29,14 @@
  * made every request too large to send before a word of it was typed. One
  * sentence of good news had been carrying an untested claim about the
  * conditions under which it holds.
+ *
+ * On 2026-08-18 the replacement claim went the same way, one day old. "The app
+ * makes this machine unconnectable" was generalised from the single machine
+ * that had failed, while the operator's own — same app, same build — had been
+ * connected and working throughout. What differs is the number of plugins the
+ * app injects. Both versions of this text were absolute, and the true statement
+ * is a quantity: hence the two machines below, and the missing figure named as
+ * missing rather than rounded to a claim.
  */
 
 import { useRef } from 'react';
@@ -294,7 +302,29 @@ wire_api = "responses"`}
               Restart the desktop app afterwards; it reads the file at startup.
             </strong>{' '}
             You may need <code>codex login</code> to use OpenAI again, since
-            pointing here never required it.
+            pointing here never required it.{' '}
+            <strong>Copy the file before the edit, not after</strong> — a backup
+            taken partway through reinstates what it was meant to remove when
+            somebody restores it an hour later.
+          </dd>
+          <dt className="font-mono text-muted-foreground">clear the key</dt>
+          <dd>
+            The configuration is gone, but <code>RCSL_API_KEY</code> outlives it
+            and is what a provider block added later would pick up with nobody
+            typing a key. On Windows it has two scopes, and <code>setx</code>{' '}
+            wrote to the first:
+            <CodeBlock
+              code={
+                "[Environment]::SetEnvironmentVariable('RCSL_API_KEY',$null,'User')"
+              }
+              label="Copy"
+            />
+            Then check the other:{' '}
+            <code>
+              [Environment]::GetEnvironmentVariable(&apos;RCSL_API_KEY&apos;,&apos;Machine&apos;)
+            </code>{' '}
+            printing nothing is the pass. Anything it prints was set machine-wide
+            and needs an elevated shell to remove.
           </dd>
           <dt className="font-mono text-muted-foreground">keep both</dt>
           <dd>
@@ -355,20 +385,28 @@ wire_api = "responses"`}
           </dt>
           <dd>
             <strong>
-              The app follows the CLI across, and on a machine where it is
-              installed that is the problem rather than the convenience.
+              It follows the CLI across, and whether that is the convenience or
+              the problem depends on how much the app has enabled.
             </strong>{' '}
             Both read <code>~/.codex/config.toml</code>, so finishing step 3
             points the app here too — observed on macOS on 2026-08-09, after an
             earlier version of this page called it impossible.{' '}
             <strong>The sharing runs the other way as well.</strong> The app
             owns that directory: it rewrites the file, and it hands the CLI its
-            own tool surface. Measured on Windows on 2026-08-17, app build
-            26.810.52044: every request carried{' '}
+            own tool surface — which is resent on every turn.
+            <br />
+            <strong>Two Windows machines, same app build 26.810.52044.</strong>{' '}
+            One carried a computer-use runtime and{' '}
+            <strong>five bundled plugins</strong>, and sent{' '}
             <strong>286 tool definitions, an estimated 122,870 tokens</strong> —
             more than this whole ceiling on its own, so nothing could be sent at
-            any conversation length. The source was the app&apos;s computer-use
-            and browser runtime plus five bundled plugins.
+            any conversation length. The other carried{' '}
+            <strong>two plugins</strong> and worked for days. Between 2026-08-17
+            and 2026-08-18 this page said a machine with the app could not be
+            connected at all, generalised from the first of those two. It is a
+            quantity, not a yes or no, and the one worth knowing is your own:{' '}
+            <strong>one successful request logs the composition</strong>, and a
+            machine already refusing everything is too late to measure.
             <br />
             It hid well, and each clue read as innocence:{' '}
             <code>codex mcp list</code> reported none while the server was in
@@ -383,7 +421,14 @@ wire_api = "responses"`}
             moves the app too. Undoing it also takes one more step than it
             looks: after removing those lines the app can still fail at startup
             on a conversation created against the old provider, and deleting
-            that conversation is what clears it.
+            that conversation is what clears it — leaving the{' '}
+            <code>[model_providers.rcsl]</code> block in place avoids that
+            error entirely.
+            <br />
+            <strong>Both figures above carry a build for a reason.</strong> The
+            app updates itself and arrives with plugins nobody installed — one
+            of these machines gained a sixth overnight — so a tool count is only
+            true of the build and the plugin set it was taken on.
           </dd>
           <dt className="font-mono text-muted-foreground">
             Codex on the web
