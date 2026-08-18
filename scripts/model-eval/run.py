@@ -23,12 +23,22 @@ from tasks import TASKS
 INCUMBENT = "gemma4:31b-it-q8_0"
 CANDIDATES = [INCUMBENT, "qwen3.6:27b-q8_0", "qwen3.6:35b-a3b-q8_0"]
 
-# Restored at the end: what the deployment was serving before this run, and how.
+# Restored at the end: what the deployment is serving, and how.
+#
 # The num_ctx matters as much as the model does. Ollama keys a loaded instance by
 # its options, so restoring at a different context length leaves a model that is
 # resident but wrong, and the first real request pays a reload to correct it.
-# 196608 is what `gemma4-31b-q8` is registered with (deployment.md, MAX_CONTEXT_LENGTH).
-DEPLOYED = [(INCUMBENT, -1, 196608)]
+# 196608 is what `qwen36-35b-a3b-q8` is registered with (deployment.md section 10,
+# MAX_CONTEXT_LENGTH; and PROGRESS.md 2026-08-17, where num_ctx / 2 = 98304).
+#
+# **This is not INCUMBENT, and the difference is the point.** `chat` and `code`
+# both moved to this model on 2026-08-16, acting on the very run this harness
+# produced -- so the model the evaluation retired is the one INCUMBENT still
+# names, and a `restore` written against INCUMBENT would evict what is serving
+# and reload what is not. Whoever runs this next has to check the line still
+# describes the deployment before trusting it; nothing here can detect that it
+# has gone stale.
+DEPLOYED = [("qwen3.6:35b-a3b-q8_0", -1, 196608)]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results.jsonl")

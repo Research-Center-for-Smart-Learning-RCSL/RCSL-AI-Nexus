@@ -90,19 +90,28 @@ export function EvaluationReportView({ report }: { report: EvaluationReport }) {
         </dl>
       </section>
 
-      {/* Before the tables, deliberately. See the note at the top of this file. */}
-      {run.caveats.length ? (
-        <section className="max-w-prose space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
-          <h3 className="font-heading text-sm font-semibold">
-            What this run does not establish
-          </h3>
-          <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-            {run.caveats.map((caveat) => (
-              <li key={caveat}>{caveat}</li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
+      {/* Before the tables, deliberately. See the note at the top of this file.
+          Rendered whether or not the run carries any, because `--caveat` is
+          optional at import: a run loaded without one would otherwise show a
+          ranking with no statement of limits at all, which is the shape this
+          section exists to prevent and reads as a run that has none. */}
+      <section className="max-w-prose space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
+        <h3 className="font-heading text-sm font-semibold">
+          What this run does not establish
+        </h3>
+        <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+          {run.caveats.length ? (
+            run.caveats.map((caveat) => <li key={caveat}>{caveat}</li>)
+          ) : (
+            <li>
+              Whoever imported this run recorded no limits against it. That is
+              an omission at import rather than a statement that the run has
+              none — read the per-task verdicts below before relying on the
+              ranking.
+            </li>
+          )}
+        </ul>
+      </section>
 
       <section className="space-y-3">
         <h3 className="font-heading text-sm font-semibold">Overall</h3>

@@ -326,13 +326,18 @@ services:
       - "127.0.0.1:8001:8001"
     networks: [control-tailnet, admin-data, metrics-admin, parser-net]
     # Repeated rather than merged: a service-level `volumes` replaces the
-    # anchor's list outright, so the two mounts from x-backend are restated
-    # alongside the documents volume. Read-write here, because ingestion writes
-    # both the upload and its extracted text; the gateway gets no mount at all,
-    # since retrieval reads chunk text from Qdrant and never touches the volume.
+    # anchor's list outright, so all three mounts from x-backend are restated
+    # alongside the documents volume. Getting that count wrong is not a
+    # cosmetic error — the ollama-models mount went in on 2026-08-18 and was
+    # not restated here, which left `/admin/chat` counting characters while the
+    # gateway counted tokens, silently and with no failure anywhere. The
+    # documents volume is read-write here, because ingestion writes both the
+    # upload and its extracted text; the gateway gets no mount of it at all,
+    # since retrieval reads chunk text from Qdrant and never touches it.
     volumes:
       - ./data:/data:ro
       - ${HF_CACHE_HOST_PATH:-./data/hf-cache}:/hf-cache
+      - ${OLLAMA_MODELS_HOST_PATH:-./data/ollama-models}:/ollama-models:ro
       - documents:/var/lib/nexus/documents
     secrets:
       - source: admin_database_url
@@ -393,6 +398,7 @@ services:
     volumes:
       - ./data:/data:ro
       - ${HF_CACHE_HOST_PATH:-./data/hf-cache}:/hf-cache
+      - ${OLLAMA_MODELS_HOST_PATH:-./data/ollama-models}:/ollama-models:ro
       - documents:/var/lib/nexus/documents
     secrets:
       - source: admin_database_url
