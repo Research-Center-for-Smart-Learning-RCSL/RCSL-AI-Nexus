@@ -13,13 +13,34 @@ repos:
       - id: check-merge-conflict
       - id: check-yaml
       - id: end-of-file-fixer
+        # `secrets/*.example` are templates for files whose content *is* the
+        # secret, and secrets/README.md says to write them with no trailing
+        # newline. This hook adds one, so without the exclusion a tool would
+        # quietly reverse a rule the documentation states -- and would do it on
+        # whichever templates happened to be staged, leaving the set half
+        # converted. Worth knowing that the set is already half converted for
+        # the opposite reason: four of the seventeen carried a trailing newline
+        # on 2026-08-18, found when this hook was first installed, so the
+        # exclusion preserves an inconsistency rather than a clean state.
+        exclude: ^secrets/.*\.example$
       - id: trailing-whitespace
       - id: detect-private-key
 
+  # Pinned to the ruff the project actually resolves (`uv run ruff --version`),
+  # because a hook that lints with a different version than CI is a fight rather
+  # than a gate. This said v0.9.6 until 2026-08-18, and installing the hook that
+  # day is how it was found: 0.9.6 wanted `alembic.config` in a different import
+  # group than 0.16.0 does, so the two would have taken turns rewriting
+  # `tests/integration/conftest.py` on every commit that touched it, and it
+  # flagged UP038 -- a rule current ruff no longer has -- against a file 0.16.0
+  # passes clean. Bump this line whenever the backend's ruff moves.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.6
+    rev: v0.16.0
     hooks:
-      - id: ruff
+      # `ruff-check`, not `ruff`: the latter still resolves but announces itself
+      # as a legacy alias, and an alias is one deprecation away from a hook that
+      # stops running while the summary line still reads Passed.
+      - id: ruff-check
         args: [--fix]
         files: ^backend/
       - id: ruff-format

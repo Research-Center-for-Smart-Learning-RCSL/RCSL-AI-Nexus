@@ -18,4 +18,3 @@ export function usePasswordStrength(
   const key = userInputs.join('\u0000');
   return useMemo(() => scorePassword(password, key ? key.split('\u0000') : []), [password, key]);
 }
-
