@@ -25,7 +25,7 @@ an archive of several thousand pieces by as many different authors, with no
 shared design language and, being visual showcases, generally no focus states,
 disabled states, or ARIA. That is fine for a stateless decoration and wrong for
 the interactive surface of an administrative tool, which is why everything a
-user actually operates is shadcn/ui on Radix instead.
+user actually operates is shadcn/ui on Base UI instead.
 
 ## shadcn/ui
 

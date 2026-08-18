@@ -68,7 +68,7 @@ function columnsFor(showAccount: boolean): string[] {
     'When',
     ...(showAccount ? ['Account'] : []),
     'Code',
-    'What you were told',
+    'Message to the caller',
     'Where',
     'Request',
     '',
@@ -101,7 +101,7 @@ function filterSummary(
     // The typed text where the screen has it, since that is what the reader
     // can compare against what they meant. A uuid is what the paste needs.
     filters.actor_id && `account ${account || filters.actor_id}`,
-    filters.actor_display && `account name containing “${filters.actor_display}”`,
+    filters.actor_display && `account login containing “${filters.actor_display}”`,
     filters.since && `from ${time(filters.since)}`,
     filters.until && `before ${time(filters.until)}`,
   ].filter(Boolean);
@@ -463,8 +463,8 @@ export function RefusalsTable() {
                 setAccount(e.target.value);
                 setPinnedAccount(null);
               }}
-              placeholder="Login, name, or an id"
-              aria-label="Show one account's refusals, by login, name or id"
+              placeholder="Login, full name, or an id"
+              aria-label="Show one account's refusals, by login, full name, or id"
             />
             <datalist id="refusal-account-names">
               {names.map((option) => (

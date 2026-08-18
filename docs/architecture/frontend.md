@@ -145,10 +145,17 @@ The entrance is discovered at runtime from a single endpoint:
 ```ts
 // GET /admin/me
 type Me = {
+  id: string                          // absent once, and the self-deletion guard
+                                      //   compared a uuid to a login and never matched
   auth_mode: 'tailnet' | 'local' | 'dev'
   login: string
   display_name: string
-  role: 'admin' | 'user'
+  role: 'admin' | 'tenant_admin' | 'operator' | 'curator' | 'auditor' | 'user'
+  scopes?: string[]                   // resolved server-side from the role.
+                                      //   Optional, and absent is not empty: empty
+                                      //   means this account holds nothing, missing
+                                      //   means an older backend did not say, and
+                                      //   `can()` falls back to role === 'admin'
   session_expires_at: string | null   // null on tailnet, which has no session
 }
 ```
@@ -290,7 +297,7 @@ security defect is covered, the two authentication state machines and the API
 key management lifecycle are driven in Chromium, and presentation is not
 exhaustively covered.
 
-Currently 308 Vitest tests across 36 files (2026-08-18) — the SSE reader and frame schema, the API
+Currently 374 Vitest tests across 40 files (2026-08-18) — the SSE reader and frame schema, the API
 client's CSRF and 401 handling, `safe-redirect`, the password schema, the key
 form's own rules, and the assistant's proposal parsing, transcript handling and
 page-context registry — plus five Playwright paths, and one more under §9.1 that

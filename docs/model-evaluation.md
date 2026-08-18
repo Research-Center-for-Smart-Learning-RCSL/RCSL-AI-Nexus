@@ -3,7 +3,10 @@
 **Status: designed 2026-08-14, run 2026-08-15.** The harness is
 [`scripts/model-eval/`](../scripts/model-eval/) — committed, unlike the one
 behind the previous set — and the results are in [PROGRESS.md](./PROGRESS.md)
-2026-08-15. Three candidates, three interleaved rounds, 280 samples:
+2026-08-15. Three candidates, three interleaved rounds, 162 scored samples — 189
+written, with a `repair` phase superseding the three tasks it re-ran; the 280 rows
+in `results.jsonl` include the two calibration phases, which ran against the
+incumbent alone:
 `gemma4:31b-it-q8_0` 94.4%, `qwen3.6:35b-a3b-q8_0` 89.8%, `qwen3.6:27b-q8_0`
 87.5%. **It separates them, which is the one thing the twelve-task set could not
 do**, and the order held across all three rounds.
@@ -117,7 +120,7 @@ line against one right answer. Nothing is judged by reading it.
 
 | # | task | scored by |
 |---|---|---|
-| 9 | `spec_contradiction` | ~5,000 tokens of numbered clauses, exactly two of which conflict; answer is the two clause ids, sorted |
+| 9 | `spec_contradiction` | ~4,500 tokens of numbered clauses, exactly two of which conflict; answer is the two clause ids, sorted |
 | 10 | `spec_precedence` | same document, a described scenario, answer is the single governing clause id |
 
 ### F — the right answer is a refusal
@@ -143,9 +146,12 @@ line against one right answer. Nothing is judged by reading it.
 
 ### Anchors
 
-`ini_parse` and `logic_order` are carried over unchanged. They were the only two
-tasks in the first set that discriminated, and keeping them makes the two sets
-comparable rather than merely sequential.
+`ini_parse` and `logic_order` were the only two tasks in the first set that
+discriminated, and were meant to make the two sets comparable rather than merely
+sequential. **They are not carried over; they are reconstructed.** The twelve-task
+harness was never committed, so both were rebuilt from the prose description in
+PROGRESS.md and are two more tasks rather than a bridge. The bridge between the
+two sets is gone, and this set cannot rebuild it.
 
 ## 4. Calibration, before any candidate is compared
 
@@ -211,6 +217,6 @@ rather than `/api/generate`, which is a 400 for an embedding model.
 ## 6. What this still will not answer
 
 The same boundary the ten-rung agent harness stops at: whether the work is any
-good. Sixteen checkable tasks measure whether a model can follow a specification
+good. Eighteen checkable tasks measure whether a model can follow a specification
 it has not memorised. They do not measure whether its code is worth reading, and
 2026-08-07 already recorded that real work is the only instrument left for that.

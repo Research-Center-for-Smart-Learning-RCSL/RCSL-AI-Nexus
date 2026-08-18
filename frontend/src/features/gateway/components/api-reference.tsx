@@ -155,8 +155,10 @@ export function ApiReference() {
           The same list is available on the wire as{' '}
           <code>GET /v1/models</code>, in OpenAI&apos;s shape, narrowed to what
           your key was issued for. A key is refused any capability it does not
-          carry, so a key issued for <code>chat</code> cannot spend the
-          hardware&apos;s time on anything else.
+          carry — unless it was issued with a default capability, which serves
+          one of its own instead of refusing — so a key issued for{' '}
+          <code>chat</code> cannot spend the hardware&apos;s time on anything
+          else.
         </p>
         <CodeBlock
           code={`{
@@ -893,8 +895,8 @@ data: [DONE]`}
                   being left to be inferred.
                   <br />
                   <strong>
-                    Every refusal is stored, and an administrator can read yours
-                    back.
+                    Every refusal is stored, and the account the key belongs to
+                    can read its own back without an administrator.
                   </strong>{' '}
                   Since 2026-08-18 the code, the status, the message and these
                   figures are kept against the <code>request_id</code> in the

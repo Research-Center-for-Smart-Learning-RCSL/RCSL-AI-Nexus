@@ -86,7 +86,9 @@ export function CapabilityPicker({
       </div>
       <p className="text-sm text-muted-foreground">
         A request names one of these in its <code>model</code> field. A key is
-        refused any capability it was not issued for.{' '}
+        refused any capability it was not issued for, unless a default capability
+        is set below — which serves one of the key&apos;s own instead of
+        refusing, and can never reach one it does not hold.{' '}
         <code>embedding</code> and <code>rerank</code> may be issued and routed,
         but the gateway mounts only <code>/v1/chat/completions</code> and{' '}
         <code>/v1/responses</code>, so a key carrying either has no endpoint to

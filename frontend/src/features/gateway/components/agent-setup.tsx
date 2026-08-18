@@ -521,9 +521,10 @@ wire_api = "responses"`}
             back by retrying. If your client only reports{' '}
             <em>exceeded retry limit, last status: 429</em>, it has swallowed
             the body; quote the request id it prints. Since 2026-08-18 every
-            refusal is stored with the figures it carried, so an administrator
-            can look that id up on the Refusals screen rather than reading a
-            container log — including the wait a <code>429</code> asked for,
+            refusal is stored with the figures it carried, so that id can
+            be looked up on the Refusals screen by the account the key belongs
+            to — reading your own refusals needs no administrator — rather than
+            by anyone reading a container log — including the wait a <code>429</code> asked for,
             which is otherwise a header nobody still has.
           </dd>
 

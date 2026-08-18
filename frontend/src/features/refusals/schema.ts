@@ -8,12 +8,15 @@ import { z } from 'zod';
  * received.** The code they branched on, the status, the message they read, and
  * the caller-facing figures that came with it — built by the same function that
  * builds the response body, so the two cannot disagree. Nothing operator-facing
- * is in it: `detail` never leaves the backend process, and the model's alias is
+ * is in it: `detail` is never stored on the row, and the model's alias is
  * withheld from a refusal exactly as it is from the response the refusal was.
+ * `detail` does reach a *response* while a debug window is open on the
+ * credential (`errors.py`, `debug_detail_active`), which is the one place this
+ * claim has to be stated narrowly: what is bounded here is the stored copy.
  *
- * That is why this screen is not admin-only. Reading your own is in the base
+ * That is why this screen is not admin-only. Reading one's own is in the base
  * scopes; reading everybody's is `refusal:read_all`, and the response says
- * which of the two you got rather than showing a filter that silently does
+ * which of the two the reader got rather than showing a filter that silently does
  * nothing.
  */
 

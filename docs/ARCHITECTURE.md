@@ -127,9 +127,9 @@ The distinction matters: routing policies bind to `alias` so that swapping the u
 
 ### 2.3 Capability
 
-The unit that applications call against, deliberately decoupled from any specific model: `chat`, `code`, `vision`, `embedding`, `rerank`. Each capability resolves through exactly one routing policy.
+The unit that applications call against, deliberately decoupled from any specific model: `chat`, `code`, `vision`, `embedding`, `rerank`, and `assist`. Each capability resolves through exactly one routing policy.
 
-The set is defined once, in `domain/entities/capability.py`. Three places have to agree on it — a key is issued for capabilities, a policy is written for one, and the gateway maps one onto the scope that reaches inference — and until 2026-07-28 each kept its own copy, which had drifted in both directions at once ([PROGRESS.md](./PROGRESS.md) 2026-07-28).
+There are **two** sets and they are defined together, in `domain/entities/capability.py`: `ISSUABLE_CAPABILITIES`, what a key may be issued for, and `ROUTABLE_CAPABILITIES`, the superset a policy may be written for. `assist` is routable and not issuable, so the management assistant can be pointed at a fast model without a key ever being sold access to an internal management surface ([security.md](./architecture/security.md) §7.5.1). Three places have to agree on them — a key is issued for capabilities, a policy is written for one, and the gateway maps one onto the scope that reaches inference — and until 2026-07-28 each kept its own copy, which had drifted in both directions at once ([PROGRESS.md](./PROGRESS.md) 2026-07-28).
 
 **The name is what a caller puts in the `model` field**, which is the platform's one departure from the OpenAI convention and the thing an integrator is least able to guess. `GET /v1/models` exists to answer it, listing the capabilities a routing policy currently serves, narrowed to the calling key.
 
@@ -204,6 +204,8 @@ class Actor:
                                                   #   api_key; usage accounting and
                                                   #   the per-key quota both key on it
     allowed_capabilities: frozenset[str] | None = None
+    default_capability: str | None = None         # what serves a capability this key
+                                                  #   was not issued for; None refuses
     debug_logging_until: datetime | None = None   # §9.2's window, carried here so the
                                                   #   application layer can read it
 ```
@@ -214,6 +216,12 @@ table no database row can widen; *which* capability is then asked for is data,
 chosen per request, so it travels here and is checked where the capability is
 read. `None` is unrestricted and belongs to a person on an admin entrance; a set
 belongs to an API key, and an empty one permits nothing.
+
+`default_capability` is the one exception to the refusal that follows from an
+empty answer, and it is a substitution rather than a widening. `capability_for`
+re-checks the stored value against `allowed_capabilities` rather than trusting
+it, so a row written by some other hand still reaches nothing the key was not
+issued for; `None`, the default, refuses as before.
 
 ### 2.8 Tenancy: single tenant in Phase 1, multi-tenant foundation in Phase 2
 
@@ -263,7 +271,7 @@ worse than none. [ROADMAP.md](./ROADMAP.md) and
 | Knowledge base | `/admin/knowledge` | 2 | yes, built 2026-07-30: collections, upload, isolated extraction in the `parser` container, Qdrant passage index, and tenant isolation enforced in three further places (§2.8) |
 | Prompt templates | `/admin/prompt-templates` | 2 | yes, end to end: authored in the UI, selected by name on both chat paths. **No variable substitution**, deliberately — §7.4's rule is that values go in their own slot rather than into a template body, and a slot filled from a request would let a caller write into the one message the model treats as authoritative ([security.md](./architecture/security.md) §7.4) |
 | Transcripts | `/admin/prompt-logs` | 2 | yes, read-only. Behind `prompt_log:read`, which is admin-only and withheld from `tenant_admin`: this reads what somebody typed, not that they typed ([security.md](./architecture/security.md) §9.2) |
-| Refusals | `/admin/refusals` | 2 | yes, built 2026-08-17. Every `DomainError` is stored where its caller can read it; `refusal:read_own` is a base scope, `refusal:read_all` is granted like `usage:read_all` ([security.md](./architecture/security.md) §9.5) |
+| Refusals | `/admin/refusals` | 2 | yes, built 2026-08-18. Every `DomainError` is stored where its caller can read it; `refusal:read_own` is a base scope, `refusal:read_all` is granted like `usage:read_all` ([security.md](./architecture/security.md) §9.5) |
 | Retention | `/admin/retention` | 2 | yes: per-dataset policy, preview and purge, behind `retention:write`. Admin-only, because a tenant administrator who could purge could remove the record of what they did inside their own tenant |
 | Host status | `/admin/host` | 2 | yes; free memory, disk, uptime and load, read from `launchd/host-metrics.py` over loopback rather than from inside a container, which on macOS would describe the Linux VM (§0.1) |
 | Model evaluation | `/admin/evaluations` | 2 | yes, shipped 2026-08-17 |
