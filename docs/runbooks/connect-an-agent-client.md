@@ -117,13 +117,28 @@ preferable to work not done at all.
 wrong for this caller and both fail in ways that look like the platform is
 broken:
 
-- **Requests per minute.** An agent makes one request per step, and a single
-  task is tens of steps. A limit sized for a person typing will hit `429
-  rate_limited` in the middle of a task.
+- **Requests per minute.** An agent makes one request per step and a task is
+  tens of steps, though in practice even a busy minute rarely passes twenty. A
+  limit sized for a person typing will hit `429 rate_limited` in the middle of a
+  task — but a `429` mid-task is more often the client retrying after some other
+  failure than this limit being reached, so read the key's Usage before raising
+  it. Raising the wrong limit leaves the caller stuck and spends the diagnosis.
 - **Daily token quota.** An agent replays the whole conversation on every turn,
   and `prompt_tokens` counts towards quota (since 2026-08-04). Consumption is
   therefore roughly quadratic in the length of a task, not linear. Size this
   generously or leave it unset.
+
+**`default_capability` is issued here too, and the default is to leave it
+unset.** A key may name one of its *own* capabilities to serve anything it was
+not issued for, instead of refusing with `403 capability_not_issued`. It ends the
+model-picker trap in section 3 for that key, at the cost of the signal: with it
+on, a client sending its own model name works, and nobody learns that the `model`
+line was never being read. It can never name a capability the key was not issued
+for — the value is checked when the key is issued, when it is edited, and again
+on every request. Every substituted request carries `X-Capability-Defaulted`
+naming what actually ran, and the value the caller sent is kept on the usage row,
+so the substitution stays legible afterwards. Ask for it when a machine has to
+work more than it has to be diagnosable.
 
 Set the CIDR allowlist if the machine running the agent has a fixed address. It
 is the one control that survives the key leaking, and an agent's key sits in a
@@ -554,10 +569,11 @@ Try a different model before touching anything else.
 
 | Symptom | Cause |
 |---|---|
-| `413 context_too_long` mid-task | The conversation grew past `MAX_CONTEXT_LENGTH`. Tool definitions and replayed calls count towards it, so a long agent session reaches it by accumulation. Start a fresh conversation, or raise the setting knowing what section 4.3 of security.md says about it |
+| `413 context_too_long` mid-task | The input grew past the ceiling — 122,880 tokens today, and lower when a smaller model is serving, since the ceiling is checked against whichever target routing picked. Tool definitions and replayed calls count towards it, so a long agent session reaches it by accumulation. **Read the response before choosing a fix**: `composition` splits the figure across messages, prior tool calls and tool definitions and names the largest single turn, and `basis` says how it was counted — `tokenizer` (the serving model's own vocabulary, since 2026-08-18), `estimate` (the character-width fallback on a host with no GGUF), or `lower_bound` (the cheap guard that runs before a target is chosen, so the true figure is above the number shown). Only one of the three causes is fixed by starting a fresh conversation: tool definitions are resent every turn, and a new conversation gets the identical 413 on its first request. See 3.2 and 3.3 |
 | `400 runtime_capability_unsupported` | The client sent `tool_choice: "required"` or named a function. Neither runtime can constrain decoding, so it is refused rather than quietly served as `auto`. Configure the client to send `auto` |
 | `403 capability_not_issued` | The `model` field named something this key may not call — most often the client's own default model name rather than a capability. The message names what was asked for and what may be asked for instead; `GET /v1/models` is the same list. See section 3. A key can be issued with a `default_capability` that serves one of its own capabilities instead of refusing; ask an administrator, and read section 3 first, because this refusal is usually telling you something true about your client |
-| `429` early in a task | The key's requests-per-minute limit. See section 2 |
+| `429 rate_limited` | The key's requests-per-minute limit. Back off and retry; `Retry-After` is on the response. In practice even a busy minute rarely passes twenty requests, so this is more often the client retrying after some other failure than the limit genuinely being reached — read the key's Usage before asking for it to be raised. See section 2 |
+| `429 quota_exceeded` | The key's rolling 24-hour token budget is spent, and **retrying will not clear it**. Both halves of the work count and an agent replays the conversation every turn, so this arrives sooner than request counts suggest. The `type` is `insufficient_quota` rather than `rate_limit_error` precisely so an OpenAI client library does not back off into a wall — branch on `error.code` or `error.type`, never on the status alone. The window trails 24 hours behind now rather than resetting at midnight; the message states the wait coarsely and `Retry-After` carries it when it can be projected. Ask an administrator to raise the quota. See section 2 |
 | `503 runtime_timeout` on long conversations | Prompt evaluation outran the platform's read timeout. **Do not retry it unchanged — send less**, which is what the platform's own message says. A prefill cancelled at the timeout is discarded, so the retry re-evaluates from nothing at the full cold rate: measured 2026-08-14, by aborting a cold prefill part way and re-sending it, the retry evaluated 20,919 tokens in 33.5 seconds having kept nothing. It then fails identically after the same wait. **This row said "retry immediately, the prompt is in the prefix cache" until 2026-08-14, and the prefix-cache reasoning is not wrong so much as inapplicable**: the cache is real and does make an agent's *next turn* nearly free, but it does not survive a cancellation, and a cancellation is the only way this code is reached. If the agent's SDK timeout is shorter than 2100s it kills the connection first and this code never appears; size it up (see `/api-docs`, Timeouts) |
 | `503 overloaded` | Every inference slot was busy for the whole two-minute queue wait. The deployment is full, not broken; back off for `Retry-After` |
 | `400 runtime_capability_unsupported` on a replayed conversation | An assistant turn in the history carries `arguments` that are not valid JSON, and Ollama takes arguments as an object, so the platform refuses before sending. Repair or drop that turn — retrying replays the failure |

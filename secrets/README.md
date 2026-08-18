@@ -27,11 +27,11 @@ passwords, then grants their privileges.
 | File | Account | May do |
 |---|---|---|
 | `owner_database_url` | `nexus` (schema owner) | everything; used only by `migrate` |
-| `gateway_database_url` | `nexus_gateway` | read every table, write only `usage_records` |
+| `gateway_database_url` | `nexus_gateway` | INSERT into `usage_records`, `prompt_logs` and `refusals`; SELECT on everything else. Its read on the last two is revoked after the blanket grant, so it writes both without being able to read either back |
 | `admin_database_url` | `nexus_admin` | full DML, no DDL |
 
-Keep the usernames as above unless you change them in both the URLs and nowhere
-else (the grants follow whatever username the URL carries). Each URL has the
+Keep the usernames as above; changing one means changing it in the URL and
+nowhere else, since the grants follow whatever username the URL carries. Each URL has the
 shape `postgresql+asyncpg://<user>:<password>@postgres:5432/nexus`.
 
 The account usernames and the database name (`POSTGRES_DB`) must be lower-case

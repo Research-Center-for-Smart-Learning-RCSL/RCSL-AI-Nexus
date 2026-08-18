@@ -630,7 +630,7 @@ data: [DONE]`}
           <code>Retry-After</code> (before 2026-08-05 it queued without limit,
           in silence), and a runtime that takes longer than the platform&apos;s
           own read timeout returns <code>503 runtime_timeout</code> — see the
-          table below for why that one is worth retrying immediately.
+          table below for why retrying that one unchanged does not help.
         </p>
       </section>
 
