@@ -341,6 +341,7 @@ class RefusalRepositoryPort(Protocol):
         self,
         *,
         actor_id: str | None,
+        actor_display: str | None,
         api_key_id: str | None,
         code: str | None,
         request_id: str | None,
@@ -356,6 +357,14 @@ class RefusalRepositoryPort(Protocol):
         summary — a code, a status, a message the caller already read and the
         figures that came with it — so a second request to open one would
         disclose nothing the page had not.
+
+        `actor_display` is the one filter here that is not an equality. It
+        matches a substring, case-insensitively, because it is what the reader
+        can actually see: the account id is a uuid and a screen that can only
+        filter by one is a screen you cannot search. It is also the only way to
+        find the refusals of an account that has since been deleted, whose name
+        survives on this row and nowhere else, and the only way to find one
+        gateway key's by the handle it is known by.
         """
         ...
 
@@ -363,6 +372,7 @@ class RefusalRepositoryPort(Protocol):
         self,
         *,
         actor_id: str | None,
+        actor_display: str | None,
         api_key_id: str | None,
         code: str | None,
         request_id: str | None,

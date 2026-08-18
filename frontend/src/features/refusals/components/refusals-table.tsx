@@ -23,19 +23,81 @@ import {
 } from '@/components/ui/table';
 import { EmptyState } from '@/components/composed/empty-state';
 import { ErrorState } from '@/components/composed/error-state';
-import { describeAccount, usersById } from '@/features/refusals/account';
+import {
+  accountOptions,
+  accountQuery,
+  describeAccount,
+  usersById,
+  type AccountQuery,
+} from '@/features/refusals/account';
 import { useRefusals } from '@/features/refusals/hooks/use-refusals';
 import { refusalToMarkdown, refusalsToMarkdown } from '@/features/refusals/markdown';
-import { FIGURE_LABELS, remedyFor, type Refusal } from '@/features/refusals/schema';
+import {
+  FIGURE_LABELS,
+  remedyFor,
+  type Refusal,
+  type RefusalFilters,
+} from '@/features/refusals/schema';
+import { PRESETS, toInstant, toLocalInput } from '@/features/refusals/time-range';
 import { useUsers } from '@/features/users/hooks/use-users';
 import { useCopyToClipboard } from '@/lib/use-copy-to-clipboard';
 import { cn } from '@/lib/utils';
 import { wrapTooltip } from '@/lib/wrap-tooltip';
 
 const PAGE_SIZE = 50;
-const BASE_COLUMNS = ['When', 'Code', 'What you were told', 'Where', 'Request', ''];
-/** The account column appears only when the page may contain more than one. */
-const ACCOUNT_COLUMN = 'Account';
+
+/** No selection, as one value, so that clearing it does not make a new object
+ *  every time and re-render a table of fifty rows for nothing. */
+const NOTHING: ReadonlySet<string> = new Set();
+
+/**
+ * The header row.
+ *
+ * Two of these are blank deliberately: the tick box and the per-row buttons are
+ * controls, and a heading over either would name something the cells below it
+ * do not contain. They are still columns here rather than being rendered
+ * around the loop, because `colSpan` on the empty state and the skeleton has to
+ * count them.
+ *
+ * `Account` appears only when the page may hold more than one.
+ */
+function columnsFor(showAccount: boolean): string[] {
+  return [
+    '',
+    'When',
+    ...(showAccount ? ['Account'] : []),
+    'Code',
+    'What you were told',
+    'Where',
+    'Request',
+    '',
+  ];
+}
+
+/**
+ * The filters in force, as a sentence for the paste's subtitle.
+ *
+ * **Every control, not the two this screen started with.** The account filter
+ * was added without being added here, so a page copied while narrowed to one
+ * person's refusals was headed "from all accounts" — which is precisely the
+ * misleading excerpt `refusalsToMarkdown` was written to prevent, produced by
+ * its own caller. A filter that is not named here is one the paste denies.
+ *
+ * The window is quoted as the instant that was sent rather than as the local
+ * text in the box, because a paste is read by somebody who was not looking at
+ * this screen and may not be in this timezone.
+ */
+function filterSummary(filters: RefusalFilters): string | undefined {
+  const parts = [
+    filters.code && `code ${filters.code}`,
+    filters.request_id && `request id ${filters.request_id}`,
+    filters.actor_id && `account ${filters.actor_id}`,
+    filters.actor_display && `account name containing “${filters.actor_display}”`,
+    filters.since && `from ${filters.since}`,
+    filters.until && `before ${filters.until}`,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(', ') : undefined;
+}
 
 /** 4xx is the caller's to fix and 5xx is the platform's, which is the one
  *  distinction a colour should carry here. Everything finer is the code. */
@@ -134,11 +196,83 @@ function CopyRefusal({ refusal, account }: { refusal: Refusal; account?: string 
 }
 
 
+/**
+ * A tick box, native.
+ *
+ * `components/ui` has no checkbox and this is the first screen that wants one.
+ * A native input is the whole of what is needed here — it is keyboard
+ * reachable, it announces its own state, and it is the only element that can
+ * be `indeterminate`, which is the state the header box spends most of its
+ * time in. Adding a styled primitive to the design system for one table would
+ * be a component nothing else uses and a third thing to keep in step.
+ */
+function Tick({
+  checked,
+  indeterminate = false,
+  onChange,
+  label,
+  disabled = false,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  onChange: () => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <input
+      type="checkbox"
+      className="size-4 accent-foreground align-middle"
+      checked={checked}
+      // `indeterminate` is a property and not an attribute, so React cannot set
+      // it from JSX and it has to be written to the node.
+      ref={(node) => {
+        if (node) node.indeterminate = indeterminate;
+      }}
+      onChange={onChange}
+      disabled={disabled}
+      aria-label={label}
+    />
+  );
+}
+
 export function RefusalsTable() {
   const [requestId, setRequestId] = useState('');
   const [code, setCode] = useState('');
   const [account, setAccount] = useState('');
+  // The window, held as what `datetime-local` puts in the box rather than as
+  // the instant that goes to the server. The box is the thing the reader
+  // adjusts, and a round trip through UTC and back is where an hour goes
+  // missing.
+  const [since, setSince] = useState('');
+  const [until, setUntil] = useState('');
   const [offset, setOffset] = useState(0);
+  // **Which refusals somebody has ticked, to copy those and not the page.**
+  // Copying was all-or-one: the whole fifty, or one row's button. An
+  // investigation is usually three of them — the 413 and the two 409s that
+  // followed it — and there was no way to say so.
+  //
+  // Ids rather than rows, like `opened` below, because the row objects are
+  // replaced on every refetch and this table refetches every ten seconds.
+  const [selected, setSelected] = useState<ReadonlySet<string>>(NOTHING);
+
+  /**
+   * What the account box asks the server for, beside what it says.
+   *
+   * A pair rather than one value because they are two different things: the
+   * text is what the reader typed, and the query is which of the server's two
+   * account filters that text turned out to mean — an exact id when the name
+   * belongs to an account this reader can list, a substring of the recorded
+   * name otherwise. `accountQuery` decides, and its doc comment says why the
+   * choice matters.
+   *
+   * Resolved when the box changes rather than while rendering, because the
+   * accounts it resolves against are fetched on the strength of the refusals
+   * response, which is fetched with these filters. In an event handler that
+   * circle does not exist: the accounts are whatever had loaded by the moment
+   * somebody typed.
+   */
+  const [accountFilter, setAccountFilter] = useState<AccountQuery>({});
   // **Collapsed by default, because one row was four times the height of its
   // neighbours.** The stored 413 carries a 287-character message, three
   // figures, a 113-character composition and a 295-character remedy — about
@@ -156,10 +290,39 @@ export function RefusalsTable() {
       return next;
     });
 
-  const filters = {
+  const toggleSelected = (id: string) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+
+  /**
+   * Change what the table is showing.
+   *
+   * Every control that changes which rows are on screen goes through here, so
+   * that two things happen together: the offset returns to the first page, and
+   * the selection is dropped. A tick means "this refusal, the one I am looking
+   * at" — carrying it across a filter change leaves the copy button offering a
+   * count of rows the reader can no longer see and cannot check.
+   */
+  const narrow = (apply: () => void) => {
+    apply();
+    setOffset(0);
+    setSelected(NOTHING);
+  };
+
+  const turnTo = (next: number) => {
+    setOffset(next);
+    setSelected(NOTHING);
+  };
+
+  const filters: RefusalFilters = {
     code: code.trim() || undefined,
     request_id: requestId.trim() || undefined,
-    actor_id: account.trim() || undefined,
+    ...accountFilter,
+    since: toInstant(since),
+    until: toInstant(until),
     limit: PAGE_SIZE,
     offset,
   };
@@ -182,13 +345,22 @@ export function RefusalsTable() {
   const total = data?.total ?? 0;
   const from = total === 0 ? 0 : offset + 1;
   const to = Math.min(offset + PAGE_SIZE, total);
-  const filtered = Boolean(code.trim() || requestId.trim() || account.trim());
+  const summary = filterSummary(filters);
+  const filtered = summary !== undefined;
   // Shown only when the reader may see other people's. Their own name repeated
   // down every row of their own list is a column that says nothing.
   const showAccount = Boolean(data && !data.scoped_to_self);
-  const COLUMNS = showAccount
-    ? [BASE_COLUMNS[0], ACCOUNT_COLUMN, ...BASE_COLUMNS.slice(1)]
-    : BASE_COLUMNS;
+  const COLUMNS = columnsFor(showAccount);
+  const names = showAccount ? accountOptions(accounts) : [];
+
+  // The rows a tick actually refers to. Intersected with what is on screen
+  // rather than trusted: a refusal can leave the page under a refetch — the
+  // table is append-only and reloads every ten seconds — and a count that
+  // outran the rows would be a button promising to copy something it has not
+  // got.
+  const picked = entries.filter((entry) => selected.has(entry.id));
+  const allPicked = entries.length > 0 && picked.length === entries.length;
+  const copying = picked.length > 0 ? picked : entries;
 
   return (
     <div className="space-y-3">
@@ -196,10 +368,7 @@ export function RefusalsTable() {
         <div className="max-w-xs flex-1">
           <Input
             value={requestId}
-            onChange={(e) => {
-              setRequestId(e.target.value);
-              setOffset(0);
-            }}
+            onChange={(e) => narrow(() => setRequestId(e.target.value))}
             placeholder="Request id, e.g. req_9f2a…"
             aria-label="Find a refusal by the request id the caller was given"
           />
@@ -207,10 +376,7 @@ export function RefusalsTable() {
         <div className="max-w-[12rem] flex-1">
           <Input
             value={code}
-            onChange={(e) => {
-              setCode(e.target.value);
-              setOffset(0);
-            }}
+            onChange={(e) => narrow(() => setCode(e.target.value))}
             placeholder="Code, e.g. context_too_long"
             aria-label="Filter by error code"
           />
@@ -218,40 +384,63 @@ export function RefusalsTable() {
         {/* Offered only to a reader who may see more than their own. For
             anybody else the server narrows to them whatever this said, so the
             control would be one that visibly does nothing. */}
-        {data && !data.scoped_to_self ? (
-          <div className="max-w-[14rem] flex-1">
+        {showAccount ? (
+          <div className="max-w-[16rem] flex-1">
+            {/* **It takes the name the table shows, not the uuid it stores.**
+                This box wanted an account id, and nothing on this screen is
+                one a person could type: the column shows a name resolved in
+                the browser, and the two handles under it are a uuid and a
+                credential's display. So the one filter that answers "whose?"
+                could only be used by somebody who had already gone and looked
+                the answer up somewhere else.
+
+                A `datalist` rather than a select, because the set it completes
+                is not the set it accepts. The completions are the accounts
+                this reader can list; what a reader may also want is a deleted
+                account whose name survives only on the row, an API key by its
+                handle, or a uuid pasted out of an audit entry — none of which
+                a closed list would let them ask for. */}
             <Input
               value={account}
-              onChange={(e) => {
-                setAccount(e.target.value);
-                setOffset(0);
-              }}
-              placeholder="Account id"
-              aria-label="Show one account's refusals"
+              list="refusal-account-names"
+              onChange={(e) =>
+                narrow(() => {
+                  setAccount(e.target.value);
+                  setAccountFilter(accountQuery(e.target.value, accounts));
+                })
+              }
+              placeholder="Account name, or an id"
+              aria-label="Show one account's refusals, by name or by id"
             />
+            <datalist id="refusal-account-names">
+              {names.map((name) => (
+                <option key={name} value={name} />
+              ))}
+            </datalist>
           </div>
         ) : null}
         <span className="ml-auto text-sm text-muted-foreground tabular-nums">
           {total === 0 ? 'No refusals' : `${from}–${to} of ${total}`}
         </span>
+        {/* One button for both, rather than two. What it copies is whatever
+            the reader has in front of them: the rows they ticked, or the page
+            if they ticked none. A second permanently-disabled "copy selected"
+            beside it would be a control that spends most of its life saying
+            no, and the label already says which of the two this is about to
+            do. */}
         <Button
           size="sm"
           variant="outline"
           type="button"
-          disabled={entries.length === 0}
+          disabled={copying.length === 0}
           onClick={() =>
             void page.copy(
-              refusalsToMarkdown(entries, {
+              refusalsToMarkdown(copying, {
                 accountOf: (refusal) => describeAccount(refusal, accounts).name,
                 total,
                 scopedToSelf: data?.scoped_to_self ?? true,
-                filter:
-                  [
-                    code.trim() ? `code ${code.trim()}` : null,
-                    requestId.trim() ? `request id ${requestId.trim()}` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' and ') || undefined,
+                picked: picked.length > 0,
+                filter: summary,
                 sourceUrl:
                   typeof window === 'undefined' ? undefined : window.location.href,
               }),
@@ -259,8 +448,75 @@ export function RefusalsTable() {
           }
         >
           {page.copied ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}
-          {page.copied ? 'Copied' : 'Copy this page'}
+          {page.copied
+            ? 'Copied'
+            : picked.length > 0
+              ? `Copy ${picked.length} selected`
+              : 'Copy this page'}
         </Button>
+      </div>
+
+      {/* **The window, which is the question this screen was built to
+          answer.** Its own explanation says somebody had to ask "what happened
+          at 19:16?" and had no way to; the backend has filtered on `since` and
+          `until` since the table existed, and nothing ever sent either.
+
+          The presets fill the boxes rather than replacing them, so a reader
+          can see what "last hour" meant and then move it — and so the boundary
+          stays put while they page through what it matched. `time-range.ts`
+          says why a live window would be the wrong thing here.
+
+          "Before" rather than "to", because the server's comparison is
+          exclusive and a label that rounded that off would be wrong about
+          exactly one minute — the minute somebody typed in because it is the
+          one they care about. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-muted-foreground">When</span>
+        {PRESETS.map((preset) => (
+          <Button
+            key={preset.id}
+            size="sm"
+            variant="outline"
+            type="button"
+            onClick={() =>
+              narrow(() => {
+                setSince(toLocalInput(preset.from(new Date())));
+                setUntil('');
+              })
+            }
+          >
+            {preset.label}
+          </Button>
+        ))}
+        <Input
+          type="datetime-local"
+          className="w-auto"
+          value={since}
+          onChange={(e) => narrow(() => setSince(e.target.value))}
+          aria-label="From, inclusive"
+        />
+        <Input
+          type="datetime-local"
+          className="w-auto"
+          value={until}
+          onChange={(e) => narrow(() => setUntil(e.target.value))}
+          aria-label="Before, exclusive"
+        />
+        {since || until ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            type="button"
+            onClick={() =>
+              narrow(() => {
+                setSince('');
+                setUntil('');
+              })
+            }
+          >
+            Clear
+          </Button>
+        ) : null}
       </div>
 
       {/* Said rather than implied. A reader who may see only their own is
@@ -279,7 +535,29 @@ export function RefusalsTable() {
           <TableHeader>
             <TableRow>
               {COLUMNS.map((c, i) => (
-                <TableHead key={c || `actions-${i}`}>{c}</TableHead>
+                <TableHead key={c || `control-${i}`} className={i === 0 ? 'w-8' : undefined}>
+                  {i === 0 ? (
+                    // Every row on this page, and nothing beyond it: a tick
+                    // here cannot reach the forty-nine rows on the next one,
+                    // because copying works from what was fetched. Saying
+                    // "on this page" is the whole of the promise.
+                    <Tick
+                      checked={allPicked}
+                      indeterminate={picked.length > 0 && !allPicked}
+                      disabled={entries.length === 0}
+                      onChange={() =>
+                        setSelected(allPicked ? NOTHING : new Set(entries.map((e) => e.id)))
+                      }
+                      label={
+                        allPicked
+                          ? 'Clear the selection'
+                          : 'Select every refusal on this page'
+                      }
+                    />
+                  ) : (
+                    c
+                  )}
+                </TableHead>
               ))}
             </TableRow>
           </TableHeader>
@@ -301,7 +579,17 @@ export function RefusalsTable() {
                     title={filtered ? 'Nothing matched' : 'Nothing has been refused'}
                     description={
                       filtered
-                        ? 'No refusal matches this. The request id has to be the whole value from the error — the one in the `request_id` field of the response body, or in the X-Request-Id header.'
+                        ? // Says which filters were in force, because there
+                          // are now five of them and "nothing matched" does
+                          // not say which one to loosen. The request-id advice
+                          // is only offered when a request id is what was
+                          // asked for: as an unconditional sentence it named
+                          // the wrong cause every time the filter was a window
+                          // or a name.
+                          `No refusal matches ${summary}.` +
+                          (requestId.trim()
+                            ? ' The request id has to be the whole value from the error — the one in the `request_id` field of the response body, or in the X-Request-Id header.'
+                            : '')
                         : 'Refusals appear here as they happen: a request over the context ceiling, a key using a capability it was not issued, an expiry beyond the maximum. An empty list means nothing has been turned away in the retention window.'
                     }
                     className="border-0"
@@ -315,6 +603,17 @@ export function RefusalsTable() {
                 const isOpen = opened.has(entry.id);
                 return (
                   <TableRow key={entry.id} className="align-top">
+                    <TableCell className="pt-4">
+                      <Tick
+                        checked={selected.has(entry.id)}
+                        onChange={() => toggleSelected(entry.id)}
+                        // Named by its code and its time, because a page of
+                        // fifty "select this refusal" boxes is fifty
+                        // indistinguishable controls to anybody listening to
+                        // it rather than looking at it.
+                        label={`Select the ${entry.code} refusal from ${new Date(entry.at).toLocaleString()}`}
+                      />
+                    </TableCell>
                     <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">
                       {new Date(entry.at).toLocaleString()}
                     </TableCell>
@@ -333,10 +632,17 @@ export function RefusalsTable() {
                         <button
                           type="button"
                           className="block max-w-[13rem] text-left underline-offset-2 hover:underline"
-                          onClick={() => {
-                            setAccount(entry.actor_id);
-                            setOffset(0);
-                          }}
+                          onClick={() =>
+                            narrow(() => {
+                              setAccount(account_.name);
+                              // The id, not the name that was just put in the
+                              // box: this row knows exactly whose it is, and
+                              // an exact filter is the one that also catches
+                              // this person's gateway refusals, whose recorded
+                              // name is the key's handle rather than theirs.
+                              setAccountFilter({ actor_id: entry.actor_id });
+                            })
+                          }
                         >
                           <span className="block truncate text-sm">{account_.name}</span>
                           <span className="block truncate font-mono text-[0.7rem] text-muted-foreground">
@@ -453,7 +759,7 @@ export function RefusalsTable() {
         <Button
           size="sm"
           variant="outline"
-          onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+          onClick={() => turnTo(Math.max(0, offset - PAGE_SIZE))}
           disabled={offset === 0 || isFetching}
           aria-label="Previous page"
         >
@@ -462,7 +768,7 @@ export function RefusalsTable() {
         <Button
           size="sm"
           variant="outline"
-          onClick={() => setOffset(offset + PAGE_SIZE)}
+          onClick={() => turnTo(offset + PAGE_SIZE)}
           disabled={to >= total || isFetching}
           aria-label="Next page"
         >

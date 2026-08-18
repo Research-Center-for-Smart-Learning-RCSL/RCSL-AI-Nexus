@@ -71,6 +71,7 @@ class ReadRefusals:
         actor: Actor,
         *,
         actor_id: str | None = None,
+        actor_display: str | None = None,
         api_key_id: str | None = None,
         code: str | None = None,
         request_id: str | None = None,
@@ -86,13 +87,18 @@ class ReadRefusals:
             actor_id = actor.id
             # The key filter is left alone: a caller narrowing to one of their
             # own keys is the ordinary use, and the actor filter above already
-            # confines the result to rows that are theirs.
+            # confines the result to rows that are theirs. The same goes for
+            # the name search: it is ANDed with the id, so somebody confined to
+            # their own who types a colleague's name gets nothing back rather
+            # than the colleague's refusals — the narrowing is what holds, and
+            # the search only ever subtracts from it.
 
         limit = max(1, min(limit, MAX_LIMIT))
         offset = max(0, offset)
 
         entries = await self._refusals.list_refusals(
             actor_id=actor_id,
+            actor_display=actor_display,
             api_key_id=api_key_id,
             code=code,
             request_id=request_id,
@@ -103,6 +109,7 @@ class ReadRefusals:
         )
         total = await self._refusals.count_refusals(
             actor_id=actor_id,
+            actor_display=actor_display,
             api_key_id=api_key_id,
             code=code,
             request_id=request_id,
@@ -114,11 +121,20 @@ class ReadRefusals:
             # Once per request, naming what was reached for rather than the
             # rows returned: an audit row per refusal read would grow with the
             # page size and describe the same act several times.
+            #
+            # A name search reaches across accounts exactly as an id does, and
+            # is the less specific of the two — "everyone called wu" names a
+            # set the searcher did not have to know the members of — so it is
+            # recorded beside the id rather than instead of it.
             await self._audit.record(
                 actor,
                 AuditAction.REFUSAL_READ_ANY,
                 target=actor_id or "all",
-                detail={"code": code or "", "returned": str(len(entries))},
+                detail={
+                    "code": code or "",
+                    "name": actor_display or "",
+                    "returned": str(len(entries)),
+                },
             )
 
         return RefusalPage(

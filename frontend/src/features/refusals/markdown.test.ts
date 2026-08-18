@@ -131,3 +131,29 @@ describe('refusalsToMarkdown', () => {
     expect(md.match(/^## 413 `context_too_long`$/gm)).toHaveLength(2);
   });
 });
+
+describe('a hand-picked paste', () => {
+  it('says it is a choice rather than a window', () => {
+    /**
+     * Two claims that must not read alike. A whole page tells the reader how
+     * much of the matches they are holding and they can see the rest by
+     * paging. A selection is three rows somebody chose out of fifty for a
+     * reason the paste does not carry — which of the other forty-seven were
+     * passed over, and why, is nowhere in the numbers.
+     */
+    const md = refusalsToMarkdown([REFUSAL], {
+      total: 120,
+      scopedToSelf: false,
+      picked: true,
+    });
+
+    expect(md).toContain('1 hand-picked out of 120 matching, from all accounts.');
+    expect(md).not.toContain('1 of 120 shown');
+  });
+
+  it('reads as a window when it is one', () => {
+    const md = refusalsToMarkdown([REFUSAL], { total: 120, scopedToSelf: false });
+
+    expect(md).toContain('1 of 120 shown, from all accounts.');
+  });
+});

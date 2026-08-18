@@ -109,7 +109,11 @@ frontend/
       refusals/               # Phase 2, built 2026-08-18. Every DomainError
                               #   the caller received, second copy of the
                               #   response they already had; `refusal:read_own`
-                              #   is a base scope, so a member reads their own
+                              #   is a base scope, so a member reads their own.
+                              #   Filtered by code, request id, account and
+                              #   time; rows are ticked to copy a selection
+                              #   rather than the page (`time-range.ts`,
+                              #   `account.ts` hold the two decisions)
 
     app/
       (dashboard)/

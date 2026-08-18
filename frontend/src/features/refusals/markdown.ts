@@ -97,6 +97,18 @@ export function refusalsToMarkdown(
   context: {
     total: number;
     scopedToSelf: boolean;
+    /**
+     * Whether these are rows somebody ticked rather than the page as it stood.
+     *
+     * The two are different claims and the subtitle has to make the difference
+     * plain. A whole page is a window on the matches — what was left out is
+     * the rest of the window, and the reader can tell how much by the numbers.
+     * A hand-picked set is a *choice*: three refusals out of fifty that
+     * somebody selected for a reason, and nothing in the numbers says which
+     * fifty-seven were passed over or why. Pasted into a ticket unlabelled it
+     * is the more misleading of the two, so it is the one that says so.
+     */
+    picked?: boolean;
     filter?: string;
     sourceUrl?: string;
     accountOf?: (refusal: Refusal) => string;
@@ -110,11 +122,10 @@ export function refusalsToMarkdown(
   const shown = refusals.length;
   const scope = context.scopedToSelf ? 'your own account and its API keys' : 'all accounts';
   const filtered = context.filter ? `, filtered by ${context.filter}` : '';
-  const lines = [
-    '# Refusals',
-    '',
-    `${shown} of ${context.total} shown, from ${scope}${filtered}.`,
-  ];
+  const count = context.picked
+    ? `${shown} hand-picked out of ${context.total} matching`
+    : `${shown} of ${context.total} shown`;
+  const lines = ['# Refusals', '', `${count}, from ${scope}${filtered}.`];
   if (context.sourceUrl) lines.push('', `Copied from ${context.sourceUrl}`);
   for (const refusal of refusals) {
     lines.push('', '---', '', refusalToMarkdown(refusal, { account: context.accountOf?.(refusal) }));

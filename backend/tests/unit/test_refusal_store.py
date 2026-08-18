@@ -26,6 +26,7 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from app.adapters.authz.role_authorization import ADMIN_ONLY_SCOPES, RoleAuthorization
+from app.adapters.persistence.repositories import PostgresRefusalRepository
 from app.application.use_cases.read_refusals import ReadRefusals
 from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.entities.refusal import MAX_FIGURE_CHARS, Refusal
@@ -92,6 +93,13 @@ class FakeRefusals:
     def _match(self, row: Refusal, **f: object) -> bool:
         if f.get("actor_id") and row.actor_id != f["actor_id"]:
             return False
+        display = f.get("actor_display")
+        if isinstance(display, str) and display:
+            # A substring, case-insensitively, which is what the repository's
+            # `ILIKE '%needle%'` does. Matching exactly here would let a test
+            # pass against a fake stricter than the thing it stands for.
+            if display.casefold() not in row.actor_display.casefold():
+                return False
         if f.get("api_key_id") and row.api_key_id != f["api_key_id"]:
             return False
         if f.get("code") and row.code != f["code"]:
@@ -174,6 +182,85 @@ async def test_a_reader_may_narrow_to_one_account_when_they_may_see_all() -> Non
     page = await use_case.list_page(_actor(role=Role.OPERATOR, actor_id="op"), actor_id="u2")
 
     assert [r.actor_id for r in page.entries] == ["u2"]
+
+
+async def test_a_reader_may_narrow_by_the_name_the_screen_actually_shows() -> None:
+    """The id filter was the only way to ask "whose?", and the id is a uuid.
+
+    Nothing on the screen is a uuid a person could type: the name is resolved
+    in the browser against the accounts the reader can list, and the row's own
+    `actor_display` is the *credential's* — a login for somebody on an admin
+    entrance, a key handle for a gateway caller. So an operator looking at a
+    page of other people's refusals could see whose they were and could not ask
+    for one person's without going and looking their uuid up somewhere else.
+
+    A substring, because the two things worth searching by are a name somebody
+    half-remembers and a key handle nobody memorises. And matched against the
+    row rather than against the account table, which is what still finds the
+    refusals of an account that has since been deleted — the case the
+    denormalised column exists for, and the one where a join would return
+    nothing at all.
+    """
+    use_case, _ = _use_case(
+        [
+            _refusal(actor_id="u1", actor_display="teacher@example.test"),
+            _refusal(actor_id="u2", actor_display="student@example.test"),
+        ]
+    )
+
+    page = await use_case.list_page(
+        _actor(role=Role.OPERATOR, actor_id="op"), actor_display="TEACH"
+    )
+
+    assert [r.actor_id for r in page.entries] == ["u1"]
+    assert page.total == 1
+
+
+async def test_the_name_search_cannot_reach_past_the_narrowing() -> None:
+    """The one thing this filter must not become: a second way in.
+
+    A caller without `refusal:read_all` has the actor filter overwritten with
+    their own id, and the name search is ANDed with it — so typing a
+    colleague's name returns nothing rather than the colleague's refusals. An
+    empty page is the correct answer here and the safe one: the filter can only
+    ever subtract from what the reader was already allowed to see.
+    """
+    use_case, _ = _use_case(
+        [
+            _refusal(actor_id="u1", actor_display="teacher@example.test"),
+            _refusal(actor_id="u2", actor_display="student@example.test"),
+        ]
+    )
+
+    page = await use_case.list_page(_actor(actor_id="u1"), actor_display="student")
+
+    assert page.entries == []
+    assert page.total == 0
+
+
+async def test_a_name_search_across_accounts_is_audited_and_says_what_was_searched() -> None:
+    """A name reaches across accounts exactly as an id does, and names a set
+    the searcher did not have to know the members of — "everyone called wu" is
+    a broader reach than one uuid, not a narrower one. Recording only the id
+    would leave the broader of the two reads as the unlogged one."""
+    use_case, trail = _use_case([_refusal(actor_id="u2", actor_display="student@example.test")])
+
+    await use_case.list_page(_actor(role=Role.OPERATOR, actor_id="op"), actor_display="student")
+
+    assert [e[0] for e in trail.entries] == ["refusal.read_any"]
+    assert trail.rows[0][4]["name"] == "student"
+
+
+def test_the_name_search_spends_the_wildcards_it_is_given() -> None:
+    """`%` and `_` mean something to `LIKE`, and a login is allowed to contain
+    both. Unescaped, `a_b` finds `axb` — a filter that quietly returns more
+    than it was asked for — and a bare `%` matches every row while looking on
+    screen like a narrowing. The backslash goes first: escaping the escape
+    character afterwards would escape the ones just added."""
+    assert PostgresRefusalRepository._contains("a_b") == r"%a\_b%"
+    assert PostgresRefusalRepository._contains("50%") == r"%50\%%"
+    assert PostgresRefusalRepository._contains("a\\b") == r"%a\\b%"
+    assert PostgresRefusalRepository._contains("teacher") == "%teacher%"
 
 
 async def test_the_scope_that_made_that_evening_s_diagnosis_possible() -> None:
