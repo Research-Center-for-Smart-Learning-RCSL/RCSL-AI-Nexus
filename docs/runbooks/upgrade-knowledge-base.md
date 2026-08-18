@@ -29,7 +29,7 @@
 - [ ] 確認目前服務是健康的（升級失敗時才知道是不是本來就壞的）：
 
   ```sh
-  cd ~/RCSL-AI-Nexus          # 換成你的實際路徑
+  cd ~/dev/RCSL-AI-Nexus      # 換成實際路徑
   docker compose ps
   ```
 
@@ -128,11 +128,13 @@ read-only 金鑰對 `PUT /collections/...` 會被 Qdrant 回 **403**。
 - [ ] 確認 migration 成功：
 
   ```sh
-  docker compose logs migrate | tail -20
+  docker compose logs migrate | grep 'Running upgrade'
   docker compose ps migrate
   ```
 
-  預期 `exited (0)`，log 裡有 `Running upgrade d4e8f1a2b6c9 -> e5f2c8d71a43`。
+  預期 `exited (0)`，而 `Running upgrade d4e8f1a2b6c9 -> e5f2c8d71a43` 要出現在那串裡。
+  **不要用 `tail -20`**：`migrate` 在 alembic 之後還會跑 `db_roles` 與 `provision`，而
+  `e5f2c8d71a43` 後面現在還有十個 migration，那一行早就不在最後二十行裡了。
 
 - [ ] 確認全部起來，特別是兩個新的：
 
@@ -345,8 +347,20 @@ docker compose up -d
 docker compose stop qdrant parser
 ```
 
-新的資料表和 volume 留著不影響舊版運作，之後要重新升級也還在。真的要清乾淨才
-執行 `alembic downgrade d4e8f1a2b6c9`（會刪掉知識庫資料表與其內容）。
+新的資料表和 volume 留著不影響舊版運作，之後要重新升級也還在。
+
+**不要用 `alembic downgrade d4e8f1a2b6c9` 來「只清掉知識庫」。** 這份 runbook 寫的時候
+`e5f2c8d71a43` 還是 head，現在它後面又疊了十個 migration——model observations
+（`f7a9d24c8b16`）、usage prompt tokens（`a1b4e6c2d873`）、retention policies
+（`a1b2c3d4e5f6`）、routing policy thinking（`b8c3e5f10d47`）、prompt templates
+（`c2f7b90e4a15`）、prompt logs（`a1d6e93c7f52`）、model evaluations
+（`d3f5b81a04c7`）、refusals 兩個（`e7b41c9d0a26`、`f3c8a15d27be`）、capability
+defaulting（`a4c1e07f2b9d`，目前的 head）。降到 `d4e8f1a2b6c9` 會把這十個連同知識庫
+一起往回拆，連同它們的資料。
+
+真的只要清掉知識庫那兩張表，先確認 `alembic current`，再用
+`alembic downgrade e5f2c8d71a43`——它只退一步——或者直接 DROP
+`knowledge_collections` 與 `knowledge_documents`。
 
 ---
 

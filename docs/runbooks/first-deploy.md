@@ -711,12 +711,13 @@ cd ~/dev/RCSL-AI-Nexus
 **它會先拒絕再動手。** 五個前置條件任何一個不成立，它什麼都不改就 exit 1：
 
 - §1.1a 的 plist 還裝著（兩個注入同時來，兩邊的救援路徑會互相擋住）
-- 它清單裡的九個服務沒有全部在跑（從壞的平台開始測復原，回不來的時候分不出是誰造成的）。
-  **注意這份清單還是九個，`qdrant` 和 `parser` 不在裡面**——`stop-stack-once.sh` 的
-  `EXPECTED_SERVICES` 是寫死的，而 reconciler 和 health-check 都改成從
-  `docker compose config --services` 推導了。所以這個前置條件擋不掉「qdrant 沒在跑」的
-  情況；停之前自己 `docker compose ps` 數一次十一個。停下來之後的讀回檢查沒有這個問題，
-  它問的是 `docker compose ps --services --status running` 有沒有清空
+- 它預期的十一個服務沒有全部在跑（從壞的平台開始測復原，回不來的時候分不出是誰造成的）。
+  **這份清單 2026-08-18 補齊了**：`stop-stack-once.sh` 現在和 reconciler、health-check
+  一樣，從 `docker compose config --services` 減掉 `migrate` 推導出來，寫死的那份只在推
+  導失敗時當 fallback，而它現在也含 `qdrant` 與 `parser`。在那之前它是九個，所以一個
+  `qdrant` 已經掛掉的平台可以通過這個前置條件——而那正是這個檢查存在要擋的事。停下來之後
+  的讀回檢查從來沒有這個問題，它問的是 `docker compose ps --services --status running`
+  有沒有清空
 - 有 binding requested 但沒 actual（那是 §1.1a 的狀態，先修那個）
 - reconciler 的 plist 不在
 - **`nexus-reconcile.log` 裡最新的 `reconcile starting` 比這次開機還舊**
@@ -728,7 +729,7 @@ launchd 真的載入了那個 job**——而「停掉 stack 重開、卻沒有�
 
 前置條件過了之後它會把 pre-state 記下來（六個 requested binding），停掉 stack，**再讀回來
 確認全部都真的停了**——它讀的是 `docker compose ps --services --status running` 有沒有清空，
-所以這一步不受上面那份九個的清單影響。半停的 stack 是這裡最糟的結果，Docker 會還原還在跑的
+所以這一步不受上面那份預期清單怎麼算出來的影響。半停的 stack 是這裡最糟的結果，Docker 會還原還在跑的
 那些，reconciler 會遇到一個既不空也不完整的集合，下一次開機印出來的東西會是在講一個沒有人
 設計過的故障。
 
@@ -949,14 +950,11 @@ Ollama 預設會聽所有介面 (`0.0.0.0:11434`)。要把它綁回本機，只�
   ```
 
 - [ ] 設定成開機自動啟動、掛掉自動重啟。**不要用 `brew services start ollama`**，
-  用 repo 裡的 [`launchd/online.rcsl.ollama.plist`](../../launchd/online.rcsl.ollama.plist)：
-
-  ```sh
-  sudo cp launchd/online.rcsl.ollama.plist /Library/LaunchDaemons/
-  sudo chown root:wheel /Library/LaunchDaemons/online.rcsl.ollama.plist
-  sudo chmod 644 /Library/LaunchDaemons/online.rcsl.ollama.plist
-  sudo launchctl bootstrap system /Library/LaunchDaemons/online.rcsl.ollama.plist
-  ```
+  用 repo 裡的 [`launchd/online.rcsl.ollama.plist`](../../launchd/online.rcsl.ollama.plist)
+  ——**但不要在這裡手動安裝它**。那份 plist 的 `UserName` 是 `_rcslollama`，那個帳號此刻
+  還不存在，現在 bootstrap 只會得到一個起不來的 daemon。安裝與載入都由下一步的
+  `adopt-ollama-service-account.sh` 負責，它自己會做 `cp`、`chown root:wheel`、
+  `chmod 644`、`plutil -lint`，最後才 `launchctl bootstrap`。
 
   Homebrew 的做法在這台機器上有兩個問題，其中一個是靜默的安全失效：
 
@@ -969,8 +967,11 @@ Ollama 預設會聽所有介面 (`0.0.0.0:11434`)。要把它綁回本機，只�
     運作，跳電重開後不會有人登入（FileVault 開著時更不可能），Ollama 就不會
     回來，gateway 只會一直回「no available model」。所以是 LaunchDaemon。
 
-  plist 裡 `UserName` 設成操作者帳號而不是留給 root：daemon 預設以 root 執行，
-  會去找 `/var/root/.ollama` 而看不到已經拉好的模型。
+  plist 裡 `UserName` 是專用服務帳號 `_rcslollama`，既不是 root 也不是操作者帳號。
+  root 不行是因為 daemon 預設以 root 執行，會去找 `/var/root/.ollama` 而看不到已經拉好
+  的模型；操作者帳號不行是因為它在 `admin` 裡、能 sudo，而這個 process 載入的是從網路
+  抓下來的權重（[security.md](../architecture/security.md) §7.1(d)）。2026-08-18 以前
+  它確實是操作者帳號，那是在還沒有辦法把模型目錄搬出家目錄之前的權宜之計。
 
 - [ ] 驗證（三件事都要對）：
 
@@ -986,9 +987,30 @@ Ollama 預設會聽所有介面 (`0.0.0.0:11434`)。要把它綁回本機，只�
   docker run --rm alpine:3 sh -c 'apk add -q curl; curl -s http://host.docker.internal:11434/api/tags'
   ```
 
-- [ ] （之後的硬化，非首次上線必須）改用一個專用、非管理員的服務帳號來跑 Ollama，
-  模型目錄只給該帳號寫入。細節見 [security.md](../architecture/security.md) §7.1(d)。
-  第一次先跑通，這項可列為後續。
+- [ ] **把 Ollama 移到專用服務帳號。這一步是必須的，而且必須在 §5.1 設
+  `OLLAMA_MODELS_HOST_PATH`、§7 `docker compose up -d` 之前做完**：
+
+  ```sh
+  sudo sh launchd/adopt-ollama-service-account.sh
+  ```
+
+  它會建 `_rcslollama`（uid 470、無 shell、不在 `admin`、密碼 `*`）、停掉 daemon、把
+  `~/.ollama` 搬到 `/Users/Shared/ollama`、改擁有權為 `_rcslollama:staff`（目錄 750）、
+  把 `/opt/homebrew/var/log/ollama.log` 一起改擁有者（**漏掉這步 daemon 開不了自己的
+  log 就不會啟動**），然後安裝並載入 plist、驗證 API 有回應。每一步都先檢查再動，任何
+  一項不成立就整個拒絕；出事用 `--rollback`。
+
+  **為什麼一定要搬目錄，而不是只改 `UserName`**：`/Users/<operator>` 是 750，不在
+  `staff` 的帳號無法 traverse，所以權重只要還留在家目錄裡，任何服務帳號都讀不到。這一
+  個八進位數字就是這件事擱置數月的全部原因。`/Users/Shared` 和家目錄在同一個 volume，
+  所以那 214 GB 是 rename 不是複製，中斷只有兩秒。群組給 `staff` 而不是服務帳號自己的
+  群組，是因為 Docker Desktop 以操作者身分分享該路徑，而三個後端容器要唯讀掛載它來讀
+  tokenizer——寫的權限歸 runtime 一個帳號，讀的權限給 `staff`。
+
+  **這一步不能延後。** 腳本看到 `/Users/Shared/ollama` 已經存在就會
+  `REFUSING: /Users/Shared/ollama already exists` 而什麼都不做；而 §5.1 會叫你把
+  `.env` 指向那個路徑，一旦先跑了 `docker compose up -d`，Docker 就會替那個 bind mount
+  自己建出一個空目錄，把這條路堵死。
 
 ---
 
@@ -1147,7 +1169,7 @@ LaunchDaemon 放在一起——它要跑得起來，得先有 repo、有 `secret
 
 - [ ] 確認 Ollama 的模型倉庫位置。**這台是 `/Users/Shared/ollama/models`，不是任何人的
   家目錄底下**——2026-08-18 把 runtime 移到專用服務帳號 `_rcslollama` 時一起搬的，因為
-  `/Users/rcslmac1` 是 750，服務帳號連進都進不去（見下面 §7 的服務帳號那一步）。全新安裝
+  `/Users/rcslmac1` 是 750，服務帳號連進都進不去（見上面 §3 的服務帳號那一步）。全新安裝
   若還沒做那一步，位置是執行 Ollama 那個帳號的 `~/.ollama/models`。
 - [ ] 在 `.env` 設 `OLLAMA_MODELS_HOST_PATH=/Users/Shared/ollama/models`。
   compose 會把它**唯讀**掛成容器裡的 `/ollama-models`。唯讀是有原因的：那個目錄的擁有者
@@ -1311,7 +1333,9 @@ docstring 裡，那是估算器本身所在的地方。
   docker compose ps
   ```
 
-- [ ] 確認 `migrate` 顯示 `exited (0)`。它負責建立三個資料庫帳號並套用授權。若不是 0，
+- [ ] 確認 `migrate` 顯示 `exited (0)`。它依序做三件事：`alembic upgrade head` 套用全部
+  migration、`db_roles` 建立三個資料庫帳號並套用授權、`provision` 寫入單一節點那一列並把
+  重啟中斷的 transient 狀態收斂成 `error`。若不是 0，
   **先看它的 log**（應用服務都在等它）：
 
   ```sh
@@ -1405,7 +1429,7 @@ docstring 裡，那是估算器本身所在的地方。
   ```
 
   plist 裡的路徑寫死成 `/Users/rcslmac1/dev/RCSL-AI-Nexus/launchd/host-metrics.py`，
-  repo 放在別的地方就要改；`UserName` 跟其他 job 一樣是操作者帳號，因為 `vm_stat`、
+  repo 放在別的地方就要改；`UserName` 跟另外三個主機側 job 一樣是操作者帳號（只有 ollama 那個是 `_rcslollama`），因為 `vm_stat`、
   `sysctl`、`statfs` 誰都讀得到，不需要 root。
 
   **這一步在 2026-08-18 之前不在這份清單裡，而下一步裝的健康監測會因為它而失敗。**
@@ -1447,23 +1471,14 @@ docstring 裡，那是估算器本身所在的地方。
   sudo launchctl load -w /Library/LaunchDaemons/online.rcsl.health-check.plist
   ```
 
-- [ ] **把 Ollama 移到專用服務帳號**（安裝好 ollama 的 plist 之後，`.env` 設定之前）：
+- [ ] **複驗 Ollama 的服務帳號**。移轉本身在 §3 就做完了
+  （`adopt-ollama-service-account.sh`），這裡只確認它還在：
 
   ```sh
-  sudo sh launchd/adopt-ollama-service-account.sh
+  ps -axo user,command | grep '[o]llama serve'   # 要顯示 _rcslollama
   ```
 
-  它會建 `_rcslollama`（uid 470、無 shell、不在 `admin`、密碼 `*`）、停掉 daemon、把
-  `~/.ollama` 搬到 `/Users/Shared/ollama`、改擁有權為 `_rcslollama:staff` 750、把
-  `/opt/homebrew/var/log/ollama.log` 一起改擁有者（**漏掉這步 daemon 開不了自己的 log
-  就不會啟動**），然後裝新 plist 並驗證 API 回應。每一步都先檢查再動，任何一項不成立就
-  拒絕；出事用 `--rollback`。
-
-  **為什麼一定要搬目錄而不只是改 `UserName`**：`/Users/<operator>` 是 750，不在 `staff`
-  的帳號無法 traverse，所以權重不離開家目錄的話，任何服務帳號都讀不到。`/Users/Shared`
-  和家目錄在同一個 volume，所以那 214 GB 是 rename 不是複製，中斷只有兩秒。
-
-  搬完 `.env` 的 `OLLAMA_MODELS_HOST_PATH` 要跟著改，並重建掛載它的三個容器
+  `.env` 的 `OLLAMA_MODELS_HOST_PATH` 必須指向 `/Users/Shared/ollama/models`，掛載它的三個容器
   （`gateway`、`admin-tailnet`、`admin-public`），否則 tokenizer 會安靜地退回字元估算 ——
   `/readyz` 仍然是綠的，這是這個變更唯一會無聲壞掉的地方。確認方式：
 
@@ -1629,12 +1644,16 @@ docstring 裡，那是估算器本身所在的地方。
 - [ ] 登入後在管理 UI 裡：註冊一個模型、綁一條 routing policy、發一把 API key，確認
   gateway 真的能服務推論。
 
-  兩個呼叫端會踩到、但目前沒有文件的地方：
+  兩個呼叫端最常踩到的地方（兩者現在 `/api-docs` 和
+  [connect-an-agent-client.md](./connect-an-agent-client.md) 都有寫，這裡是部署當下的速查）：
 
   - **OpenAI 請求裡的 `model` 欄位放的是 capability，不是模型別名。** 送
     `"model": "chat"`，不是 `"model": "qwen7b"`。`RouteChatRequest` 用 capability 查
-    routing policy，policy 才決定用哪顆模型。填模型別名會得到 `no_available_model`，
-    而那個訊息不會告訴你原因。
+    routing policy，policy 才決定用哪顆模型。填模型別名會得到 `403 capability_not_issued`，
+    而那個訊息**會**告訴你原因：它把送出去的那個名字唸出來、列出這把金鑰可以用的清單
+    （和 `GET /v1/models` 同一份），並且明說這個平台的 `model` 欄位收的是 capability
+    而不是模型名。（金鑰若帶了 `default_capability`，這個請求會改由那個 capability 服務
+    而不是被拒絕，回應的 `X-Capability-Defaulted` 會說是哪一個。）
   - **Production 下 gateway 拒絕沒有經過 proxy 的請求。** nginx 還沒架好時要自己模擬：
 
     ```sh
@@ -1676,7 +1695,8 @@ docstring 裡，那是估算器本身所在的地方。
   curl -H "Tailscale-User-Login: 你的@email" http://127.0.0.1:8001/admin/gateway
   ```
 
-  第二個要回 `["chat"]` 之類、**不含 `assist`** 的清單。`assist` 可路由但不可簽發——
+  第二個回的是一個物件，`capabilities` 欄位要是 `["chat"]` 之類、**不含 `assist`** 的清單
+  （另一個欄位是 `base_url`）。`assist` 可路由但不可簽發——
   對外簽出去的金鑰不該買到內部管理介面的入場券。這一步之所以要驗，是因為
   `ListCapabilities` 是從「現存的 routing policy」推導清單的，不是讀常數，所以它是整個
   可簽發／可路由拆分裡唯一要手動套過濾的地方（[security.md](../architecture/security.md)
