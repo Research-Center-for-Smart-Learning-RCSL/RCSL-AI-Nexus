@@ -136,7 +136,7 @@ The constants are not retuned to it, and the second table is why: qwen36 is
 *both* more efficient than gemma4 on everything this platform serves and more
 fragmented on dense identifiers, so the gap between the honest case and the
 pathological one grew rather than shrank. 3.0 cannot sit inside it. Raising it
-to recover the 1.2x-1.5x over-count would deepen the 0.34x under-count, and the
+to recover the 1.2x-1.6x over-count would deepen the 0.34x under-count, and the
 under-count is the direction that ends in a silent truncation.
 
 What the over-count costs is real and was paid twice on 2026-08-17. A Codex
@@ -466,20 +466,31 @@ def _warn_if_prompt_was_truncated(
     )
 
 
-ESTIMATE_DRIFT_BAND = (0.9, 1.5)
+ESTIMATE_DRIFT_BAND = (0.9, 1.65)
 """The estimate-to-actual ratios already known to be normal, which are not news.
 
 A symmetric tolerance was the wrong shape for this. The estimator does not sit
-near 1.0 and is not meant to: measured against qwen36 on 2026-08-17 it runs
-1.22x to 1.47x high on every kind of content this platform serves, and 0.34x to
-0.91x on dense ASCII. Any threshold tight enough to call 1.2x a deviation fires
-on essentially every request, and one loose enough to stay quiet says nothing
-about the direction that matters.
+near 1.0 and is not meant to: measured against qwen36 it runs 1.22x to 1.61x
+high on every kind of content this platform serves, and 0.34x to 0.91x on dense
+ASCII. Any threshold tight enough to call 1.2x a deviation fires on essentially
+every request, and one loose enough to stay quiet says nothing about the
+direction that matters.
 
 So the band is the measured spread, and a line is logged only outside it. Below
 0.9 the estimator is under-counting by more than any sample did, which is what
-precedes a silent truncation. Above 1.5 it is over-counting by more than any
+precedes a silent truncation. Above 1.65 it is over-counting by more than any
 sample did, which costs callers capacity they paid for.
+
+**The top was 1.5 until 2026-08-18, taken from that day's 1.47x maximum, and
+the third measurement put English prose at 1.61x.** The two are not in
+conflict — the header above records why, the ratio being a property of the
+sample rather than a constant of the content type — but a band that excludes a
+measured sample turns this instrument into the noise it was shaped to avoid: on
+an `estimate` basis, ordinary prose would have logged over-counting on
+essentially every request. The bottom is deliberately not the measured minimum
+for the opposite reason: 0.34x is a real dense-ASCII figure, and under-counting
+is the direction that ends in a silent truncation, so it is meant to be
+reported.
 
 **This would not have fired on 2026-08-17, and should not have.** That refusal
 was at 1.21x — ordinary calibration, not drift. What was wrong that day was a
