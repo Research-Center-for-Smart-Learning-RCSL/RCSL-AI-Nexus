@@ -41,6 +41,17 @@ management UI for the wire reference an integrator reads.
 > Codex in the ChatGPT desktop app was described as impossible when it works
 > and needs no separate setup (section 3), and there was nothing anywhere
 > about how to undo any of it (section 3.1).
+>
+> **Amended 2026-08-18, and the amendment before it was the thing corrected.**
+> Section 3.2 was written on 2026-08-17 from one machine and said a machine
+> with the desktop app installed cannot be connected at all. A second machine,
+> running the same app build, had been connected and working throughout: what
+> differs is the plugin set the app injects, not whether the app is there. This
+> file has now stated the same relationship three ways in nine days —
+> impossible, then free, then impossible again — each time from whichever
+> machine was in front of it. **Section 3.2 carries the two machines side by
+> side for that reason, with the figure that is missing from one of them marked
+> as missing.**
 
 ---
 
@@ -233,6 +244,25 @@ them than one they chose per invocation.
   nothing selects it once those two lines are gone. Restart the desktop app,
   which reads the file at startup. `codex login` may be needed to use OpenAI
   again, since pointing here never required it.
+
+  **Back the file up before the edit, never after.** On 2026-08-17 a `.bak`
+  taken after the first attempt was restored an hour later and reinstated every
+  line it was meant to remove. Name the copy for the moment it captures —
+  `config.toml.before-unbind` — because `.bak` says nothing about which side of
+  the change it holds.
+
+- **Clear the key out of the environment.** `RCSL_API_KEY` outlives the
+  configuration, and it is what a provider block re-added later would pick up
+  without anybody typing a key. On Windows it has two scopes, and `setx` writes
+  to the first:
+
+  ```powershell
+  [Environment]::SetEnvironmentVariable('RCSL_API_KEY',$null,'User')
+  [Environment]::GetEnvironmentVariable('RCSL_API_KEY','Machine')
+  ```
+
+  The second line printing nothing is the check. Anything it does print was set
+  machine-wide and needs an elevated shell to remove.
 - **Both, side by side.** Put the provider block in
   `~/.codex/rcsl.config.toml` and leave `config.toml` untouched, then run
   `codex --profile rcsl`. Plain `codex` stays on the default. In `0.147.0`
@@ -249,25 +279,55 @@ a copy of the configuration elsewhere keeps working. The disconnect this
 platform enforces is **revoking the key** (section 2), which is also the only
 one that helps if the key has reached somewhere you did not intend.
 
-### 3.2 The same sharing, in the direction that breaks it
+### 3.2 The same sharing, in the direction that can break it
 
-**A machine with the ChatGPT desktop app installed cannot be connected through
-`~/.codex` at all**, and the reason is the shared file the section above treats
-as a convenience. The app does not only *follow* the CLI's configuration; it
-*owns* that directory, rewrites it, and hands the CLI its own tool surface.
+**The ChatGPT desktop app does not only *follow* the CLI's configuration; it
+owns that directory, rewrites it, and hands the CLI its own tool surface.** How
+much that costs is the whole question, and it is a question of degree: the tool
+definitions the app injects are resent on every turn, so a machine where the app
+has a large plugin set cannot send anything at all, and a machine where it has a
+small one never notices.
 
-Measured on 2026-08-17 against a teacher's Windows machine, app build
-`26.810.52044`, client `0.148.0`. Every request carried **286 tool definitions
-estimated at 122,870 tokens** — more than the entire 98,304 ceiling on its own,
-so no conversation of any length could be sent. The conversation was 17,000
-tokens across four messages, seven per cent of the payload. Four attempts over
-twenty minutes produced a byte-identical tool figure while the message count
-moved, which is the signature to recognise: **a share that does not change when
-the conversation does is not a conversation problem.**
+**This section said "a machine with the desktop app installed cannot be
+connected at all" from 2026-08-17 to 2026-08-18, and that was too strong.** It
+was written from one machine. A second machine, running the desktop app the
+whole time, had been connected and working for days — the difference was the
+plugin set, not the presence of the app:
+
+| | Machine A | Machine B |
+|---|---|---|
+| Measured | 2026-08-18 | 2026-08-17 |
+| App build | `26.810.52044` | `26.810.52044`, self-updated to `26.814.41407` on 2026-08-18 |
+| CLI on `PATH` | `0.147.0` | `0.147.0` |
+| CLI the app bundles | `0.148.0` | `0.148.0` |
+| Bundled plugins | **2** — `browser`, `visualize` | **5** — `chrome`, `sites`, `browser`, `computer-use`, `visualize`, plus `codex-app-tools` after the update |
+| `[mcp_servers.node_repl]` | present | present |
+| Tool definitions sent | **not measured** | **286, an estimated 122,870 tokens** |
+| Outcome | connected and working for days, until unbound by choice | every request refused before a word was typed |
+
+**Machine A's tool count is missing and that is a real gap**, not an omission:
+by the time the comparison suggested itself the machine had been unbound, and
+the gateway's retained log held no inference request to read a composition line
+from. Anyone connecting a desktop-app machine should capture that figure while
+it still has traffic — one successful request logs it.
+
+Machine B's numbers, measured against app build `26.810.52044`: every request
+carried **286 tool definitions estimated at 122,870 tokens** — more than the
+entire 98,304 ceiling on its own, so no conversation of any length could be
+sent. The conversation was 17,000 tokens across four messages, seven per cent of
+the payload. Four attempts over twenty minutes produced a byte-identical tool
+figure while the message count moved, which is the signature to recognise: **a
+share that does not change when the conversation does is not a conversation
+problem.**
 
 The source was `[mcp_servers.node_repl]` — the app's computer-use and browser
-runtime — plus five bundled plugins: `chrome`, `sites`, `browser`,
-`computer-use`, `visualize`.
+runtime — plus the five bundled plugins in the table above.
+
+**Date any tool count you write down, against a build and a plugin set.** Both
+move on their own: machine B's app updated itself overnight and arrived with a
+sixth plugin, `codex-app-tools`, which nobody installed. A figure carrying only
+"the ChatGPT desktop app" as its condition will be quoted at somebody after it
+has stopped being true.
 
 **Three things kept that out of sight for an hour, and each looked like
 evidence of innocence:**
@@ -301,8 +361,30 @@ set instead of inheriting the desktop surface. Set it per shell rather than with
 **Reverting needs one more step than it looks.** Deleting `model` and
 `model_provider` leaves the app erroring at startup that the provider is not
 found, because a conversation created against that provider still references it.
-Deleting that conversation cleared it; the state file was renamed aside first
-and turned out not to be the cause.
+**Deleting that conversation is what clears it.** Leaving
+`[model_providers.rcsl]` in place while removing the two lines above avoids the
+error entirely, which is the other reason that bullet in 3.1 says the block may
+stay.
+
+**And a correction to how that was diagnosed, because the method was worse than
+the answer.** The state file `.codex-global-state.json` was renamed aside first,
+on the strength of `findstr /M /S /I "rcsl" *` naming it. `findstr /M` prints
+**filenames, not matches** — read case-insensitively on two machines the next
+day, that file holds no provider block, no `base_url`, no `env_key`, and no
+account of any kind. The hits were project paths and conversation titles
+containing `RCSL-AI-Nexus`. Renaming it was unnecessary, and on the machine
+where it was then deleted it cost a rebuilt file of app preferences for nothing.
+
+Two rules come out of that, and they are cheap:
+
+- **Never conclude from a tool that prints filenames.** Print the surrounding
+  text and read it. `findstr /N`, or in PowerShell
+  `[regex]::Matches($raw,'(?is).{0,80}rcsl.{0,80}')`.
+- **PowerShell's `-match` is case-insensitive and `[regex]::Matches` is not.**
+  `$raw -match 'rcsl'` returning `True` and `[regex]::Matches($raw,'rcsl')`
+  returning nothing is not a contradiction — the file said `RCSL_API_KEY`. Put
+  `(?i)` at the front of any pattern used for a search whose answer you intend
+  to act on.
 
 ### 3.3 What a conversation costs before anybody types
 
@@ -334,6 +416,75 @@ Three things to check on the client, in order of what they usually cost:
 
 None of these are settings on this platform, and the ceiling is not the lever
 that fixes them: doubling it doubles how long a session runs before it stops.
+
+### 3.4 Accounts and sign-in, which are not ours but arrive addressed to us
+
+**An integrator whose machine you touched will attribute the next unrelated
+problem on it to you.** That is reasonable of them, and the way out is evidence
+rather than assurance. This section is what a day of collecting it produced —
+none of it is platform behaviour, and all of it was asked as though it were.
+
+**Where the credential lives.** `~/.codex/auth.json` is the Codex-side
+credential and nothing else on that machine holds it: `%APPDATA%` has no OpenAI
+directory at all, and `%LOCALAPPDATA%\OpenAI\` holds runtimes and binaries, not
+tokens. Signing out of the desktop app **deletes `auth.json`**, and the next
+Codex sign-in recreates it. A missing `auth.json` on a machine whose app is
+signed in and working is therefore normal, not damage.
+
+**Which account is signed in**, without printing a credential — the account
+metadata is a claim inside the id token:
+
+```powershell
+$a = Get-Content auth.json -Raw | ConvertFrom-Json
+$p = $a.tokens.id_token.Split('.')[1].Replace('-','+').Replace('_','/')
+while ($p.Length % 4) { $p += '=' }
+$j = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p)) | ConvertFrom-Json
+$j.'https://api.openai.com/auth'.chatgpt_plan_type
+```
+
+`chatgpt_plan_type` is `plus`, `team`, `business` and so on. The same claim
+carries `chatgpt_account_id` and an `organizations` list — **and that list is
+the API platform's organizations, not the ChatGPT workspaces the app switches
+between.** A business workspace does not appear in it, so its absence there
+proves nothing. Read the whole claim before drawing a conclusion from one field;
+none of it is secret, but the file it comes from is, so decode the field rather
+than pasting the file.
+
+**One account at a time.** Builds `26.810.52044` and `26.814.41407` sign in to a
+single account and offer no in-app switcher: changing account means signing out
+and signing back in. Confirmed on two machines, one on `team` and one on `plus`,
+so it is neither a plan difference nor a broken installation — and the machine
+we had configured behaved identically to the one we had not.
+
+**A sign-out that reports an error can still have worked.** After
+`26.814.41407`, the sign-out button returned `Oops, an error has occurred` while
+completing normally — `auth.json` was gone afterwards. Check the file before
+believing the message.
+
+**And when it genuinely will not sign out, the remedy is inside the app, not on
+the disk.** The operator of that machine uninstalled and reinstalled the desktop
+app, signed in cleanly, and **the same error came back on the first sign-out** —
+which is the useful half of the result: a fault that survives a reinstall was
+never local state, so nothing on the filesystem was ever going to fix it, and
+the hour spent looking there bought nothing. What worked was
+**Settings → log out all sessions**, and after that the ordinary sign-out
+behaved. Offer that before anybody reinstalls anything.
+
+Two things follow, and the second is the reason this section exists:
+
+- **A reinstall is the expensive thing an integrator reaches for first**, and it
+  is the one that proves least. If a symptom survives it, stop looking at files.
+- **The absence of an account switcher survived a clean install too.** Three
+  observations now — two machines and one fresh installation — so it is how the
+  app is built, not damage anyone did. Say that plainly; an integrator who has
+  just reinstalled their client wants to know whether to keep going.
+
+**The general form**, worth saying to an integrator in the same breath as the
+configuration: this client updates itself, changes its plugin set, and changes
+its account handling between builds, all on its own schedule and none of it
+announced. When something changes on their machine the day after you were on it,
+**compare against a second machine before assuming either answer** — that is
+what settled every question in this section, and it took minutes each time.
 
 ## 4. Check it end to end
 

@@ -176,12 +176,40 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
   CLI configures the app too, with nothing to set inside it. Only Codex on the
   web (chatgpt.com/codex) cannot be pointed here; it runs on OpenAI's machines.
 
+  **The desktop app owns that directory, and that cuts both ways.** It rewrites
+  the file — a hand-written provider block can be gone by the next read — and it
+  hands the CLI its own tool definitions, which are resent every turn. Whether
+  that matters is a quantity, not a yes or no: one machine measured on
+  2026-08-17 sent 286 tool definitions worth ~122,870 estimated tokens, more
+  than the whole ceiling on its own, so no conversation of any length could be
+  sent; another with fewer plugins ran for days. **The signature is a tool
+  figure that stays identical while the message count moves** — that is not a
+  conversation problem and starting a new conversation cannot fix it. The remedy
+  is a separate `CODEX_HOME` holding only the configuration above, set per shell
+  (machine-wide moves the app too). Never tell an operator their machine cannot
+  be connected because the app is installed; ask what the refusal says the tools
+  cost.
+
   **To undo it:** delete the `model` and `model_provider` lines from that file
-  and restart the desktop app. To keep both, put the provider block in
-  `~/.codex/rcsl.config.toml` and run `codex --profile rcsl`; plain `codex`
-  stays on the default. Neither disconnects anything on this side — they are
-  settings on the operator's own machine. **Revoking the key is the only
-  disconnect this platform enforces.**
+  and restart the desktop app; copy the file *before* editing, not after. Clear
+  `RCSL_API_KEY` from the environment too — it outlives the configuration
+  (`[Environment]::SetEnvironmentVariable('RCSL_API_KEY',$null,'User')` on
+  Windows, and check the `'Machine'` scope as well). To keep both, put the
+  provider block in `~/.codex/rcsl.config.toml` and run `codex --profile rcsl`;
+  plain `codex` stays on the default. Neither disconnects anything on this
+  side — they are settings on the operator's own machine. **Revoking the key is
+  the only disconnect this platform enforces.**
+
+  **Questions about ChatGPT accounts are not ours, and saying so is the help.**
+  The app signs into one account at a time with no in-app switcher, so changing
+  account means signing out and back in; `~/.codex/auth.json` is the Codex-side
+  credential and signing out deletes it, which is normal rather than damage.
+  None of this is affected by the configuration above. If sign-out itself fails,
+  **Settings → log out all sessions** is the remedy that worked; a reinstall is
+  not — the same failure came back on a freshly installed app, which is how it
+  was established that nothing on that filesystem was the cause. Say what was
+  and was not touched, suggest comparing against a second machine, and do not
+  speculate about the app's internals.
 
   Point them at the "Connect an agent" screen in this application, which has
   the whole walkthrough in order.

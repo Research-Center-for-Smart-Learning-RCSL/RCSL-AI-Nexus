@@ -228,6 +228,119 @@ remains the Phase 3 increment.
 
 ## 2026-08-18
 
+### The claim that a desktop app makes a machine unconnectable, refuted by the machine that had been connected all along
+
+Yesterday's entry and section 3.2 of the agent runbook both said that a machine
+with the ChatGPT desktop app installed **cannot** be connected through
+`~/.codex`. That was written from one machine, at the end of a long evening, and
+the counter-example was the operator's own Windows machine -- desktop app
+installed, connected to this platform for days, working. It was unbound this
+morning by choice rather than by failure, which is how the comparison came up at
+all.
+
+**What actually differs is the plugin set the app injects**, and the two
+machines bracket it:
+
+| | Operator's machine | Teacher's machine |
+|---|---|---|
+| App build | `26.810.52044` | `26.810.52044`, self-updated to `26.814.41407` today |
+| CLI on `PATH` | `0.147.0` | `0.147.0` |
+| CLI bundled in the app | `0.148.0` | `0.148.0` |
+| Bundled plugins | 2 | 5, plus `codex-app-tools` after the update |
+| Tool definitions | **not measured** | 286, ~122,870 estimated tokens |
+| Outcome | worked for days | every request refused |
+
+**The missing cell is the finding's own limit and is recorded as missing.** By
+the time the comparison suggested itself the machine was unbound, and the
+gateway's retained log had no inference request to read a composition line from
+-- the container had been restarted nine hours earlier and `/v1/responses`
+appears zero times in what it kept. One request would have produced the number.
+Nobody thought to take it while it was there, which is exactly the shape of the
+gap the composition line was built to close.
+
+**Yesterday's client version was also wrong, in a way worth naming.** The
+teacher's machine was recorded as running client `0.148.0`. Both machines run
+`codex-cli 0.147.0` on `PATH` and both carry a **second** CLI inside the app
+reporting `0.148.0` in `models_cache.json`. The version that got written down
+was the one the app fetched models with, not the one the operator installed --
+and since both machines are identical here, the CLI was never a variable in
+yesterday's diagnosis at all.
+
+### The state file I told an operator to delete held nothing I said it held
+
+Yesterday `findstr /M /S /I "rcsl" *` named `.codex-global-state.json`, and I
+read that as the app's global state remembering the provider. **`findstr /M`
+prints filenames, not matches.** Read properly today on two machines, that file
+holds no provider block, no `base_url`, no `env_key` -- and no account of any
+kind. The hits were project paths and conversation titles containing
+`RCSL-AI-Nexus`.
+
+So the rename was unnecessary, and on the machine where the operator then chose
+to delete the two files it cost a rebuilt file of app preferences for nothing.
+What had actually fixed the app was the step taken beside it: deleting the
+conversation created against the provider. That was recorded correctly at the
+time and the wrong cause was recorded next to it with more emphasis.
+
+**A second thing hid it for an hour**: `$raw -match 'rcsl'` returned `True`
+while `[regex]::Matches($raw,'rcsl')` returned nothing, on the same string.
+PowerShell's `-match` is case-insensitive and `[regex]::Matches` is not; the
+file said `RCSL_API_KEY`. Two searches for the same thing disagreeing is a fact
+about the searches.
+
+### An integrator's unrelated problem arrived addressed to us, and the evidence was cheap
+
+The teacher reported this morning that his business workspace had disappeared
+from the ChatGPT desktop app, and reasonably suspected the configuration we had
+edited on his machine the night before. It had not: the app signs into one
+account at a time and has no in-app switcher, so he was looking at his personal
+account with no way back except signing out. **Confirmed against the operator's
+machine, which is on `team` and behaves identically** -- and which we had also
+configured, and unconfigured, that day.
+
+Three things came out of settling it, and they are now section 3.4 of the
+runbook:
+
+- **`~/.codex/auth.json` is the Codex-side credential**, signing out deletes it,
+  and the next sign-in recreates it. A machine with no `auth.json` whose app
+  works is normal.
+- **The account claim inside the id token** (`chatgpt_plan_type`,
+  `chatgpt_account_id`, `organizations`) answers "who is signed in" without
+  printing a credential -- and its `organizations` list is the **API platform's**
+  organizations, not the ChatGPT workspaces the app switches between, so a
+  business workspace missing from it means nothing.
+- **A sign-out reporting `Oops, an error has occurred` had still worked.** The
+  file was gone afterwards. That message arrived with the build the app
+  installed on its own that morning.
+
+**Why any of this is in our runbook.** None of it is platform behaviour. But an
+integrator whose machine you touched will attribute the next thing that breaks
+on it to you, which is a reasonable thing for them to do, and the reply that
+works is a second machine rather than an assurance. Each question here took
+minutes to settle that way and would have taken an afternoon to argue.
+
+**He then uninstalled and reinstalled the app, and the sign-out error came back
+on the first attempt** -- which settles more than the fix that followed it did.
+A fault that survives a clean install was never local state, so every file we
+had been reading was the wrong place, including the ones edited the night
+before. **He found the remedy himself: Settings, log out all sessions.** The
+ordinary sign-out worked afterwards. And the account switcher he was originally
+missing was still missing on a freshly installed app, which is the third
+independent observation that its absence is how the client is built.
+
+Worth carrying forward, because a reinstall is what an integrator reaches for
+first and it is the step that proves least: **offer "log out all sessions"
+before anybody reinstalls anything**, and when a symptom does survive a
+reinstall, stop reading files.
+
+**One deliberate loose end, recorded so it is a decision rather than a
+lapse.** Both Codex keys are still live -- the operator's and the teacher's --
+with both machines now unbound at the client end. Keeping them was chosen
+today, on the grounds that reconnecting through a separate `CODEX_HOME` is a
+five-minute job that a revoked key would only lengthen. Section 2 of the
+runbook still says what remains true of that choice: **a configuration removed
+from a machine is not a disconnect, and revoking the key is the only one this
+platform enforces.**
+
 ### Adding a retention dataset broke the Retention screen, and the mirror is why
 
 `refusals` is bounded like everything else that accumulates — 30 days by
@@ -895,6 +1008,13 @@ block was gone by the next read, replaced by the app's own `model`. Written up
 as section 3.2 of the agent runbook, with `CODEX_HOME` as the remedy, and the
 `/agent-setup` page corrected -- it had said "Works, and needs no second setup",
 which was true of the direction that had been tested.
+
+**Two claims in this entry were corrected on 2026-08-18, see the top of this
+file.** The generalisation from this machine to every machine with the app --
+written into the runbook as "cannot be connected at all" -- is refuted by the
+operator's own machine, which had the app and worked; the difference is the
+plugin set. And the app's global state was never holding the provider: that came
+from `findstr /M`, which prints filenames rather than matches.
 
 **And the correction to my own entry from four hours earlier.** `ef503dc`
 recorded 78 refusals of `gpt-5.6-luna` clustering after each 413, said the
