@@ -164,8 +164,34 @@ async def test_ollama_embeds_a_batch_through_the_batching_endpoint(monkeypatch) 
     vectors = await OllamaAdapter("http://host:11434").embed("nomic-embed-text", ["a", "b"])
 
     assert seen["path"] == "/api/embed"
-    assert seen["json"] == {"model": "nomic-embed-text", "input": ["a", "b"]}
+    assert seen["json"] == {
+        "model": "nomic-embed-text",
+        "input": ["a", "b"],
+        "keep_alive": -1,
+    }
     assert vectors == [[0.1, 0.2], [0.3, 0.4]]
+
+
+async def test_ollama_embedding_does_not_hand_residency_back_to_the_server_default(
+    monkeypatch,
+) -> None:
+    """Omitting `keep_alive` lets Ollama's five-minute timer overrule `load`.
+
+    On the generate path that costs a reload. Here it costs the capability:
+    routing requires a `loaded` observation, and nothing on the embedding path
+    loads on demand, so the eviction is permanent until somebody warms the
+    model by hand.
+    """
+    seen: dict[str, object] = {}
+
+    async def post(self: object, path: str, **kwargs: object) -> httpx.Response:
+        seen["json"] = kwargs.get("json")
+        return httpx.Response(200, json={"embeddings": [[0.1]]})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    await OllamaAdapter("http://host:11434", keep_alive="30m").embed("nomic-embed-text", ["a"])
+
+    assert seen["json"]["keep_alive"] == "30m"  # type: ignore[index]
 
 
 async def test_ollama_refuses_a_model_that_answers_without_embeddings(monkeypatch) -> None:
