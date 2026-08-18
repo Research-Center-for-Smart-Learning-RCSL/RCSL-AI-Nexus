@@ -29,8 +29,11 @@ export const DOCUMENT_STATUS_HINT: Record<DocumentStatus, string> = {
   indexed: 'Searchable.',
   // Re-index first: it starts from the text already extracted, so it costs no
   // parser run and no re-upload. It cannot help a document that failed *during*
-  // extraction, and the job says so when that is the case.
-  error: 'Ingestion failed. Re-index to retry, or delete and upload again.',
+  // extraction — the backend job then says "No extracted text is stored; upload
+  // the document again", but nothing in this application reads that job, so all
+  // the operator sees is the row returning to `error`. The hint carries the
+  // distinction because no other part of the screen can.
+  error: 'Ingestion failed. Re-indexing only helps if the text was already extracted; if extraction itself failed nothing was stored, and the document has to be deleted and uploaded again.',
 };
 
 /**
@@ -189,7 +192,7 @@ export function describeUploadRefusal(file: File): string | null {
   // `application/octet-stream` with one that does not.
   const mediaType = resolveMediaType(file);
   if (!mediaType) {
-    return 'This browser could not identify that file type. Rename it with a .pdf, .docx, .txt or .md extension, or convert it.';
+    return 'This browser could not identify that file type. A .txt or .md extension is enough on its own; a PDF or Word file has to be identified by the system, so renaming one will not help — convert it, or try another browser.';
   }
   if (!(mediaType in ACCEPTED_MEDIA_TYPES)) {
     return 'That file type is not accepted. Upload a PDF, Word, text or markdown file.';
@@ -199,6 +202,6 @@ export function describeUploadRefusal(file: File): string | null {
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }

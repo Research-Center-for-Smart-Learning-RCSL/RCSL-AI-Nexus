@@ -35,10 +35,18 @@ every router except `chat.py` and `health.py` was too. That stopped being true
 during Phase 1 and was still here on 2026-07-28. What exists now is every use
 case and every router named below, plus these, which postdate the sketch:
 `manage_tenants.py`, `read_audit_log.py`, `read_usage_analytics.py`,
-`pending_enrolment.py`, `recovery_codes.py` and `list_capabilities.py`, and the
-`gateway_info.py`, `tenants.py`, `logs.py`, `usage.py` and `invitations.py`
-routers. There is no `jobs.py`: download progress is
-`GET /admin/models/download-jobs/{id}`, on the router that starts the download.
+`pending_enrolment.py`, `recovery_codes.py`, `list_capabilities.py`,
+`manage_knowledge.py`, `ingest_document.py`, `search_knowledge.py`,
+`embed_texts.py`, `ground_chat.py`, `manage_prompt_templates.py`,
+`apply_prompt_template.py`, `assist_operator.py`, `manage_retention.py`,
+`read_prompt_logs.py`, `read_refusals.py`, `read_host_status.py`,
+`manage_own_account.py` and `manage_evaluations.py`, and the
+`gateway_info.py`, `tenants.py`, `logs.py`, `usage.py`, `invitations.py`,
+`responses.py`, `knowledge.py`, `prompt_templates.py`, `assistant.py`,
+`retention.py`, `prompt_logs.py`, `refusals.py`, `host.py`, `me.py`,
+`roles.py`, `metrics.py` and `evaluations.py` routers — twenty-seven router
+modules and thirty-two use cases in all, counted 2026-08-18. There is no `jobs.py`: download progress is
+`GET /admin/download-jobs/{job_id}`, on the router that starts the download.
 [security.md](./security.md) §13.0 remains the checked control-by-control state.
 
 Present and not listed below: `app/shared/clock.py` (injected time, so expiry
@@ -236,15 +244,27 @@ Ports the domain defines, and what implements them:
 | `ApiKeyRepositoryPort`, `UserRepositoryPort`, `InvitationRepositoryPort`, `UsageRepositoryPort` | Postgres | yes |
 | `AuthorizationPort` | `RoleAuthorization` | yes |
 | `CachePort` | `RedisCache`, `InMemoryCache` | yes |
-| `PasswordHasherPort` | `Argon2Hasher` | **no adapter** |
-| `TotpPort` | `PyotpTotp` | **no adapter** |
-| `AuditPort` | `PostgresAudit` | **no adapter, no call sites** |
-| `JobProgressPort` | Redis | **no adapter** |
-| `KnowledgeRepositoryPort`, `MetricsPort` | Phase 2 | correctly absent |
+| `PasswordHasherPort` | `Argon2Hasher` | yes |
+| `TotpPort` | `PyotpTotp` | yes |
+| `AuditPort` | `PostgresAudit` | yes; fifty call sites across eighteen use cases |
+| `JobProgressPort` | `CacheJobProgress`, over Redis | yes |
+| `KnowledgeRepositoryPort` | `PostgresKnowledgeRepository` | yes, built 2026-07-30 |
+| `EvaluationRepositoryPort` | `PostgresEvaluationRepository` | yes, built 2026-08-17 |
+| `MetricsPort` | Phase 2 | correctly absent; the memory budget still uses static node capacity |
 | `TokenCounterPort` | `GgufTokenCounter` | yes |
 
-A port with no adapter is not neutral: `AuditPort` and the `audit_log` table
-both exist, which reads as an audit trail that is in fact never written.
+**This table said "no adapter" for the four rows above `MetricsPort` until
+2026-08-18, and the conclusion drawn from it was the opposite of the truth.**
+The paragraph here read "`AuditPort` and the `audit_log` table both exist,
+which reads as an audit trail that is in fact never written". Every one of the
+four was wired in `di.py`, and the audit trail in particular is written from
+fifty call sites; the sentence survived because it was checked against the
+table above it rather than against `di.py`. The observation it was making is
+still worth keeping in the abstract — a port with no adapter is not neutral,
+because the table and the schema together read as a control that exists — but
+it is not a statement about this platform, and a status column that is only
+ever written once is worse than none (the same defect [ARCHITECTURE.md](../ARCHITECTURE.md) §3 records
+about its own Built column).
 
 **Every domain error is stored where its caller can read it (§9.5).** The shared
 exception handler writes a `refusals` row carrying the code, the status, the
@@ -452,8 +472,15 @@ async with aclosing(use_case.execute(actor, capability, messages)) as stream:
 | Application | Middleware | Identity source |
 |---|---|---|
 | `main_gateway` | `api_key_auth` | `Authorization: Bearer nx_live_...` |
-| `main_admin_tailnet` | `tailnet_identity` | `Tailscale-User-Login` header |
-| `main_admin_public` | `session_auth` + `csrf` | Server-side session cookie, established by password plus TOTP |
+| `main_admin_tailnet` | `identity.resolve_tailnet_actor` | `Tailscale-User-Login` header |
+| `main_admin_public` | `identity.resolve_session_actor` + `csrf` | Server-side session cookie, established by password plus TOTP |
+
+The two resolvers share one file, `middleware/identity.py`, rather than the
+`tailnet_identity.py` and `session_auth.py` this table named until 2026-08-18.
+They are together because the half that is easy to get wrong is the part they
+have in common: both end at `_actor_for`, which is the single place a `User`
+row becomes an `Actor` with its role, tenant and scopes, and two files would
+mean two copies of that.
 
 **"Middleware" is the directory, not the ASGI stack, and the difference cost something.** `api_key_auth` and the admin identity resolvers are FastAPI *dependencies* — `Depends(...)` on a router — while `csrf`, the geo filter and header stripping are true stack-level middleware. FastAPI reads and JSON-parses the request body **before** it resolves dependencies (`fastapi/routing.py::get_request_handler`), so everything in the first group runs after the whole body is in memory. That was invisible until an unauthenticated 200 MiB request was answered with a parse error rather than a 401 (see [PROGRESS.md](../PROGRESS.md) 2026-08-07). The consequence for anything added here: a check that must run *before* the body is read cannot be a dependency, whichever directory it lives in. `middleware/body_limit.py` is the one that has to be, and it is stack-level for that reason alone.
 
@@ -514,7 +541,7 @@ Neither response includes a version string, model list, or hostname. `/readyz` r
 
 The development machine is Windows. It has no `tailscale serve`, no openresty, and no GeoLite2 database. Taken literally, the middleware described above rejects every request, so the application would be unrunnable locally. The local credential flow itself depends on nothing external and does run locally under `AUTH_MODE=local`.
 
-`AUTH_MODE=dev` disables the trusted-proxy check and resolves the caller to the peer address, which is what lets the stack run without a proxy in front of it. It is read in exactly one place, `middleware/client_ip.py`.
+`AUTH_MODE=dev` disables the trusted-proxy check and resolves the caller to the peer address, which is what lets the stack run without a proxy in front of it. This paragraph said it was read in exactly one place, `middleware/client_ip.py`; it is read in six, which is worth stating because "one place" is what makes a setting look safe to change. They are `config.py` (the production fail-fast below), `middleware/client_ip.py`, `middleware/identity.py` twice — it substitutes `DEV_TAILNET_LOGIN` for the absent Tailscale header, and stamps the resulting actor's `source` as `dev` rather than `tailnet` — and the two admin composition roots, which pass it to the geo filter and to the error handlers so a 401 body can tell the browser whether to reconnect to the tailnet or show a login form.
 
 It does **not** inject a fixed admin `Actor`, contrary to an earlier version of this paragraph; there is no such injection anywhere, and the gateway still requires a real API key in development. That will need building alongside the admin entrances, and the fail-fast below is what keeps it from mattering in production.
 
@@ -524,11 +551,11 @@ It does **not** inject a fixed admin `Actor`, contrary to an earlier version of 
 
 Alembic. Phase 1 creates `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `invitations`, `recovery_codes`, `usage_records`, and `audit_log`.
 
-Migrations run as a **one-shot Compose service** that the application services depend on with `condition: service_completed_successfully`. They are not run from an application entrypoint, because three containers start from the same image and would race each other.
+Migrations run as a **one-shot Compose service** that the application services depend on with `condition: service_completed_successfully`. They are not run from an application entrypoint, because five containers start from the same image — the gateway, the two admin entrances, `parser` and the migration job itself — and the three that open the database would race each other.
 
 ## 12. Testing
 
-- **Unit**: `domain/services` and `application/use_cases` with fake adapters. `FakeModelRuntimePort` yields a fixed sequence of chunks, which makes the streaming contract in §6 testable without a runtime. These run in milliseconds and need no Docker.
+- **Unit**: `domain/services` and `application/use_cases` with fake adapters. `FakeRuntime` (`tests/unit/test_streaming_contract.py`) yields a fixed sequence of chunks and records whether it was closed early, which makes the streaming contract in §6 testable without a runtime; a second `FakeRuntime` in `tests/unit/fakes.py` covers the registry use cases. These run in milliseconds and need no Docker.
 - **Integration**: `adapters/persistence` and `adapters/runtime` against real dependencies started by Compose.
 
 Cases worth pinning down early because they are easy to get wrong and expensive to discover late: client disconnect releases the concurrency slot; a mid-stream error produces a terminal frame; `AUTH_MODE=dev` under `ENV=production` refuses to start; the public application strips `Tailscale-*` headers; an unknown login and a wrong password are indistinguishable; a replayed TOTP counter is rejected; a consumed invitation token cannot be reused.

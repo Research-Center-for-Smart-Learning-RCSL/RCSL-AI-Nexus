@@ -121,9 +121,11 @@ export function DocumentTable({ collectionId }: DocumentTableProps) {
               )}
               {/* Re-index starts from the text already extracted, so it costs
                   no parser run and no re-upload. Offered on `error` too: that
-                  is the case it exists for, and the one shape it cannot fix —
-                  a failure during extraction, where no text was ever stored —
-                  reports itself as such. */}
+                  is the case it exists for. The one shape it cannot fix — a
+                  failure during extraction, where no text was ever stored —
+                  says so only in the job body, which nothing here reads, so the
+                  row just returns to `error` and the status hint is what has to
+                  explain it. */}
               {REINDEXABLE_STATUSES.includes(document.status) && (
                 <Button
                   variant="outline"

@@ -15,7 +15,7 @@ export default function KnowledgePage() {
           Documents a model can draw on when answering. Files are grouped into
           collections, and a question can be pointed at one collection or at
           everything. Accepted formats are PDF, DOCX, plain text and Markdown,
-          up to 32 MB per file; other formats are refused rather than parsed,
+          up to 32 MiB per file; other formats are refused rather than parsed,
           because every format accepted is a parser this deployment has to run.
         </p>
         <p className="mt-2 max-w-prose text-sm text-muted-foreground">

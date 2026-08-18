@@ -145,8 +145,9 @@ export function useReindexDocument() {
     onSuccess: async () => {
       await invalidate();
       // 202, like the upload: accepted, not finished. The row moves to
-      // `indexing` and the table's poll reports the rest — including the one
-      // failure re-indexing cannot fix, a document with no text stored.
+      // `indexing` and the table's poll reports where it lands. The one failure
+      // re-indexing cannot fix — a document with no text stored — lands back on
+      // `error` with its explanation in the job body this deliberately drops.
       toast.success('Re-indexing from the stored text.');
     },
     onError: (error) => toast.error(describeError(error)),

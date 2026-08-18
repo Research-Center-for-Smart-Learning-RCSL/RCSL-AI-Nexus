@@ -454,6 +454,7 @@ def build_assist_operator(
         # to rely on it, so the two disagreeing would be worse than either being
         # wrong alone.
         max_lifetime_days=settings.api_key_max_lifetime_days,
+        max_context_length=settings.max_context_length,
         max_tokens=settings.assistant_max_tokens,
     )
 

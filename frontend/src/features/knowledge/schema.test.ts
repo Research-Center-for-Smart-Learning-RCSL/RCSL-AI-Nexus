@@ -158,10 +158,17 @@ describe('upload policy, mirroring the server', () => {
 });
 
 describe('formatBytes', () => {
+  // Binary divisors, so the unit says so: the limit these messages quote is
+  // 33,554,432 bytes, which is 32 MiB and 33.6 MB. Labelling it "32 MB" made
+  // the refusal disagree with the ceiling it was refusing against.
   it('reads at the scale a person thinks in', () => {
     expect(formatBytes(512)).toBe('512 B');
-    expect(formatBytes(2048)).toBe('2 KB');
-    expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MB');
+    expect(formatBytes(2048)).toBe('2 KiB');
+    expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MiB');
+  });
+
+  it('names the upload ceiling in the unit it is enforced in', () => {
+    expect(formatBytes(MAX_UPLOAD_BYTES)).toBe('32.0 MiB');
   });
 });
 

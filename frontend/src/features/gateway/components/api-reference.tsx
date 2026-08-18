@@ -162,7 +162,7 @@ export function ApiReference() {
           code={`{
   "object": "list",
   "data": [
-    {"id": "${sample}", "object": "model", "created": 0, "owned_by": "rcsl"}
+    {"id": "${sample}", "object": "model", "created": 0, "owned_by": "rcsl-ai-nexus"}
   ]
 }`}
           label="Copy the /v1/models shape"
@@ -530,7 +530,13 @@ export function ApiReference() {
             All three figures are reported, and <code>total_tokens</code> is the
             sum of both sides. The quota on your key is spent by that same
             total, so a large prompt costs you whether or not the answer is
-            long — on this hardware, reading the prompt is most of the work.
+            long — and it is spent on what you sent rather than on the work the
+            machine did. Reading the prompt is most of the work exactly once
+            per conversation: measured on 2026-08-14, roughly 6% of the prompt
+            tokens billed across one agent session were evaluated at all, and
+            the rest were prefix-cache hits that cost the hardware nothing. The
+            runtime reports the whole prompt either way, so the figure never
+            moves and nothing here can tell the two apart.
             <br />
             <strong>One exception worth knowing:</strong> if you disconnect
             before the response completes, <code>prompt_tokens</code> is
@@ -873,8 +879,10 @@ data: [DONE]`}
                     back.
                   </strong>{' '}
                   Since 2026-08-18 the code, the status, the message and these
-                  figures are kept for thirty days against the{' '}
-                  <code>request_id</code> in the body — so a client that
+                  figures are kept against the <code>request_id</code> in the
+                  body for this deployment&apos;s refusal retention window —
+                  thirty days unless an administrator has moved it, and it may
+                  be set anywhere from 7 to 180 days — so a client that
                   swallows the response leaves an operator something better to
                   read than a container log. Nothing about your request is
                   stored: no messages, no tool definitions, no model name.
@@ -917,11 +925,19 @@ data: [DONE]`}
                   The runtime took longer than the platform&apos;s read timeout
                   before producing its first byte — almost always prompt
                   evaluation on a large context.{' '}
-                  <strong>Retry immediately, once:</strong> the prompt is now
-                  in the runtime&apos;s prefix cache, so the evaluation that
-                  just timed out is nearly free the second time. This is the
-                  one 503 where an instant retry is the measured, correct
-                  response.
+                  <strong>
+                    Retrying the same request unchanged is unlikely to help;
+                    send less.
+                  </strong>{' '}
+                  A prefill that is cancelled is discarded rather than kept:
+                  measured on 2026-08-14 by aborting a cold one part way, the
+                  retry re-evaluated 20,919 tokens in 33.5 seconds — the full
+                  cold rate, having kept nothing. The prefix cache is real and
+                  does make an agent&apos;s <em>next</em> turn nearly free, but
+                  it never holds a prompt whose evaluation was cut off, which
+                  is the only way this code is reached. Until 2026-08-14 this
+                  page advised the opposite; following it bought another full
+                  wait and the identical failure.
                 </td>
               </tr>
               <tr>

@@ -129,10 +129,10 @@ export const ROLE_DESCRIPTIONS: Record<Role, string> = {
   operator:
     'Runs the fleet — models, nodes, routing policies — and grants nobody access. Deliberately cannot invite users, change roles, or issue keys for anyone else.',
   curator:
-    'Maintains the knowledge base and nothing else. Separate because knowledge documents shape what the models answer, which is authority worth granting on purpose.',
+    'Maintains what the models are told: the knowledge base and the prompt templates. Separate because both shape what the models answer, which is authority worth granting on purpose rather than as a side effect of administering something else.',
   auditor:
-    'Reads everything and changes nothing — usage, logs, models, nodes, users. Holds no write at all, not even to their own API keys.',
-  user: 'Uses the chat UI, manages their own API keys, sees their own usage.',
+    'Reads and changes nothing — usage, logs, models, nodes, users, and every refusal the platform issued. Holds no write at all, not even to their own API keys. Conversation transcripts and the retention windows are not theirs to read or set: those stay with the platform administrator.',
+  user: 'Uses the chat UI with the prompt templates their tenant offers, manages their own API keys, and sees their own usage and the refusals their own requests provoked.',
 };
 
 /**
@@ -165,4 +165,8 @@ export const SCOPE_LABELS: Record<string, string> = {
   'knowledge:write': 'Add and remove knowledge documents',
   'prompt:read': 'See the tenant\'s prompt templates',
   'prompt:write': 'Write and remove prompt templates',
+  'prompt_log:read': 'Read stored conversation transcripts',
+  'refusal:read_own': 'See why their own requests were refused',
+  'refusal:read_all': "See why anyone's requests were refused",
+  'retention:write': 'Set how long records are kept, and delete them early',
 };

@@ -130,8 +130,10 @@ export function HostStatusCard() {
       <p className="text-xs text-muted-foreground">
         Read from the Mac itself by a launchd agent, not from inside a container:
         a container here would describe the Linux VM it runs in. The memory
-        budget that governs model loads still uses the configured 64 GB rather
-        than this figure.{' '}
+        budget that refuses a model load reads the total memory configured on
+        the node itself — the figure in its row in the table below — and not
+        this one, so a node whose configuration does not match its machine is
+        judged against a number the machine never had.{' '}
         <Link
           href="/nodes/numbers"
           className="underline underline-offset-2 hover:text-foreground"

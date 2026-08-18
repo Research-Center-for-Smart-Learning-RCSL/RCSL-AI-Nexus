@@ -26,12 +26,20 @@ const LABELS: Record<string, string> = {
   scopes: 'Capabilities',
   rate_limit_rpm: 'Rate limit (rpm)',
   quota_tokens_per_day: 'Daily token quota',
-  allowed_cidrs: 'Allowed sources',
+  allowed_cidrs: 'Allowed source CIDRs',
   expires_at: 'Expires',
 };
 
-function describe(value: unknown): string {
+function describe(field: string, value: unknown): string {
   if (Array.isArray(value)) return value.length ? value.join(', ') : 'none';
+  // Shown as the day it will become, because that is what applying it writes:
+  // the API and the form's date input both take `YYYY-MM-DD`, and
+  // `proposalToFormPatch` truncates the proposal's timestamp to one. Printing
+  // the instant would describe something other than what the button does.
+  if (field === 'expires_at' && typeof value === 'string') {
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+  }
   return String(value);
 }
 
@@ -58,7 +66,7 @@ export function ProposalCard({
             <dt className="shrink-0 text-muted-foreground">
               {LABELS[field] ?? field}
             </dt>
-            <dd className="break-all">{describe(value)}</dd>
+            <dd className="break-all">{describe(field, value)}</dd>
           </div>
         ))}
       </dl>

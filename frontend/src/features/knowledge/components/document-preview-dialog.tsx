@@ -67,8 +67,11 @@ export function DocumentPreviewDialog({
             </pre>
             {data?.truncated ? (
               <p className="text-xs text-muted-foreground">
-                Truncated. The whole document is indexed; only this preview is
-                bounded.
+                Truncated: this preview is bounded, not the stored text. What is
+                indexed depends on the status — a document that says{' '}
+                <em>indexed</em> has all of this searchable, while one still{' '}
+                <em>extracted</em> has none of it yet and one in{' '}
+                <em>error</em> may have stopped part way.
               </p>
             ) : null}
           </>
