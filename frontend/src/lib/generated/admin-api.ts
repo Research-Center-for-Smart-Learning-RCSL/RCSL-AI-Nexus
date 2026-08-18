@@ -4400,6 +4400,7 @@ export interface operations {
         parameters: {
             query?: {
                 actor_id?: string | null;
+                actor_display?: string | null;
                 api_key_id?: string | null;
                 code?: string | null;
                 request_id?: string | null;

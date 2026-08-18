@@ -1116,11 +1116,25 @@ class PostgresRefusalRepository(_TenantScoped):
     """Reading refusals, on the admin entrances only. The write is
     `PostgresRefusalWriter`, which needs a transaction of its own."""
 
+    @staticmethod
+    def _contains(needle: str) -> str:
+        """A `LIKE` pattern matching `needle` anywhere, with its wildcards spent.
+
+        `%` and `_` are wildcards in `LIKE`, so a login containing either would
+        otherwise match more than itself — `a_b` would find `axb`, and a lone
+        `%` typed into the box would match every row while looking like a
+        narrowing. The backslash that does the escaping has to be escaped
+        first, or escaping is what breaks the pattern.
+        """
+        escaped = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return f"%{escaped}%"
+
     def _filtered(
         self,
         stmt: Any,
         *,
         actor_id: str | None,
+        actor_display: str | None,
         api_key_id: str | None,
         code: str | None,
         request_id: str | None,
@@ -1130,6 +1144,17 @@ class PostgresRefusalRepository(_TenantScoped):
         stmt = self._scope(stmt, RefusalRow.tenant_id)
         if actor_id:
             stmt = stmt.where(RefusalRow.actor_id == actor_id)
+        if actor_display:
+            # The only substring match on this table, and the only filter here
+            # that is not an equality. It exists because the id is a uuid and
+            # the name is the part a reader can see — and because it is what
+            # still finds a deleted account's refusals, which is when somebody
+            # is most likely to be looking. Narrowing further is the use case's
+            # job: this is ANDed with the actor filter, so a reader confined to
+            # their own stays confined whatever they type here.
+            stmt = stmt.where(
+                RefusalRow.actor_display.ilike(self._contains(actor_display), escape="\\")
+            )
         if api_key_id:
             stmt = stmt.where(RefusalRow.api_key_id == api_key_id)
         if code:
@@ -1146,6 +1171,7 @@ class PostgresRefusalRepository(_TenantScoped):
         self,
         *,
         actor_id: str | None,
+        actor_display: str | None,
         api_key_id: str | None,
         code: str | None,
         request_id: str | None,
@@ -1157,6 +1183,7 @@ class PostgresRefusalRepository(_TenantScoped):
         stmt = self._filtered(
             select(RefusalRow),
             actor_id=actor_id,
+            actor_display=actor_display,
             api_key_id=api_key_id,
             code=code,
             request_id=request_id,
@@ -1172,6 +1199,7 @@ class PostgresRefusalRepository(_TenantScoped):
         self,
         *,
         actor_id: str | None,
+        actor_display: str | None,
         api_key_id: str | None,
         code: str | None,
         request_id: str | None,
@@ -1181,6 +1209,7 @@ class PostgresRefusalRepository(_TenantScoped):
         stmt = self._filtered(
             select(func.count()).select_from(RefusalRow),
             actor_id=actor_id,
+            actor_display=actor_display,
             api_key_id=api_key_id,
             code=code,
             request_id=request_id,

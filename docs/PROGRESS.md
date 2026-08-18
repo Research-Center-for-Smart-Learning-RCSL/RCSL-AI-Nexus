@@ -88,8 +88,8 @@ last row in security.md §13.0 that said "not implemented".
 
 | | |
 |---|---|
-| Backend | 32 use cases, 27 routers, 19 entity modules, 15 migrations (head `f3c8a15d27be`), 907 unit tests, 118 integration tests that skip without `TEST_DATABASE_URL` |
-| Frontend | 21 feature folders, 20 screens, **308 tests across 36 files** (296 until 2026-08-18), types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
+| Backend | 32 use cases, 27 routers, 19 entity modules, 15 migrations (head `f3c8a15d27be`), 911 unit tests, 118 integration tests that skip without `TEST_DATABASE_URL` |
+| Frontend | 21 feature folders, 20 screens, **345 tests across 39 files** (296, then 308, earlier on 2026-08-18), types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
 | Gates | ruff, ruff-format, strict mypy, pytest; tsc, eslint, vitest, a real `next build`, **six Playwright paths** (five until 2026-08-18, three days after the sixth landed); Trivy, pip-audit and pnpm audit advisory-only. All green — **and this row was false from 2026-08-07 to 2026-08-08**, see below; the claim was not re-run in the 2026-08-18 pass |
 
 **Verified on real hardware**, not only in tests: the full inference path with
@@ -304,6 +304,88 @@ days later, which is what a present tense inside a dated entry costs.
 ---
 
 ## 2026-08-18
+
+### Three things the refusals screen could not be asked, one of which the backend had been able to answer all along
+
+The screen shipped this morning and was used the same day, which is how the
+three came up. None of them is a missing feature so much as a control that was
+never wired to a capability that existed.
+
+**The time filter was already built and unreachable.** `since` and `until` are
+on the router, on the use case, on the port and in the `WHERE` clause, with an
+index on `at` behind them. Nothing in the browser ever sent either, so both
+comparisons were dead code that read as a working filter to anyone looking at
+the SQL — and the screen's own explanation says its purpose is answering "what
+happened at 19:16?". This is the same defect the prompt-log port had and the
+`test_the_filters_the_screen_offers_reach_the_repository` test was written for;
+that test covered `since` at the use-case boundary, which is one layer below
+where the wire was missing.
+
+The controls are four presets and two `datetime-local` boxes, and **a preset
+fills the boxes rather than becoming a mode**. "Last hour" writes an instant
+and stops. A live window would slide under a reader paging through what it
+matched, so an offset computed against one window returns rows that were on the
+previous page of another. The labels are "From" and "Before" because the
+server's comparison is half-open and a label that rounded that off would be
+wrong about exactly the minute somebody typed in — which is the minute they
+care about.
+
+**The account filter asked for a uuid, and nothing on the screen is one.** The
+name in the column is resolved in the browser against the accounts the reader
+can list; the row's own `actor_display` is the *credential's* display, which
+for a gateway caller is the key handle. So the one control that answers
+"whose?" could only be used by somebody who had already answered it elsewhere.
+
+It now takes a name, completed from the accounts the reader can list, and the
+resolution decides between two server filters that are **not interchangeable**:
+
+- A name that resolves to an account is sent as `actor_id`. Exact, and it
+  follows the account rather than the recorded string — which is the only way
+  to catch that person's *gateway* refusals, whose `actor_display` is the API
+  key's handle and not their login. A name search misses every one of them.
+- Anything else is sent as `actor_display`, a new case-insensitive substring
+  match. That is what finds a deleted account's refusals, whose name survives
+  on the denormalised column and nowhere else, and what finds one key by the
+  handle it is known by.
+
+A name shared by two accounts resolves to neither: it stays a search, because
+picking whichever came first would show one person's refusals under the other's
+name. The new filter is ANDed with the use case's existing narrowing, so it can
+only subtract from what a reader was already allowed — a member who types a
+colleague's name gets an empty page, and there is a test that says so.
+`refusal.read_any` now records the name searched for as well as the id, because
+a name is the broader of the two reaches.
+
+**Copying was all-or-one, and an investigation is three.** One row's button, or
+the whole fifty. The evening this table exists for was a 413 and two 409s.
+Rows now carry a tick box and the copy button copies the selection when there
+is one; `refusalsToMarkdown` already took an arbitrary list, so the export
+layer needed only to be told *which* kind of excerpt it was making. A
+hand-picked paste is headed "3 hand-picked out of 120 matching" rather than "3
+of 120 shown" — a page is a window and the numbers say how much of it you hold,
+but a selection is a choice, and nothing in the numbers says which of the other
+hundred-and-seventeen were passed over or why. It is the more misleading of the
+two to paste into a ticket unlabelled, so it is the one that says what it is.
+
+The selection is dropped whenever the rows underneath it change — every filter,
+every page — because a tick means "this refusal, the one I am looking at", and
+carried across a filter change it leaves the button offering a count of rows the
+reader cannot see and cannot check.
+
+**And a bug found while adding the fourth filter to the paste's subtitle: the
+third had never been added.** That subtitle names the filters in force so a
+copied page is evidence rather than an excerpt, and it listed the code and the
+request id. The account filter had shipped without it, so a page copied while
+narrowed to one person was headed "from all accounts" — the exact misleading
+excerpt `refusalsToMarkdown`'s own comment was written to prevent, produced by
+its only caller. Every control now goes through one `filterSummary`.
+
+**One real bug, found by a test written for a comment.** `toInstant` guarded
+against a half-typed date with `Number.isNaN`, which does not catch it:
+`new Date('2026-08-')` is not `NaN`, it is the first of August. Since
+`datetime-local` fires on every keystroke, the guard would have filtered to a
+month nobody asked for while somebody was still typing the day. The shape is
+checked before parsing now.
 
 ### The claim that a desktop app makes a machine unconnectable, refuted by the machine that had been connected all along
 

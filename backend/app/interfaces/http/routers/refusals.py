@@ -15,7 +15,9 @@ edited.
 `refusal:read_all` has the actor filter replaced with their own id inside the
 use case, so a screen every account is expected to open keeps working rather
 than answering 403 when somebody clears a filter. The response says which of the
-two reads it was.
+two reads it was. `actor_display` is a search rather than a second way in: it is
+ANDed with that replaced id, so it can only ever subtract from what the reader
+was already allowed.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ async def list_refusals(
     actor: Annotated[Actor, Depends(current_actor)],
     use_case: Annotated[ReadRefusals, Depends(build_read_refusals)],
     actor_id: Annotated[str | None, Query(max_length=36)] = None,
+    actor_display: Annotated[str | None, Query(max_length=200)] = None,
     api_key_id: Annotated[str | None, Query(max_length=64)] = None,
     code: Annotated[str | None, Query(max_length=64)] = None,
     request_id: Annotated[str | None, Query(max_length=64)] = None,
@@ -50,6 +53,7 @@ async def list_refusals(
     page = await use_case.list_page(
         actor,
         actor_id=actor_id,
+        actor_display=actor_display,
         api_key_id=api_key_id,
         code=code,
         request_id=request_id,

@@ -69,6 +69,29 @@ export type RefusalFilters = {
    * and not a control.
    */
   actor_id?: string;
+  /**
+   * A substring of the name recorded on the row, matched case-insensitively.
+   *
+   * The sibling of `actor_id` rather than a replacement for it, because the
+   * two find different things. An id is exact and follows the account: it
+   * catches a person's gateway refusals, whose recorded display is the *key's*
+   * handle and not their login. A name is the only thing that still finds the
+   * refusals of an account that has since been deleted, which is when somebody
+   * is most likely to be asking whose these were.
+   *
+   * `accountQuery` in `./account` picks between them. Like `actor_id`, it is
+   * ANDed with the server's own narrowing, so it can only subtract from what
+   * the reader was already allowed to see.
+   */
+  actor_display?: string;
+  /**
+   * The window, as ISO instants. Half-open — `since` is inclusive and `until`
+   * is exclusive — which is the backend's comparison and not a detail worth
+   * hiding: the controls are labelled "From" and "Before" so the boundary
+   * reads the way it behaves.
+   */
+  since?: string;
+  until?: string;
   limit: number;
   offset: number;
 };
