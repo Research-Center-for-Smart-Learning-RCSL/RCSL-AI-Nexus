@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery } from '@tanstack/react-query';
@@ -12,7 +13,7 @@ import { ErrorState, describeError } from '@/components/composed/error-state';
 import { resetPassword, verifyResetToken } from '@/features/auth/api';
 import { PasswordStrengthMeter } from '@/features/auth/components/password-strength-meter';
 import {
-  resetPasswordSchema,
+  makeResetPasswordSchema,
   type ResetPasswordInput,
 } from '@/features/auth/password-schema';
 
@@ -35,8 +36,12 @@ export function ResetPasswordForm({ token }: { token: string }) {
     retry: false,
   });
 
+  // Same as invitation acceptance: available only after the lookup answers, and
+  // picked up because react-hook-form re-reads its options on every render.
+  const userInputs = useMemo(() => (target.data ? [target.data.login] : []), [target.data]);
+
   const form = useForm<ResetPasswordInput>({
-    resolver: zodResolver(resetPasswordSchema),
+    resolver: zodResolver(makeResetPasswordSchema(userInputs)),
     defaultValues: { password: '', password_confirmation: '' },
   });
 
@@ -80,7 +85,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
           type="password"
           autoComplete="new-password"
         />
-        <PasswordStrengthMeter password={password} />
+        <PasswordStrengthMeter password={password} userInputs={userInputs} />
 
         <FormField
           control={form.control}

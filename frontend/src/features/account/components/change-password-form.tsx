@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
@@ -13,9 +14,10 @@ import { describeError } from '@/components/composed/error-state';
 import { changePassword } from '@/features/auth/api';
 import { PasswordStrengthMeter } from '@/features/auth/components/password-strength-meter';
 import {
-  changePasswordSchema,
+  makeChangePasswordSchema,
   type ChangePasswordInput,
 } from '@/features/auth/password-schema';
+import { useMe } from '@/lib/session';
 
 /**
  * Changing your own password.
@@ -26,8 +28,13 @@ import {
  * else's hands and leaving their session alive would make the change cosmetic.
  */
 export function ChangePasswordForm() {
+  // The account's own login and name, so a password built out of either is
+  // refused here rather than by the API, which scores against both.
+  const me = useMe();
+  const userInputs = useMemo(() => [me.login, me.display_name], [me.login, me.display_name]);
+
   const form = useForm<ChangePasswordInput>({
-    resolver: zodResolver(changePasswordSchema),
+    resolver: zodResolver(makeChangePasswordSchema(userInputs)),
     defaultValues: {
       current_password: '',
       password: '',
@@ -75,7 +82,7 @@ export function ChangePasswordForm() {
               type="password"
               autoComplete="new-password"
             />
-            <PasswordStrengthMeter password={password} />
+            <PasswordStrengthMeter password={password} userInputs={userInputs} />
 
             <FormField
               control={form.control}

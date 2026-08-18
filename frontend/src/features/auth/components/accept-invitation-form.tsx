@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery } from '@tanstack/react-query';
@@ -15,7 +15,7 @@ import { PasswordStrengthMeter } from '@/features/auth/components/password-stren
 import { RecoveryCodes } from '@/features/auth/components/recovery-codes';
 import { TotpEnrolment } from '@/features/auth/components/totp-enrolment';
 import {
-  acceptInvitationSchema,
+  makeAcceptInvitationSchema,
   type AcceptInvitationInput,
 } from '@/features/auth/password-schema';
 
@@ -38,8 +38,16 @@ export function AcceptInvitationForm({ token }: { token: string }) {
     retry: false,
   });
 
+  // Rebuilt once the lookup answers: react-hook-form reads its options on every
+  // render, so the schema the resolver uses is the one holding the login rather
+  // than the empty one this component first rendered with.
+  const userInputs = useMemo(
+    () => (invitation.data ? [invitation.data.login] : []),
+    [invitation.data],
+  );
+
   const form = useForm<AcceptInvitationInput>({
-    resolver: zodResolver(acceptInvitationSchema),
+    resolver: zodResolver(makeAcceptInvitationSchema(userInputs)),
     defaultValues: { password: '', password_confirmation: '', totp_code: '' },
   });
 
@@ -99,7 +107,7 @@ export function AcceptInvitationForm({ token }: { token: string }) {
           type="password"
           autoComplete="new-password"
         />
-        <PasswordStrengthMeter password={password} />
+        <PasswordStrengthMeter password={password} userInputs={userInputs} />
 
         <FormField
           control={form.control}

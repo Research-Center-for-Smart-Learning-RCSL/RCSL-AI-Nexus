@@ -37,6 +37,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator, Sequence
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
@@ -193,6 +194,50 @@ def _sampling_payload(sampling: SamplingOptions | None) -> dict[str, Any]:
     if sampling.stop:
         payload["stop"] = list(sampling.stop)
     return payload
+
+
+def is_allowed_file(name: str) -> bool:
+    """Whether `name` matches ALLOWED_FILE_PATTERNS, on the file name alone.
+
+    `fnmatch` is matched against the base name as well as the whole path,
+    because `snapshot_download` applies its patterns to repository-relative
+    paths and a weight file one directory down would otherwise be counted by
+    the size sum and not by the download.
+    """
+    base = name.rsplit("/", 1)[-1]
+    return any(fnmatch(name, p) or fnmatch(base, p) for p in ALLOWED_FILE_PATTERNS)
+
+
+ALLOWED_FILE_PATTERNS: tuple[str, ...] = (
+    "*.safetensors",
+    "*.safetensors.index.json",
+    "*.gguf",
+    "*.json",
+    "*.txt",
+    "*.model",
+    "*.tiktoken",
+)
+"""What a download is allowed to fetch, as an allowlist rather than a denylist.
+
+**`.bin`, `.pt`, `.ckpt` and `.pth` are PyTorch pickle formats, and loading one
+is equivalent to executing arbitrary code.** `docs/architecture/security.md`
+§7.1(c) has said only `.safetensors` and `.gguf` are acceptable since the file
+was written, and until 2026-08-18 nothing enforced it on this path: the call
+below fetched every file in the repository. A denylist would have to predict
+the next serialisation format somebody adds; this fails closed instead, and a
+repository whose weights are in a format not listed here simply does not
+download.
+
+The non-weight entries are what a model needs to load at all — `config.json`,
+`tokenizer.json`, the sentencepiece `*.model`, merges and vocab text files, and
+`*.tiktoken` for the vocabularies that ship that way. None of them is a pickle
+format.
+
+**This is not integrity checking.** It constrains what is fetched, not what the
+bytes are: a `.safetensors` file from a compromised repository is still
+fetched, and the digest half of §7.1(c) is still open. Recorded there rather
+than implied here.
+"""
 
 
 class MlxAdapter:
@@ -577,13 +622,19 @@ class MlxAdapter:
         from huggingface_hub import snapshot_download
 
         # cache_dir left to HF_HOME so the bytes land where the host server reads.
-        snapshot_download(repo_id=ref)
+        # `allow_patterns` is the format rule, enforced here because this is the
+        # only place it can be: see ALLOWED_FILE_PATTERNS.
+        snapshot_download(repo_id=ref, allow_patterns=list(ALLOWED_FILE_PATTERNS))
 
     def _repo_total_bytes(self, ref: str) -> int | None:
         from huggingface_hub import HfApi
 
         info = HfApi().model_info(ref, files_metadata=True)
-        sizes = [s.size for s in (info.siblings or []) if s.size]
+        # Filtered by the same rule the download uses. Summing every sibling
+        # would make the progress this feeds count towards a total that is
+        # never fetched, so a download would stop short of 100% and read as
+        # stalled.
+        sizes = [s.size for s in (info.siblings or []) if s.size and is_allowed_file(s.rfilename)]
         return sum(sizes) if sizes else None
 
     def _downloaded_bytes(self, ref: str) -> int:

@@ -67,10 +67,21 @@ RECONCILE_LOG="/opt/homebrew/var/log/nexus-reconcile.log"
 RECONCILE_PLIST="/Library/LaunchDaemons/online.rcsl.reconcile-port-bindings.plist"
 DELAY_PLIST="/Library/LaunchDaemons/online.rcsl.delay-tailscaled-once.plist"
 
-# The same list the reconciler and the health check use. Kept in step by hand
-# across three files; if that ever drifts, the check that notices is whichever
-# one is strictest, which is why all three are written the same way.
-EXPECTED_SERVICES="postgres redis prometheus grafana gateway admin-public admin-tailnet frontend-public frontend-tailnet"
+# Derived from the compose file, with the literal below as the fallback — the
+# same shape as reconcile-port-bindings.sh and check-platform-health.sh, and
+# for the same reason they stopped keeping theirs by hand.
+#
+# **Keeping it by hand did not work here either, and this file was the last to
+# find out.** The other two were corrected on 2026-08-04 when `parser` and
+# `qdrant` turned out to have been missing from every copy since the day they
+# were added; this one kept the nine-service list until 2026-08-18, while its
+# own comment claimed all three were in step. What that cost is exactly the
+# check this script exists to make: the precondition below asserts the platform
+# is healthy before it injects a fault, and a platform with `qdrant` or
+# `parser` already down would have passed it — so a recovery test could start
+# from a broken stack and report success, which is the one outcome that makes
+# the test worse than not running it.
+EXPECTED_SERVICES="postgres redis prometheus grafana gateway admin-public admin-tailnet frontend-public frontend-tailnet parser qdrant"
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*"; }
 
@@ -81,6 +92,17 @@ refuse() {
 }
 
 cd "$REPO" || refuse "cannot cd to $REPO"
+
+# After the cd, because `docker compose config` reads the compose file from the
+# working directory. `migrate` is excluded: it is the one-shot that exits 0, so
+# a running check would fail on it forever.
+DERIVED_SERVICES="$(docker compose config --services 2>/dev/null | grep -vx 'migrate' | tr '\n' ' ')"
+if [ -n "$DERIVED_SERVICES" ]; then
+  EXPECTED_SERVICES="${DERIVED_SERVICES% }"
+else
+  log "WARNING: could not derive the service list from docker compose config; using the built-in list"
+fi
+log "expecting: $EXPECTED_SERVICES"
 
 # --- refuse to run alongside the other injector ------------------------------
 #
