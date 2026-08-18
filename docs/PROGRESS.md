@@ -45,7 +45,7 @@ under "Not verified".
 admin entrances), two frontends, Postgres, Redis, Qdrant, the isolated parser,
 Prometheus and Grafana, with `migrate` exiting 0 ahead of them. Ollama runs
 natively and holds `qwen3.6:35b-a3b-q8_0`, `qwen2.5:7b` and `nomic-embed-text` —
-**43.64 GB resident against a 51.2 GB budget**, summed from
+**43.63 GB resident against a 51.2 GB budget**, summed from
 `models.observed_memory_gb` on 2026-08-18 (37.97 + 5.32 + 0.34). **This said
 45.3 GB from 2026-08-16 until 2026-08-18**: the runtime's observed figure for
 `qwen36-35b-a3b-q8` has settled at 37.97 GB against the 40.0 GB measured on the
@@ -88,7 +88,7 @@ last row in security.md §13.0 that said "not implemented".
 
 | | |
 |---|---|
-| Backend | 32 use cases, 27 routers, 19 entity modules, 16 migrations (head `a4c1e07f2b9d`), 932 unit tests, 120 integration tests that skip without `TEST_DATABASE_URL` |
+| Backend | 32 use cases, 27 routers, 19 entity modules, 16 migrations (head `a4c1e07f2b9d`), 943 unit tests, 120 integration tests that skip without `TEST_DATABASE_URL` |
 | Frontend | 21 feature folders, 20 screens, **366 tests across 40 files** (296, then 308, 345 and 359, earlier on 2026-08-18), types generated from the backend's OpenAPI document and checked against every hand-written schema at compile time |
 | Gates | ruff, ruff-format, strict mypy, pytest; tsc, eslint, vitest, a real `next build`, **six Playwright paths** (five until 2026-08-18, three days after the sixth landed); Trivy, pip-audit and pnpm audit advisory-only. All green — **and this row was false from 2026-08-07 to 2026-08-08**, see below; the claim was not re-run in the 2026-08-18 pass |
 
@@ -111,7 +111,7 @@ minutes, measured twice on 2026-08-07**, the trigger is a single request of any
 size, and the machine spends those nineteen minutes under a gigabyte free with
 swap at 0 bytes and nothing degrading. The leading candidate is still to do
 nothing, now with more behind it. What actually limits the deployment is the
-static budget's headroom — **7.56 GiB on 2026-08-18**, 51.2 GiB less the 43.64
+static budget's headroom — **7.57 GiB on 2026-08-18**, 51.2 GiB less the 43.63
 the runtime reports resident — which none of this touches. **This said 9.87 GiB
 from 2026-08-05 until 2026-08-18**, a subtraction taken against 41.33 GiB of a
 different model set; the headroom moves whenever the registry does, and the
@@ -1385,7 +1385,7 @@ chat-template overhead measured once and subtracted.
 131,072 the model can now read, outside the 122,880 the estimate is judged
 against. It was refused by the estimator rather than by the hardware, and an
 exact count would have let it through. That is the concrete case for a
-tokeniser, and it is stronger than the 1.2x-1.5x general over-count because it
+tokeniser, and it is stronger than the 1.2x-1.6x general over-count because it
 names a request that failed.
 
 **The Chinese row is not the good news it looks like.** 1.00 is a mixed
@@ -1550,8 +1550,8 @@ It is now a table in the database, an endpoint, and a screen under a new
 **Evidence** group in the sidebar.
 
 **The design decision worth recording is that the caveats are data.** A run
-carries its own list of what it does not establish -- eleven of eighteen tasks
-carrying no signal, the 6.9-point spread resting on four of them, the bridge to
+carries its own list of what it does not establish -- thirteen of eighteen tasks
+carrying no signal, the 6.9-point spread resting on three of them, the bridge to
 the older set being gone -- and the screen renders that list *above* the
 ranking. Written into the page instead, those sentences would keep being
 asserted about the next run, whose limits will be different ones; written
@@ -1864,7 +1864,13 @@ of eighteen qualify** — ten every candidate passes every time, plus
 `insufficient_data`, which every candidate fails every time. The 6.9-point
 spread rests on four tasks: `retry_deadline`, `cache_decorator`, `ini_parse` and
 the pair in group A. A set this thin at separating them is a weak instrument
-even when its verdict is stable across three rounds.
+even when its verdict is stable across three rounds. **(Correction, 2026-08-17:
+this paragraph is an `analyse.py full` reading sitting beside a post-`repair`
+score table. Over the published figures the count is thirteen of eighteen --
+twelve every candidate passes every time, plus `insufficient_data` -- and three
+tasks separate them: `retry_deadline`, `cache_decorator` and `ini_parse`. The
+group A pair is `undecided`, scored but too close to decide, not separating. See
+the 2026-08-17 import entry.)**
 
 Two truncations are on the record rather than scored, both on
 `spec_contradiction`, both `done_reason: length` at 4096 tokens with
@@ -2258,6 +2264,14 @@ averaged away.
 
 ### Buying a stronger model with the SSD: the exchange rate, and the two conditions on it
 
+**Measured the next day, and three of this entry's conclusions moved.** The SSD
+delivers 0.89 GB/s through the mmap page faults Ollama actually uses, not the
+~7 GB/s specification claim priced below, so the ratio is 418x rather than 53x;
+"roughly 1.2x oversubscription is survivable" is wrong, measured at 1.29x; and
+the sparse candidate this entry asked for exists, was measured, and was deployed
+on 2026-08-16. See the 2026-08-14, 2026-08-15 and 2026-08-16 entries. What
+follows is left as written, because the reasoning is what it is here for.
+
 **Nothing here was measured on this host, deployed, or changed.** This is
 analysis of the question the 2026-08-05 open decision left standing, worked out
 from figures this file already carries plus one it explicitly does not have.
@@ -2430,24 +2444,30 @@ and three of its rules apply to work already planned here:
   instrumentation, 6.34 on a production-behaviour timeline. Three different
   questions, not three samples.
 
-#### Not measured, and what each would take
+#### Not measured, and what each would take (three of these closed on 2026-08-14 to 08-16, marked below)
 
 - **The SSD's cold sequential read on this machine.** Still the number the
   entire model above rests on, still a specification claim, and now
   load-bearing rather than incidental. Needs the privileges to drop the page
-  cache, and one sitting.
+  cache, and one sitting. **Measured 2026-08-14: 7.16 GB/s at 8 threads x 256
+  KiB, and 0.89 GB/s through the mmap page faults this runtime actually uses.
+  The second figure is the one that mattered.**
 - **Whether a sparse candidate in the right size class exists and is any good.**
   The sizes in the table are published figures nobody here has checked, and
   capability is a separate question from arithmetic. The ten-rung harness
   answers "can the loop run", and 2026-08-07 already recorded that it has no
   resolution at the level where q4 and q8 differ, so it will not answer this
-  either.
+  either. **Answered 2026-08-14 to 2026-08-16: `qwen3.6:35b-a3b-q8_0` fits in
+  37 GB, and the eighteen-task set of 2026-08-15 put it 4.6 points below the
+  incumbent on quality and at 45% of its wall clock. It serves `chat` and `code`
+  since 2026-08-16.**
 - **Prompt evaluation for a low-active-parameter model.** Predicted to improve,
   never observed. It is cheap to measure and it gates the context ceiling.
 - **What the KV cache costs at 65536 for a candidate's geometry.** This competes
   with the experts for the same memory, and nobody has driven a request to the
   ceiling and watched the figure, which 2026-08-05 also listed and which is now
-  a harder blocker than it was.
+  a harder blocker than it was. **Answered 2026-08-14: linear in context here,
+  about 44 KiB per token.**
 - **Whether the OS evicts file-backed pages under real pressure**, still open
   from 2026-08-05, and now the mechanism the whole approach would depend on
   rather than a curiosity.
