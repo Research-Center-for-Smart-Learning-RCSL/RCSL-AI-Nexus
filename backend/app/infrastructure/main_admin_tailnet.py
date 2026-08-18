@@ -36,6 +36,7 @@ from app.infrastructure.config import get_settings
 from app.infrastructure.logging_config import configure_logging
 from app.interfaces.http.errors import install_error_handlers
 from app.interfaces.http.middleware.body_limit import BodySizeLimitMiddleware
+from app.interfaces.http.middleware.cache_control import CacheControlMiddleware
 from app.interfaces.http.middleware.csrf import CsrfMiddleware
 from app.interfaces.http.middleware.identity import current_actor, resolve_tailnet_actor
 from app.interfaces.http.middleware.metrics import MetricsMiddleware
@@ -85,6 +86,11 @@ def create_app() -> FastAPI:
     # Outermost user middleware, so every request is counted; see the public
     # entrance for the same note.
     app.add_middleware(MetricsMiddleware)
+    # Every response that has not chosen for itself says it must not be stored.
+    # Placed inside RequestContextMiddleware so the two do not compete for
+    # outermost, and outside the perimeter middlewares so a rejection they build
+    # carries it too. See middleware/cache_control.py.
+    app.add_middleware(CacheControlMiddleware)
     # Outermost, so every response — including one built by a rejecting
     # perimeter middleware — carries X-Request-Id. See request_context.py.
     app.add_middleware(RequestContextMiddleware)
