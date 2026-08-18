@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -41,6 +41,7 @@ import {
 import { PRESETS, toInstant, toLocalInput } from '@/features/refusals/time-range';
 import { useUsers } from '@/features/users/hooks/use-users';
 import { useCopyToClipboard } from '@/lib/use-copy-to-clipboard';
+import { useDebounced } from '@/lib/use-debounced';
 import { cn } from '@/lib/utils';
 import { wrapTooltip } from '@/lib/wrap-tooltip';
 
@@ -83,18 +84,26 @@ function columnsFor(showAccount: boolean): string[] {
  * misleading excerpt `refusalsToMarkdown` was written to prevent, produced by
  * its own caller. A filter that is not named here is one the paste denies.
  *
- * The window is quoted as the instant that was sent rather than as the local
- * text in the box, because a paste is read by somebody who was not looking at
- * this screen and may not be in this timezone.
+ * **How a time is written depends on who is reading it.** A paste gets the
+ * instant that was sent, because it is read by somebody who was not looking at
+ * this screen and may not be in this timezone. The message on the screen gets
+ * the reader's own clock: an operator in UTC+8 who typed 19:00 into a box
+ * labelled "From" and is then told "no refusal matches from 11:00Z" reads the
+ * filter as wrong rather than the result as empty.
  */
-function filterSummary(filters: RefusalFilters): string | undefined {
+function filterSummary(
+  filters: RefusalFilters,
+  { time = (iso: string) => iso, account = '' }: { time?: (iso: string) => string; account?: string } = {},
+): string | undefined {
   const parts = [
     filters.code && `code ${filters.code}`,
     filters.request_id && `request id ${filters.request_id}`,
-    filters.actor_id && `account ${filters.actor_id}`,
+    // The typed text where the screen has it, since that is what the reader
+    // can compare against what they meant. A uuid is what the paste needs.
+    filters.actor_id && `account ${account || filters.actor_id}`,
     filters.actor_display && `account name containing “${filters.actor_display}”`,
-    filters.since && `from ${filters.since}`,
-    filters.until && `before ${filters.until}`,
+    filters.since && `from ${time(filters.since)}`,
+    filters.until && `before ${time(filters.until)}`,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(', ') : undefined;
 }
@@ -257,22 +266,35 @@ export function RefusalsTable() {
   const [selected, setSelected] = useState<ReadonlySet<string>>(NOTHING);
 
   /**
-   * What the account box asks the server for, beside what it says.
+   * Whether this reader may see more than their own, latched once the first
+   * response says so.
    *
-   * A pair rather than one value because they are two different things: the
-   * text is what the reader typed, and the query is which of the server's two
-   * account filters that text turned out to mean — an exact id when the name
-   * belongs to an account this reader can list, a substring of the recorded
-   * name otherwise. `accountQuery` decides, and its doc comment says why the
-   * choice matters.
+   * It exists to break a circle. The accounts are fetched only for a reader
+   * who may see other people's refusals — but that fact arrives *in* the
+   * refusals response, which is fetched with filters that need the accounts to
+   * resolve a typed name against. Deriving the one from the other directly is
+   * the circle; latching it is one render's delay and no circle at all.
    *
-   * Resolved when the box changes rather than while rendering, because the
-   * accounts it resolves against are fetched on the strength of the refusals
-   * response, which is fetched with these filters. In an event handler that
-   * circle does not exist: the accounts are whatever had loaded by the moment
-   * somebody typed.
+   * It never goes back to false, which is right: a reader's scopes do not
+   * change while they are looking at a page, and a flicker to false would
+   * unmount the account box mid-typing.
    */
-  const [accountFilter, setAccountFilter] = useState<AccountQuery>({});
+  const [mayReadAll, setMayReadAll] = useState(false);
+
+  /**
+   * An account filter the screen knew exactly, rather than one guessed from
+   * text.
+   *
+   * Set only by clicking a row's account, which is the one place the answer is
+   * already known: the row carries the id. Guessing it back out of the box
+   * would mean `accountQuery` deciding whether the string looks like a uuid —
+   * true for every account this platform issues, and a rule that quietly
+   * becomes a name search for an id shaped any other way.
+   *
+   * Cleared the moment somebody types, because from then on the box is the
+   * question and this would be a stale answer to a different one.
+   */
+  const [pinnedAccount, setPinnedAccount] = useState<AccountQuery | null>(null);
   // **Collapsed by default, because one row was four times the height of its
   // neighbours.** The stored 413 carries a 287-character message, three
   // figures, a 113-character composition and a 295-character remedy — about
@@ -297,29 +319,47 @@ export function RefusalsTable() {
       return next;
     });
 
-  /**
-   * Change what the table is showing.
-   *
-   * Every control that changes which rows are on screen goes through here, so
-   * that two things happen together: the offset returns to the first page, and
-   * the selection is dropped. A tick means "this refusal, the one I am looking
-   * at" — carrying it across a filter change leaves the copy button offering a
-   * count of rows the reader can no longer see and cannot check.
-   */
-  const narrow = (apply: () => void) => {
-    apply();
-    setOffset(0);
-    setSelected(NOTHING);
-  };
-
   const turnTo = (next: number) => {
     setOffset(next);
     setSelected(NOTHING);
   };
 
+  // The accounts are fetched only for a reader who may see other people's
+  // refusals, which is exactly the set of roles that also holds `user:read` —
+  // so this asks for nothing the reader could not already list, and asks for
+  // nothing at all on the page every account opens to see its own.
+  //
+  // Memoised on the query's own data, which react-query keeps stable, because
+  // the map is a dependency of the effect below: a new one per render would
+  // make that effect fire forever.
+  const users = useUsers({ enabled: mayReadAll });
+  const accounts = useMemo(() => usersById(users.data), [users.data]);
+
+  // **What is typed, and what is asked for.** They were the same value, so
+  // every keystroke was a request — and on this screen a partly-typed name is
+  // the expensive kind: `actor_display` is matched with a leading wildcard on
+  // an unindexed column, twice per request, against a table every refused
+  // gateway call appends to. It is also audited, so twelve characters typed
+  // wrote twelve `refusal.read_any` rows naming each successive prefix of the
+  // name. The audit log's own table found this first and its comment says so.
+  const settledCode = useDebounced(code.trim());
+  const settledRequestId = useDebounced(requestId.trim());
+  const settledAccount = useDebounced(account.trim());
+
+  /**
+   * Which of the server's two account filters the typed text means.
+   *
+   * Derived while rendering rather than pinned when the box changed, so it is
+   * recomputed when the accounts arrive. Pinning it meant a name typed in the
+   * window before that fetch resolved stayed a name *search* for the rest of
+   * the session — and since `actor_display` holds logins rather than display
+   * names, that search found nothing rather than merely finding less.
+   */
+  const accountFilter = pinnedAccount ?? accountQuery(settledAccount, accounts);
+
   const filters: RefusalFilters = {
-    code: code.trim() || undefined,
-    request_id: requestId.trim() || undefined,
+    code: settledCode || undefined,
+    request_id: settledRequestId || undefined,
     ...accountFilter,
     since: toInstant(since),
     until: toInstant(until),
@@ -328,14 +368,25 @@ export function RefusalsTable() {
   };
   const { data, isLoading, isFetching, error, refetch } = useRefusals(filters);
   const page = useCopyToClipboard();
-  // Above the early return, like every hook: the accounts are fetched only for
-  // a reader who may see other people's refusals, which is exactly the set of
-  // roles that also holds `user:read` — so this asks for nothing the reader
-  // could not already list, and asks for nothing at all on the page every
-  // account opens to see its own.
-  const accounts = usersById(
-    useUsers({ enabled: data?.scoped_to_self === false }).data,
-  );
+
+  useEffect(() => {
+    if (data && !data.scoped_to_self) setMayReadAll(true);
+  }, [data]);
+
+  /**
+   * Back to the first page, and drop the selection.
+   *
+   * Keyed on the filters that are *in force* rather than on the keystroke that
+   * started them, which is the correction the audit log's version records:
+   * resetting per keystroke means a Next click inside the debounce window
+   * silently returns to page one while the request for the later offset is
+   * already in flight. A tick means "this refusal, the one I am looking at",
+   * so it cannot survive the rows underneath it changing either.
+   */
+  useEffect(() => {
+    setOffset(0);
+    setSelected(NOTHING);
+  }, [settledCode, settledRequestId, settledAccount, pinnedAccount, since, until]);
 
   if (error) {
     return <ErrorState error={error} onRetry={() => void refetch()} />;
@@ -345,7 +396,12 @@ export function RefusalsTable() {
   const total = data?.total ?? 0;
   const from = total === 0 ? 0 : offset + 1;
   const to = Math.min(offset + PAGE_SIZE, total);
+  // Two renderings of the same filters for two audiences; see `filterSummary`.
   const summary = filterSummary(filters);
+  const onScreenSummary = filterSummary(filters, {
+    time: (iso) => new Date(iso).toLocaleString(),
+    account: account.trim(),
+  });
   const filtered = summary !== undefined;
   // Shown only when the reader may see other people's. Their own name repeated
   // down every row of their own list is a column that says nothing.
@@ -368,7 +424,7 @@ export function RefusalsTable() {
         <div className="max-w-xs flex-1">
           <Input
             value={requestId}
-            onChange={(e) => narrow(() => setRequestId(e.target.value))}
+            onChange={(e) => setRequestId(e.target.value)}
             placeholder="Request id, e.g. req_9f2a…"
             aria-label="Find a refusal by the request id the caller was given"
           />
@@ -376,7 +432,7 @@ export function RefusalsTable() {
         <div className="max-w-[12rem] flex-1">
           <Input
             value={code}
-            onChange={(e) => narrow(() => setCode(e.target.value))}
+            onChange={(e) => setCode(e.target.value)}
             placeholder="Code, e.g. context_too_long"
             aria-label="Filter by error code"
           />
@@ -403,18 +459,21 @@ export function RefusalsTable() {
             <Input
               value={account}
               list="refusal-account-names"
-              onChange={(e) =>
-                narrow(() => {
-                  setAccount(e.target.value);
-                  setAccountFilter(accountQuery(e.target.value, accounts));
-                })
-              }
-              placeholder="Account name, or an id"
-              aria-label="Show one account's refusals, by name or by id"
+              onChange={(e) => {
+                setAccount(e.target.value);
+                setPinnedAccount(null);
+              }}
+              placeholder="Login, name, or an id"
+              aria-label="Show one account's refusals, by login, name or id"
             />
             <datalist id="refusal-account-names">
-              {names.map((name) => (
-                <option key={name} value={name} />
+              {names.map((option) => (
+                // The login is the value and the name is the label, because
+                // the login is the string that works: it resolves exactly, and
+                // it is what `actor_display` holds if it ever falls through to
+                // a search. The name is what a reader recognises, so the
+                // browser shows it beside the value.
+                <option key={option.value} value={option.value} label={option.label} />
               ))}
             </datalist>
           </div>
@@ -478,12 +537,10 @@ export function RefusalsTable() {
             size="sm"
             variant="outline"
             type="button"
-            onClick={() =>
-              narrow(() => {
-                setSince(toLocalInput(preset.from(new Date())));
-                setUntil('');
-              })
-            }
+            onClick={() => {
+              setSince(toLocalInput(preset.from(new Date())));
+              setUntil('');
+            }}
           >
             {preset.label}
           </Button>
@@ -492,14 +549,14 @@ export function RefusalsTable() {
           type="datetime-local"
           className="w-auto"
           value={since}
-          onChange={(e) => narrow(() => setSince(e.target.value))}
+          onChange={(e) => setSince(e.target.value)}
           aria-label="From, inclusive"
         />
         <Input
           type="datetime-local"
           className="w-auto"
           value={until}
-          onChange={(e) => narrow(() => setUntil(e.target.value))}
+          onChange={(e) => setUntil(e.target.value)}
           aria-label="Before, exclusive"
         />
         {since || until ? (
@@ -507,12 +564,10 @@ export function RefusalsTable() {
             size="sm"
             variant="ghost"
             type="button"
-            onClick={() =>
-              narrow(() => {
-                setSince('');
-                setUntil('');
-              })
-            }
+            onClick={() => {
+              setSince('');
+              setUntil('');
+            }}
           >
             Clear
           </Button>
@@ -586,7 +641,7 @@ export function RefusalsTable() {
                           // asked for: as an unconditional sentence it named
                           // the wrong cause every time the filter was a window
                           // or a name.
-                          `No refusal matches ${summary}.` +
+                          `Nothing matches these filters: ${onScreenSummary}.` +
                           (requestId.trim()
                             ? ' The request id has to be the whole value from the error — the one in the `request_id` field of the response body, or in the X-Request-Id header.'
                             : '')
@@ -632,17 +687,16 @@ export function RefusalsTable() {
                         <button
                           type="button"
                           className="block max-w-[13rem] text-left underline-offset-2 hover:underline"
-                          onClick={() =>
-                            narrow(() => {
-                              setAccount(account_.name);
-                              // The id, not the name that was just put in the
-                              // box: this row knows exactly whose it is, and
-                              // an exact filter is the one that also catches
-                              // this person's gateway refusals, whose recorded
-                              // name is the key's handle rather than theirs.
-                              setAccountFilter({ actor_id: entry.actor_id });
-                            })
-                          }
+                          // The box says who, and the filter is the id this
+                          // row already carries — pinned rather than parsed
+                          // back out of the text, because an exact filter is
+                          // the only one that also catches this account's
+                          // gateway refusals, whose recorded name is the key's
+                          // handle rather than theirs.
+                          onClick={() => {
+                            setAccount(account_.name);
+                            setPinnedAccount({ actor_id: entry.actor_id });
+                          }}
                         >
                           <span className="block truncate text-sm">{account_.name}</span>
                           <span className="block truncate font-mono text-[0.7rem] text-muted-foreground">
