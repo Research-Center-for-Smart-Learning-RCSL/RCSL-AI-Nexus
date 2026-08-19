@@ -648,7 +648,7 @@ def test_every_identity_dependency_leaves_its_actor_on_the_request() -> None:
     root = Path(__file__).resolve().parents[2] / "app" / "interfaces" / "http" / "middleware"
     definitions: dict[str, ast.AsyncFunctionDef | ast.FunctionDef] = {}
     returns_actor: set[str] = set()
-    for module in sorted(root.glob("*.py")):
+    for module in sorted(root.rglob("*.py")):
         for node in ast.walk(ast.parse(module.read_text())):
             if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
                 definitions[node.name] = node
@@ -694,7 +694,8 @@ def test_the_api_key_resolver_remembers_before_the_checks_that_refuse() -> None:
         / "interfaces"
         / "http"
         / "middleware"
-        / "api_key_auth.py"
+        / "api_key_auth"
+        / "authentication.py"
     )
     tree = ast.parse(module.read_text())
     resolver = next(

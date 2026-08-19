@@ -1,101 +1,16 @@
-"""Server-sent events in the Responses API's shape.
-
-A second framing module rather than a branch inside `sse.py`, because the two
-protocols disagree about the thing `sse.py` exists to get right:
-
-- Chat Completions ends with the literal `data: [DONE]`, and that sentinel
-  means "completed normally".
-- **The Responses API has no sentinel.** `response.completed` is the terminal
-  event, and a stream that failed ends with `response.failed` instead. Emitting
-  `[DONE]` here would be a frame no client parses; emitting `response.completed`
-  after a failure would be the same lie `sse.py`'s docstring warns about, in
-  the other protocol's vocabulary.
-
-**There are three terminal events, not two** (2026-08-09). `response.incomplete`
-is what a reply that was cut off ends with, and it was missing: this module
-ignored `finish_reason` entirely and called everything that did not raise
-`completed`. A stream can end badly without failing, and that is the common
-case rather than the exotic one — the context window fills, the token ceiling
-binds, the generation deadline fires — so the event that was absent is the one
-an agent client meets most.
-
-Everything else in that module's contract is kept, because it is about
-streaming rather than about the envelope: the first chunk is pulled before the
-response object exists (see `sse.prime`), the generator is closed with
-`aclosing` so the use case's `finally` releases its concurrency slot, and an
-error after the first byte becomes a terminal event rather than a status code
-that can no longer be sent.
-
-**The event set here is the one a real client was observed to need**, captured
-from `codex-cli 0.147.0` against a local recorder on 2026-08-07 rather than
-read from a specification. A deliberately minimal reply — `response.created`
-followed by `response.completed` — was accepted, and adding the tool-call
-events made the client execute the call and come back for a second turn. What
-is not below is what no captured client asked for.
-
-**Reasoning is not emitted, and that is a limitation rather than an omission.**
-The Responses API carries a model's deliberation as `reasoning` items the
-client replays on the next turn, and this platform's rule is that deliberation
-is never replayed into a prompt (`CompletionChunk.reasoning`). Emitting the
-events without the item, or the item without testing the round trip, are both
-worse than not emitting them. The visible cost is silence while a thinking
-model deliberates — which is why the `code` capability has `thinking=false`,
-and why an agent should.
-"""
+"""HTTP events boundary."""
 
 from __future__ import annotations
 
-import json
-import time
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import aclosing
 
-from fastapi.responses import StreamingResponse
-
 from app.domain.entities.chat import CompletionChunk
 from app.domain.exceptions import DomainError
 from app.interfaces.http.request_context import current_request_id, debug_detail_active
-from app.interfaces.http.sse import STREAM_HEADERS
 
-
-def new_response_id() -> str:
-    return f"resp_{uuid.uuid4().hex}"
-
-
-def created_now() -> int:
-    return int(time.time())
-
-
-def event(name: str, payload: dict[str, object]) -> str:
-    """Both the `event:` line and a `type` inside the data.
-
-    Clients read one or the other and the API sends both; a client keyed on the
-    field this omitted would see a stream of events it could not classify.
-    """
-    body = {"type": name, **payload}
-    return f"event: {name}\ndata: {json.dumps(body, separators=(',', ':'))}\n\n"
-
-
-def _message_item(item_id: str, text: str, status: str = "completed") -> dict[str, object]:
-    return {
-        "type": "message",
-        "id": item_id,
-        "role": "assistant",
-        "status": status,
-        "content": [{"type": "output_text", "text": text, "annotations": []}],
-    }
-
-
-def _call_item(item_id: str, call_id: str, name: str, arguments: str) -> dict[str, object]:
-    return {
-        "type": "function_call",
-        "id": item_id,
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments,
-        "status": "completed",
-    }
+from .encoding import _call_item, _message_item, event
 
 
 async def _events(
@@ -358,26 +273,4 @@ async def _events(
     yield event(
         "response.incomplete" if truncated else "response.completed",
         {"sequence_number": seq(), "response": terminal},
-    )
-
-
-def streaming_response(
-    *,
-    response_id: str,
-    created: int,
-    model: str,
-    generation: AsyncGenerator[CompletionChunk, None],
-    first: CompletionChunk | None,
-    extra_headers: dict[str, str] | None = None,
-) -> StreamingResponse:
-    return StreamingResponse(
-        _events(
-            response_id=response_id,
-            created=created,
-            model=model,
-            generation=generation,
-            first=first,
-        ),
-        media_type="text/event-stream",
-        headers={**STREAM_HEADERS, **(extra_headers or {})},
     )
