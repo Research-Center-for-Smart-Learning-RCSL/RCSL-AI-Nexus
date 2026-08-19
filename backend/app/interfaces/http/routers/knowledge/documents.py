@@ -1,27 +1,17 @@
-"""Knowledge base: collections, documents, and the ingestion job.
-
-Authorization is not enforced here; each use case declares and checks its own
-scope, so a second caller reaching the same use case cannot skip it.
-
-The upload endpoint is the only place in this API that accepts a file, so the
-two bounds that cannot be expressed as a pydantic field live here: the body is
-read in chunks against a ceiling rather than in one call, and the media type is
-taken from the multipart part rather than guessed from the name.
-"""
+"""Knowledge documents routes."""
 
 from __future__ import annotations
 
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
+from fastapi import Depends, File, Form, Request, Response, UploadFile
 
 from app.application.use_cases.ingest_document import IngestDocument
 from app.application.use_cases.manage_knowledge import (
     DEFAULT_DOCUMENT_PAGE,
     ManageKnowledge,
 )
-from app.application.use_cases.search_knowledge import SearchKnowledge
 from app.domain.entities.actor import Actor
 from app.domain.exceptions import UploadRejectedError
 from app.domain.services.upload_policy import MAX_UPLOAD_BYTES
@@ -29,55 +19,17 @@ from app.infrastructure.di import (
     SessionDep,
     build_ingest_document,
     build_manage_knowledge,
-    build_search_knowledge,
 )
 from app.infrastructure.jobs import schedule_ingestion, schedule_reindex
 from app.interfaces.http.middleware.identity import current_actor
 from app.interfaces.http.schemas.admin_schemas import (
-    CreateCollectionRequest,
     DocumentTextResponse,
     IngestionJobResponse,
-    KnowledgeCollectionResponse,
     KnowledgeDocumentPageResponse,
     KnowledgeDocumentResponse,
-    KnowledgeSearchRequest,
-    KnowledgeSearchResponse,
-    RetrievedPassageResponse,
 )
 
-router = APIRouter(tags=["knowledge"])
-
-_UPLOAD_CHUNK = 1024 * 1024
-
-
-@router.get("/knowledge/collections")
-async def list_collections(
-    actor: Annotated[Actor, Depends(current_actor)],
-    knowledge: Annotated[ManageKnowledge, Depends(build_manage_knowledge)],
-) -> list[KnowledgeCollectionResponse]:
-    return [KnowledgeCollectionResponse.of(c) for c in await knowledge.list_collections(actor)]
-
-
-@router.post("/knowledge/collections", status_code=201)
-async def create_collection(
-    payload: CreateCollectionRequest,
-    actor: Annotated[Actor, Depends(current_actor)],
-    knowledge: Annotated[ManageKnowledge, Depends(build_manage_knowledge)],
-) -> KnowledgeCollectionResponse:
-    collection = await knowledge.create_collection(
-        actor, name=payload.name, description=payload.description
-    )
-    return KnowledgeCollectionResponse.of(collection)
-
-
-@router.delete("/knowledge/collections/{collection_id}", status_code=204)
-async def delete_collection(
-    collection_id: str,
-    actor: Annotated[Actor, Depends(current_actor)],
-    knowledge: Annotated[ManageKnowledge, Depends(build_manage_knowledge)],
-) -> Response:
-    await knowledge.delete_collection(actor, collection_id)
-    return Response(status_code=204)
+from .base import _UPLOAD_CHUNK, router
 
 
 @router.get("/knowledge/documents")
@@ -218,28 +170,6 @@ async def read_ingestion_job(
     """
     knowledge.assert_may_read(actor)
     return IngestionJobResponse.of(await ingest.status(job_id))
-
-
-@router.post("/knowledge/search")
-async def search_knowledge(
-    payload: KnowledgeSearchRequest,
-    actor: Annotated[Actor, Depends(current_actor)],
-    search: Annotated[SearchKnowledge, Depends(build_search_knowledge)],
-) -> KnowledgeSearchResponse:
-    """POST rather than GET, because the query is document-adjacent text.
-
-    A query is what a researcher is looking for in unpublished work, which is
-    close enough to the content itself to keep out of a URL: query strings reach
-    access logs and `Referer` headers, and the NTNU proxy is a third party
-    (security.md 15.1). The body reaches neither.
-    """
-    passages = await search.execute(
-        actor,
-        payload.query,
-        collection_id=payload.collection_id,
-        top_k=payload.top_k,
-    )
-    return KnowledgeSearchResponse(passages=[RetrievedPassageResponse.of(p) for p in passages])
 
 
 @router.delete("/knowledge/documents/{document_id}", status_code=204)

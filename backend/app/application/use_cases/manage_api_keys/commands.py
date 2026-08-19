@@ -1,153 +1,27 @@
-"""Issuing, editing and revoking API keys.
-
-The plaintext exists in exactly one place: the response that issued it. Only
-an HMAC digest is stored, so an administrator who closes the dialog reissues
-rather than looks it up, and a database read yields nothing usable.
-
-Two rules here are not obvious from the entity.
-
-**Expiry is mandatory and must be in the future.** The column is NOT NULL, but
-a caller could still supply a date already past, producing a key that is dead
-on arrival and reads as a platform fault. Rotation is the point of the field,
-so it is checked rather than assumed.
-
-**Scope is narrowed at verification, not widened here.** Whatever list is
-stored, `adapters/authz` maps a service actor onto a fixed set, so no edit to
-this table can promote a key into the control plane.
-
-See docs/architecture/security.md section 4.2.
-"""
+"""API-key create, update, revoke, and debug-window commands."""
 
 from __future__ import annotations
 
 import uuid
-from collections.abc import Collection, Sequence
-from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
-from ipaddress import IPv4Network, IPv6Network, ip_network
+from collections.abc import Sequence
+from dataclasses import replace
+from datetime import datetime
 
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.audit import AuditAction
 from app.domain.entities.capability import ISSUABLE_CAPABILITIES
 from app.domain.exceptions import (
-    ApiKeyLifetimeError,
     ApiKeyStateConflictError,
-    InvalidCidrError,
-    NotAuthorizedError,
     UserNotFoundError,
 )
-from app.domain.ports.repositories import (
-    ApiKeyRepositoryPort,
-    UsageRepositoryPort,
-    UserRepositoryPort,
-)
-from app.domain.ports.security_ports import AuditPort, AuthorizationPort
-from app.domain.services.api_key_service import ApiKeyService
 from app.domain.services.debug_window import debug_window_until
-from app.shared.clock import Clock
 
-"""Checked at issue so a typo becomes an error rather than a key that is
-silently powerless. The authoritative narrowing still happens at verification;
-this is about giving the operator an answer.
-
-Imported from the domain rather than defined here: the gateway's scope mapping
-needs the same set and routing policies need a superset of it, and each of the
-readers that kept its own copy had drifted from the others. The *issuable* set
-specifically, which is narrower than the routable one — a key must not be
-issued for a capability that exists only to serve an internal surface. See
-`domain/entities/capability.py`."""
+from .authorization import ApiKeyPolicyMixin
+from .policy import UNCHANGED, IssuedApiKey, Unchanged, _parse_cidrs
 
 
-class Unchanged:
-    """The third state a PATCH field needs, and the reason it needs one.
-
-    `default_capability` is the first editable setting whose *null* is a
-    meaningful value — "refuse, as every key did before this field existed" —
-    so the convention every other field here uses, where `None` means "the
-    caller did not mention this", would make the setting impossible to clear
-    once set. An explicit sentinel keeps absent and null apart all the way from
-    `model_fields_set` on the request to the column.
-    """
-
-
-UNCHANGED = Unchanged()
-
-
-@dataclass(frozen=True, slots=True)
-class IssuedApiKey:
-    key: ApiKey
-    plaintext: str
-    """The only copy that will ever exist."""
-
-
-class ManageApiKeys:
-    def __init__(
-        self,
-        keys: ApiKeyRepositoryPort,
-        users: UserRepositoryPort,
-        usage: UsageRepositoryPort,
-        service: ApiKeyService,
-        authz: AuthorizationPort,
-        audit: AuditPort,
-        clock: Clock,
-        *,
-        max_lifetime_days: int = 365,
-    ) -> None:
-        self._keys = keys
-        self._users = users
-        self._usage = usage
-        self._service = service
-        self._authz = authz
-        self._audit = audit
-        self._clock = clock
-        self._max_lifetime = timedelta(days=max_lifetime_days)
-
-    def _assert_expiry_sane(self, expires_at: datetime) -> None:
-        """Bounded at both ends.
-
-        A date already past produces a key that is dead on arrival and reads
-        as a platform fault. A date far enough ahead defeats the field's only
-        purpose: expiry is here to force rotation, and `9999-12-31` satisfied
-        "in the future" while rotating nothing.
-        """
-        now = self._clock.now()
-        if expires_at <= now:
-            raise ApiKeyStateConflictError(detail=f"expiry {expires_at} is not in the future")
-        if expires_at > now + self._max_lifetime:
-            # The one refusal on this surface that reached a caller and told
-            # them nothing they could act on. On 2026-08-17 an operator sent
-            # this seven times in three minutes with 2029, then 2028, then
-            # 2027 -- each beyond the maximum, each answered with a message
-            # about *models* because this code was the platform's general 409
-            # -- and concluded the capability edit beside it was what had
-            # failed. `ApiKeyLifetimeError` carries the figure, so the number
-            # they are being held to arrives with the refusal.
-            raise ApiKeyLifetimeError(
-                self._max_lifetime.days,
-                detail=f"expiry {expires_at} is beyond the {self._max_lifetime.days} day maximum",
-            )
-
-    def _assert_default_capability(self, default: str | None, scopes: Collection[str]) -> None:
-        """A substitution within the key's own list, or nothing.
-
-        The whole safety of the field is here: whatever a caller names in
-        `model`, a key with a default reaches exactly the capabilities it was
-        issued for, so the setting can shorten the path to one of them and can
-        never add one. Refused rather than silently dropped, because a key
-        whose stated default does nothing is the shape an operator reads as
-        "the platform ignored me".
-        """
-        if default is None:
-            return
-        if default not in scopes:
-            raise ApiKeyStateConflictError(
-                detail=(
-                    f"default capability {default} is not one of this key's "
-                    f"capabilities {sorted(scopes)}"
-                )
-            )
-
+class ApiKeyCommandsMixin(ApiKeyPolicyMixin):
     async def list_visible(self, actor: Actor) -> tuple[list[ApiKey], dict[str, datetime]]:
         """Returns the keys and, separately, when each was last used.
 
@@ -358,36 +232,3 @@ class ManageApiKeys:
             detail={"until": until.isoformat() if until else "off"},
         )
         return replace(key, debug_logging_until=until)
-
-    def _require_owner_permission(self, actor: Actor, owner_id: str) -> None:
-        """Own keys need `api_key:write_own`; anyone else's needs
-        `api_key:write_any`. Checked against the *key's* owner rather than the
-        request body, so a caller cannot aim an edit at somebody else's key by
-        naming their own id."""
-        if owner_id == actor.id:
-            self._authz.require(actor, Scope.API_KEY_WRITE_OWN)
-            return
-        self._authz.require(actor, Scope.API_KEY_WRITE_ANY)
-
-    async def _require(self, key_id: str) -> ApiKey:
-        key = await self._keys.get_by_key_id(key_id)
-        if key is None:
-            # Same error a caller without permission receives, so the endpoint
-            # does not confirm which key ids exist.
-            raise NotAuthorizedError(detail=f"no key {key_id}")
-        return key
-
-
-def _parse_cidrs(values: Sequence[str]) -> tuple[IPv4Network | IPv6Network, ...]:
-    networks: list[IPv4Network | IPv6Network] = []
-    for value in values:
-        candidate = value.strip()
-        if not candidate:
-            continue
-        try:
-            # `strict=False` so `10.0.0.7/24` is accepted as the network it
-            # obviously means, rather than rejected for having host bits set.
-            networks.append(ip_network(candidate, strict=False))
-        except ValueError as exc:
-            raise InvalidCidrError(detail=f"unparsable range {candidate!r}") from exc
-    return tuple(networks)
