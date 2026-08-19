@@ -14,12 +14,11 @@ A concrete payoff specific to this project: the gateway and the two admin entran
 
 ## 2. Folder Structure
 
-**This is the target layout, not the current one.** Two deliberate departures
-have already happened and are worth stating rather than leaving as apparent
-drift: the individually named port files are consolidated into `repositories.py`,
-`security_ports.py` and `infrastructure_ports.py`, and the per-entity
-`postgres_*_repository.py` files into a single `repositories.py`. The protocols
-and classes all exist under those names; only the file granularity differs.
+**This is the current layout.** The 2026-08-20 separation pass replaced the
+former repository, ORM, mapper, schema, dependency-wiring, orchestration and
+adapter mega-files with bounded-context packages. Their `__init__.py` modules
+are explicit compatibility façades: existing imports still resolve to the same
+objects, while implementation dependencies point at the focused modules.
 
 The third departure is naming. The use cases below were sketched one verb per
 file; they were written one *subject* per file, because the verbs share their
@@ -57,7 +56,30 @@ named — it lived in a use case and two other places kept copies that had each
 drifted from it, see [PROGRESS.md](../PROGRESS.md) 2026-07-28, and it became two
 sets on 2026-07-29 so that every reader has to say whether it means "may be
 issued for" or "may be routed to"; [security.md](./security.md) §7.5.1),
-`domain/services/api_key_service.py`, and `adapters/persistence/mappers.py`.
+`domain/services/api_key_service.py`, and the focused packages summarized here:
+
+```
+domain/{entities/actor,entities/evaluation,exceptions,ports/repositories}/
+  # catalogs/entities, scoring, contextual errors, and repository protocols
+application/use_cases/
+  route_chat_request/          # estimates, guardrails, diagnostics, session, finalization
+  manage_{models,api_keys,knowledge}/
+  ingest_document/ authenticate_local/ assist_operator/
+adapters/
+  persistence/{sqlalchemy_models,mappers,repositories}/
+  runtime/{ollama_adapter,mlx_adapter}/
+  tokenizer/gguf_token_counter/
+interfaces/http/
+  errors/ sse/ responses_sse/ assistant_proposal/
+  middleware/api_key_auth/
+  routers/{chat,responses,knowledge}/
+  schemas/admin_schemas/
+infrastructure/{config,di,import_evaluation}/
+```
+
+Each line above is a package with named modules for its data-flow stages or
+bounded contexts. The compact layer overview below remains intentionally
+non-exhaustive; the package map above is authoritative for decomposed areas.
 
 ```
 backend/
@@ -74,16 +96,18 @@ backend/
         api_key.py                  # ApiKey
         user.py                     # User, Role
         invitation.py               # Invitation, RecoveryCode
-        actor.py                    # Actor, Scope
+        actor/                      # Role, Scope, catalogs, Actor capability behavior
         usage.py                    # UsageRecord
         refusal.py                  # Refusal: the stored copy of what a caller was told
-        evaluation.py               # EvaluationRun and its per-model, per-task scores
+        evaluation/                 # entities/value objects and aggregation/scoring
       services/
         routing_service.py          # Pure logic: capability + node state -> target model
         debug_window.py             # The one ceiling on the debug-logging window,
                                     #   shared by both credential kinds
         memory_budget_service.py    # Refuses loads that would exceed node capacity
       ports/
+        repositories/               # platform, identity, observability, knowledge,
+                                    #   retention/templates and evaluations
         model_runtime_port.py
         model_repository_port.py
         node_repository_port.py
@@ -100,11 +124,11 @@ backend/
         metrics_port.py                  # Phase 2
         cache_port.py
         job_progress_port.py             # Model download progress
-      exceptions.py                 # DomainError hierarchy, see §5
+      exceptions/                   # contextual DomainError families, see §5
 
     application/
       use_cases/
-        route_chat_request.py
+        route_chat_request/         # thin orchestrator plus ordered pipeline stages
         register_model.py
         download_model.py
         load_model.py
@@ -115,7 +139,7 @@ backend/
         set_user_role.py
         invite_user.py
         accept_invitation.py            # set password + enrol TOTP in one step
-        authenticate_local.py           # password then TOTP, see §7
+        authenticate_local/          # coordination, password, TOTP, recovery, results
         change_password.py
         issue_password_reset.py
         bootstrap_first_admin.py
@@ -124,22 +148,18 @@ backend/
 
     adapters/
       runtime/
-        ollama_adapter.py           # Implements ModelRuntimePort
+        ollama_adapter/             # encoding, decoding, generation and lifecycle
         vllm_adapter.py             # Phase 2
-        mlx_adapter.py              # Phase 2
+        mlx_adapter/                # translation, generation, lifecycle and integrity
         validation.py               # Model reference validation, see security.md §7.1
       tokenizer/
         gguf.py                     # Reads a GGUF's metadata header, nothing else
         ollama_blobs.py             # `ref` -> manifest -> the weights file it resolves to
-        gguf_token_counter.py       # Implements TokenCounterPort
+        gguf_token_counter/         # construction, templates, cache and adapter
       persistence/
-        sqlalchemy_models.py        # ORM models, deliberately separate from domain entities
-        postgres_model_repository.py
-        postgres_node_repository.py
-        postgres_routing_policy_repository.py
-        postgres_api_key_repository.py
-        postgres_user_repository.py
-        postgres_usage_repository.py
+        sqlalchemy_models/          # Base plus five bounded-context row modules
+        mappers/                    # no dependency on repository implementations
+        repositories/               # shared tenant scope plus contextual repositories
         qdrant_knowledge_repository.py   # Phase 2
       cache/
         redis_adapter.py
@@ -159,7 +179,7 @@ backend/
     interfaces/
       http/
         routers/
-          chat.py                   # POST /v1/chat/completions,
+          chat/                     # translation, collection, route
                                     #  GET /v1/models                    (gateway)
           admin_chat.py             # POST /admin/chat                   (admin)
           gateway_info.py           # GET  /admin/gateway                (admin)
@@ -170,7 +190,8 @@ backend/
           users.py                  # /admin/users, /admin/me
           auth.py                   # /admin/auth/{login,totp,logout,accept-invite,
                                     #   change-password}          (public entrance only)
-          jobs.py                   # /admin/jobs/{id}
+          knowledge/                # collections, documents/jobs, search
+          responses/                # translation, tools, collection, route
           dashboard.py
           health.py                 # /healthz, /readyz
         middleware/
@@ -178,19 +199,18 @@ backend/
           geo_filter.py             # Country allowlist, see security.md §4.1
           tailnet_identity.py       # Tailscale header identity  (tailnet app only)
           session_auth.py           # Server-side session        (public app only)
-          api_key_auth.py           # API key identity           (gateway only)
+          api_key_auth/             # resolution, enforcement, Actor construction
           csrf.py                   # Double-submit token        (public app only)
         schemas/
           chat_schemas.py
-          model_schemas.py
-          user_schemas.py
-        errors.py                   # DomainError -> HTTP mapping, see §5
+          admin_schemas/            # ten HTTP/domain surfaces, stable component names
+        errors/                     # mapping, details, persistence and handlers
         dependencies.py
 
     infrastructure/
-      config.py                     # Settings, env + Docker secrets
+      config/                       # flat settings, derived values and validation
       db.py
-      di.py                         # Composition root
+      di/                           # stable dependency identities, contextual providers
       concurrency.py                # Global inference semaphore
       main_gateway.py               # Mounts /v1/* only
       main_admin_tailnet.py         # Mounts /admin/* with Tailscale identity
@@ -564,7 +584,7 @@ Migrations run as a **one-shot Compose service** that the application services d
 
 ## 12. Testing
 
-- **Unit**: `domain/services` and `application/use_cases` with fake adapters. `FakeRuntime` (`tests/unit/test_streaming_contract.py`) yields a fixed sequence of chunks and records whether it was closed early, which makes the streaming contract in §6 testable without a runtime; a second `FakeRuntime` in `tests/unit/fakes.py` covers the registry use cases. These run in milliseconds and need no Docker.
+- **Unit**: `domain/services` and `application/use_cases` with fake adapters. `FakeRuntime` (`tests/unit/streaming_contract_fixtures.py`) yields a fixed sequence of chunks and records whether it was closed early, which makes the streaming contract in §6 testable without a runtime; scenario modules divide lifecycle, context guardrails, diagnostics and exact counting. A second `FakeRuntime` in `tests/unit/fakes.py` covers the registry use cases. These run in milliseconds and need no Docker.
 - **Integration**: `adapters/persistence` and `adapters/runtime` against real dependencies started by Compose.
 
 Cases worth pinning down early because they are easy to get wrong and expensive to discover late: client disconnect releases the concurrency slot; a mid-stream error produces a terminal frame; `AUTH_MODE=dev` under `ENV=production` refuses to start; the public application strips `Tailscale-*` headers; an unknown login and a wrong password are indistinguishable; a replayed TOTP counter is rejected; a consumed invitation token cannot be reused.

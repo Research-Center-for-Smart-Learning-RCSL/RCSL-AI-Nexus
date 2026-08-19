@@ -47,13 +47,15 @@ frontend/
     components/
       ui/                     # shadcn/ui primitives, source lives in the repo
       composed/               # cross-feature building blocks
-        data-table.tsx          # wraps TanStack Table: sort, filter, paginate, column toggle
+        data-table.tsx          # stable composition façade
+        data-table-{toolbar,content,pagination}.tsx
         stat-card.tsx
         metric-chart.tsx
         confirm-dialog.tsx
         form-field.tsx
         status-badge.tsx        # online/offline/degraded, loaded/unloading
-        stream-message.tsx      # incremental assistant output, see §6
+        stream-message.tsx      # stable composition façade, see §6
+        stream-{store,markdown,reasoning,outcome,presentation}.tsx
         empty-state.tsx
         error-state.tsx
         one-time-secret.tsx     # a value the server will never return again
@@ -61,7 +63,10 @@ frontend/
         code-block.tsx          # a snippet meant to be copied rather than read
         disabled-reason.tsx     # why a control is disabled, said where the control is
         export-markdown.tsx     # a selection copied out as markdown (see features/refusals)
-        app-shell.tsx           # nav, scope gating, the assistant drawer mount (§3)
+        app-shell.tsx           # stable façade
+        app-shell-navigation*.tsx  # catalog, renderers and collapsed state
+        app-shell-{session-gate,runtime,header}.tsx
+        app-shell-{desktop-navigation,mobile-navigation,with-assistant}.tsx
         related-screens.tsx     # the cross-references at the foot of each screen
         stream-message.tsx      # one assistant turn, while it is still arriving
         theme-toggle.tsx
@@ -78,7 +83,9 @@ frontend/
       api-keys/               # issue, edit, revoke; actions gated on the scopes
                               #   the backend grants, so a member manages
                               #   their own (security.md §5.2)
-      gateway/                # what an integrator needs: the base URL, the
+      gateway/                # API reference sections and agent-setup steps,
+                              #   separated from their page compositions; what
+                              #   an integrator needs: the base URL, the
                               #   servable capabilities, the paste-ready
                               #   snippets shown at issue, and the API reference
       assistant/              # the advisory drawer, mounted once by AppShell so
@@ -134,9 +141,9 @@ frontend/
 
     lib/
       api-client.ts
-      session.tsx             # auth mode context
+      session.tsx             # stable façade over session query/provider/expiry
       safe-redirect.ts        # the open redirect that shipped once (§9)
-      markdown-export.ts      # shared by the refusals and audit-log exports
+      markdown-export.ts      # stable entry over inline/block/list/table/code serializers
       use-debounced.ts        # filter inputs that must not fire per keystroke
       use-copy-to-clipboard.ts
       wrap-tooltip.ts         # a native `title` renders on one line however long
@@ -197,7 +204,7 @@ Password strength feedback uses the same zxcvbn threshold the backend enforces, 
 
 Role gating in the UI is a usability affordance, not a security control. Every admin action is authorized server-side in the use case layer ([backend.md](./backend.md) §7); hiding a button never stands in for that.
 
-**The nav gates on scopes, not on roles**, and each entry names the scope its screen's own first request requires — so a hidden link and a 403 are the same statement, one made before the click and one after. This replaced an `adminOnly` flag on 2026-08-04, which was accurate with two roles and wrong with six: it would have hidden Models from the `operator` whose job they are. Three entries declare no scope at all (API keys, API, Chat) because every role holds what they need. One definition feeds both the sidebar and the narrow-screen panel, and a route the caller's scopes do not cover redirects to `/chat` rather than rendering a screen whose data will 403 — that guard is for the address bar and the shared bookmark, which the nav cannot hide. All of it is covered by `app-shell.test.tsx`, which drives on scope sets rather than role names: the role table belongs to the backend, and a frontend copy of it could only assert that the copy matches itself.
+**The nav gates on scopes, not on roles**, and each entry names the scope its screen's own first request requires — so a hidden link and a 403 are the same statement, one made before the click and one after. This replaced an `adminOnly` flag on 2026-08-04, which was accurate with two roles and wrong with six: it would have hidden Models from the `operator` whose job they are. Three entries declare no scope at all (API keys, API, Chat) because every role holds what they need. One definition feeds both the sidebar and the narrow-screen panel, and a route the caller's scopes do not cover redirects to `/chat` rather than rendering a screen whose data will 403 — that guard is for the address bar and the shared bookmark, which the nav cannot hide. The behavior is divided between `app-shell.roles.test.tsx`, `app-shell.access.test.tsx` and `app-shell.groups.test.tsx`, with only mock setup and navigation builders in `app-shell-test-support.tsx`. They drive on scope sets rather than role names: the role table belongs to the backend, and a frontend copy of it could only assert that the copy matches itself.
 
 ## 4. Type Safety: Types Generated From the Backend
 
@@ -310,7 +317,8 @@ security defect is covered, the two authentication state machines and the API
 key management lifecycle are driven in Chromium, and presentation is not
 exhaustively covered.
 
-Currently 374 Vitest tests across 40 files (2026-08-18) — the SSE reader and frame schema, the API
+Currently 374 Vitest tests across 45 files (re-counted 2026-08-20 after the
+shell and refusal scenarios were separated) — the SSE reader and frame schema, the API
 client's CSRF and 401 handling, `safe-redirect`, the password schema, the key
 form's own rules, and the assistant's proposal parsing, transcript handling and
 page-context registry — plus five Playwright paths, and one more under §9.1 that

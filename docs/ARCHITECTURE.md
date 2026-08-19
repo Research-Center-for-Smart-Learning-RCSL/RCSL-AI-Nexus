@@ -314,6 +314,15 @@ The chat interface lives on the admin API rather than calling the public gateway
 
 Five containers run from the backend image: those three, `parser`, and the one-shot `migrate` job. The three application entrances share the entire `domain/` and `application/` layers, and only the routers mounted by `interfaces/http` differ, so splitting them costs no duplicated code. `parser` shares the image rather than the layers — the isolation that matters there is the process, network and credential boundary, not which layers the code was built from.
 
+Within those layers, the 2026-08-20 separation pass made bounded context and
+protocol stage visible in the module tree. Persistence, repository ports, admin
+schemas, dependency providers and settings are packages split by domain;
+inference/runtime packages split translation, guardrails, state machines and
+finalization; HTTP packages split wire translation from response construction.
+The frontend follows the same rule for shell, session, streaming, tables,
+dialogs and reference content. Public import points remain explicit façades, so
+this structure changes ownership without changing the contracts at the edges.
+
 Detailed internal design:
 
 - [architecture/backend.md](./architecture/backend.md): hexagonal architecture, ports and adapters, streaming contract, error mapping, testing
