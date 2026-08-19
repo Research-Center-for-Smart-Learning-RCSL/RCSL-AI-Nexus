@@ -1,25 +1,21 @@
 'use client';
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { LogOutIcon, MenuIcon, SparklesIcon, UserCogIcon, XIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Logo } from '@/components/composed/logo';
-import { ThemeToggle } from '@/components/composed/theme-toggle';
 import { useSession } from '@/lib/session';
 import { useAssistantContext } from '@/features/assistant/context';
 import { AssistantDrawer } from '@/features/assistant/components/assistant-drawer';
 import { readWidePreference, RESERVED_CLASS, WIDTH_EVENT } from '@/features/assistant/width';
 
 import { NAV, NAV_GROUPS, PINNED, isActive } from './app-shell-navigation-catalog';
-import { NavGroups } from './app-shell-navigation';
 import { SessionExpiryWarning } from './session-expiry-warning';
 import { renderSessionGate } from './app-shell-session-gate';
 import { useCollapsedGroups } from './use-collapsed-nav-groups';
+import { DesktopNavigation } from './app-shell-desktop-navigation';
+import { MobileNavigation } from './app-shell-mobile-navigation';
+import { AppShellHeader } from './app-shell-header';
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { me, status, authMode, can, error, refresh, signOut } =
@@ -143,166 +139,16 @@ export function AppShell({ children }: { children: ReactNode }) {
             hides as you scroll, so the last group sat under the toolbar.
             `overscroll-contain` for the same reason as everywhere else — a nav
             that has reached its end must not start moving the page behind it. */}
-        <aside className="sticky top-0 hidden h-[100dvh] w-56 shrink-0 overflow-y-auto overscroll-contain border-r p-3 sm:block">
-          <div className="mb-4 px-2">
-            {/* Stacked rather than set beside the title. The sidebar is 224px
-                wide, which leaves room for the mark at a size it survives;
-                inline next to the text it would have to shrink to about 24px,
-                where the monogram becomes an unreadable blob. */}
-            <Logo height={48} className="mb-2" />
-            <p className="font-heading text-sm font-semibold">RCSL AI Nexus</p>
-            <Badge variant="outline" className="mt-1">
-              {authMode ?? 'unknown'}
-            </Badge>
-          </div>
-          <NavGroups
-            pinned={visiblePinned}
-            groups={visibleGroups}
-            pathname={pathname}
-            collapsed={collapsed}
-            onToggle={toggleGroup}
-          />
-        </aside>
+        <DesktopNavigation authMode={authMode} pinned={visiblePinned} groups={visibleGroups} pathname={pathname} collapsed={collapsed} onToggle={toggleGroup} />
 
         {/* The same links for anything narrower than the sidebar's breakpoint.
             Below 640px the aside is display:none, and without this there was no
             way at all to reach another screen short of typing the URL. */}
-        {navOpen ? (
-          <div className="fixed inset-0 z-50 sm:hidden">
-            <button
-              type="button"
-              aria-label="Close the menu"
-              className="absolute inset-0 bg-black/40"
-              onClick={() => setNavOpen(false)}
-            />
-            <div
-              ref={navPanelRef}
-              role="dialog"
-              aria-modal="true"
-              aria-label="Navigation"
-              // Focusable only as a target for the effect above, so focus lands
-              // inside the panel and Tab continues through the links rather
-              // than leaving for the header.
-              tabIndex={-1}
-              className="absolute inset-y-0 left-0 flex w-64 max-w-[85%] flex-col overflow-y-auto overscroll-contain border-r bg-background p-3 outline-none"
-            >
-              <div className="mb-4 flex items-start justify-between gap-2 px-2">
-                <div>
-                  <p className="font-heading text-sm font-semibold">
-                    RCSL AI Nexus
-                  </p>
-                  <Badge variant="outline" className="mt-1">
-                    {authMode ?? 'unknown'}
-                  </Badge>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Close the menu"
-                  onClick={() => {
-                    setNavOpen(false);
-                    navButtonRef.current?.focus();
-                  }}
-                >
-                  <XIcon />
-                </Button>
-              </div>
-              <NavGroups
-                pinned={visiblePinned}
-                groups={visibleGroups}
-                pathname={pathname}
-                collapsed={collapsed}
-                onToggle={toggleGroup}
-                onNavigate={() => setNavOpen(false)}
-              />
-            </div>
-          </div>
-        ) : null}
+        <MobileNavigation navOpen={navOpen} setNavOpen={setNavOpen} navPanelRef={navPanelRef} navButtonRef={navButtonRef} authMode={authMode} pinned={visiblePinned} groups={visibleGroups} pathname={pathname} collapsed={collapsed} onToggle={toggleGroup} />
+
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="flex items-center justify-between gap-3 border-b px-4 py-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <Button
-                ref={navButtonRef}
-                variant="ghost"
-                size="icon-sm"
-                className="sm:hidden"
-                aria-label="Open the menu"
-                aria-expanded={navOpen}
-                onClick={() => setNavOpen(true)}
-              >
-                <MenuIcon />
-              </Button>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium">{me.display_name}</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {me.login} - {me.role}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {/* Labelled, not just an icon. The sparkle alone said nothing
-                  about what it opens — an operator has to already know the
-                  feature exists to try it, which is the opposite of what an
-                  assistant is for. The text is what the `aria-label` has always
-                  said, so a screen reader user was the only one being told.
-                  Hidden below `sm` where the header is tight; the label is what
-                  drops, never the control. */}
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-label={
-                  assistant.isOpen
-                    ? 'Close the assistant'
-                    : 'Open the assistant'
-                }
-                aria-expanded={assistant.isOpen}
-                onClick={() => assistant.setOpen(!assistant.isOpen)}
-                className={cn(
-                  'gap-1.5',
-                  assistant.isOpen && 'bg-muted text-foreground',
-                )}
-              >
-                <SparklesIcon className="size-4" />
-                <span className="hidden sm:inline">Assistant</span>
-              </Button>
-              <ThemeToggle />
-              {/* Account settings only apply where local credentials exist. */}
-              {authMode !== 'tailnet' ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-label="Account"
-                  // This renders an anchor, not a button. Without saying so,
-                  // Base UI keeps native button semantics for an element that
-                  // has none, and warns. A link that navigates is the correct
-                  // element here — it is Ctrl-clickable and has an href — so
-                  // the prop follows the markup rather than the other way.
-                  nativeButton={false}
-                  render={<Link href="/account" />}
-                >
-                  <UserCogIcon />
-                  {/* The label is the first thing to go when the header has to
-                      share a narrow row with the menu button and the identity
-                      block; the icon still carries the meaning, and the
-                      aria-label above keeps the name for anyone not seeing it. */}
-                  <span className="hidden md:inline">Account</span>
-                </Button>
-              ) : null}
-              {/* No session on the tailnet, so nothing to sign out of. */}
-              {authMode !== 'tailnet' ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  aria-label="Sign out"
-                  onClick={() => void signOut()}
-                >
-                  <LogOutIcon />
-                  <span className="hidden md:inline">Sign out</span>
-                </Button>
-              ) : null}
-            </div>
-          </header>
+          <AppShellHeader navButtonRef={navButtonRef} navOpen={navOpen} setNavOpen={setNavOpen} me={me} authMode={authMode} assistant={assistant} signOut={signOut} />
 
           {/* A flex column, so a page that wants the remaining height can ask
               for it with `flex-1` instead of guessing at the chrome above it in
