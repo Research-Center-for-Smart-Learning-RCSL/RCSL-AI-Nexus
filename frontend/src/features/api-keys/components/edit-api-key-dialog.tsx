@@ -16,20 +16,17 @@ import {
 import { Form } from '@/components/ui/form';
 import { FormField } from '@/components/composed/form-field';
 import { describeError } from '@/components/composed/error-state';
-import { CapabilityPicker } from '@/features/api-keys/components/capability-picker';
+import {
+  ApiKeyCapabilities,
+  CidrTextarea,
+  DefaultCapabilitySelect,
+} from '@/features/api-keys/components/api-key-policy-controls';
 import { useUpdateApiKey } from '@/features/api-keys/hooks/use-api-keys';
 import { useAssistantSurface } from '@/features/assistant/context';
 import {
   applyProposalPatch,
   draftFor,
 } from '@/features/api-keys/assistant-bridge';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import {
   defaultCapabilityField,
   defaultCapabilityOptions,
@@ -174,8 +171,8 @@ export function EditApiKeyDialog({
               }
             />
 
-            <CapabilityPicker
-              value={scopes}
+            <ApiKeyCapabilities
+              scopes={scopes}
               onChange={(next) =>
                 form.setValue('scopes', next, { shouldValidate: true })
               }
@@ -195,27 +192,12 @@ export function EditApiKeyDialog({
               label="When a request names something else"
               description="A request names a capability in its model field. Most clients send a model name instead — Codex's own picker overrides a configured model line — and refusing is what tells the holder that. Set a capability only where convenience is worth more than that signal; substituted requests are recorded either way."
               render={(field) => (
-                <Select
-                  value={field.value as string}
-                  onValueChange={(value) => field.onChange(value)}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NO_DEFAULT}>
-                      Refuse, and say what this key may call
-                    </SelectItem>
-                    {defaultOptions.map((capability) => (
-                      <SelectItem key={capability} value={capability}>
-                        Serve {capability}
-                        {(scopes as string[]).includes(capability)
-                          ? ''
-                          : ' (not among this key\u2019s capabilities)'}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <DefaultCapabilitySelect
+                      value={field.value as string}
+                      onChange={(value) => field.onChange(value)}
+                      scopes={scopes}
+                      options={defaultOptions}
+                    />
               )}
             />
 
@@ -249,15 +231,12 @@ export function EditApiKeyDialog({
               label="Allowed source CIDRs"
               description="One per line or comma separated. Empty means no source restriction."
               render={(field) => (
-                <textarea
-                  id="edit-allowed-cidrs"
-                  value={(field.value as string) ?? ''}
-                  onChange={(event) => field.onChange(event.target.value)}
-                  onBlur={field.onBlur}
-                  rows={2}
-                  placeholder="203.0.113.0/24"
-                  className="w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                />
+                <CidrTextarea
+                      id="edit-allowed-cidrs"
+                      value={(field.value as string) ?? ''}
+                      onChange={(value) => field.onChange(value)}
+                      onBlur={field.onBlur}
+                    />
               )}
             />
 
