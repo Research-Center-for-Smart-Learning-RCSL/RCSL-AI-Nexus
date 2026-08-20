@@ -16,14 +16,19 @@ SECRETS_DIR = Path("/run/secrets")
 _secrets_dir = str(SECRETS_DIR) if SECRETS_DIR.is_dir() else None
 
 
+# Named rather than written inline, because the composed `Settings` has to
+# restate it: see the note on that class. A second literal would drift.
+SETTINGS_CONFIG = SettingsConfigDict(
+    env_file=".env",
+    env_file_encoding="utf-8",
+    secrets_dir=_secrets_dir,
+    extra="ignore",
+    populate_by_name=True,
+)
+
+
 class CoreSettings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        secrets_dir=_secrets_dir,
-        extra="ignore",
-        populate_by_name=True,
-    )
+    model_config = SETTINGS_CONFIG
 
     env: Environment = "development"
 
