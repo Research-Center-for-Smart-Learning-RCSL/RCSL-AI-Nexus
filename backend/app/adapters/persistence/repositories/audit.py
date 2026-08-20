@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 from typing import Any
 
@@ -15,8 +14,6 @@ from app.adapters.persistence.sqlalchemy_models import (
 from app.domain.entities.audit import AuditEntry
 
 from .shared import _TenantScoped
-
-logger = logging.getLogger(__name__)
 
 
 class PostgresAuditLogRepository(_TenantScoped):

@@ -17,7 +17,9 @@ from app.domain.entities.refusal import Refusal
 
 from .shared import _TenantScoped
 
-logger = logging.getLogger(__name__)
+# Pinned rather than `__name__`: the formatter prints the logger name, and
+# this line was emitted under the pre-split module before the package existed.
+logger = logging.getLogger("app.adapters.persistence.repositories")
 
 
 class PostgresRefusalWriter:

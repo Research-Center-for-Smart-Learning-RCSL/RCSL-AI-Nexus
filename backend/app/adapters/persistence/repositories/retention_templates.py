@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 from typing import Any, cast
 
@@ -23,8 +22,6 @@ from app.domain.entities.prompt_template import PromptTemplate
 from app.domain.entities.retention import RetentionDataset, RetentionPolicy
 
 from .shared import _TenantScoped
-
-logger = logging.getLogger(__name__)
 
 
 class PostgresRecordPurge:

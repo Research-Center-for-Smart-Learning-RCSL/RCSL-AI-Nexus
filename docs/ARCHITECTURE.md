@@ -180,7 +180,7 @@ A human who can sign in to the management UI. Identity arrives from one of two s
 | `password_hash` | argon2id, nullable. Absent for tailnet-only users |
 | `totp_secret` | Encrypted at rest, nullable. **Required whenever `password_hash` is set** |
 | `totp_last_counter` | Replay prevention, see [security.md](./architecture/security.md) §5.3 |
-| `role` | `admin` / `tenant_admin` / `operator` / `curator` / `auditor` / `user`. Not a ladder: `curator` writes knowledge `operator` may not touch, and `operator` restarts a node `tenant_admin` may not. A seventh, `service`, exists in the enum but belongs to an API key rather than a person and never appears in this table (`domain/entities/actor.py`) |
+| `role` | `admin` / `tenant_admin` / `operator` / `curator` / `auditor` / `user`. Not a ladder: `curator` writes knowledge `operator` may not touch, and `operator` restarts a node `tenant_admin` may not. A seventh, `service`, exists in the enum but belongs to an API key rather than a person and never appears in this table (`domain/entities/actor/role.py`) |
 | `debug_logging_until` | Optional timestamp, see [security.md](./architecture/security.md) §9.2 |
 
 Accounts are **invitation only**; there is no self-registration. A user who only ever works over the tailnet needs no password at all, so both credential columns are nullable. A user who needs the public entrance is issued a single-use invitation link and sets their own password and TOTP; the platform never transmits a credential. See [security.md](./architecture/security.md) §5.3 and §5.4.

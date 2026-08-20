@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-
 from sqlalchemy import delete, func, or_, select, update
 
 from app.adapters.persistence import mappers as m
@@ -19,8 +17,6 @@ from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.tenant import Tenant
 
 from .shared import _Base
-
-logger = logging.getLogger(__name__)
 
 
 class PostgresTenantRepository(_Base):

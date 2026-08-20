@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, delete, select
@@ -19,8 +18,6 @@ from app.domain.entities.evaluation import (
 )
 
 from .shared import _Base
-
-logger = logging.getLogger(__name__)
 
 
 class PostgresEvaluationRepository(_Base):

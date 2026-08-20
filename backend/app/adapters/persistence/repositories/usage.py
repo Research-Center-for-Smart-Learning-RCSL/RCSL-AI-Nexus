@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
@@ -14,8 +13,6 @@ from app.adapters.persistence.sqlalchemy_models import (
 from app.domain.entities.usage import BucketUnit, UsageBucket, UsageRecord
 
 from .shared import _TenantScoped
-
-logger = logging.getLogger(__name__)
 
 
 class PostgresUsageRepository(_TenantScoped):

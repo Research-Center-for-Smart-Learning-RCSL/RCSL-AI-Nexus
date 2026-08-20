@@ -346,13 +346,13 @@ class RoutingService:
 All domain errors derive from a single base carrying a stable machine code and a message that is safe to return to a caller.
 
 ```python
-# domain/exceptions.py
+# domain/exceptions/base.py
 class DomainError(Exception):
     code: str = "internal_error"
     public_message: str = "An internal error occurred."
 ```
 
-A single exception handler registered in `interfaces/http/errors.py` performs the mapping. Routers do not write their own `try/except` blocks for domain errors.
+A single exception handler registered in `interfaces/http/errors/handlers.py` performs the mapping, against the table in `mapping.py`. Routers do not write their own `try/except` blocks for domain errors.
 
 | Exception | Status | Notes |
 |---|---|---|
@@ -444,7 +444,7 @@ The wire framing question these raise is order. A runtime reports the call and t
 
 Tool definitions and replayed calls count towards the context ceiling. They are prompt the model reads like any other, and they are the part an agent client grows without bound: leaving them out would let a caller carry an arbitrary payload past the guardrail in `tools`, which is the one field of an agent request that no person ever types.
 
-**Where framing happens.** `interfaces/http/routers/chat.py` converts chunks into `data: {...}\n\n` frames and terminates with `data: [DONE]`. `admin_chat.py` may use a simpler frame shape.
+**Where framing happens.** `interfaces/http/routers/chat/route.py` converts chunks into `data: {...}\n\n` frames and terminates with `data: [DONE]`. `admin_chat.py` may use a simpler frame shape.
 
 **Trailers.** A stream may carry one final frame after the answer and before `[DONE]`, for something that could only be known once the whole answer existed. `/admin/assistant` uses it for a structured proposal it has to finish writing before it can be validated ([security.md](./security.md) §7.5). It is an optional argument to `sse.streaming_response`, not a second framing function, so there stays one implementation of the envelope, the error branch and the sentinel. Two orderings make it safe and both are pinned by tests: it precedes `[DONE]`, because a client is right to stop reading at the sentinel; and a stream that failed carries none, for the same reason `[DONE]` is withheld on error — whatever it described came from an answer that never finished.
 
@@ -457,7 +457,7 @@ The client half has a matching rule. `readChatStream` returns as soon as it sees
 **Concurrency slot lifetime.** The global inference semaphore is held for the whole generator lifetime, not just the call that creates it.
 
 ```python
-# application/use_cases/route_chat_request.py
+# application/use_cases/route_chat_request/orchestrator.py
 class RouteChatRequest:
     async def execute(self, actor: Actor, capability: str,
                       messages: list[Message], max_tokens: int | None = None,
@@ -538,7 +538,7 @@ class LoadModel:
 
 ## 8. Configuration and Secrets
 
-`infrastructure/config.py` uses pydantic-settings reading both environment variables and mounted secret files.
+`infrastructure/config/` uses pydantic-settings reading both environment variables and mounted secret files.
 
 ```python
 class Settings(BaseSettings):
@@ -574,7 +574,7 @@ The development machine is Windows. It has no `tailscale serve`, no openresty, a
 
 It does **not** inject a fixed admin `Actor`, contrary to an earlier version of this paragraph; there is no such injection anywhere, and the gateway still requires a real API key in development. That will need building alongside the admin entrances, and the fail-fast below is what keeps it from mattering in production.
 
-**This is a production-fatal setting.** `infrastructure/config.py` fails fast at startup if `AUTH_MODE=dev` and `ENV=production` are both set. The check is a startup assertion rather than a runtime branch, so a misconfigured deployment refuses to boot instead of silently serving an open admin API. [security.md](./security.md) §14 carries a matching pre-launch check.
+**This is a production-fatal setting.** `infrastructure/config/production_validation.py` fails fast at startup if `AUTH_MODE=dev` and `ENV=production` are both set. The check is a startup assertion rather than a runtime branch, so a misconfigured deployment refuses to boot instead of silently serving an open admin API. [security.md](./security.md) §14 carries a matching pre-launch check.
 
 ## 11. Migrations
 

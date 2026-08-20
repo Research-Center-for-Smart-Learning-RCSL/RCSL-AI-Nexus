@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, delete, func, select, update
@@ -20,8 +19,6 @@ from app.domain.entities.knowledge import (
 )
 
 from .shared import _TenantScoped
-
-logger = logging.getLogger(__name__)
 
 
 class PostgresKnowledgeRepository(_TenantScoped):
