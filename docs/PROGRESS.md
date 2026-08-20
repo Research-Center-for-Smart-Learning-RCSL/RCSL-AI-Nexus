@@ -54,6 +54,77 @@ estimate and orchestration stages, runtime settings declarations, and the two
 large explanatory/interactive components already excluded from mechanical
 splitting. Generated `admin-api.ts` remains generated and untouched.
 
+**Deployed the same afternoon, and the deploy is the reason this entry has a
+second half.** Both images were rebuilt on the Mac Studio and the new backend
+image was checked for the refactored code rather than assumed to carry it --
+five former modules answering as packages, the gateway application importing.
+`docker compose up -d` then stopped at the `migrate` one-shot, exit 1, on
+`Placeholder secrets present in production: api_key_pepper,
+metrics_scrape_token, proxy_shared_secret, qdrant_api_key, session_signing_key,
+totp_encryption_key`. Every backend service waits on `migrate` completing
+successfully, so gateway, both admin entrances, `parser` and both frontends did
+not start: the platform was down for about four minutes.
+
+**The cause was in the split of `config.py`, and it was not the validator.**
+That code is byte-identical to what it replaced. `Settings` is now assembled
+from four bases, and only `SettingDeclarations` reaches `CoreSettings` and its
+`model_config`; the other three derive from `BaseSettings` directly, each
+carrying a full copy of pydantic's defaults, and those won the merge. The
+composed class was built with `secrets_dir=None`, `env_file=None` and
+`extra="forbid"` -- so **no file under `/run/secrets` was read at all**, every
+secret held the placeholder `.env.example` commits, and the production check
+did exactly what it exists for. The fix restates the config on the composed
+class from a single named `SETTINGS_CONFIG`.
+
+**It failed closed, and that is the whole difference between an outage and a
+compromise.** The alternative shape of this defect is a platform serving on a
+pepper published in this repository, indistinguishable from a working one. The
+check that turned it into a refused startup was added on the argument that a
+placeholder pepper still verifies keys correctly; this is the first time it has
+fired on anything real.
+
+**Recovery was a rollback, and it is the first time the tags earned their
+convention.** `latest` was moved back to `rollback-20260820` -- tagged before
+the build, naming the build that had been serving for 39 hours -- and
+`docker compose up -d` brought all six services back on it. The broken build
+was kept as `refactor-95b10a9` rather than discarded, which is what made the
+diagnosis a two-image comparison against the same mounted secrets: old
+constructs `Settings`, new raises, same inputs.
+
+**Neither CI nor the unit suite could have caught it, and that is what was
+fixed rather than the merge order.** `/run/secrets` does not exist on a test
+machine, so `secrets_dir` is `None` in a correct build too, and every existing
+config test passes its secrets as keyword arguments -- the source that had gone
+missing had nothing to read either way, in either build.
+`test_settings_composition.py` therefore asserts over the whole config dict
+rather than over `secrets_dir`, the one key that cannot tell the two apart, and
+pins separately that a file named for a field populates it. Reverting the
+one-line fix fails it; the suite is 1074.
+
+**Verified on the machine after the second deploy.** `migrate` exited 0 through
+all three of its steps, including `database roles provisioned` and
+`local_node_ready`. Six entrances at 200 and all four backend containers
+`healthy`; `readyz` reports `database`, `cache` and `runtime` true on gateway
+and admin-tailnet; `cache-control: no-store` still on `/healthz` from all three
+entrances; all six published bindings requested-equals-actual; Ollama holds the
+same eight models and still refuses the tailnet address. The four services and
+two frontends were confirmed to be running the new image digests, and the
+gateway was asked from inside for the shape of the refactor and the effective
+`secrets_dir`. `check-platform-health.sh --dry-run` reports `state OK`, zero
+warnings, all eleven services at 0, and zero 5xx in the last 24 hours.
+`verify-public-entrance.sh` reports 9 passed, 0 failed, 2 skipped -- the two
+skips need an API key, as they did at the last clean run.
+
+**Two smaller things the branch left behind, fixed before the merge.** The
+split persistence repositories had taken `getLogger(__name__)`, which would
+have moved the one log line the package emits out from under the name it has
+always been grepped by; every other package the refactor created pins the
+pre-split name, so this one now does too. And 31 path references across
+`ARCHITECTURE.md`, `backend.md` and `security.md` pointed at files the same
+commit deleted -- `main` had none -- including §13, which is the map from a
+security control to the code implementing it. Every path reference in the four
+architecture documents now resolves, checked by script.
+
 ## Current state — 2026-08-18
 
 **A summary, and therefore the least trustworthy thing here.** Two summaries in
