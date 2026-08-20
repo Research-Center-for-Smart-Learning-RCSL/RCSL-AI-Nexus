@@ -112,8 +112,24 @@ two frontends were confirmed to be running the new image digests, and the
 gateway was asked from inside for the shape of the refactor and the effective
 `secrets_dir`. `check-platform-health.sh --dry-run` reports `state OK`, zero
 warnings, all eleven services at 0, and zero 5xx in the last 24 hours.
-`verify-public-entrance.sh` reports 9 passed, 0 failed, 2 skipped -- the two
-skips need an API key, as they did at the last clean run.
+`verify-public-entrance.sh` reports **11 passed, 0 failed, 0 skipped**. The
+two proxy-header checks on the inference path are the ones that need a
+credential -- the gateway answers 401 to anything unauthenticated before it
+looks at the headers, so a credential-free probe cannot tell a configured
+host from an unconfigured one -- and they were run rather than left skipped:
+`X-Nexus-Proxy` set and the caller's overwritten, and a forged
+`X-Forwarded-For` discarded, both at 200 through `llmapi.rcsl.online`.
+
+The key for it was minted out of band by the same path
+`scripts/e2e_seed_stack.py` uses -- `ApiKeyService.issue()` and an unscoped
+repository save -- rather than through `ManageApiKeys`, deliberately: the use
+case writes an `api_key.issued` audit row against the actor that called it,
+and there is no system `ActorSource`, so routing it that way would have put a
+human's name on something no human did. The trade is that the issue is
+unaudited, which is why it was one hour, `chat` only, named for what it was
+for, and deleted immediately afterwards: the row is gone, `api_keys` is back
+to the 32 it held before, and the token is refused with 401 both directly and
+through the public entrance.
 
 **Two smaller things the branch left behind, fixed before the merge.** The
 split persistence repositories had taken `getLogger(__name__)`, which would
