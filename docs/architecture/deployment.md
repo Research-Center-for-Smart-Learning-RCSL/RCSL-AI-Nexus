@@ -362,6 +362,34 @@ docker compose up -d          # migrate runs first, then services restart
 docker compose ps             # confirm migrate exited 0 and services are healthy
 ```
 
+**Check the built image before recreating anything.** Two questions, and the
+second was added on 2026-08-20 because a deploy that answered the first
+correctly still took the platform down for four minutes:
+
+```bash
+# 1. Does the image carry the code you think it does?
+docker run --rm rcsl-ai-nexus:latest python -c "import app.infrastructure.main_gateway"
+
+# 2. Can it construct Settings the way a service will -- against real secret
+#    files, in production mode? `migrate` is the first thing to try this, and
+#    it fails the whole deploy when it cannot.
+docker run --rm -v "$PWD/secrets:/run/secrets:ro" \
+  -e ENV=production -e AUTH_MODE=tailnet -e METRICS_ENABLED=true \
+  rcsl-ai-nexus:latest python -c "
+from app.infrastructure.config import Settings
+s = Settings()
+print('secrets_dir', Settings.model_config.get('secrets_dir'))
+"
+```
+
+The second is not the same question as the first, and that is the whole point:
+the 2026-08-20 image imported every module and still could not read a single
+file under `/run/secrets`, because the settings class had been composed in a
+way that dropped `secrets_dir`. Nothing in the unit suite or CI can ask this —
+`/run/secrets` does not exist on either — so the image is the only place it can
+be asked, and asking costs one container that exits immediately. The mount is
+read-only and the container is discarded; nothing here writes.
+
 After any `up -d` that recreates containers, also confirm the published ports are actually bound — see the startup-ordering note below for why `docker compose ps` does not show this.
 
 **Deploy from a commit, not from a working tree.** The rollback path below is a git one, so an image built from uncommitted changes corresponds to nothing and can only be rolled back to whatever image tag happens to survive.
