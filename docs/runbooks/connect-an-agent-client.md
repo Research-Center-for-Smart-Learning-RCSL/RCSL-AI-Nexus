@@ -675,13 +675,14 @@ truncated from its second turn.
 **And nothing told the client.** Ollama reports `done_reason: "length"`, and
 `/v1/chat/completions` passes it through as `finish_reason: "length"` — the
 signal an OpenAI client reads to know a reply was cut. The `/v1/responses`
-translation dropped it: `interfaces/http/responses_sse.py` never read
+translation dropped it: `interfaces/http/responses_sse/` never read
 `chunk.finish_reason`, so it emitted `response.completed` whatever happened,
 and `_collect` hardcoded the same for the non-streaming path. So Codex — which
 speaks `responses`, per section 3 — was told a truncated answer was a whole
 one.
 
-That module now ends a cut-off stream with **`response.incomplete`**, carrying
+That package (`responses_sse/events.py`) now ends a cut-off stream with
+**`response.incomplete`**, carrying
 `status: "incomplete"` and `incomplete_details: {"reason":
 "max_output_tokens"}`, with the text item marked `"incomplete"` beside it; the
 non-streaming body reports the same. There are three terminal events, not two,
