@@ -12,14 +12,22 @@ select = ["E", "F", "I", "UP", "B", "S"]
 # the thing being measured. Reflowing them to fit a column changes the token
 # count group E's prompt depth is reported against.
 "specdoc.py" = ["E501"]
+"scripts/model-eval/spec_sections/*.py" = ["E501"]
 
 # tasks.py embeds each check as source text that runs against the model's code.
 # Those strings are assertions read by a human comparing them to the task
 # description; wrapping them hides what is being asserted.
 "tasks.py" = ["E501"]
+"scripts/model-eval/task_families/*.py" = ["E501"]
 
 # harness.py talks to the runtime at OLLAMA_HOST, a loopback address from the
 # environment, and runs the candidate's own code as a subprocess with an
 # argument list. Both are the point of the file, and the README says so.
 "harness.py" = ["S310", "S603"]
+"scripts/model-eval/harness_parts/client.py" = ["S310"]
+"scripts/model-eval/harness_parts/code_scoring.py" = ["S603"]
 "run.py" = ["S310"]
+
+# The agent-loop probe uses the configured Nexus gateway URL. It is the same
+# explicit network behavior as the evaluation harness above.
+"scripts/agent_loop/client.py" = ["S310"]

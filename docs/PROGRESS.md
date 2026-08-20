@@ -15,6 +15,45 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-20 — Oversized modules separated without changing the edges
+
+The core had accumulated a second architecture inside individual files: one
+persistence module owned seventeen repositories, inference orchestration owned
+counting through finalization, protocol routers owned translation through wire
+encoding, and frontend page components owned state, policy and presentation.
+That made changes cross unrelated responsibilities even though the system-level
+ports and bounded contexts were already sound.
+
+The implementation now follows those boundaries in the filesystem. Persistence
+rows, mappers, repositories and protocols are grouped by bounded context; config,
+dependency providers, schemas, exceptions and catalogs have explicit façades;
+chat routing, runtime adapters and HTTP encoders are split by data-flow stage;
+application services separate policy from coordination. The frontend shell,
+session, streaming, tables, dialogs, assistant/chat flows and documentation pages
+now compose focused modules. Operations entrypoints source named POSIX stages,
+and the evaluation corpus is composed from task families without changing its
+order. All twenty-one backend and two frontend test aggregations named by the
+refactor were split into behavior scenarios with feature-scoped fixtures.
+
+Compatibility was measured rather than inferred. Ruff, Ruff format and strict
+mypy pass; 952 backend unit tests and all 120 integration tests pass (the latter
+against a disposable Postgres); TypeScript, ESLint, all 374 Vitest tests and a
+production Next build pass; five fixture-backed Playwright paths and the separate
+browser-to-gateway/Postgres path pass. The canonical OpenAPI SHA-256 remains
+`6ce557d5da6714bafffe4dde2097cf6cc24067fa15674c1b6a9854a4e27d798e`;
+regenerated admin types, role scopes and audit actions are unchanged; SQLAlchemy
+still registers nineteen tables and Alembic remains at `a4c1e07f2b9d`. The model
+task registry keeps all eighteen ordered tasks and its original structured-data
+hash, every scorer passes in both directions under Linux, and `sh -n` accepts all
+four operational entrypoints and their sourced stages.
+
+No production file introduced by the split exceeds 400 lines. The files still
+above 300 are cohesive exceptions: the two intentionally unsplit wire-schema
+contracts, literal operator prompt and API-error/task catalogs, the route-chat
+estimate and orchestration stages, runtime settings declarations, and the two
+large explanatory/interactive components already excluded from mechanical
+splitting. Generated `admin-api.ts` remains generated and untouched.
+
 ## Current state — 2026-08-18
 
 **A summary, and therefore the least trustworthy thing here.** Two summaries in

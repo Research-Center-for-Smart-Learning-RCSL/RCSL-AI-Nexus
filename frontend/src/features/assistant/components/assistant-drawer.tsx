@@ -19,11 +19,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ChevronsLeftIcon, ChevronsRightIcon, XIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import {
-  SanitisedMarkdown,
-  StreamMessage,
-} from '@/components/composed/stream-message';
+import { StreamMessage } from '@/components/composed/stream-message';
 import { cn } from '@/lib/utils';
 import { useAssistantContext } from '@/features/assistant/context';
 import {
@@ -31,12 +27,12 @@ import {
   WIDTH_EVENT,
   WIDTH_KEY,
 } from '@/features/assistant/width';
-import { useAssistant, type AssistantTurn } from '@/features/assistant/hooks/use-assistant';
-import {
-  ProposalCard,
-  proposalToFormPatch,
-} from '@/features/assistant/components/proposal-card';
+import { useAssistant } from '@/features/assistant/hooks/use-assistant';
+import { proposalToFormPatch } from '@/features/assistant/components/proposal-card';
 import type { Proposal } from '@/features/assistant/schema';
+
+import { AssistantComposer } from './assistant-composer';
+import { AssistantTurn } from './assistant-turn';
 
 const SURFACE_LABELS: Record<string, string> = {
   'api_keys.create': 'Issuing a key',
@@ -46,47 +42,6 @@ const SURFACE_LABELS: Record<string, string> = {
   agent_setup: 'Connecting an agent',
   other: 'This platform',
 };
-
-function Turn({
-  turn,
-  canApply,
-  onApply,
-}: {
-  turn: AssistantTurn;
-  canApply: boolean;
-  onApply: (proposal: Proposal) => void;
-}) {
-  const isUser = turn.role === 'user';
-  return (
-    <div
-      className={cn(
-        'rounded-lg px-3 py-2 text-sm',
-        isUser ? 'bg-muted' : 'ring-1 ring-foreground/10',
-      )}
-    >
-      <p className="mb-1 text-xs font-medium text-muted-foreground">
-        {isUser ? 'You' : 'Assistant'}
-      </p>
-      {isUser ? (
-        <p className="whitespace-pre-wrap">{turn.content}</p>
-      ) : (
-        <SanitisedMarkdown text={turn.content} />
-      )}
-      {turn.proposal ? (
-        <ProposalCard
-          proposal={turn.proposal}
-          canApply={canApply}
-          onApply={onApply}
-        />
-      ) : null}
-      {turn.error ? (
-        <p role="alert" className="mt-2 text-destructive">
-          The answer stopped: {turn.error}
-        </p>
-      ) : null}
-    </div>
-  );
-}
 
 export function AssistantDrawer() {
   const [question, setQuestion] = useState('');
@@ -217,7 +172,7 @@ export function AssistantDrawer() {
         ) : null}
 
         {turns.map((turn) => (
-          <Turn
+          <AssistantTurn
             key={turn.id}
             turn={turn}
             canApply={context.canApply}
@@ -250,34 +205,15 @@ export function AssistantDrawer() {
         <div ref={bottomRef} />
       </div>
 
-      <form onSubmit={submit} className="flex items-center gap-2 border-t px-4 py-3">
-        <Input
-          value={question}
-          onChange={(event) => setQuestion(event.target.value)}
-          placeholder="Ask about this screen"
-          disabled={isStreaming}
-          className="flex-1"
-          aria-label="Ask the assistant"
-        />
-        {isStreaming ? (
-          <Button type="button" variant="outline" size="sm" onClick={cancel}>
-            Stop
-          </Button>
-        ) : (
-          <Button type="submit" size="sm" disabled={!question.trim()}>
-            Ask
-          </Button>
-        )}
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={clear}
-          disabled={turns.length === 0 && !isStreaming}
-        >
-          Clear
-        </Button>
-      </form>
+      <AssistantComposer
+        question={question}
+        setQuestion={setQuestion}
+        isStreaming={isStreaming}
+        hasTurns={turns.length > 0}
+        onSubmit={submit}
+        onCancel={cancel}
+        onClear={clear}
+      />
     </aside>
   );
 }

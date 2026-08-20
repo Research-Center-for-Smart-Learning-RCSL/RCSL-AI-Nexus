@@ -13,21 +13,16 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Form } from '@/components/ui/form';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { FormField } from '@/components/composed/form-field';
 import { SecretDialog } from '@/components/composed/secret-dialog';
-import { OneTimeSecret } from '@/components/composed/one-time-secret';
 import { describeError } from '@/components/composed/error-state';
-import { CapabilityPicker } from '@/features/api-keys/components/capability-picker';
+import {
+  ApiKeyCapabilities,
+  CidrTextarea,
+  DefaultCapabilitySelect,
+} from '@/features/api-keys/components/api-key-policy-controls';
 import { useSession } from '@/lib/session';
 import { useUsers } from '@/features/users/hooks/use-users';
-import { IntegrationSnippet } from '@/features/gateway/components/integration-snippet';
 import { useIssueApiKey } from '@/features/api-keys/hooks/use-api-keys';
 import { useAssistantSurface } from '@/features/assistant/context';
 import { applyProposalPatch, draftFor } from '@/features/api-keys/assistant-bridge';
@@ -42,6 +37,8 @@ import {
   type CreateApiKeyInput,
   type CreateApiKeyValues,
 } from '@/features/api-keys/schema';
+import { IssuedApiKeySecret } from './issued-api-key-secret';
+import { ApiKeyOwnerField } from './api-key-owner-field';
 
 export function CreateApiKeyDialog({
   open,
@@ -161,29 +158,13 @@ export function CreateApiKeyDialog({
         </DialogHeader>
 
         {plaintext ? (
-          <>
-            <div className="max-h-[60vh] space-y-5 overflow-y-auto overscroll-contain">
-              <OneTimeSecret
-                title="The key, shown once"
-                description="Only a peppered hash is stored, so this cannot be retrieved later. If it is lost, revoke and issue a new one."
-                values={[plaintext]}
-                acknowledgement="I have saved this key"
-                onAcknowledgedChange={setAcknowledged}
-              />
-              {/* Shown here rather than left to documentation, because this is
-                  the only moment the plaintext exists: a snippet the holder
-                  has to come back and fill in is one they fill in wrongly. */}
-              <IntegrationSnippet
-                plaintext={plaintext}
-                capability={issuedCapability}
-              />
-            </div>
-            <DialogFooter>
-              <Button disabled={!acknowledged} onClick={close}>
-                Done
-              </Button>
-            </DialogFooter>
-          </>
+          <IssuedApiKeySecret
+            plaintext={plaintext}
+            capability={issuedCapability}
+            acknowledged={acknowledged}
+            setAcknowledged={setAcknowledged}
+            close={close}
+          />
         ) : (
           <>
             <Form {...form}>
@@ -201,38 +182,15 @@ export function CreateApiKeyDialog({
                 />
 
                 {mayWriteAny ? (
-                  <FormField
+                  <ApiKeyOwnerField
                     control={form.control}
-                    name="owner_id"
-                    label="Owner"
-                    description="Who holds this key. Revoke it when they leave; deleting the account takes its keys with it."
-                    render={(field) => (
-                      <Select
-                        value={field.value as string}
-                        onValueChange={(value) => field.onChange(value)}
-                        disabled={owners.isLoading}
-                      >
-                        <SelectTrigger className="w-full">
-                          <SelectValue
-                            placeholder={
-                              owners.isLoading ? 'Loading...' : 'Choose an owner'
-                            }
-                          />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {(owners.data ?? []).map((user) => (
-                            <SelectItem key={user.id} value={user.id}>
-                              {user.display_name} ({user.login})
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    )}
+                    owners={owners.data ?? []}
+                    isLoading={owners.isLoading}
                   />
                 ) : null}
 
-                <CapabilityPicker
-                  value={scopes}
+                <ApiKeyCapabilities
+                  scopes={scopes}
                   onChange={(next) =>
                     form.setValue('scopes', next, { shouldValidate: true })
                   }
@@ -247,27 +205,12 @@ export function CreateApiKeyDialog({
                   label="When a request names something else"
                   description="A request names a capability in its model field. Most clients send a model name instead — Codex's own picker overrides a configured model line — and refusing is what tells the integrator that. Set a capability here only where convenience is worth more than that signal."
                   render={(field) => (
-                    <Select
+                    <DefaultCapabilitySelect
                       value={field.value as string}
-                      onValueChange={(value) => field.onChange(value)}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={NO_DEFAULT}>
-                          Refuse, and say what this key may call
-                        </SelectItem>
-                        {defaultOptions.map((capability) => (
-                          <SelectItem key={capability} value={capability}>
-                            Serve {capability}
-                            {(scopes as string[]).includes(capability)
-                              ? ''
-                              : ' (not among this key\u2019s capabilities)'}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                      onChange={(value) => field.onChange(value)}
+                      scopes={scopes}
+                      options={defaultOptions}
+                    />
                   )}
                 />
 
@@ -305,14 +248,11 @@ export function CreateApiKeyDialog({
                   label="Allowed source CIDRs"
                   description="One per line or comma separated. Leave empty for no source restriction."
                   render={(field) => (
-                    <textarea
+                    <CidrTextarea
                       id="allowed-cidrs"
                       value={(field.value as string) ?? ''}
-                      onChange={(event) => field.onChange(event.target.value)}
+                      onChange={(value) => field.onChange(value)}
                       onBlur={field.onBlur}
-                      rows={2}
-                      placeholder="203.0.113.0/24"
-                      className="w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                     />
                   )}
                 />

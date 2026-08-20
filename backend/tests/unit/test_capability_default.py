@@ -18,7 +18,7 @@ import pytest
 from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.exceptions import CapabilityNotIssuedError
 from app.interfaces.http.sse import CAPABILITY_DEFAULTED_HEADER, capability_defaulted_header
-from tests.unit.test_streaming_contract import MESSAGES, FakeRuntime, build
+from tests.unit.streaming_contract_fixtures import MESSAGES, FakeRuntime, build
 
 
 def key_actor(

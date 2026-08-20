@@ -180,7 +180,7 @@ A human who can sign in to the management UI. Identity arrives from one of two s
 | `password_hash` | argon2id, nullable. Absent for tailnet-only users |
 | `totp_secret` | Encrypted at rest, nullable. **Required whenever `password_hash` is set** |
 | `totp_last_counter` | Replay prevention, see [security.md](./architecture/security.md) §5.3 |
-| `role` | `admin` / `tenant_admin` / `operator` / `curator` / `auditor` / `user`. Not a ladder: `curator` writes knowledge `operator` may not touch, and `operator` restarts a node `tenant_admin` may not. A seventh, `service`, exists in the enum but belongs to an API key rather than a person and never appears in this table (`domain/entities/actor.py`) |
+| `role` | `admin` / `tenant_admin` / `operator` / `curator` / `auditor` / `user`. Not a ladder: `curator` writes knowledge `operator` may not touch, and `operator` restarts a node `tenant_admin` may not. A seventh, `service`, exists in the enum but belongs to an API key rather than a person and never appears in this table (`domain/entities/actor/role.py`) |
 | `debug_logging_until` | Optional timestamp, see [security.md](./architecture/security.md) §9.2 |
 
 Accounts are **invitation only**; there is no self-registration. A user who only ever works over the tailnet needs no password at all, so both credential columns are nullable. A user who needs the public entrance is issued a single-use invitation link and sets their own password and TOTP; the platform never transmits a credential. See [security.md](./architecture/security.md) §5.3 and §5.4.
@@ -313,6 +313,15 @@ The chat interface lives on the admin API rather than calling the public gateway
 - `frontend-tailnet` and `frontend-public`: the Next.js application, one instance per entrance from one image, differing only in which admin API the middleware rewrite targets. Two rather than one for the same reason the admin API is two: an entrance that trusts a Tailscale header must not share a socket with one reachable from the internet.
 
 Five containers run from the backend image: those three, `parser`, and the one-shot `migrate` job. The three application entrances share the entire `domain/` and `application/` layers, and only the routers mounted by `interfaces/http` differ, so splitting them costs no duplicated code. `parser` shares the image rather than the layers — the isolation that matters there is the process, network and credential boundary, not which layers the code was built from.
+
+Within those layers, the 2026-08-20 separation pass made bounded context and
+protocol stage visible in the module tree. Persistence, repository ports, admin
+schemas, dependency providers and settings are packages split by domain;
+inference/runtime packages split translation, guardrails, state machines and
+finalization; HTTP packages split wire translation from response construction.
+The frontend follows the same rule for shell, session, streaming, tables,
+dialogs and reference content. Public import points remain explicit façades, so
+this structure changes ownership without changing the contracts at the edges.
 
 Detailed internal design:
 

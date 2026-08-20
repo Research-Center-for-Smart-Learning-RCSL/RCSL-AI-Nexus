@@ -1,0 +1,208 @@
+"""Immutable scope catalogs and role-to-scope policy."""
+
+from collections.abc import Mapping
+from types import MappingProxyType
+
+from .role import Role
+from .scope import Scope
+
+_BASE_SCOPES = frozenset(
+    {
+        Scope.CHAT_USE,
+        Scope.API_KEY_READ_OWN,
+        Scope.API_KEY_WRITE_OWN,
+        Scope.USAGE_READ_OWN,
+        # Being told why you were refused is not an administrative privilege.
+        # Every row it reaches is a second copy of a response this account
+        # already received; see `Scope.REFUSAL_READ_OWN`.
+        Scope.REFUSAL_READ_OWN,
+        # Selecting a prompt template is part of asking a question, so seeing
+        # which exist has to come with using the chat rather than with
+        # administering it. Read only: authoring one is `prompt:write`.
+        Scope.PROMPT_READ,
+    }
+)
+"""What having an account at all is worth: use the chat UI, manage your own
+API keys, see your own usage. Every human role builds on this except
+`auditor`, which drops the one write in it."""
+
+_ADMIN_SCOPES = frozenset(Scope)
+"""Everything, including scopes added after this line was written.
+
+Deliberate here and dangerous anywhere else, which is why `test_role_scopes.py`
+asserts that every scope reaches some other role too: a scope that lands only
+in this set silently narrows every role below it, and nothing would say so."""
+
+_TENANT_ADMIN_SCOPES = _BASE_SCOPES | {
+    Scope.USER_READ,
+    Scope.USER_WRITE,
+    Scope.API_KEY_WRITE_ANY,
+    Scope.USAGE_READ_ALL,
+    Scope.REFUSAL_READ_ALL,
+    Scope.LOGS_READ,
+    Scope.KNOWLEDGE_READ,
+    Scope.KNOWLEDGE_WRITE,
+    Scope.PROMPT_WRITE,
+    Scope.TENANT_READ,
+    Scope.MODEL_READ,
+    Scope.ROUTING_READ,
+    Scope.NODE_READ,
+}
+"""Full authority over one tenant's people and content; read-only on the fleet.
+
+The confinement to a single tenant is not in this set and could not be: it
+comes from the tenant-scoped repositories `di.py` constructs, which is why
+`USER_WRITE` here reaches only this tenant's users. What is withheld is every
+platform-global write — `TENANT_WRITE`, `NODE_WRITE`, `MODEL_WRITE`,
+`ROUTING_WRITE` — because those are the operations whose blast radius is the
+whole installation rather than one tenant of it."""
+
+_OPERATOR_SCOPES = _BASE_SCOPES | {
+    Scope.MODEL_READ,
+    Scope.MODEL_WRITE,
+    Scope.NODE_READ,
+    Scope.NODE_WRITE,
+    Scope.ROUTING_READ,
+    Scope.ROUTING_WRITE,
+    Scope.LOGS_READ,
+    Scope.USAGE_READ_ALL,
+    Scope.REFUSAL_READ_ALL,
+    Scope.KNOWLEDGE_READ,
+    Scope.USER_READ,
+    Scope.TENANT_READ,
+}
+"""Runs the fleet, grants nobody anything.
+
+`USER_READ` and `TENANT_READ` are present because diagnosing load means knowing
+whose load it is, and both are read-only. `USER_WRITE`, `API_KEY_WRITE_ANY` and
+`TENANT_WRITE` are the ones deliberately withheld: an operator who can issue a
+key or promote an account can hand themselves every other scope in this file,
+so withholding them is what makes this role a role rather than a delay."""
+
+_CURATOR_SCOPES = _BASE_SCOPES | {
+    Scope.KNOWLEDGE_READ,
+    Scope.KNOWLEDGE_WRITE,
+    Scope.PROMPT_WRITE,
+}
+"""What the models are told, and nothing else. Separate from the roles above
+because §7.3 treats knowledge documents as a prompt-injection surface: whoever
+writes them shapes what the models answer, which is authority worth granting on
+purpose rather than as a side effect of being an administrator.
+
+`prompt:write` belongs here for the same reason and is the more direct form of
+it — a knowledge document shapes an answer by being retrieved, a system prompt
+shapes every answer that selects it, without competing with anything. Both are
+content authorship, which is why neither is with the role that runs the
+nodes."""
+
+_AUDITOR_SCOPES = frozenset(
+    {
+        Scope.CHAT_USE,
+        Scope.API_KEY_READ_OWN,
+        Scope.USAGE_READ_OWN,
+        Scope.USAGE_READ_ALL,
+        Scope.REFUSAL_READ_OWN,
+        Scope.REFUSAL_READ_ALL,
+        Scope.LOGS_READ,
+        Scope.MODEL_READ,
+        Scope.ROUTING_READ,
+        Scope.NODE_READ,
+        Scope.USER_READ,
+        Scope.TENANT_READ,
+        Scope.KNOWLEDGE_READ,
+        Scope.PROMPT_READ,
+    }
+)
+"""Reads everything, writes nothing.
+
+Built from scratch rather than from `_BASE_SCOPES`, because that set contains
+`API_KEY_WRITE_OWN` and an auditor who can mint themselves a key can act
+through the gateway — the point of the role is that its holder leaves no trace
+but a read. `CHAT_USE` is kept deliberately: it changes no configuration, and a
+role whose holder cannot ask the assistant a question is one nobody accepts
+being put in."""
+
+_USER_SCOPES = _BASE_SCOPES
+"""Exactly what §5.2 grants a user: use the chat UI, manage their own API
+keys, view their own usage. The read scopes for models, routing and nodes are
+deliberately absent — they were granted before and let a `user` enumerate the
+whole registry and read the node's tailnet address, which the chat composer
+(it names a capability, not a model) never needs."""
+
+_SERVICE_SCOPES = frozenset({Scope.CHAT_USE, Scope.USAGE_READ_OWN})
+"""An API key can never hold a control-plane scope, whatever its stored list
+says. The stored list narrows this set; it cannot widen it."""
+
+_BY_ROLE: dict[Role, frozenset[Scope]] = {
+    Role.ADMIN: _ADMIN_SCOPES,
+    Role.TENANT_ADMIN: _TENANT_ADMIN_SCOPES,
+    Role.OPERATOR: _OPERATOR_SCOPES,
+    Role.CURATOR: _CURATOR_SCOPES,
+    Role.AUDITOR: _AUDITOR_SCOPES,
+    Role.USER: _USER_SCOPES,
+    Role.SERVICE: _SERVICE_SCOPES,
+}
+
+ADMIN_ONLY_SCOPES = frozenset({Scope.TENANT_WRITE, Scope.RETENTION_WRITE, Scope.PROMPT_LOG_READ})
+"""Scopes no role but `admin` holds — listed, rather than left to be discovered.
+
+Creating a tenant is the one operation with no smaller holder, because a tenant
+is the boundary every other role is confined by: granting the power to draw one
+is granting the power to step outside it. Adding to this set is a deliberate
+narrowing and belongs in this docstring with its reason. A scope that becomes
+admin-only *without* being added here fails `test_role_scopes.py`, which is the
+point of writing it down.
+
+`retention:write` joined it on 2026-08-04 for a related reason. It sets how
+long records are kept and deletes them ahead of that, including audit entries.
+Held by a `tenant_admin` it would let the holder erase the record of what they
+did inside the tenant they administer — the audit log's whole value is that it
+is written by a wider authority than the one being recorded. The platform
+administrator can still erase their own trail; that is the deliberate choice
+made when this was designed, and it is recorded in `security.md` §12.1 rather
+than mitigated here.
+
+`prompt_log:read` joined on 2026-08-08, and it is the mirror of the entry above
+it. Where `retention:write` would let a `tenant_admin` erase the record of what
+they did, this would let them read what their tenant's members typed — and the
+tenant boundary, which confines every other authority that role holds, offers
+those members no protection at all from the person who administers them. A lab
+head who may reset a password should not thereby be able to read a student's
+conversations.
+
+**It was granted to `auditor` first, and the escalation rule refused it.**
+`grantable_roles` stops a granter conferring a scope they lack, so an `auditor`
+holding this became a role a `tenant_admin` could no longer create — the rule
+working exactly as designed, on a placement that had not been thought through.
+The tightest answer turned out to also be the one that leaves every other role
+usable. The cost is that a transcript has one reader, which is acceptable here:
+the read is itself audited (`prompt_log.read`), so the reader is recorded even
+though they are the platform administrator."""
+
+ROLE_SCOPES: Mapping[Role, frozenset[Scope]] = MappingProxyType(_BY_ROLE)
+"""Read-only view for callers that describe the model rather than enforce it —
+the `/admin/roles` catalogue the settings UI renders. Exported so the screen
+explaining these roles is generated from the same table that grants them, and
+cannot drift from it.
+
+Genuinely read-only, via `MappingProxyType`. Binding it straight to `_BY_ROLE`
+handed every importer — a router, a test — a reference to the dict this module
+enforces from, so a stray `ROLE_SCOPES[role] = ...` would have rewritten live
+authorization. For a module whose first line argues that no database row may
+grant itself a scope, leaving the table writable from anywhere that imports it
+was the wrong shape."""
+
+ASSIGNABLE_ROLES: tuple[Role, ...] = (
+    Role.ADMIN,
+    Role.TENANT_ADMIN,
+    Role.OPERATOR,
+    Role.CURATOR,
+    Role.AUDITOR,
+    Role.USER,
+)
+"""The roles a person may be given, widest authority first.
+
+`SERVICE` is absent: it belongs to an API key, and offering it in a role picker
+would create an account that authenticates as one. These are not a ladder —
+`curator` writes knowledge that `operator` cannot touch — so the order is a
+presentation choice, not a comparison."""

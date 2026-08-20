@@ -1,0 +1,143 @@
+import type { FormEvent } from 'react';
+
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  CAPABILITY_DESCRIPTIONS,
+  isConversational,
+  issuableCapabilitySchema,
+  type IssuableCapability,
+} from '@/features/models/schema';
+
+type ChatComposerProps = {
+  capability: IssuableCapability;
+  setCapability: (capability: IssuableCapability) => void;
+  thinking: boolean;
+  setThinking: (thinking: boolean) => void;
+  prompt: string;
+  setPrompt: (prompt: string) => void;
+  useKnowledge: boolean;
+  setUseKnowledge: (useKnowledge: boolean) => void;
+  isStreaming: boolean;
+  hasTurns: boolean;
+  gatewayLoading: boolean;
+  servable: ReadonlySet<string>;
+  onSubmit: (event: FormEvent) => void;
+  onCancel: () => void;
+  onClear: () => void;
+};
+
+export function ChatComposer(props: ChatComposerProps) {
+  const {
+    capability,
+    setCapability,
+    thinking,
+    setThinking,
+    prompt,
+    setPrompt,
+    useKnowledge,
+    setUseKnowledge,
+    isStreaming,
+    hasTurns,
+    gatewayLoading,
+    servable,
+    onSubmit,
+    onCancel,
+    onClear,
+  } = props;
+  return (
+    <>
+      <div className="space-y-1">
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <input
+            type="checkbox"
+            className="size-4 accent-primary"
+            checked={useKnowledge}
+            disabled={isStreaming}
+            onChange={(event) => setUseKnowledge(event.target.checked)}
+          />
+          Answer from the knowledge base
+        </label>
+        <p className="text-xs text-muted-foreground">
+          {CAPABILITY_DESCRIPTIONS[capability]}
+        </p>
+      </div>
+      <form onSubmit={onSubmit} className="flex items-center gap-2">
+        <Select
+          value={capability}
+          onValueChange={(value) => setCapability(value as IssuableCapability)}
+        >
+          <SelectTrigger className="w-36" aria-label="Capability">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {issuableCapabilitySchema.options.map((option) => {
+              const routable =
+                gatewayLoading || servable.has(option) || option === capability;
+              return (
+                <SelectItem
+                  key={option}
+                  value={option}
+                  disabled={!isConversational(option) || !routable}
+                >
+                  {option}
+                  {isConversational(option) ? null : (
+                    <span className="text-xs text-muted-foreground">
+                      not a conversation
+                    </span>
+                  )}
+                  {isConversational(option) && !routable ? (
+                    <span className="text-xs text-muted-foreground">
+                      nothing serves this yet
+                    </span>
+                  ) : null}
+                </SelectItem>
+              );
+            })}
+          </SelectContent>
+        </Select>
+        <label className="flex shrink-0 items-center gap-1.5 text-sm text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={thinking}
+            disabled={isStreaming}
+            onChange={(event) => setThinking(event.target.checked)}
+          />
+          Thinking
+        </label>
+        <Input
+          value={prompt}
+          onChange={(event) => setPrompt(event.target.value)}
+          placeholder="Ask something"
+          disabled={isStreaming}
+          className="flex-1"
+          aria-label="Message"
+        />
+        {isStreaming ? (
+          <Button type="button" variant="outline" onClick={onCancel}>
+            Stop
+          </Button>
+        ) : (
+          <Button type="submit" disabled={!prompt.trim()}>
+            Send
+          </Button>
+        )}
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={onClear}
+          disabled={!hasTurns && !isStreaming}
+        >
+          Clear
+        </Button>
+      </form>
+    </>
+  );
+}
