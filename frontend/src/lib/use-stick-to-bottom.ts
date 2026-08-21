@@ -15,6 +15,15 @@
  * end while they are reading earlier output is worse than one that never
  * follows at all. `pinned` reports which state applies, so a caller can offer a
  * way back.
+ *
+ * **The refs are callbacks, not ref objects, and that is load-bearing.** The
+ * assistant drawer renders nothing at all while it is closed, so an effect that
+ * read `ref.current` once at mount found two nulls, returned, and never ran
+ * again — the observer was never attached for the one caller that mounts
+ * before its own elements exist. Attaching from the ref callback ties the
+ * observer to the elements arriving rather than to the component mounting, and
+ * a `ResizeObserver` delivers an initial observation when it begins, so a
+ * drawer reopened on an existing conversation lands at the end of it.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -29,65 +38,82 @@ const NEAR_BOTTOM_PX = 64;
 
 export type StickToBottom = {
   /** Goes on the scrolling element. */
-  containerRef: React.RefObject<HTMLDivElement | null>;
+  containerRef: (node: HTMLDivElement | null) => void;
   /** Goes on the single child whose height changes as content arrives. */
-  contentRef: React.RefObject<HTMLDivElement | null>;
+  contentRef: (node: HTMLDivElement | null) => void;
   /** Goes on the scrolling element's `onScroll`. */
   onScroll: () => void;
   /** False once the reader has scrolled away from the end. */
   pinned: boolean;
-  scrollToBottom: (behavior?: ScrollBehavior) => void;
+  scrollToBottom: () => void;
 };
 
 export function useStickToBottom(): StickToBottom {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const contentRef = useRef<HTMLDivElement | null>(null);
+  const container = useRef<HTMLDivElement | null>(null);
+  const content = useRef<HTMLDivElement | null>(null);
+  const observer = useRef<ResizeObserver | null>(null);
   // Mirrored in a ref because the ResizeObserver below runs outside React and
   // would otherwise close over the value from the render that registered it.
   const pinnedRef = useRef(true);
   const [pinned, setPinned] = useState(true);
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
-    const container = containerRef.current;
-    if (!container) return;
-    // `scrollTo` does not consult the reduced-motion preference the way the CSS
-    // property does, so the check is made here rather than assumed.
-    const still =
-      typeof window !== 'undefined' &&
-      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    container.scrollTo({
-      top: container.scrollHeight,
-      behavior: still ? 'auto' : behavior,
-    });
-    pinnedRef.current = true;
-    setPinned(true);
+  const follow = useCallback(() => {
+    const element = container.current;
+    if (!element) return;
+    // Assigned rather than animated, everywhere. This runs on every token, and
+    // a smooth scroll started before the previous one finished never reaches
+    // the end; worse, the intermediate `scroll` events an animation emits are
+    // indistinguishable from a reader scrolling up, so an animated jump would
+    // unpin itself part way and stop following the reply it was catching up to.
+    element.scrollTop = element.scrollHeight;
   }, []);
 
+  const observe = useCallback(() => {
+    observer.current?.disconnect();
+    observer.current = null;
+    // ResizeObserver is absent under jsdom, where there is no layout to observe
+    // and nothing to follow.
+    if (!container.current || !content.current) return;
+    if (typeof ResizeObserver === 'undefined') return;
+    const next = new ResizeObserver(() => {
+      if (pinnedRef.current) follow();
+    });
+    next.observe(content.current);
+    observer.current = next;
+  }, [follow]);
+
+  const containerRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      container.current = node;
+      observe();
+    },
+    [observe],
+  );
+
+  const contentRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      content.current = node;
+      observe();
+    },
+    [observe],
+  );
+
+  useEffect(() => () => observer.current?.disconnect(), []);
+
+  const scrollToBottom = useCallback(() => {
+    follow();
+    pinnedRef.current = true;
+    setPinned(true);
+  }, [follow]);
+
   const onScroll = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    const element = container.current;
+    if (!element) return;
     const distance =
-      container.scrollHeight - container.scrollTop - container.clientHeight;
+      element.scrollHeight - element.scrollTop - element.clientHeight;
     const next = distance <= NEAR_BOTTOM_PX;
     pinnedRef.current = next;
     setPinned((current) => (current === next ? current : next));
-  }, []);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    const content = contentRef.current;
-    // Absent under jsdom, where there is no layout to observe and nothing to
-    // follow.
-    if (!container || !content || typeof ResizeObserver === 'undefined') return;
-
-    const observer = new ResizeObserver(() => {
-      if (!pinnedRef.current) return;
-      // Assigned rather than animated: this fires on every token, and a smooth
-      // scroll started before the previous one finished never reaches the end.
-      container.scrollTop = container.scrollHeight;
-    });
-    observer.observe(content);
-    return () => observer.disconnect();
   }, []);
 
   return { containerRef, contentRef, onScroll, pinned, scrollToBottom };

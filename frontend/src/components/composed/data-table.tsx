@@ -33,6 +33,8 @@ export type DataTableProps<TData, TValue> = {
   emptyAction?: ReactNode;
   toolbar?: ReactNode;
   pageSize?: number;
+  /** Off where the screen pages on the server and owns the authoritative count. */
+  showRowCount?: boolean;
   getRowId?: (row: TData, index: number) => string;
   className?: string;
 };
@@ -49,6 +51,7 @@ export function DataTable<TData, TValue>({
   emptyAction,
   toolbar,
   pageSize = 20,
+  showRowCount = true,
   getRowId,
   className,
 }: DataTableProps<TData, TValue>) {
@@ -115,7 +118,7 @@ export function DataTable<TData, TValue>({
         emptyDescription={emptyDescription}
         emptyAction={emptyAction}
       />
-      <DataTablePagination table={table} />
+      <DataTablePagination table={table} showRowCount={showRowCount} />
     </div>
   );
 }
