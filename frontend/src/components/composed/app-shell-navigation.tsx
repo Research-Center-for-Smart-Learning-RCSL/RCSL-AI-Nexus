@@ -17,28 +17,34 @@ function NavLinks({
   onNavigate?: () => void;
 }) {
   return (
-    <nav className="space-y-0.5">
+    // A list, not a landmark. This renders once for the pinned entries and
+    // again for every group, so a `<nav>` here announced six unnamed navigation
+    // landmarks per page to a screen reader — a worse rendering of the sidebar
+    // than one unlabelled list would have been. The single landmark is in
+    // `NavGroups` below.
+    <ul className="space-y-0.5">
       {items.map((item) => {
         const active = isActive(pathname, item.href);
         return (
-          <Link
-            key={item.href}
-            href={item.href}
-            onClick={onNavigate}
-            aria-current={active ? 'page' : undefined}
-            className={cn(
-              'flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm',
-              active
-                ? 'bg-muted font-medium text-foreground'
-                : 'text-muted-foreground hover:bg-muted/50',
-            )}
-          >
-            {item.icon}
-            {item.label}
-          </Link>
+          <li key={item.href}>
+            <Link
+              href={item.href}
+              onClick={onNavigate}
+              aria-current={active ? 'page' : undefined}
+              className={cn(
+                'flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm',
+                active
+                  ? 'bg-muted font-medium text-foreground'
+                  : 'text-muted-foreground hover:bg-muted/50',
+              )}
+            >
+              {item.icon}
+              {item.label}
+            </Link>
+          </li>
         );
       })}
-    </nav>
+    </ul>
   );
 }
 
@@ -62,6 +68,7 @@ export function NavGroups({
   collapsed,
   onToggle,
   onNavigate,
+  label,
 }: {
   pinned: NavItem[];
   groups: NavGroup[];
@@ -69,9 +76,11 @@ export function NavGroups({
   collapsed: Set<string>;
   onToggle: (id: string) => void;
   onNavigate?: () => void;
+  /** Distinguishes the two copies, which are both in the DOM at every width. */
+  label: string;
 }) {
   return (
-    <div className="space-y-3">
+    <nav aria-label={label} className="space-y-3">
       {/* Above every heading and inside none of them, so no fold can reach it. */}
       {pinned.length ? (
         <NavLinks items={pinned} pathname={pathname} onNavigate={onNavigate} />
@@ -99,6 +108,6 @@ export function NavGroups({
           </div>
         );
       })}
-    </div>
+    </nav>
   );
 }

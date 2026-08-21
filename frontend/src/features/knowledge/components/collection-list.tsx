@@ -63,7 +63,7 @@ export function CollectionList({ selectedId, onSelect }: CollectionListProps) {
         </button>
 
         {isLoading ? (
-          <p className="px-2 py-1.5 text-sm text-muted-foreground">Loading...</p>
+          <p className="px-2 py-1.5 text-sm text-muted-foreground">Loading…</p>
         ) : null}
 
         {collections?.map((collection) => (
@@ -179,7 +179,7 @@ function CreateCollectionDialog({
             control={form.control}
             name="description"
             label="Description"
-            description="Optional. What this collection holds, for whoever reads it next."
+            description="Optional. What this collection holds, for the reader selecting one."
           />
 
           <DialogFooter>

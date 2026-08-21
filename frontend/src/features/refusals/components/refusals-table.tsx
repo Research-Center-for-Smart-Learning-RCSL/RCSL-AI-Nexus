@@ -77,8 +77,9 @@ export function RefusalsTable() {
       />
       {state.data?.scoped_to_self ? (
         <p className="text-xs text-muted-foreground">
-          Showing refusals from this account and its API keys. Seeing everyone’s
-          needs <code className="font-mono">refusal:read_all</code>.
+          Showing refusals from this account and its API keys. Reading every
+          account’s requires{' '}
+          <code className="font-mono">refusal:read_all</code>.
         </p>
       ) : null}
       <RefusalsGrid

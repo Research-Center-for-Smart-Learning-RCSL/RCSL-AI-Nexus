@@ -4,6 +4,7 @@ import { LogOutIcon, MenuIcon, SparklesIcon, UserCogIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/composed/theme-toggle';
+import { ROLE_LABELS } from '@/features/users/schema';
 import type { AuthMode, Me } from '@/lib/session';
 import { cn } from '@/lib/utils';
 
@@ -11,13 +12,13 @@ type Props = { navButtonRef: RefObject<HTMLButtonElement | null>; navOpen: boole
 
 export function AppShellHeader({ navButtonRef, navOpen, setNavOpen, me, authMode, assistant, signOut }: Props) {
   return (
-          <header className="flex items-center justify-between gap-3 border-b px-4 py-2">
+          <header className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2">
             <div className="flex min-w-0 items-center gap-2">
               <Button
                 ref={navButtonRef}
                 variant="ghost"
                 size="icon-sm"
-                className="sm:hidden"
+                className="lg:hidden"
                 aria-label="Open the menu"
                 aria-expanded={navOpen}
                 onClick={() => setNavOpen(true)}
@@ -26,8 +27,13 @@ export function AppShellHeader({ navButtonRef, navOpen, setNavOpen, me, authMode
               </Button>
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">{me.display_name}</p>
+                {/* The role as it is named to people, not as the wire spells
+                    it: `platform_admin` beside a display name reads as an
+                    account identifier rather than as an authority. An en dash
+                    separates the two, since a hyphen between two names reads as
+                    a compound. */}
                 <p className="truncate text-xs text-muted-foreground">
-                  {me.login} - {me.role}
+                  {me.login} – {ROLE_LABELS[me.role] ?? me.role}
                 </p>
               </div>
             </div>

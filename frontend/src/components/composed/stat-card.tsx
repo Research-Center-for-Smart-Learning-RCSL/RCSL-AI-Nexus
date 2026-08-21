@@ -8,24 +8,23 @@ export type StatCardProps = {
   value: ReactNode;
   hint?: string;
   icon?: ReactNode;
-  /** Signed change, rendered next to the value. Phase 2 supplies real deltas. */
-  delta?: { value: string; direction: 'up' | 'down' | 'flat' };
   isLoading?: boolean;
   className?: string;
 };
 
-const DELTA_TONE = {
-  up: 'text-emerald-600 dark:text-emerald-400',
-  down: 'text-destructive',
-  flat: 'text-muted-foreground',
-} as const;
-
+/**
+ * A single figure, its label, and what the figure is counted from.
+ *
+ * There is no trend indicator. One was carried here unused for long enough to
+ * acquire a comment promising real deltas in a later phase; a control nothing
+ * renders is not a feature in reserve, it is a claim in the type signature that
+ * the screens do not make.
+ */
 export function StatCard({
   label,
   value,
   hint,
   icon,
-  delta,
   isLoading,
   className,
 }: StatCardProps) {
@@ -41,14 +40,7 @@ export function StatCard({
         {isLoading ? (
           <div className="h-7 w-24 animate-pulse rounded bg-muted" />
         ) : (
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-semibold tabular-nums">{value}</span>
-            {delta ? (
-              <span className={cn('text-xs', DELTA_TONE[delta.direction])}>
-                {delta.value}
-              </span>
-            ) : null}
-          </div>
+          <span className="text-2xl font-semibold tabular-nums">{value}</span>
         )}
         {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
       </CardContent>

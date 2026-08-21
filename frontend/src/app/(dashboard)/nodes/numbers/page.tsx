@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 
+import { PageHeader } from '@/components/composed/page-header';
 import { HostNumbersExplainer } from '@/features/host/components/host-numbers-explainer';
 
 export const metadata: Metadata = { title: 'Where these numbers come from' };
@@ -14,15 +15,10 @@ export const metadata: Metadata = { title: 'Where these numbers come from' };
 export default function HostNumbersPage() {
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="font-heading text-lg font-semibold">
-          Where these numbers come from
-        </h1>
-        <p className="max-w-prose text-sm text-muted-foreground">
-          Reference for the compute-host panel: the collection method, a
-          definition for each figure, and what is excluded from collection.
-        </p>
-      </div>
+      <PageHeader
+        title="Where these numbers come from"
+        lead="Reference for the compute-host panel: the collection method, a definition for each figure, and what is excluded from collection."
+      />
       <HostNumbersExplainer />
     </div>
   );

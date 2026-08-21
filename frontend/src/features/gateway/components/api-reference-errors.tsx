@@ -20,26 +20,25 @@ export function ErrorsSection() {
         <p className="text-sm text-muted-foreground">
           <strong>
             Every response carries <code>X-Request-Id</code>
-          </strong>{' '}
-          (since 2026-08-05), and every error body repeats it as{' '}
-          <code>error.request_id</code>. The detail behind an error is
-          deliberately never in the response — it goes to the platform&apos;s
-          log, keyed by this id — so when you report a failure,{' '}
-          <strong>quote the id</strong>: it is the difference between an
-          administrator grepping timestamps and finding the exact line. If you
-          are actively debugging an integration, an administrator can open a
-          time-boxed <em>debug window</em> on your key (API keys page), during
-          which error responses carry that detail directly as{' '}
-          <code>error.detail</code>.
+          </strong>
+          , and every error body repeats it as <code>error.request_id</code>.
+          The detail behind an error is never included in the response; it is
+          written to the platform&apos;s log, keyed by this identifier. When
+          reporting a failure, <strong>quote the identifier</strong>: it is the
+          difference between an administrator searching timestamps and locating
+          the exact entry. While an integration is being debugged, an
+          administrator can open a time-boxed <em>debug window</em> on the key,
+          from the API keys page, during which error responses carry that detail
+          directly as <code>error.detail</code>.
         </p>
         <h3 className="pt-2 font-heading text-sm font-semibold">
           A stream that fails after it has started
         </h3>
         <p className="text-sm text-muted-foreground">
           The table below describes failures that happen before any bytes are
-          sent, which get a status code. Once the first frame is out the status
-          line is already committed as 200 and cannot be taken back, so a
-          failure mid-generation arrives in the body instead — a frame carrying{' '}
+          sent, which receive a status code. Once the first frame has been
+          sent, the status line is committed as 200 and cannot be withdrawn, so
+          a failure mid-generation arrives in the body instead: a frame carrying{' '}
           <code>error.code</code> and <code>error.message</code>, and then{' '}
           <strong>
             the stream ends without <code>data: [DONE]</code>
@@ -55,8 +54,8 @@ export function ErrorsSection() {
           label="Copy the failure shape"
         />
         <p className="text-sm text-muted-foreground">
-          This is inherent to server-sent events rather than a choice, and it
-          makes <code>[DONE]</code> load-bearing:{' '}
+          This is inherent to server-sent events rather than a design decision,
+          and it makes <code>[DONE]</code> load-bearing:{' '}
           <strong>
             treat a stream that ended without it as a failed request
           </strong>
@@ -81,10 +80,10 @@ export function ErrorsSection() {
                 <td className="font-mono text-xs">untrusted_proxy</td>
                 <td>
                   The request did not arrive through this deployment&apos;s
-                  front door, so no source address could be established. You
-                  will see this if you reach the application port directly
-                  rather than the published endpoint above. Nothing about the
-                  key is wrong.
+                  front door, so no source address could be established. It
+                  occurs where the application port is reached directly rather
+                  than the published endpoint above. Nothing about the key is at
+                  fault.
                 </td>
               </tr>
               <tr>
@@ -93,16 +92,16 @@ export function ErrorsSection() {
                   runtime_capability_unsupported
                 </td>
                 <td>
-                  Three conditions, none helped by an identical retry. A{' '}
-                  <code>tool_choice</code> of <code>required</code> or a named
-                  function, which no runtime here can enforce — send{' '}
+                  Three conditions, none of them resolved by an identical
+                  retry. A <code>tool_choice</code> of <code>required</code> or
+                  of a named function, which no runtime here can enforce: send{' '}
                   <code>auto</code>. A replayed assistant turn whose tool-call{' '}
-                  <code>arguments</code> do not parse as JSON, on a runtime
-                  that takes arguments as an object (Ollama does) — repair or
-                  drop that turn. Or, with <code>use_knowledge</code>, an
-                  embedding model on a runtime that cannot embed, in which case
-                  the request succeeds without the flag and an administrator
-                  has to repoint the <code>embedding</code> policy.
+                  <code>arguments</code> do not parse as JSON, on a runtime that
+                  takes arguments as an object, as Ollama does: repair or discard
+                  that turn. Or, with <code>use_knowledge</code>, an embedding
+                  model on a runtime that cannot embed, in which case the request
+                  succeeds without the flag and an administrator must repoint the{' '}
+                  <code>embedding</code> policy.
                 </td>
               </tr>
               <tr>
@@ -111,8 +110,8 @@ export function ErrorsSection() {
                 <td>
                   Missing, malformed, unknown, expired or revoked key, or a
                   source the key&apos;s CIDR allowlist does not permit. All
-                  answer identically on purpose — telling you which would tell
-                  an attacker which to fix.
+                  return the same response by design: naming the condition would
+                  tell an attacker which one to address.
                 </td>
               </tr>
               <tr>
@@ -120,26 +119,27 @@ export function ErrorsSection() {
                 <td className="font-mono text-xs">capability_not_issued</td>
                 <td>
                   The <code>model</code> field named something this key may not
-                  call — most often a client&apos;s own default model name
-                  rather than a capability. The message names what you asked for
-                  and what you may ask for instead; <code>GET /v1/models</code>{" "}
-                  is the same list, and since 2026-08-18 the two are fields as
-                  well as prose — <code>capability</code> and{' '}
-                  <code>available</code> — so a client can branch on them
-                  instead of parsing a sentence. Retrying will not help. A key
-                  can be issued with a default capability, which serves one of
-                  its own instead of refusing; the response then carries{' '}
-                  <code>X-Capability-Defaulted</code> naming what actually ran.
+                  call, most often a client&apos;s own default model name
+                  rather than a capability. The message names what was requested
+                  and what may be requested instead; <code>GET /v1/models</code>{" "}
+                  returns the same list. Both are also available as fields —{' '}
+                  <code>capability</code> and <code>available</code> — so a
+                  client can branch on them rather than parse a sentence.
+                  Retrying does not succeed. A key may be issued with a default
+                  capability, which serves one of the key&apos;s own instead of
+                  refusing; the response then carries{' '}
+                  <code>X-Capability-Defaulted</code> naming what ran.
                 </td>
               </tr>
               <tr>
                 <td>403</td>
                 <td className="font-mono text-xs">not_authorized</td>
                 <td>
-                  The key may not perform this action at all — it holds none of
+                  The key may not perform this action at all: it holds none of
                   the scopes the endpoint requires. Distinct from the row above,
-                  which is about <em>which</em> capability was asked for; this
-                  one is not fixed by changing the <code>model</code> field.
+                  which concerns <em>which</em> capability was requested. This
+                  condition is not corrected by changing the <code>model</code>{' '}
+                  field.
                 </td>
               </tr>
               <tr>
@@ -147,23 +147,23 @@ export function ErrorsSection() {
                 <td className="font-mono text-xs">country_not_allowed</td>
                 <td>
                   The request came from outside the countries this deployment
-                  accepts. Nothing about the key is wrong, so reissuing it
-                  changes nothing — this is the other 403, and the reason to
-                  read the code rather than the status.
+                  accepts. Nothing about the key is at fault, so reissuing it
+                  has no effect. This is the second condition returning 403, and
+                  the reason to read the code rather than the status.
                 </td>
               </tr>
               <tr>
                 <td>404</td>
                 <td className="font-mono text-xs">model_not_found</td>
                 <td>
-                  Routing picked a model that its runtime does not actually
-                  have. A deployment fault rather than anything about your
-                  request — the capability is configured but the weights behind
-                  it are missing — so retrying the same call repeats it. Two
-                  models can trigger it: the one serving your capability, and,
-                  with <code>use_knowledge</code>, the one serving{' '}
-                  <code>embedding</code>. In the second case the request
-                  succeeds without the flag.
+                  Routing selected a model that its runtime does not hold. This
+                  is a deployment fault rather than a property of the request —
+                  the capability is configured but the weights behind it are
+                  absent — so an identical retry reproduces it. Two models can
+                  produce it: the one serving the requested capability and, with{' '}
+                  <code>use_knowledge</code>, the one serving{' '}
+                  <code>embedding</code>. In the second case the request succeeds
+                  without the flag.
                 </td>
               </tr>
               <tr>
@@ -174,10 +174,7 @@ export function ErrorsSection() {
                   <code>message</code> names the field and the rule. A missing{' '}
                   <code>messages</code> array looks like this, as does a{' '}
                   <code>tool</code> message with no <code>tool_call_id</code>{' '}
-                  and an image part in a <code>content</code> array. Before
-                  2026-08-05 this was the framework&apos;s{' '}
-                  <code>{'{"detail": [...]}'}</code>, which no OpenAI client
-                  library could surface.
+                  and an image part in a <code>content</code> array.
                 </td>
               </tr>
               <tr>
@@ -185,10 +182,10 @@ export function ErrorsSection() {
                 <td className="font-mono text-xs">rate_limited</td>
                 <td>
                   Requests per minute exceeded. <code>Retry-After</code> is
-                  set; the window is short and retrying is the right response.
-                  The same figure is in the body as{' '}
-                  <code>retry_after_seconds</code>, for a client that reads
-                  bodies and not headers.
+                  set; the window is short and retrying is the correct
+                  response. The same figure appears in the body as{' '}
+                  <code>retry_after_seconds</code>, for clients that read bodies
+                  rather than headers.
                 </td>
               </tr>
               <tr>
@@ -197,13 +194,14 @@ export function ErrorsSection() {
                 <td>
                   The key&apos;s token budget is spent. Carries{' '}
                   <code>type: &quot;insufficient_quota&quot;</code>, not{' '}
-                  <code>rate_limit_error</code> — retrying cannot succeed, and
-                  an OpenAI client library branching on <code>type</code> will
-                  stop rather than exhaust its backoff. <code>Retry-After</code>{' '}
-                  is a measured wait (see below); it is often many hours, so
-                  treat it as a stop rather than a sleep. It is in the body too,
-                  as <code>retry_after_seconds</code>, and omitted from both
-                  rather than guessed at when the recovery time cannot be
+                  <code>rate_limit_error</code>, since retrying cannot succeed
+                  and an OpenAI client library branching on <code>type</code>{' '}
+                  stops rather than exhausting its backoff.{' '}
+                  <code>Retry-After</code> is a computed wait, described below;
+                  it is frequently many hours, and should be treated as a stop
+                  rather than as a delay. It appears in the body as{' '}
+                  <code>retry_after_seconds</code>, and is omitted from both
+                  rather than estimated where the recovery time cannot be
                   projected.
                 </td>
               </tr>
@@ -212,67 +210,61 @@ export function ErrorsSection() {
                 <td className="font-mono text-xs">context_too_long</td>
                 <td>
                   The prompt exceeds the configured input ceiling. Shorten it;
-                  the limit is about memory, not policy, and retrying unchanged
-                  cannot succeed. To budget for it yourself: the ceiling is{' '}
-                  <strong>at most 122,880 tokens</strong> over everything the
-                  model will read — your tool definitions and replayed tool
-                  calls included — so an agent conversation reaches this through
-                  accumulation rather than through one large message. It is
-                  lower when a smaller model is serving your capability, which
-                  is why the response states the figure it judged against rather
-                  than leaving you to assume the maximum.
+                  the limit is a memory constraint rather than a policy, and an
+                  unchanged retry cannot succeed. The ceiling is{' '}
+                  <strong>at most 122,880 tokens</strong> across everything the
+                  model will read, tool definitions and replayed tool calls
+                  included, so an agent conversation reaches this through
+                  accumulation rather than through one large message. It is lower
+                  where a smaller model is serving the capability, which is why
+                  the response states the figure it was judged against rather
+                  than leaving the maximum to be assumed.
                   <br />
                   It carries its own arithmetic: <code>estimated</code> and <code>limit</code> as
                   numbers, <code>composition</code>, which splits the figure
                   across messages, prior tool calls and tool definitions and
                   names the largest single message&apos;s share, and{' '}
-                  <code>basis</code>, which says how the figure was arrived at.
-                  The three shares have different remedies — a conversation that
-                  grew is fixed by starting a new one, one enormous message by
-                  not reading that file in, and tool definitions that dominate by
-                  trimming the client&apos;s tool list, which starting a new
-                  conversation does nothing about. The same figures are repeated
-                  in <code>message</code> for clients that print only that.
+                  <code>basis</code>, which states how the figure was arrived
+                  at. The three shares have different remedies: an accumulated
+                  conversation is addressed by starting a new one, a single very
+                  large message by not reading that file in, and dominant tool
+                  definitions by reducing the client&apos;s tool list, which
+                  starting a new conversation does not affect. The same figures
+                  are repeated in <code>message</code> for clients that print
+                  only that field.
                   <br />
                   <code>basis</code> is one of three values and they are not
                   interchangeable. <code>tokenizer</code> means the prompt was
                   counted with the vocabulary and chat template of the model that
-                  would have read it, including the framing the runtime wraps
-                  each turn in; it is the figure that model would have charged,
-                  and you can budget against it directly.{' '}
+                  would have read it, including the framing the runtime applies
+                  to each turn. It is the figure that model would have charged,
+                  and can be budgeted against directly.{' '}
                   <code>estimate</code> means no vocabulary was available for
-                  that model and the figure was inferred from character widths,
-                  which runs roughly 20% to 60% above the real count on prose,
-                  source and tool schemas — the ratio is a property of the
-                  sample rather than a constant of the content type — and can
-                  run well below it on dense identifiers
-                  such as uuids or base64 — so treat it as an upper bound on
-                  ordinary content and nothing at all on the rest.{' '}
+                  that model and the figure was inferred from character widths.
+                  It runs roughly 20% to 60% above the true count on prose,
+                  source and tool schemas — the ratio is a property of the sample
+                  rather than a constant of the content type — and can run well
+                  below it on dense identifiers such as UUIDs or base64. Treat it
+                  as an upper bound on ordinary content and as no bound at all on
+                  the rest.{' '}
                   <code>lower_bound</code> means the request was turned away
-                  before a model had been chosen, on a bound no tokenizer could
-                  bring under the ceiling; the true figure is above the number
-                  shown, and a payload that provokes this one is around a
-                  megabyte of text.
-                  <br />
-                  Before 2026-08-17 every refusal here was an{' '}
-                  <code>estimate</code>, and one of them was wrong by enough to
-                  matter: a client was refused at 140,059 estimated tokens on a
-                  payload of about 99,000 real ones, which the model serving it
-                  could have read. That is why the field exists rather than
-                  being left to be inferred.
+                  before a model had been selected, on a bound that no
+                  tokenizer could bring under the ceiling. The true figure is
+                  above the number shown, and a payload producing this basis is
+                  in the order of a megabyte of text.
                   <br />
                   <strong>
                     Every refusal is stored, and the account the key belongs to
-                    can read its own back without an administrator.
+                    can read its own without an administrator.
                   </strong>{' '}
-                  Since 2026-08-18 the code, the status, the message and these
-                  figures are kept against the <code>request_id</code> in the
-                  body for this deployment&apos;s refusal retention window —
-                  thirty days unless an administrator has moved it, and it may
-                  be set anywhere from 7 to 180 days — so a client that
-                  swallows the response leaves an operator something better to
-                  read than a container log. Nothing about your request is
-                  stored: no messages, no tool definitions, no model name.
+                  The code, the status, the message and these figures are
+                  retained against the <code>request_id</code> in the body for
+                  this deployment&apos;s refusal retention window — thirty days
+                  unless an administrator has changed it, and it may be set
+                  between 7 and 180 days — so a client that discards the response
+                  still leaves a record more useful than a container log. Nothing
+                  about the request itself is stored: no messages, no tool
+                  definitions, no model name.
                 </td>
               </tr>
               <tr>
@@ -280,15 +272,15 @@ export function ErrorsSection() {
                 <td className="font-mono text-xs">request_too_large</td>
                 <td>
                   The request body itself is over the platform&apos;s byte
-                  ceiling, which is a separate limit from the row above and
-                  measured differently. That one counts tokens in what the model
-                  will read and is applied after your request is parsed and your
-                  key is checked; this one counts raw bytes and is applied
-                  before either, so it is the one error here you can receive
-                  without a valid key. In practice you reach it only by sending
-                  something far larger than the context ceiling would allow
-                  anyway &mdash; a whole file pasted into a message, or a body
-                  that is not what you meant to send.
+                  ceiling, which is a separate limit from the row above and is
+                  measured differently. That limit counts tokens in what the
+                  model will read and is applied after the request is parsed and
+                  the key is checked; this one counts raw bytes and is applied
+                  before either, so it is the only error here that can be
+                  received without a valid key. In practice it is reached only by
+                  sending something far larger than the context ceiling would
+                  permit in any case: a whole file pasted into a message, or a
+                  body other than the one intended.
                 </td>
               </tr>
               <tr>
@@ -298,11 +290,11 @@ export function ErrorsSection() {
                   The routing layer found nothing to send the request to: no
                   policy names the capability, every candidate is offline or
                   unloaded, or the runtime process refused the connection. The
-                  response deliberately does not say which. Retry with backoff;
-                  if it persists, the deployment needs an administrator. Until
-                  2026-08-05 this code also covered the two rows below, whose
-                  remedies are different — an older integration branching on it
-                  should learn the new codes.
+                  response does not distinguish between them. Retry with
+                  backoff; where the condition persists, the deployment requires
+                  an administrator. The two rows below are distinct codes with
+                  different remedies, and an integration branching on this one
+                  alone should be updated to recognise them.
                 </td>
               </tr>
               <tr>
@@ -310,59 +302,55 @@ export function ErrorsSection() {
                 <td className="font-mono text-xs">runtime_timeout</td>
                 <td>
                   The runtime took longer than the platform&apos;s read timeout
-                  before producing its first byte — almost always prompt
+                  before producing its first byte, almost always prompt
                   evaluation on a large context.{' '}
                   <strong>
-                    Retrying the same request unchanged is unlikely to help;
-                    send less.
+                    An unchanged retry is unlikely to succeed; send less.
                   </strong>{' '}
-                  A prefill that is cancelled is discarded rather than kept:
-                  measured on 2026-08-14 by aborting a cold one part way, the
-                  retry re-evaluated 20,919 tokens in 33.5 seconds — the full
-                  cold rate, having kept nothing. The prefix cache is real and
-                  does make an agent&apos;s <em>next</em> turn nearly free, but
-                  it never holds a prompt whose evaluation was cut off, which
-                  is the only way this code is reached. Until 2026-08-14 this
-                  page advised the opposite; following it bought another full
-                  wait and the identical failure.
+                  A cancelled prefill is discarded rather than retained.
+                  Measured on this deployment by aborting a cold prefill part
+                  way, the retry re-evaluated 20,919 tokens in 33.5 seconds, the
+                  full cold rate, having retained nothing. The prefix cache does
+                  make an agent&apos;s <em>next</em> turn nearly free, but it
+                  never holds a prompt whose evaluation was interrupted, which is
+                  the only condition under which this code is returned.
                 </td>
               </tr>
               <tr>
                 <td>503</td>
                 <td className="font-mono text-xs">overloaded</td>
                 <td>
-                  Every inference slot was busy for the whole queue wait (two
-                  minutes). The deployment is healthy, just full —{' '}
-                  <code>Retry-After</code> is set, and backing off for it is
-                  the right response. Distinct from{' '}
-                  <code>no_available_model</code> on purpose: busy and broken
-                  used to be indistinguishable.
+                  Every inference slot was busy for the duration of the queue
+                  wait, which is two minutes. The deployment is healthy and at
+                  capacity. <code>Retry-After</code> is set, and backing off for
+                  that interval is the correct response. It is distinct from
+                  <code>no_available_model</code>, which reports a
+                  deployment that cannot serve the request at all.
                 </td>
               </tr>
               <tr>
                 <td>—</td>
                 <td className="font-mono text-xs">stream_interrupted</td>
                 <td>
-                  Only ever seen in the mid-stream error frame above (or, rarely,
-                  as a 503 when the runtime&apos;s stream ended before producing
-                  anything): the generation stalled or its stream ended without
-                  a terminal event. You may hold a partial answer. Whether to
-                  retry is your idempotence judgement — nothing here knows what
-                  your tool calls already did.
+                  Returned only in the mid-stream error frame above, or, rarely,
+                  as a 503 where the runtime&apos;s stream ended before producing
+                  anything: the generation stalled, or its stream ended without a
+                  terminal event. A partial answer may have been received.
+                  Whether to retry is a question of the caller&apos;s
+                  idempotence, since the platform has no knowledge of what
+                  already-executed tool calls have done.
                 </td>
               </tr>
               <tr>
                 <td>500</td>
                 <td className="font-mono text-xs">internal_error</td>
                 <td>
-                  Something the platform did not anticipate. Since 2026-08-05
-                  this carries the same envelope as every other error —
-                  before that it was the framework&apos;s bare{' '}
-                  <code>Internal Server Error</code> text, the one non-JSON
-                  body the API could produce. The traceback went to the log;
-                  what you get is <code>error.request_id</code>, and quoting it
-                  is exactly how an administrator finds that traceback. Retry
-                  once; if it repeats, report the id.
+                  A condition the platform did not anticipate. It carries the
+                  same envelope as every other error. The traceback is written to
+                  the log; the response carries <code>error.request_id</code>,
+                  and quoting that identifier is how an administrator locates the
+                  traceback. Retry once; where it recurs, report the
+                  identifier.
                 </td>
               </tr>
             </tbody>

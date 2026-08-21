@@ -129,9 +129,9 @@ export function PolicyFormDialog({
               control={form.control}
               name="thinking"
               label="Deliberation"
-              description="What a request that says nothing about it gets. Turn it off for agent
-                clients: they pay the cost again on every tool round trip, and a thinking model can
-                spend a whole token budget without answering."
+              description="What applies to a request that specifies nothing. Disable it for agent
+                clients: they incur the cost again on every tool round trip, and a deliberating model
+                can consume an entire token budget without answering."
               render={(field) => (
                 <Select
                   value={(field.value as string) ?? 'default'}
@@ -142,7 +142,7 @@ export function PolicyFormDialog({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="default">Deployment default</SelectItem>
-                    <SelectItem value="on">Let the model think</SelectItem>
+                    <SelectItem value="on">Deliberate before answering</SelectItem>
                     <SelectItem value="off">Answer directly</SelectItem>
                   </SelectContent>
                 </Select>

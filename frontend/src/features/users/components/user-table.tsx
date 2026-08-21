@@ -58,8 +58,8 @@ export function UserTable() {
         error={error}
         onRetry={() => void refetch()}
         searchPlaceholder="Search users"
-        emptyTitle="No users yet"
-        emptyDescription="Invite someone to give them access to the management UI."
+        emptyTitle="No users"
+        emptyDescription="Issue an invitation to grant access to the management UI."
         getRowId={(row) => row.id}
         toolbar={
           mayWrite ? (

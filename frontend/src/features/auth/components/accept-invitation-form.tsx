@@ -64,7 +64,7 @@ export function AcceptInvitationForm({ token }: { token: string }) {
   });
 
   if (invitation.isPending) {
-    return <p className="text-sm text-muted-foreground">Checking this link...</p>;
+    return <p className="text-sm text-muted-foreground">Checking this link…</p>;
   }
 
   if (invitation.isError) {

@@ -1,32 +1,33 @@
 import type { Metadata } from 'next';
 
+import { PageHeader } from '@/components/composed/page-header';
 import { AccountSettings } from '@/features/account/components/account-settings';
 
 export const metadata: Metadata = { title: 'Account' };
 
-/**
- * The destination the shell header has linked to all along. Until this existed
- * the Account button was a 404 on every screen it appeared on, which was every
- * screen served from the public entrance.
- */
 export default function AccountPage() {
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="font-heading text-lg font-semibold">Account</h1>
-        <p className="max-w-prose text-sm text-muted-foreground">
-          Your own password and authenticator app. Nothing here affects anyone
-          else&apos;s account, and administrators change theirs the same way —
-          nobody can set another person&apos;s password from this application.
+      <PageHeader
+        title="Account"
+        lead="The password and authenticator app belonging to the signed-in account."
+      >
+        <p>
+          Changes made here affect no other account. Administrators change their
+          own credentials by the same procedure; no account&apos;s password can
+          be set on its behalf from this application.
         </p>
-        <p className="mt-2 max-w-prose text-sm text-muted-foreground">
-          These are needed only for signing in from outside the private network;
-          over the private network you are already identified and neither is
-          asked for. Keep the recovery codes somewhere other than the device
-          holding the authenticator, since they are what remains if that device
-          is lost.
+        <p>
+          Both credentials are required only for signing in from outside the
+          private network. Over the private network the account is identified by
+          the network itself and neither is requested.
         </p>
-      </div>
+        <p>
+          Retain the recovery codes on a device other than the one holding the
+          authenticator. They are the only remaining means of access if that
+          device is lost.
+        </p>
+      </PageHeader>
       <AccountSettings />
     </div>
   );

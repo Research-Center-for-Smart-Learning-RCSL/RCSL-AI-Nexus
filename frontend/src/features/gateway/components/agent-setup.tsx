@@ -91,10 +91,11 @@ export function AgentSetup() {
 
       {isLoading ? null : capabilities.includes('code') ? null : (
         <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-          This deployment has no <code>code</code> capability yet. An agent works
+          This deployment has no <code>code</code> capability. An agent operates
           against any routable capability, but <code>code</code> is the one an
-          administrator sizes for agents — one model, no fallback, deliberation
-          off. Ask for it before pointing real work at this.
+          administrator sizes for agents: one model, no fallback, deliberation
+          disabled. Request it before directing production work at this
+          deployment.
         </p>
       )}
       </div>

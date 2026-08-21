@@ -92,8 +92,8 @@ export function PromptTemplateTable() {
         error={error}
         onRetry={() => void refetch()}
         searchPlaceholder="Search templates"
-        emptyTitle="No prompt templates yet"
-        emptyDescription="A template is a system prompt a caller selects by name. There is no variable substitution: what a caller chooses is which one, not what it says."
+        emptyTitle="No prompt templates"
+        emptyDescription="A template is a system prompt that a caller selects by name. There is no variable substitution: the caller selects which template applies, not what it says."
         getRowId={(row) => row.id}
         toolbar={
           mayWrite ? (
@@ -120,7 +120,7 @@ export function PromptTemplateTable() {
           if (!open) setDeleting(null);
         }}
         title={`Delete ${deleting?.name ?? 'this template'}?`}
-        description="Conversations already sent are unaffected — the template was copied into those requests. The next request naming it is refused rather than served without it."
+        description="Conversations already sent are unaffected, since the template was copied into those requests. The next request naming it is refused rather than served without it."
         confirmLabel="Delete"
         destructive
         onConfirm={async () => {
