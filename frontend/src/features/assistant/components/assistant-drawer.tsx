@@ -224,7 +224,7 @@ export function AssistantDrawer() {
               size="sm"
               variant="outline"
               className="pointer-events-auto bg-background shadow-md"
-              onClick={() => scrollToBottom('smooth')}
+              onClick={() => scrollToBottom()}
             >
               <ArrowDownIcon className="size-4" />
               Jump to latest

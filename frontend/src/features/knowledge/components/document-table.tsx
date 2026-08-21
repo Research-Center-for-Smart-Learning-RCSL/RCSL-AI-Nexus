@@ -89,6 +89,10 @@ export function DocumentTable({ collectionId }: DocumentTableProps) {
         // "1-25 of N" — two sets of Previous/Next, three clicks apart in
         // meaning, on the same screen.
         pageSize={PAGE_SIZE}
+        // For the same reason as the page size above: the rows the table can
+        // see are one server page, so its own count would read "25 rows"
+        // directly above this screen's "1-25 of 137".
+        showRowCount={false}
         searchPlaceholder="Filter the documents below"
         emptyTitle="No documents"
         emptyDescription={
@@ -104,7 +108,7 @@ export function DocumentTable({ collectionId }: DocumentTableProps) {
             onClick={() => fileInput.current?.click()}
           >
             <UploadIcon />
-            {upload.isPending ? 'Uploading...' : 'Upload'}
+            {upload.isPending ? 'Uploading…' : 'Upload'}
           </Button>
         }
       />
