@@ -56,7 +56,7 @@ export function TenantTable() {
         onRetry={() => void refetch()}
         searchPlaceholder="Search tenants"
         emptyTitle="No tenants"
-        emptyDescription="Every account belongs to a tenant. Create one to isolate a group's users and keys."
+        emptyDescription="Every account belongs to a tenant. Create one to isolate a group's accounts and keys."
         getRowId={(row) => row.id}
         toolbar={
           mayWrite ? (

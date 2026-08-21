@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 
+import { PageHeader } from '@/components/composed/page-header';
 import { ApiReference } from '@/features/gateway/components/api-reference';
 
 export const metadata: Metadata = { title: 'API reference' };
@@ -7,22 +8,22 @@ export const metadata: Metadata = { title: 'API reference' };
 export default function ApiDocsPage() {
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-lg font-semibold">API reference</h1>
-        <p className="max-w-prose text-sm text-muted-foreground">
-          How to call this deployment from your own code with a key issued here:
-          the address to send to, the shape of a request, every field a request
-          accepts, and what each error code means. Requests name a{' '}
-          <strong>capability</strong> rather than a model, which is the one
-          place this platform differs from providers you may have used before.
+      <PageHeader
+        title="API reference"
+        lead="The contract for calling this deployment from external code using a key issued here: the address to send to, the structure of a request, every field a request accepts, and the meaning of each error code."
+      >
+        <p>
+          Requests name a <strong>capability</strong> rather than a model. This
+          is the principal respect in which the platform differs from
+          general-purpose providers.
         </p>
-        <p className="mt-2 max-w-prose text-sm text-muted-foreground">
-          The gateway serves no machine-readable schema of its own, so this page
-          is the contract rather than a summary of one. Everything on it is
-          rendered from the running deployment, so the address and the list of
-          capabilities are the ones your key will actually meet.
+        <p>
+          The gateway serves no machine-readable schema, so this page
+          constitutes the contract rather than a summary of one. Its contents
+          are rendered from the running deployment, so the address and the list
+          of capabilities are those a key will encounter.
         </p>
-      </div>
+      </PageHeader>
       <ApiReference />
     </div>
   );

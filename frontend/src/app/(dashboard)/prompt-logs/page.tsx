@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 
+import { PageHeader } from '@/components/composed/page-header';
 import { RelatedScreens } from '@/components/composed/related-screens';
 import { PromptLogsTable } from '@/features/prompt-logs/components/prompt-logs-table';
 
@@ -8,39 +9,39 @@ export const metadata: Metadata = { title: 'Transcripts' };
 export default function PromptLogsPage() {
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="font-heading text-lg font-semibold">Transcripts</h1>
-        <p className="max-w-prose text-sm text-muted-foreground">
-          What was actually typed and what the model wrote back, captured only
-          while a debug window is open on an API key or a user account. The
-          platform records metadata by default and nothing else, so an empty
-          list here is the normal state rather than a fault.
+      <PageHeader
+        title="Transcripts"
+        lead="What was submitted to a model and what it returned, captured only while a debug window is open on an API key or a user account."
+      >
+        <p>
+          The platform records metadata by default and nothing further, so an
+          empty list here is the normal state rather than a fault.
         </p>
-        <p className="mt-2 max-w-prose text-sm text-muted-foreground">
-          These are researchers’ unpublished ideas. They are kept for days
-          rather than months — the window on the Retention screen — and opening
-          one records that you read it.
+        <p>
+          These records contain unpublished research material. They are retained
+          for days rather than months — the window is set on the Retention
+          screen — and opening one is itself recorded.
         </p>
-      </div>
+      </PageHeader>
       <PromptLogsTable />
       <RelatedScreens
         items={[
           {
             href: '/api-keys',
             label: 'API keys',
-            note: 'where capture is switched on: opening a debug window on a key is what causes anything to appear here, and it closes itself',
+            note: 'where capture is enabled: opening a debug window on a key is what causes records to appear here, and the window closes itself',
           },
           {
             href: '/retention',
             label: 'Retention',
             requires: 'retention:write',
-            note: 'how long these are kept once captured, which is the window to keep shortest of any on that screen',
+            note: 'how long these are retained once captured, which should be the shortest window on that screen',
           },
           {
             href: '/logs',
             label: 'Audit log',
             requires: 'logs:read',
-            note: 'where your having opened one of these is recorded',
+            note: 'where the fact that one of these was opened is recorded',
           },
         ]}
       />

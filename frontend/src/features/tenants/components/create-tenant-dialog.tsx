@@ -68,10 +68,10 @@ export function CreateTenantDialog({
         <DialogHeader>
           <DialogTitle>Create a tenant</DialogTitle>
           <DialogDescription>
-            A tenant isolates its users, keys and usage from every other
-            tenant. Creating one issues a single-use link for its first
-            account — which is a platform administrator, so the boundary drawn
-            here does not confine the person handed it.
+            A tenant isolates its accounts, keys and usage from every other
+            tenant. Creating one issues a single-use link for its first account,
+            which is a platform administrator, so the boundary drawn here does
+            not confine the account it is issued to.
           </DialogDescription>
         </DialogHeader>
 
@@ -112,7 +112,7 @@ export function CreateTenantDialog({
                   type="email"
                   placeholder="lead@example.org"
                   autoComplete="off"
-                  description="Globally unique. This account is created with the platform admin role: every scope, in every tenant, not only this one. Issue it to somebody who is already trusted with the whole installation, or invite a tenant_admin from inside the new tenant afterwards."
+                  description="Globally unique. This account is created with the platform admin role: every scope, in every tenant, not only this one. Issue it to an account already trusted with the whole installation, or invite a tenant_admin from within the new tenant afterwards."
                 />
                 <FormField
                   control={form.control}

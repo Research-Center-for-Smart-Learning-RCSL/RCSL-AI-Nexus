@@ -82,7 +82,7 @@ export function LoginForm({ redirectTo = '/' }: { redirectTo?: string }) {
           />
           <ErrorLine message={login.error} />
           <Button type="submit" className="w-full" disabled={login.pending}>
-            {login.pending ? 'Checking...' : 'Continue'}
+            {login.pending ? 'Checking…' : 'Continue'}
           </Button>
           {/* There is no self-service reset, and there is deliberately no link
               here pretending otherwise: a reset link is issued by an
@@ -91,9 +91,9 @@ export function LoginForm({ redirectTo = '/' }: { redirectTo?: string }) {
               account-enumeration oracle. Saying nothing left someone who had
               forgotten their password on a screen with no visible way out. */}
           <p className="text-center text-xs text-muted-foreground">
-            Forgotten your password? An administrator issues a single-use reset
-            link; there is no self-service reset. Ask whoever set up your
-            account.
+            A forgotten password is reset by an administrator, who issues a
+            single-use link; there is no self-service reset. Contact the
+            administrator who created the account.
           </p>
         </form>
       </Form>

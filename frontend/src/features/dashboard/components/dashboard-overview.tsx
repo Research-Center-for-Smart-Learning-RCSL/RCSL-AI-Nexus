@@ -30,7 +30,7 @@ export function DashboardOverview() {
         <StatCard
           label="Models loaded"
           value={
-            data ? `${data.models_loaded} / ${data.models_total}` : '-'
+            data ? `${data.models_loaded} / ${data.models_total}` : '—'
           }
           hint="Registered as loaded — Models shows where the runtime disagrees, and routing follows the runtime"
           icon={<BoxIcon className="size-4" />}
@@ -38,21 +38,21 @@ export function DashboardOverview() {
         />
         <StatCard
           label="Nodes online"
-          value={data ? `${data.nodes_online} / ${data.nodes_total}` : '-'}
+          value={data ? `${data.nodes_online} / ${data.nodes_total}` : '—'}
           hint="From the node heartbeat"
           icon={<CpuIcon className="size-4" />}
           isLoading={isLoading}
         />
         <StatCard
           label="Active API keys"
-          value={data?.api_keys_active ?? '-'}
+          value={data?.api_keys_active ?? '—'}
           hint="Excludes revoked and expired"
           icon={<KeyIcon className="size-4" />}
           isLoading={isLoading}
         />
         <StatCard
           label="Users"
-          value={data?.users_total ?? '-'}
+          value={data?.users_total ?? '—'}
           hint="Invitation only"
           icon={<UsersIcon className="size-4" />}
           isLoading={isLoading}

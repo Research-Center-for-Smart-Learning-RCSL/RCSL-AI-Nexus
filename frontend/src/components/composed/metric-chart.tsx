@@ -316,7 +316,7 @@ export function MetricChart({
                     <span className={cn('size-2 rounded-full bg-current', entry.color)} />
                     <span className="text-muted-foreground">{entry.label}</span>
                     <span className="ml-auto tabular-nums">
-                      {entry.value === undefined ? '-' : formatValue(entry.value)}
+                      {entry.value === undefined ? '—' : formatValue(entry.value)}
                     </span>
                   </div>
                 ))}

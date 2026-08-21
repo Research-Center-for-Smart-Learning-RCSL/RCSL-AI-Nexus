@@ -15,8 +15,13 @@
  * to need it.
  */
 
-import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ChevronsLeftIcon, ChevronsRightIcon, XIcon } from 'lucide-react';
+import { useEffect, useState, type FormEvent } from 'react';
+import {
+  ArrowDownIcon,
+  ChevronsLeftIcon,
+  ChevronsRightIcon,
+  XIcon,
+} from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { StreamMessage } from '@/components/composed/stream-message';
@@ -28,6 +33,7 @@ import {
   WIDTH_KEY,
 } from '@/features/assistant/width';
 import { useAssistant } from '@/features/assistant/hooks/use-assistant';
+import { useStickToBottom } from '@/lib/use-stick-to-bottom';
 import { proposalToFormPatch } from '@/features/assistant/components/proposal-card';
 import type { Proposal } from '@/features/assistant/schema';
 
@@ -48,17 +54,19 @@ export function AssistantDrawer() {
   const context = useAssistantContext();
   const { isOpen: open, setOpen } = context;
   const { turns, isStreaming, store, send, cancel, clear } = useAssistant();
-  const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (open) bottomRef.current?.scrollIntoView({ block: 'end' });
-  }, [open, turns.length, isStreaming]);
+  // The same defect the chat panel had: the answer arrives on a store that does
+  // not re-render this component, so an effect keyed on the turn count followed
+  // the first line of a reply and none of the rest.
+  const { containerRef, contentRef, onScroll, pinned, scrollToBottom } =
+    useStickToBottom();
 
   function submit(event: FormEvent) {
     event.preventDefault();
     const trimmed = question.trim();
     if (!trimmed || isStreaming) return;
     setQuestion('');
+    scrollToBottom();
     void send(trimmed);
   }
 
@@ -151,13 +159,17 @@ export function AssistantDrawer() {
         </div>
       </header>
 
-      <div
-        // `overscroll-contain`: this panel is `fixed`, so when its scroll
-        // reached the end the browser chained the gesture to the document
-        // behind it — the page drifted while the panel stayed put, which reads
-        // as the panel being broken. Contained, the gesture stops at the edge.
-        className="flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-3"
-      >
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={containerRef}
+          onScroll={onScroll}
+          // `overscroll-contain`: this panel is `fixed`, so when its scroll
+          // reached the end the browser chained the gesture to the document
+          // behind it — the page drifted while the panel stayed put, which reads
+          // as the panel being broken. Contained, the gesture stops at the edge.
+          className="h-full overflow-y-auto overscroll-contain px-4 py-3"
+        >
+          <div ref={contentRef} className="space-y-3">
         {turns.length === 0 && !isStreaming ? (
           <div className="space-y-2 text-sm text-muted-foreground">
             <p>
@@ -202,7 +214,23 @@ export function AssistantDrawer() {
               : ''}
         </p>
 
-        <div ref={bottomRef} />
+          </div>
+        </div>
+
+        {!pinned && (turns.length > 0 || isStreaming) ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="pointer-events-auto bg-background shadow-md"
+              onClick={() => scrollToBottom('smooth')}
+            >
+              <ArrowDownIcon className="size-4" />
+              Jump to latest
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       <AssistantComposer

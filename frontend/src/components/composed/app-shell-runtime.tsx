@@ -115,7 +115,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div
       className={cn(
-        'flex flex-1 flex-col',
+        // A fixed viewport height with one scrolling region inside it, rather
+        // than a document that scrolls behind a nav that does not. The header
+        // used to scroll away on exactly the screens long enough to need it —
+        // Logs, Models, Users — while the sidebar beside it stayed put, and a
+        // page wanting the remaining height had to compete with a document
+        // scrollbar it could not see. `100dvh` rather than `100vh` so the
+        // mobile browser's collapsing toolbar is not counted twice.
+        'flex h-[100dvh] flex-col overflow-hidden',
         // Reserving the panel's width from `lg` up is what turns it from
         // something that covers the rightmost table columns into something that
         // sits beside them. Below `lg` there is no width to spare, so it
@@ -129,30 +136,47 @@ export function AppShell({ children }: { children: ReactNode }) {
           (assistantWide ? RESERVED_CLASS.wide : RESERVED_CLASS.narrow),
       )}
     >
+      {/* First in the tab order, visible only while focused. Every screen puts
+          the whole sidebar between the address bar and the page, so without
+          this a keyboard reader tabs through fifteen links to reach the table
+          they navigated to, on every navigation. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-60 focus:rounded-md focus:bg-background focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:ring-2 focus:ring-ring"
+      >
+        Skip to content
+      </a>
       <SessionExpiryWarning />
-      <div className="flex flex-1">
-        {/* Sticky, with its own scroll. Without this the nav scrolled away with
-            the content, so on the screens that are actually long — Users, Logs,
-            Models — reaching the bottom of a table meant losing every link and
-            scrolling back up to go anywhere. `h-[calc(100dvh)]` rather than
-            `h-screen`: on mobile browsers `100vh` includes the chrome that
-            hides as you scroll, so the last group sat under the toolbar.
-            `overscroll-contain` for the same reason as everywhere else — a nav
-            that has reached its end must not start moving the page behind it. */}
+      <div className="flex min-h-0 flex-1">
+        {/* Full height with its own scroll, inside a shell that no longer
+            scrolls as a whole. On the screens that are actually long — Users,
+            Logs, Models — reaching the bottom of a table used to mean losing
+            every link and scrolling back up to go anywhere. `overscroll-contain`
+            for the same reason as everywhere else: a nav that has reached its
+            end must not start moving the region behind it. */}
         <DesktopNavigation authMode={authMode} pinned={visiblePinned} groups={visibleGroups} pathname={pathname} collapsed={collapsed} onToggle={toggleGroup} />
 
         {/* The same links for anything narrower than the sidebar's breakpoint.
-            Below 640px the aside is display:none, and without this there was no
-            way at all to reach another screen short of typing the URL. */}
+            Below 1024px the aside is display:none, and without this there is no
+            way at all to reach another screen short of typing the URL. The
+            breakpoint is `lg` rather than `sm` because between the two a 224px
+            sidebar and a dense table share a viewport neither of them fits in;
+            the tables are what the reader came for. */}
         <MobileNavigation navOpen={navOpen} setNavOpen={setNavOpen} navPanelRef={navPanelRef} navButtonRef={navButtonRef} authMode={authMode} pinned={visiblePinned} groups={visibleGroups} pathname={pathname} collapsed={collapsed} onToggle={toggleGroup} />
 
 
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <AppShellHeader navButtonRef={navButtonRef} navOpen={navOpen} setNavOpen={setNavOpen} me={me} authMode={authMode} assistant={assistant} signOut={signOut} />
 
-          {/* A flex column, so a page that wants the remaining height can ask
-              for it with `flex-1` instead of guessing at the chrome above it in
-              viewport units. */}
+          {/* The application's only scrolling region, and a flex column, so a
+              page that wants the remaining height asks for it with `flex-1`
+              instead of guessing at the chrome above it in viewport units. A
+              page that overflows scrolls here, beneath a header and beside a
+              nav that both stay where they were.
+
+              `tabIndex={-1}` is what makes the skip link above land somewhere:
+              without it the anchor moves the scroll position and leaves focus
+              at the top of the document, so the next Tab returns to the nav. */}
           {/* The chrome stays; only the page is withheld. A screen's data
               hooks fire on mount, and a refusal on this API is an
               `authz.denied` audit row — so letting a forbidden page render for
@@ -168,7 +192,11 @@ export function AppShell({ children }: { children: ReactNode }) {
               `/usage/me`. Rendering nothing here is not a second access
               control; the server refuses these calls whatever the client
               does. */}
-          <main className="flex min-w-0 flex-1 flex-col p-4">
+          <main
+            id="main-content"
+            tabIndex={-1}
+            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain p-4 outline-none"
+          >
             {onForbiddenRoute ? null : children}
           </main>
         </div>

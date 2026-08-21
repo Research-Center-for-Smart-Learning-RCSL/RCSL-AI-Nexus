@@ -50,9 +50,9 @@ export function EvaluationCaveats({ report }: { report: EvaluationReport }) {
           report.run.caveats.map((caveat) => <li key={caveat}>{caveat}</li>)
         ) : (
           <li>
-            Whoever imported this run recorded no limits against it. That is an
-            omission at import rather than a statement that the run has none —
-            read the per-task verdicts below before relying on the ranking.
+            No limits were recorded against this run at import. That is an
+            omission at import rather than a statement that the run has none.
+            Read the per-task verdicts below before relying on the ranking.
           </li>
         )}
       </ul>

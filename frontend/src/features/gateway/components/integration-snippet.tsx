@@ -28,7 +28,7 @@ export function IntegrationSnippet({
 
   if (isLoading) {
     return (
-      <p className="text-sm text-muted-foreground">Loading the endpoint...</p>
+      <p className="text-sm text-muted-foreground">Loading the endpoint…</p>
     );
   }
 

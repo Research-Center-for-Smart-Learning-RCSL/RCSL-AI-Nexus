@@ -109,8 +109,8 @@ export function HostNumbersExplainer() {
           macOS cannot access the GPU.
         </p>
         <p className="max-w-prose text-sm text-muted-foreground">
-          The service is a standard-library Python program of approximately 186
-          lines. It executes <code>vm_stat</code>, <code>sysctl</code> and{' '}
+          The service is a standard-library Python program. It executes{' '}
+          <code>vm_stat</code>, <code>sysctl</code> and{' '}
           <code>statfs</code>, performs arithmetic on the results, and returns
           JSON. It holds no state, performs no writes, and makes no outbound
           network requests. The term &quot;agent&quot; is used here in its
@@ -206,10 +206,10 @@ export function HostNumbersExplainer() {
       <Section title="Excluded from collection">
         <p className="max-w-prose text-sm text-muted-foreground">
           GPU utilisation and thermal state are not collected. Both require{' '}
-          <code>powermetrics</code>, which requires root privileges. Granting
-          root to a permanently running background service is a security
-          decision disproportionate to the value of the additional readings,
-          and is therefore not taken.
+          <code>powermetrics</code>, which requires root privileges. The
+          collection service runs unprivileged, and the additional readings do
+          not justify granting root to a permanently running background
+          service.
         </p>
         <p className="max-w-prose text-sm text-muted-foreground">
           The commands actually used require no elevated privileges, which is

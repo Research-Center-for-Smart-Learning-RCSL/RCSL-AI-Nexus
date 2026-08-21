@@ -76,7 +76,7 @@ export function PromptTemplateDialog({
           <DialogDescription>
             The system prompt is placed at the front of the conversation, ahead
             of any system message the caller sends. There is no variable
-            substitution: what a caller chooses is which template, not what it
+            substitution: the caller selects which template applies, not what it
             says.
           </DialogDescription>
         </DialogHeader>
@@ -99,7 +99,7 @@ export function PromptTemplateDialog({
               name="description"
               label="Description"
               placeholder="Terse reviews, no praise"
-              description="For whoever is choosing one. Never sent to a model."
+              description="For the reader selecting a template. Never sent to a model."
             />
             <FormField
               control={form.control}

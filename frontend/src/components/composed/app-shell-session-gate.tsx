@@ -22,8 +22,12 @@ export function renderSessionGate({
   if (status === 'loading') {
     return (
       <div className="flex flex-1 flex-col items-center justify-center">
-        <Spinner label="Checking your access" />
-        <p className="text-sm text-muted-foreground">Checking your access...</p>
+        {/* Decorative: the line below is the announcement, and labelling both
+            reads the same sentence twice. */}
+        <Spinner label={null} />
+        <p role="status" className="text-sm text-muted-foreground">
+          Checking your access…
+        </p>
       </div>
     );
   }

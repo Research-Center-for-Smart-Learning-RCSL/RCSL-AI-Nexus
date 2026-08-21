@@ -45,11 +45,26 @@ export function DataTableContent<TData>({
                 const canSort = header.column.getCanSort();
                 const sorted = header.column.getIsSorted();
                 return (
-                  <TableHead key={header.id}>
+                  <TableHead
+                    key={header.id}
+                    // Sorted state was carried by a chevron and nothing else, so
+                    // a screen reader was told the column was a button and
+                    // never which way the table was ordered — or that it was
+                    // ordered at all.
+                    aria-sort={
+                      !canSort
+                        ? undefined
+                        : sorted === 'asc'
+                          ? 'ascending'
+                          : sorted === 'desc'
+                            ? 'descending'
+                            : 'none'
+                    }
+                  >
                     {header.isPlaceholder ? null : canSort ? (
                       <button
                         type="button"
-                        className="inline-flex items-center gap-1 hover:text-foreground"
+                        className="inline-flex items-center gap-1 rounded-sm hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
                         onClick={header.column.getToggleSortingHandler()}
                       >
                         {flexRender(
@@ -94,7 +109,7 @@ export function DataTableContent<TData>({
                 {globalFilter ? (
                   <EmptyState
                     title="No matches"
-                    description={`Nothing here matches "${globalFilter}".`}
+                    description={`No row matches “${globalFilter}”.`}
                     action={
                       <Button
                         size="sm"

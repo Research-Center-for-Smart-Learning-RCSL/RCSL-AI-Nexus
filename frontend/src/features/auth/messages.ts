@@ -31,4 +31,4 @@ export const TAILSCALE_CONNECTION_LOST =
   'Tailscale connection lost. Check that you are connected to the tailnet, then retry.';
 
 export const RECOVERY_CODES_WARNING =
-  'These are shown once and never again. Store them where you would store a spare key, not next to your password.';
+  'These are shown once and cannot be retrieved afterwards. Store them separately from the password they protect.';

@@ -44,7 +44,7 @@ export function DataTable<TData, TValue>({
   error,
   onRetry,
   searchPlaceholder,
-  emptyTitle = 'Nothing here yet',
+  emptyTitle = 'No records',
   emptyDescription,
   emptyAction,
   toolbar,

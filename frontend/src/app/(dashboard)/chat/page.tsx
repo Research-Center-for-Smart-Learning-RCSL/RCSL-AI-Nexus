@@ -1,56 +1,58 @@
 import type { Metadata } from 'next';
 
+import { PageHeader } from '@/components/composed/page-header';
 import { ChatPanel } from '@/features/chat/components/chat-panel';
 
 export const metadata: Metadata = { title: 'Chat' };
 
 export default function ChatPage() {
   return (
-    // Fills whatever the shell has left rather than measuring the viewport and
-    // subtracting a guess. The old `calc(100vh-8rem)` did not know about the
-    // session-expiry banner, so the composer slid below the fold for the last
-    // five minutes of every session — exactly when someone is most likely to be
-    // mid-sentence.
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <div>
-        <h1 className="font-heading text-lg font-semibold">Chat</h1>
-        <p className="max-w-prose text-sm text-muted-foreground">
-          Ask this deployment&apos;s models a question directly, signed in as
-          yourself. No API key is involved: this screen is authorised by your
-          own identity, and no key issued here can reach it. Choose a{' '}
-          <strong>capability</strong> rather than a model: the
-          name describes the job, and the platform decides which model serves
-          it, so conversations keep working when the models behind a name are
-          replaced.
+      <PageHeader
+        lead={
+          <>
+            Direct access to this deployment&apos;s models, authorised by the
+            signed-in identity rather than by an API key.{' '}
+            <strong>
+              A model will answer a question its material cannot determine, so
+              verify an answer that matters against its source.
+            </strong>
+          </>
+        }
+        title="Chat"
+      >
+        <p>
+          No API key is involved on this screen, and no key issued by this
+          platform can reach it.
         </p>
-        <p className="mt-2 max-w-prose text-sm text-muted-foreground">
-          Replies stream as they are produced, and <strong>Stop</strong> ends a
-          reply that is no longer worth waiting for — it stops the work on the
-          server rather than only hiding it.
+        <p>
+          Select a <strong>capability</strong> rather than a model. The
+          capability names the task and the platform selects the model that
+          serves it, so a conversation remains valid when the models behind a
+          name are replaced. Replies stream as they are produced, and{' '}
+          <strong>Stop</strong> ends generation on the server rather than
+          concealing the output.
         </p>
-        <p className="mt-2 max-w-prose text-sm text-muted-foreground">
-          Two controls change how a reply is produced.{' '}
-          <strong>Thinking</strong> lets a deliberating model reason before it
-          answers; clearing it asks for a direct reply, which is the remedy
-          when a model reasons at length and produces no answer at all.{' '}
+        <p>
+          Two controls affect how a reply is produced.{' '}
+          <strong>Thinking</strong> permits a deliberating model to reason
+          before answering; clearing it requests a direct reply, which is the
+          remedy where a model deliberates at length and produces no answer.{' '}
           <strong>Answer from the knowledge base</strong> draws the reply from
-          your tenant&apos;s uploaded documents; it is off unless switched on,
-          so by default a reply comes from the model alone. Prompt templates
-          are not applied here — they are selected by callers using the API.
+          the tenant&apos;s uploaded documents and is disabled unless enabled
+          explicitly, so a reply is otherwise produced by the model alone.
+          Prompt templates are not applied here; they are selected by callers
+          using the API.
         </p>
-        <p className="mt-2 max-w-prose text-sm text-muted-foreground">
-          <strong>
-            A model will answer a question its material cannot answer.
-          </strong>{' '}
-          Measured here on 2026-08-15: given figures that did not determine the
-          result, every model tested produced a confident number instead of
-          reporting that the data was insufficient — nine attempts out of nine,
-          with the arithmetic laid out. This is a property of the models rather
-          than of this platform, it is not fixed by choosing a different
-          capability, and retrieval does not prevent it. Where an answer matters,
-          check it against the source rather than against how certain it sounds.
+        <p>
+          On the caution above: presented with figures that did not determine a
+          result, every model tested on this deployment produced a confident
+          numerical answer, with the arithmetic set out, rather than reporting
+          that the data were insufficient. This is a property of the models
+          rather than of this platform. It is not corrected by selecting a
+          different capability, and retrieval does not prevent it.
         </p>
-      </div>
+      </PageHeader>
       <div className="min-h-0 flex-1">
         <ChatPanel />
       </div>

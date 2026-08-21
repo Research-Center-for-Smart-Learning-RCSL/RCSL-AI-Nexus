@@ -56,7 +56,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
   });
 
   if (target.isPending) {
-    return <p className="text-sm text-muted-foreground">Checking this link...</p>;
+    return <p className="text-sm text-muted-foreground">Checking this link…</p>;
   }
 
   if (target.isError) {

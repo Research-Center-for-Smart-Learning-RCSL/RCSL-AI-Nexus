@@ -39,13 +39,13 @@ export const DATASET_LABELS: Record<string, string> = {
 
 export const DATASET_DESCRIPTIONS: Record<string, string> = {
   audit_log:
-    'Who did what: sign-ins, authorization denials, and every administrative action. Deleting these removes the record of what was done, including the record of this deletion.',
+    'Which account did what: sign-ins, authorization denials, and every administrative action. Deleting these removes the record of what was done, including the record of this deletion.',
   usage_records:
-    'What each request cost, per capability and per account. Quotas are measured against these, so a window shorter than the longest quota period would make enforcement wrong rather than merely forgetful.',
+    'What each request cost, per capability and per account. Quotas are measured against these records, so a window shorter than the longest quota period makes enforcement incorrect rather than merely incomplete.',
   prompt_logs:
-    'The full prompt and completion text captured while a debug window was open: what researchers typed, and what the models answered. The most sensitive data the platform holds, and the only one here whose limit is a maximum rather than a minimum.',
+    'The full prompt and completion text captured while a debug window was open: what was submitted, and what the models answered. The most sensitive data the platform holds, and the only dataset here whose limit is a maximum rather than a minimum.',
   refusals:
-    'Every request the platform turned away, with the message its caller was given and the figures that came with it. No request content, but a month of somebody’s refusals describes how they work — which is why this one has a ceiling as well as a floor.',
+    'Every request the platform declined, with the message its caller was given and the figures that accompanied it. No request content is stored, but a month of an account’s refusals describes how that account is used, which is why this dataset has a ceiling as well as a floor.',
 };
 
 /** A dataset nobody has written prose for still has to render. */
@@ -56,7 +56,7 @@ export function datasetLabel(dataset: string): string {
 export function datasetDescription(dataset: string): string {
   return (
     DATASET_DESCRIPTIONS[dataset] ??
-    'No description has been written for this record type yet. The window below is the one the server enforces.'
+    'No description is available for this record type. The window below is the one the server enforces.'
   );
 }
 

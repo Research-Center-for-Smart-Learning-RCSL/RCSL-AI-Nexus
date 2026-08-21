@@ -123,16 +123,16 @@ export const ROLE_LABELS: Record<Role, string> = {
  */
 export const ROLE_DESCRIPTIONS: Record<Role, string> = {
   admin:
-    'Everything, across every tenant. The only role that can create a tenant — the boundary all the others are confined by.',
+    'Every permission, across every tenant. The only role that can create a tenant, which is the boundary all other roles are confined by.',
   tenant_admin:
-    'Full authority inside their own tenant: its people, its API keys, its knowledge base. Reads the fleet but cannot change it, and cannot create a tenant.',
+    'Full authority within a single tenant: its accounts, its API keys, its knowledge base. Reads the fleet but cannot change it, and cannot create a tenant.',
   operator:
-    'Runs the fleet — models, nodes, routing policies — and grants nobody access. Deliberately cannot invite users, change roles, or issue keys for anyone else.',
+    'Runs the fleet — models, nodes and routing policies — and grants no access to anyone: it cannot invite users, change roles, or issue keys on another account’s behalf.',
   curator:
-    'Maintains what the models are told: the knowledge base and the prompt templates. Separate because both shape what the models answer, which is authority worth granting on purpose rather than as a side effect of administering something else.',
+    'Maintains what the models are instructed with: the knowledge base and the prompt templates. Held separately because both shape what the models answer, and that authority is granted deliberately rather than as a consequence of administering something else.',
   auditor:
-    'Reads and changes nothing — usage, logs, models, nodes, users, and every refusal the platform issued. Holds no write at all, not even to their own API keys. Conversation transcripts and the retention windows are not theirs to read or set: those stay with the platform administrator.',
-  user: 'Uses the chat UI with the prompt templates their tenant offers, manages their own API keys, and sees their own usage and the refusals their own requests provoked.',
+    'Reads usage, logs, models, nodes, accounts and every refusal the platform issued, and changes nothing. Holds no write permission at all, including to its own API keys. Conversation transcripts and the retention windows are reserved to the platform administrator.',
+  user: 'Uses the chat screen with the prompt templates the tenant offers, manages its own API keys, and reads its own usage and the refusals its own requests produced.',
 };
 
 /**

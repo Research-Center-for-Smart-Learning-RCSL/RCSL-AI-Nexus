@@ -31,7 +31,7 @@ function summariseCandidates(policy: RoutingPolicy): string {
 /** Null is a real third state, so it is named rather than shown as a blank. */
 function describeThinking(thinking: boolean | null): string {
   if (thinking === null) return 'Deployment default';
-  return thinking ? 'Let the model think' : 'Answer directly';
+  return thinking ? 'Deliberate before answering' : 'Answer directly';
 }
 
 export function PolicyTable() {

@@ -3,7 +3,7 @@ import { XIcon } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import type { AuthMode } from '@/lib/session';
+import { authModeLabel, type AuthMode } from '@/lib/session';
 
 import { NavGroups } from './app-shell-navigation';
 import type { NavGroup, NavItem } from './app-shell-navigation-catalog';
@@ -14,7 +14,7 @@ export function MobileNavigation({ navOpen, setNavOpen, navPanelRef, navButtonRe
   return (
     <>
 {navOpen ? (
-          <div className="fixed inset-0 z-50 sm:hidden">
+          <div className="fixed inset-0 z-50 lg:hidden">
             <button
               type="button"
               aria-label="Close the menu"
@@ -38,7 +38,7 @@ export function MobileNavigation({ navOpen, setNavOpen, navPanelRef, navButtonRe
                     RCSL AI Nexus
                   </p>
                   <Badge variant="outline" className="mt-1">
-                    {authMode ?? 'unknown'}
+                    {authModeLabel(authMode)}
                   </Badge>
                 </div>
                 <Button
@@ -54,6 +54,7 @@ export function MobileNavigation({ navOpen, setNavOpen, navPanelRef, navButtonRe
                 </Button>
               </div>
               <NavGroups
+                label="Screens, in the menu"
                 pinned={visiblePinned}
                 groups={visibleGroups}
                 pathname={pathname}
