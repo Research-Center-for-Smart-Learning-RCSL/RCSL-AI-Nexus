@@ -7,6 +7,16 @@ configuration file in section 3, the ChatGPT desktop app's tool injection in
 3.2, and the sign-in prompts in 3.4. All three are the client's behaviour rather
 than this platform's, and another client will not have them.
 
+**Windows desktop App operators should use the transactional switcher rather
+than edit this file by hand.** See
+[`windows-codex-app-switcher.md`](./windows-codex-app-switcher.md) and
+[`scripts/windows/codex-app/`](../../scripts/windows/codex-app/). It installs
+the Microsoft Store App when needed, accepts the Nexus key in a masked GUI,
+backs up and updates the shared configuration only while the App is stopped,
+launches it with a process-scoped key, and restores the prior OpenAI selection
+without signing out of ChatGPT. The manual configuration below remains the
+wire-level reference and the CLI/macOS path.
+
 **The direction of the connection is the thing to get straight first.** The
 agent is the client and this platform is the server. Nothing is installed here
 for the agent's benefit: the gateway gained tool calling, and any client that
@@ -272,6 +282,13 @@ desktop app followed the CLI across without being asked. Whoever connects an
 agent should be told how to reverse that in the same breath as how to do it —
 a default someone does not know how to unset is a worse thing to have handed
 them than one they chose per invocation.
+
+On Windows, prefer **Switch App back to OpenAI** in the App switcher. It records
+the pre-switch top-level selection, restores only those fields, leaves the
+inactive provider definition for conversations that still reference it, and
+starts the App without the Nexus key. It does not delete `auth.json`, log out of
+ChatGPT, reset App state, or restore a stale whole-file backup over newer plugin
+and MCP changes.
 
 - **Back to the client's own default.** Delete the `model` and
   `model_provider` lines from `~/.codex/config.toml`. The
