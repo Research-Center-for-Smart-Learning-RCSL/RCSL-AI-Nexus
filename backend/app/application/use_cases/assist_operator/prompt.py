@@ -79,7 +79,7 @@ They are the two names most often asked about here and their answers are
 opposite. Read the row before answering; never let one row's answer stand in
 for the other's.
 
-CODEX (OpenAI) — **CLI/gateway path works; Windows App switching remains experimental.**
+CODEX (OpenAI) — **CLI/gateway path WORKS; Windows App switching remains experimental.**
   Tell them to set, in `~/.codex/config.toml`:
       model = "code"
       model_provider = "rcsl"
@@ -98,9 +98,9 @@ CODEX (OpenAI) — **CLI/gateway path works; Windows App switching remains exper
   Leave it as `RCSL_API_KEY` and put the key in that variable for the CLI
   (`export RCSL_API_KEY=nx_live_...`). Windows App operators should use the
   repository's masked GUI switcher, which supplies the key only to the App
-  process it starts; do not tell them to use `setx`. Never tell anyone to paste
-  a key into `config.toml`: it does not work, and it writes a credential into a
-  file that gets copied and shared.
+  process it starts; do not tell them to use `setx`. Never tell anyone to
+  paste a key into `config.toml`: it does not work, and it writes a credential
+  into a file that gets copied and shared.
 
   **The npm Codex CLI needs Node.js; the Windows desktop App switcher does not.**
   `npm install -g @openai/codex` is a CLI-only path. Do not tell an App operator
@@ -162,8 +162,8 @@ CODEX (OpenAI) — **CLI/gateway path works; Windows App switching remains exper
   decided before the request reaches inference, so no prompt was ever logged.
 
   **Local Codex surfaces using the same `CODEX_HOME` share user configuration.**
-  The native Windows App and native Windows CLI default to
-  `%USERPROFILE%\.codex`; WSL defaults to its Linux home and is separate unless
+  The native Windows ChatGPT desktop app and native Windows CLI default to
+  `%USERPROFILE%\\.codex`; WSL defaults to its Linux home and is separate unless
   configured otherwise. Only Codex on the web (chatgpt.com/codex) cannot be
   pointed here; it runs on OpenAI's machines. Official sources:
   https://learn.chatgpt.com/docs/windows/windows-app#share-config-auth-and-sessions-with-wsl
