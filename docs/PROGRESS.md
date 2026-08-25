@@ -31,8 +31,8 @@ Forms launcher discovers the `OpenAI.Codex` AppX package, or installs the
 official Microsoft Store package through `winget`; validates a masked Nexus key
 against `GET /v1/models`; asks the App to close normally and refuses to
 force-kill it; copies the exact pre-switch TOML; records the original top-level
-model and provider without any credential; updates only those fields and the
-`rcsl` provider table; and starts `ChatGPT.exe` with a key present only in the
+model and provider without the newly entered credential; updates only those fields and the
+dedicated `rcsl_nexus_switcher` provider table; and starts `ChatGPT.exe` with a key present only in the
 new process environment. Switching back restores the captured selection and
 launches without that key. It deliberately leaves the inactive provider table,
 because the runbook's 2026-08-18 evidence established that old conversations
@@ -56,10 +56,22 @@ picker are absent from an HTTP or CLI probe. A new App task that reads a real
 file remains the final acceptance step, stated as such rather than represented
 by a green network check.
 
-No implementation-time local execution, test, lint, build or smoke check was
-performed for this change by request. The pull request therefore carries code
-review evidence only; Windows runtime verification is still required before the
-scripts are offered to an integrator.
+No App switch, installation, authenticated request, build, or smoke check was
+performed locally. Independent review and a Windows PowerShell 5.1 AST parse
+found the original implementation syntactically valid and operationally too
+trusting. The repair uses a collision-resistant provider ID, fails closed on
+unknown state and ambiguous TOML, serialises transitions with a mutex, protects
+state/backups with a current-user ACL, reconciles App-driven selection drift,
+checks the managed projection after startup, and warns about higher-precedence
+project configuration. Doctor key entry is now a masked Windows dialog and the
+main GUI performs long operations in a background runspace.
+
+That review also corrected the delivery claim. The official Store ID and public
+config schema are documented; `OpenAI.Codex`, `app\ChatGPT.exe`, direct package
+launch, and key inheritance into the internal app-server are observed package
+details, not an OpenAI compatibility contract. The integration is implemented
+and remote repository CI passes, but remains experimental until a Windows-native
+App task performs a real file operation. WSL agent mode is outside that claim.
 
 ## 2026-08-21 — A frontend pass, and a deploy that shipped the defect it was written to fix
 

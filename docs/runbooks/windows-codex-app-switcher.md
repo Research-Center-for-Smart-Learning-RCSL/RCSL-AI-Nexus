@@ -1,4 +1,4 @@
-# Windows runbook: Switch Codex App between RCSL AI Nexus and OpenAI
+# Windows runbook: Experimentally switch Codex App between RCSL AI Nexus and OpenAI
 
 This runbook covers the Windows desktop App distributed as the
 `OpenAI.Codex` Microsoft Store package and displayed as ChatGPT/Codex. It does
@@ -18,9 +18,9 @@ Nexus mode selects one capability and the custom provider:
 
 ```toml
 model = "code"
-model_provider = "rcsl"
+model_provider = "rcsl_nexus_switcher"
 
-[model_providers.rcsl]
+[model_providers.rcsl_nexus_switcher]
 name = "RCSL AI Nexus"
 base_url = "https://llmapi.rcsl.online/v1"
 env_key = "RCSL_API_KEY"
@@ -40,7 +40,7 @@ before Nexus mode and starts the App with no process-scoped Nexus key. It does
 not run `codex logout`, delete `auth.json`, sign out of ChatGPT, remove plugins,
 or reset App state.
 
-The `[model_providers.rcsl]` table is intentionally retained while inactive.
+The `[model_providers.rcsl_nexus_switcher]` table is intentionally retained while inactive.
 App tasks created in Nexus mode may continue to name that provider. Removing
 the definition can make the App fail while reopening one of those tasks even
 though new tasks should use OpenAI.
@@ -49,14 +49,21 @@ though new tasks should use OpenAI.
 
 - Windows 10 or Windows 11.
 - Windows PowerShell 5.1 or later.
+- Windows-native agent mode. WSL agent-mode environment inheritance has not
+  been verified by this project.
 - An RCSL AI Nexus key scoped to `code`.
 - Network access to `https://llmapi.rcsl.online`.
 - `winget` and Microsoft Store access only if Codex App is not installed.
 
-The switcher discovers the App by the `OpenAI.Codex` AppX identity. If AppX
+The switcher currently discovers the App by the observed `OpenAI.Codex` AppX identity. If AppX
 discovery is unavailable, it derives the package root from the `codex.exe`
 execution alias. Package installation paths contain the App version and must
-never be hard-coded.
+never be hard-coded. The Store ID below is documented by OpenAI; the package
+identity, `app\ChatGPT.exe` layout, direct executable launch, and child-process
+environment inheritance are package-internal observations rather than an
+official compatibility contract. The switcher checks that the discovered App
+process appears and that its managed configuration survives startup, then still
+requires the interactive acceptance step in section 7.
 
 When installation is required, the switcher runs the command documented for
 the Windows App:
@@ -72,16 +79,39 @@ not treated as proof by itself.
 
 ## 3. Start the GUI
 
-From the repository root:
+Operators with a repository checkout can launch from its root:
 
 ```powershell
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass `
   -File .\scripts\windows\codex-app\Start-CodexAppSwitcher.ps1
 ```
 
-The GUI shows the detected App version, whether it is running, the effective
+Operators following the deployed management UI do not need access to the
+deployment checkout. Download the public source archive into a user-local tools
+directory, inspect the scripts, and launch the extracted copy:
+
+```powershell
+$archive = Join-Path $env:TEMP 'RCSL-AI-Nexus-main.zip'
+$toolsRoot = Join-Path $env:LOCALAPPDATA 'RCSL-AI-Nexus\client-tools'
+Invoke-WebRequest `
+  'https://github.com/Research-Center-for-Smart-Learning-RCSL/RCSL-AI-Nexus/archive/refs/heads/main.zip' `
+  -OutFile $archive
+Expand-Archive -LiteralPath $archive -DestinationPath $toolsRoot -Force
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File `
+  "$toolsRoot\RCSL-AI-Nexus-main\scripts\windows\codex-app\Start-CodexAppSwitcher.ps1"
+```
+
+The archive tracks `main`; inspect its commit and script contents before use.
+An organization that requires immutable distribution should publish a signed,
+versioned release archive and replace this moving URL with that asset.
+
+The GUI shows the detected App version, whether it is running, the user-level
 top-level provider selection, and whether a persistent legacy
 `RCSL_API_KEY` exists.
+
+A trusted project's `.codex/config.toml` has higher precedence than the user
+file. Enter the project directory in the GUI so Doctor can report any such file.
+Neither the GUI nor the user file alone can claim the effective project setting.
 
 `ExecutionPolicy Bypass` applies only to that PowerShell process. The script
 does not change the machine or user execution policy.
@@ -111,13 +141,15 @@ The switcher then performs these operations in order:
    document.
 7. Update the selection and RCSL provider definition with an atomic file move.
 8. Start `ChatGPT.exe` directly with a process-scoped `RCSL_API_KEY`.
-9. Restore the launcher's own process environment immediately.
+9. Confirm a process under the discovered package path appears and the managed
+   configuration projection survives startup.
+10. Restore the launcher's own process environment immediately.
 
 The App and its child app-server inherit the key; later terminals, unrelated
 applications, and a normally launched App do not.
 
 The App and CLI share the selected `config.toml`. While Nexus mode is active, a
-separately launched CLI also sees `model_provider = "rcsl"` but does not inherit
+separately launched CLI also sees `model_provider = "rcsl_nexus_switcher"` but does not inherit
 the GUI's key. Either give that CLI process its own `RCSL_API_KEY` or restore
 OpenAI before using it. The switcher does not install or operate the npm CLI.
 
@@ -142,10 +174,11 @@ The switcher closes the App, restores the exact top-level selection captured
 before the Nexus switch, preserves the provider definition, and launches the
 App without a Nexus key.
 
-If no switcher state exists, recovery is deliberately narrow: the tool removes
-only an exact top-level `model_provider = "rcsl"` and exact
-`model = "code"`. It does not guess what a previous model was and never
-restores a whole stale backup over newer App-managed plugin or MCP changes.
+If state is absent, malformed, or from an unsupported schema while the managed
+provider is selected, restoration fails closed. The tool does not guess what a
+previous model was, does not delete a manually configured provider, and never
+restores a whole stale backup over newer App-managed plugin or MCP changes. Use
+the manual recovery procedure in section 9.
 
 After restoration, create a new task and confirm the expected OpenAI model is
 available. Do not use the continued existence of the inactive RCSL provider
@@ -156,19 +189,19 @@ table as a mode signal; the selected top-level provider is the signal.
 Local, read-only checks:
 
 ```powershell
-powershell.exe -NoProfile -File `
+powershell.exe -NoProfile -STA -File `
   .\scripts\windows\codex-app\Test-CodexAppConnection.ps1
 ```
 
 Add DNS, TLS, unauthenticated health, and authenticated model-catalogue checks:
 
 ```powershell
-powershell.exe -NoProfile -File `
+powershell.exe -NoProfile -STA -File `
   .\scripts\windows\codex-app\Test-CodexAppConnection.ps1 `
-  -Online -Authenticated
+  -ProjectPath C:\work\the-project -Online -Authenticated
 ```
 
-The key prompt hides input. There is intentionally no API-key parameter: a
+The key prompt is a masked Windows dialog. There is intentionally no API-key parameter: a
 command-line secret is observable in process listings and likely to be retained
 in shell history.
 
@@ -178,7 +211,8 @@ The doctor reports:
 - package identity, version, and discovery method;
 - App process state;
 - `config.toml` path and selected model/provider;
-- RCSL provider presence;
+- complete managed-provider values and state/config drift;
+- higher-precedence `.codex/config.toml` files from the supplied project path;
 - recovery-state and backup availability;
 - legacy user- or machine-level key presence, without reading the value;
 - DNS, TLS, and `/healthz` when `-Online` is used;
@@ -222,7 +256,7 @@ screen. Do not retry a `413 context_too_long`, `429 quota_exceeded`, or
 | `code` is absent from `/v1/models` | The key does not hold that capability or no routable policy is visible to it. Do not change the App yet. |
 | `403 capability_not_issued` names an OpenAI model | The App picker or a hidden slot overrode `model = "code"`. Inspect the exact refused name before changing permissions. |
 | `413 context_too_long` on a new task | App-injected tool definitions may dominate the prompt. Starting another task will not reduce a tool list resent on every turn. |
-| App reopens an old task with a missing provider | Preserve `[model_providers.rcsl]`, then start a new task. Do not delete global state or authentication. |
+| App reopens an old task with a missing provider | Preserve `[model_providers.rcsl_nexus_switcher]`, then start a new task. Do not delete global state or authentication. |
 | A machine-level key remains | Remove it from an elevated shell only after confirming no other integration uses it. |
 | The App changes behavior after an update | Record the App build and plugin set. Re-run the doctor and compare with another machine before attributing the change to Nexus. |
 
@@ -241,9 +275,13 @@ Recovery artifacts are under:
 └── backups\config.toml.before-rcsl-<UTC timestamp>
 ```
 
-`state.json` contains paths, mode, hashes, original model/provider lines, App
+`state.json` contains paths, mode, managed-projection hashes, original model/provider lines, App
 version, URL, and capability. It never contains the Nexus key or ChatGPT
 credentials.
+
+The whole-file backup can contain credentials that were already present in
+`config.toml`. The switcher protects its state directory with a current-user-only
+Windows ACL, but operators must still treat every backup as sensitive.
 
 If manual recovery is necessary:
 
@@ -252,7 +290,7 @@ If manual recovery is necessary:
 3. Read `state.json` and the named backup; do not assume the newest-looking file
    is the pre-switch side of the transaction.
 4. Prefer restoring only `model` and `model_provider`.
-5. Preserve `[model_providers.rcsl]` while any Nexus task remains.
+5. Preserve `[model_providers.rcsl_nexus_switcher]` while any Nexus task remains.
 6. Never delete `auth.json`, `.codex-global-state.json`, sessions, or
    conversations as a provider-switch recovery step.
 

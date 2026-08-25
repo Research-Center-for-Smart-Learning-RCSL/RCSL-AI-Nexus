@@ -18,18 +18,23 @@ without signing out of ChatGPT. The manual configuration below remains the
 wire-level reference and the CLI/macOS path.
 
 **The direction of the connection is the thing to get straight first.** The
-agent is the client and this platform is the server. Nothing is installed here
-for the agent's benefit: the gateway gained tool calling, and any client that
-speaks the OpenAI chat API can now use it. The agent is configured to point at
-the gateway, not the other way round.
+agent is the client and this platform is the server. Nothing is installed on the
+gateway for the agent's benefit: the gateway exposes both Responses and Chat
+Completions compatibility surfaces. The agent is configured to point at the
+gateway, not the other way round.
 
 ```
-Codex CLI / IDE extension
-      |
-      |  POST https://<gateway>/v1/chat/completions
-      |  Authorization: Bearer nx_live_...
-      v
-  Nexus gateway  ->  routing policy  ->  Ollama or MLX on the Mac Studio
+Codex App / CLI / IDE                 Other compatible clients
+          |                                      |
+          | POST /v1/responses                   | POST /v1/chat/completions
+          | Authorization: Bearer nx_live_...    | Authorization: Bearer ...
+          +------------------+-------------------+
+                             v
+                     Nexus gateway
+                             |
+                      routing policy
+                             |
+                   Ollama or MLX runtime
 ```
 
 Related: [`architecture/backend.md`](../architecture/backend.md) section 6 for
@@ -168,6 +173,10 @@ base_url = "https://llmapi.rcsl.online/v1"
 env_key = "RCSL_API_KEY"
 wire_api = "responses"
 ```
+
+This is the manual CLI reference. The Windows App switcher uses the dedicated
+provider ID `rcsl_nexus_switcher` instead of `rcsl`, so it cannot overwrite an
+operator's existing manual provider definition.
 
 Then export the key: `export RCSL_API_KEY=nx_live_...`
 

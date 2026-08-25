@@ -22,8 +22,8 @@ scripts/      Acceptance, evaluation, deployment, and client-integration tools
 
 Windows operators connecting the Codex desktop App should start with
 [`docs/runbooks/windows-codex-app-switcher.md`](./docs/runbooks/windows-codex-app-switcher.md).
-It documents the GUI provider switcher, automatic App installation, safe OpenAI
-rollback, and the read-only connection doctor under
+It documents the experimental GUI provider switcher, automatic App installation,
+fail-closed OpenAI rollback, and the read-only connection doctor under
 [`scripts/windows/codex-app/`](./scripts/windows/codex-app/).
 
 ## Local development

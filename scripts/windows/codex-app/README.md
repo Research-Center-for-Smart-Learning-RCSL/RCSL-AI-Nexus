@@ -18,7 +18,8 @@ OpenAI restoration first.
   Microsoft Store installation through `winget` when the App is absent.
 - `Test-CodexAppConnection.ps1` — read-only doctor for installation, process,
   configuration, recovery state, persistent-key, DNS, TLS, health, and
-  authenticated model-catalogue checks.
+  authenticated model-catalogue checks. Its API-key prompt is a masked Windows
+  dialog, not console or command-line input.
 - `CodexAppSwitcher.Common.psm1` — shared transactional configuration, App
   discovery, graceful shutdown, launch, backup, and gateway functions.
 
@@ -38,16 +39,16 @@ needed only when the App must be installed.
 Run the doctor without network checks:
 
 ```powershell
-powershell.exe -NoProfile -File `
+powershell.exe -NoProfile -STA -File `
   .\scripts\windows\codex-app\Test-CodexAppConnection.ps1
 ```
 
 Add DNS, TLS, health, and authenticated model-catalogue checks:
 
 ```powershell
-powershell.exe -NoProfile -File `
+powershell.exe -NoProfile -STA -File `
   .\scripts\windows\codex-app\Test-CodexAppConnection.ps1 `
-  -Online -Authenticated
+  -ProjectPath C:\work\the-project -Online -Authenticated
 ```
 
 The authenticated form prompts for the API key with hidden input. There is no
@@ -61,7 +62,13 @@ processes and frequently copied into shell history.
 - `config.toml` is copied before the first Nexus switch in a cycle.
 - Changes are written through a same-directory temporary file.
 - Only top-level `model` and `model_provider` plus the
-  `[model_providers.rcsl]` table are managed.
+  `[model_providers.rcsl_nexus_switcher]` table are managed. The dedicated ID
+  avoids overwriting a pre-existing `rcsl` provider.
+- A per-session mutex prevents two switcher windows from interleaving writes.
+- Missing, malformed, or unknown recovery state fails closed. The tool never
+  guesses which manually configured model/provider should be deleted.
+- Advanced TOML forms the formatting-preserving editor cannot handle
+  unambiguously are rejected before any backup, state, or configuration write.
 - Existing plugins, MCP servers, permissions, project trust entries, and App
   preferences are retained.
 - The Nexus key is not written to TOML, state JSON, the backup, or logs. It is
@@ -83,15 +90,25 @@ Runtime state and backups are kept outside the repository:
 %LOCALAPPDATA%\RCSL-AI-Nexus\codex-app-switcher\
 ```
 
-No plaintext credential is stored there.
+The newly entered Nexus key is never stored there. The whole-file recovery copy
+can contain credentials that were already present in `config.toml`; the state
+directory is therefore created with an ACL granting only the current Windows
+user access. Treat backups as sensitive and remove obsolete ones deliberately.
 
 ## Boundary of automation
 
-The doctor can prove that the package, configuration, network, TLS, key, and
-`code` capability are available. It cannot prove the complete desktop App
+The doctor can prove that the package, user-level configuration, network, TLS,
+key, and `code` capability are available. It warns when a project
+`.codex/config.toml` can override the user default. It cannot prove the complete desktop App
 agent loop. The App adds its own plugins, hidden model slots, tool definitions,
 and picker behavior. After switching, create a new App task and request a real
 file operation; a greeting proves only text generation.
+
+Direct `ChatGPT.exe` launch and process-scoped key inheritance rely on observed
+package internals, not a documented OpenAI compatibility contract. Startup
+confirmation detects a changed path or an immediate managed-config rewrite, but
+the integration remains experimental until the interactive App task passes on
+the installed build. WSL agent mode is outside the verified scope.
 
 The detailed operator workflow and recovery procedure are in
 [`docs/runbooks/windows-codex-app-switcher.md`](../../../docs/runbooks/windows-codex-app-switcher.md).
