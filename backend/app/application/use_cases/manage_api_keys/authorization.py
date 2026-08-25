@@ -33,7 +33,7 @@ class ApiKeyPolicyMixin:
         audit: AuditPort,
         clock: Clock,
         *,
-        max_lifetime_days: int = 365,
+        max_lifetime_days: int = 3650,
     ) -> None:
         self._keys = keys
         self._users = users

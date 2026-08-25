@@ -43,8 +43,9 @@ class IdentitySecuritySettings(BaseSettings):
 
     bootstrap_admin_login: str = ""
 
-    api_key_max_lifetime_days: int = 365
-    """Ceiling on how far ahead a key may be set to expire.
+    api_key_max_lifetime_days: int = 3650
+    """Ceiling on how far ahead a key may be set to expire. 10 years, raised
+    from 365 on 2026-08-25.
 
     Expiry exists to force rotation, and a mandatory field with no upper bound
     does not: `expires_at` of the year 9999 satisfied "must be in the future"
