@@ -179,7 +179,7 @@ test('issues, edits, and revokes an API key', async ({ page }) => {
     name: 'browser-agent-renamed',
     scopes: ['chat'],
     rate_limit_rpm: 30,
-    quota_tokens_per_day: 1_000_000,
+    quota_tokens_per_day: 90_000_000,
     allowed_cidrs: [],
   });
   const renamedRow = page
