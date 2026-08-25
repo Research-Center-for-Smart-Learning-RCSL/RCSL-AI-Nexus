@@ -150,7 +150,7 @@ def test_a_refusal_reaches_the_table_and_comes_back_with_its_figure(
     assert page["total"] >= 1
     stored = page["entries"][0]
     assert stored["status"] == 409
-    assert stored["figures"]["maximum_days"] == 365
+    assert stored["figures"]["maximum_days"] == 3650
     # The route as declared, so a hundred refusals on this endpoint group
     # instead of scattering, and nothing a caller put in a path is kept.
     assert stored["path"] == "/admin/api-keys"
