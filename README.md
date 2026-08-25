@@ -24,7 +24,9 @@ Windows operators connecting the Codex desktop App should start with
 [`docs/runbooks/windows-codex-app-switcher.md`](./docs/runbooks/windows-codex-app-switcher.md).
 It documents the experimental GUI provider switcher, automatic App installation,
 fail-closed OpenAI rollback, and the read-only connection doctor under
-[`scripts/windows/codex-app/`](./scripts/windows/codex-app/).
+[`scripts/windows/codex-app/`](./scripts/windows/codex-app/). Its source and
+evidence matrix distinguishes OpenAI documentation from runtime-checked package
+assumptions, project measurements, and Windows acceptance checks that remain open.
 
 ## Local development
 

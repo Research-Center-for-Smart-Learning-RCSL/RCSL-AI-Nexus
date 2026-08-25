@@ -17,6 +17,14 @@ launches it with a process-scoped key, and restores the prior OpenAI selection
 without signing out of ChatGPT. The manual configuration below remains the
 wire-level reference and the CLI/macOS path.
 
+OpenAI's [Windows App documentation](https://learn.chatgpt.com/docs/windows/windows-app)
+is the authority for supported installation, native/WSL2 modes, and App/CLI
+configuration sharing. Package identity and executable paths are runtime-checked
+implementation assumptions; plugin figures are dated project measurements; and
+direct-launch environment inheritance is a project hypothesis. The Windows runbook's
+[source and evidence matrix](./windows-codex-app-switcher.md#10-source-and-evidence-matrix)
+keeps those categories explicit.
+
 **The direction of the connection is the thing to get straight first.** The
 agent is the client and this platform is the server. Nothing is installed on the
 gateway for the agent's benefit: the gateway exposes both Responses and Chat
@@ -46,8 +54,10 @@ management UI for the wire reference an integrator reads.
 > server block that discarded the correct one, so the perimeter headers written
 > in August had never taken effect; NPM's proxy host for that name was disabled
 > and the hand-written block took over. And **`wire_api = "chat"`, which this
-> runbook told you to set, has been impossible since February 2026** — Codex
-> removed Chat Completions support six months before this file recommended it.
+> runbook told you to set, was refused by the clients measured at the February
+> 2026 compatibility boundary**. OpenAI's current configuration reference now
+> documents only `responses`; the historical date is project evidence rather
+> than an OpenAI compatibility promise.
 > The gateway now serves `/v1/responses` as well, and section 3 says
 > `wire_api = "responses"`. Verified end to end the same day: real Codex, real
 > public entrance, a tool call executed and answered.
@@ -178,6 +188,12 @@ This is the manual CLI reference. The Windows App switcher uses the dedicated
 provider ID `rcsl_nexus_switcher` instead of `rcsl`, so it cannot overwrite an
 operator's existing manual provider definition.
 
+The file location and trusted-project override order follow OpenAI's
+[basic configuration](https://learn.chatgpt.com/docs/config-file/config-basic)
+documentation. The provider table follows the documented
+[custom model-provider schema](https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers)
+and [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+
 Then export the key: `export RCSL_API_KEY=nx_live_...`
 
 Four things are easy to get wrong:
@@ -187,10 +203,15 @@ Four things are easy to get wrong:
   providers and it is deliberate; the routing policy decides what actually
   serves the request. `GET /v1/models` lists what a given key may ask for.
 - **`wire_api = "responses"` is required**, and this line is the one that has
-  changed. Codex dropped Chat Completions in February 2026; the gateway grew
-  `/v1/responses` on 2026-08-07 to meet it. A client old enough to accept
+  changed. This project observed tested clients refusing Chat Completions at
+  the February 2026 compatibility boundary; the gateway grew `/v1/responses`
+  on 2026-08-07 to meet it. A client old enough to accept
   `"chat"` can still use `/v1/chat/completions`, which is unchanged and remains
-  the documented interface for everything else.
+  the documented interface for everything else. OpenAI's current
+  [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
+  documents `responses` as the only supported `wire_api`; the February date is
+  this project's observed client-version boundary, not a separately published
+  OpenAI guarantee.
 - **`base_url` ends in `/v1`.** The client appends the path for the wire API it
   speaks — `/responses` under the setting above, `/chat/completions` under
   `"chat"`. This line said `/chat/completions` unconditionally until
@@ -265,10 +286,15 @@ Four things are easy to get wrong:
   error. An unknown slug reaching the local fallback is what makes `model =
   "code"` work today.
 
-**Every local Codex surface reads this one file**: the CLI, the IDE extension,
-and the Codex built into the ChatGPT desktop app. Configuring the CLI therefore
-configures all three, which is a correction — this file and the `/agent-setup`
-page both said the desktop app could not be pointed here, and on 2026-08-09 an
+**Every local Codex surface using the same Codex home sees the same user
+configuration.** OpenAI documents that the native Windows App and native CLI
+normally share `%USERPROFILE%\.codex`, while a CLI running in WSL defaults to a
+separate Linux home; see
+[Share config, auth, and sessions with WSL](https://learn.chatgpt.com/docs/windows/windows-app#share-config-auth-and-sessions-with-wsl)
+and [`CODEX_HOME`](https://learn.chatgpt.com/docs/config-file/environment-variables#core-locations).
+Configuring the native CLI therefore also configured the desktop App on the
+measured machine, which is a correction — this file and the `/agent-setup` page
+both said the desktop app could not be pointed here, and on 2026-08-09 an
 operator connected the CLI and watched the app switch over with nothing
 configured inside it. Neither document had tested it; both stated it anyway.
 **The sharing runs the other way too, and that direction can break the
@@ -324,13 +350,19 @@ and MCP changes.
 
   The second line printing nothing is the check. Anything it does print was set
   machine-wide and needs an elevated shell to remove.
-- **Both, side by side.** Put the provider block in
-  `~/.codex/rcsl.config.toml` and leave `config.toml` untouched, then run
-  `codex --profile rcsl`. Plain `codex` stays on the default. In `0.147.0`
-  `--profile <name>` layers **a separate `$CODEX_HOME/<name>.config.toml`**
-  over the base config — not a `[profiles.<name>]` table inside `config.toml`,
-  which is what older guides describe and what this file would have said had
-  `codex --help` not been read first. The same caution as above, applied.
+- **Both, side by side.** Keep the inactive `[model_providers.rcsl]` block in
+  `~/.codex/config.toml`, put only the selection below in
+  `~/.codex/rcsl.config.toml`, and run `codex --profile rcsl`. Plain `codex`
+  stays on the built-in default. OpenAI's current
+  [profile documentation](https://learn.chatgpt.com/docs/config-file/config-advanced#profiles)
+  defines profile files as `$CODEX_HOME/<profile-name>.config.toml` layered over
+  the base user config and explicitly says not to nest them under
+  `[profiles.<name>]`.
+
+  ```toml
+  model = "code"
+  model_provider = "rcsl"
+  ```
 - **Once, without writing anything.** `codex -c model_provider=rcsl -c
   model=code`.
 
@@ -341,6 +373,10 @@ platform enforces is **revoking the key** (section 2), which is also the only
 one that helps if the key has reached somewhere it was not meant to.
 
 ### 3.2 The same sharing, in the direction that can break it
+
+Everything in this subsection is dated project measurement, not OpenAI product
+documentation. App builds and bundled plugins self-update, so these figures
+must not be generalized beyond the build, plugin set, and date in the table.
 
 **The ChatGPT desktop app does not only *follow* the CLI's configuration; it
 owns that directory, rewrites it, and hands the CLI its own tool surface.** How
@@ -428,8 +464,9 @@ codex
 ```
 
 The app cannot reach that directory, so the CLI starts with its own native tool
-set instead of inheriting the desktop surface. Set it per shell rather than with
-`setx`: a machine-wide `CODEX_HOME` moves the app too.
+set instead of inheriting the desktop surface. Set it per shell rather than
+persisting it casually with `setx`: a user-level value affects subsequently
+launched App processes too. Machine scope requires `setx /M` and elevation.
 
 **Reverting needs one more step than it looks.** Deleting `model` and
 `model_provider` leaves the app erroring at startup that the provider is not

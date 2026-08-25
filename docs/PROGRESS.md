@@ -28,9 +28,9 @@ one and touched a ChatGPT login it never needed to touch.
 
 `scripts/windows/codex-app` makes that sequence one transaction. The Windows
 Forms launcher discovers the `OpenAI.Codex` AppX package, or installs the
-official Microsoft Store package through `winget`; validates a masked Nexus key
+  official Microsoft Store package through `winget`; validates a masked Nexus key
 against `GET /v1/models`; asks the App to close normally and refuses to
-force-kill it; copies the exact pre-switch TOML; records the original top-level
+  force-kill it; copies a UTF-8 text snapshot of the pre-switch TOML; records the original top-level
 model and provider without the newly entered credential; updates only those fields and the
 dedicated `rcsl_nexus_switcher` provider table; and starts `ChatGPT.exe` with a key present only in the
 new process environment. Switching back restores the captured selection and
@@ -66,12 +66,18 @@ checks the managed projection after startup, and warns about higher-precedence
 project configuration. Doctor key entry is now a masked Windows dialog and the
 main GUI performs long operations in a background runspace.
 
-That review also corrected the delivery claim. The official Store ID and public
-config schema are documented; `OpenAI.Codex`, `app\ChatGPT.exe`, direct package
-launch, and key inheritance into the internal app-server are observed package
-details, not an OpenAI compatibility contract. The integration is implemented
-and remote repository CI passes, but remains experimental until a Windows-native
-App task performs a real file operation. WSL agent mode is outside that claim.
+That review also corrected the delivery claim. OpenAI documents the
+[Windows App and Store command](https://learn.chatgpt.com/docs/windows/windows-app#download-the-chatgpt-desktop-app)
+and the public [custom-provider schema](https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers);
+`OpenAI.Codex`, `app\ChatGPT.exe`, and direct package launch are runtime-checked
+implementation assumptions, while key inheritance into the internal app-server
+is a project hypothesis; none is an OpenAI compatibility contract. The implementation commit passed remote
+repository CI, but the integration remains experimental until a Windows-native App task
+performs a real file operation. WSL agent mode is outside that claim. The
+operator runbook now carries a dated
+[source and evidence matrix](./runbooks/windows-codex-app-switcher.md#10-source-and-evidence-matrix)
+that separates official documentation, repository implementation,
+project-observed behavior, and unverified assumptions.
 
 ## 2026-08-21 — A frontend pass, and a deploy that shipped the defect it was written to fix
 

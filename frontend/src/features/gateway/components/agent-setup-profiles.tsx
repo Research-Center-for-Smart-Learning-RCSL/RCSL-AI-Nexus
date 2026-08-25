@@ -21,7 +21,8 @@ export function ProfilesSection({ agentCapability }: ProfilesSectionProps) {
           <dd>
             Delete the <code>model</code> and <code>model_provider</code> lines
             from <code>~/.codex/config.toml</code>. The client returns to its
-            own default. The <code>[model_providers.rcsl]</code> block may
+            own default. The{' '}
+            <code>[model_providers.rcsl]</code> block may
             remain: it describes a provider, and nothing selects it once those
             two lines are removed.{' '}
             <strong>
@@ -55,15 +56,29 @@ export function ProfilesSection({ agentCapability }: ProfilesSectionProps) {
           </dd>
           <dt className="font-mono text-muted-foreground">run both</dt>
           <dd>
-            Preferable to switching back and forth. Place the provider block in{' '}
-            <code>~/.codex/rcsl.config.toml</code> instead, leave{' '}
-            <code>config.toml</code> unchanged, and run{' '}
+            Preferable to switching back and forth for the CLI. Keep the
+            inactive <code>[model_providers.rcsl]</code> block in{' '}
+            <code>config.toml</code>, put only the selection in{' '}
+            <code>~/.codex/rcsl.config.toml</code>, and use this file:
+            <CodeBlock
+              code={`model = "${agentCapability}"
+model_provider = "rcsl"`}
+              label="Copy (rcsl.config.toml)"
+            />
+            Then run{' '}
             <CodeBlock code={'codex --profile rcsl'} label="Copy" /> Plain{' '}
-            <code>codex</code> remains on the default. Note that this is a{' '}
-            <strong>separate file</strong> per profile in <code>0.147.0</code>,
-            not a <code>[profiles.x]</code> table within{' '}
-            <code>config.toml</code> as earlier instructions describe. Check{' '}
-            <code>codex --help</code> against the installed version.
+            <code>codex</code> remains on the default. This is OpenAI&apos;s
+            current{' '}
+            <a
+              className="underline underline-offset-2"
+              href="https://learn.chatgpt.com/docs/config-file/config-advanced#profiles"
+              rel="noreferrer"
+              target="_blank"
+            >
+              documented profile layout
+            </a>
+            , which explicitly uses one <code>&lt;profile&gt;.config.toml</code>
+            file per profile rather than a <code>[profiles.x]</code> table.
           </dd>
           <dt className="font-mono text-muted-foreground">run once</dt>
           <dd>

@@ -10,7 +10,7 @@ export function CodexConfigurationSection({ baseUrl, agentCapability }: CodexCon
   return (
 <section className="space-y-3">
         <h2 className="font-heading text-base font-semibold">
-          Codex, verified against this deployment
+          Codex setup for this deployment
         </h2>
         <p className="text-sm text-muted-foreground">
           Six steps. Two of them carry a setting whose default is unsuitable and
@@ -75,7 +75,17 @@ Expand-Archive -LiteralPath $archive -DestinationPath $toolsRoot -Force`}
               read the deployment repository. Inspect the downloaded scripts
               before running them. The switcher installs the Store App
               automatically when it is absent. Node.js is required only for the
-              separately installed CLI.
+              separately installed CLI. OpenAI publishes the{' '}
+              <a
+                className="underline underline-offset-2"
+                href="https://learn.chatgpt.com/docs/windows/windows-app#download-the-chatgpt-desktop-app"
+                rel="noreferrer"
+                target="_blank"
+              >
+                Windows App installation command
+              </a>
+              . Package identity and executable discovery remain guarded
+              implementation assumptions.
             </p>
           </Step>
 
@@ -86,9 +96,9 @@ Expand-Archive -LiteralPath $archive -DestinationPath $toolsRoot -Force`}
             </p>
             <CodeBlock
               code={`model = "${agentCapability}"
-model_provider = "rcsl_nexus_switcher"
+model_provider = "rcsl"
 
-[model_providers.rcsl_nexus_switcher]
+[model_providers.rcsl]
 name = "RCSL AI Nexus"
 base_url = "${baseUrl}/v1"
 env_key = "RCSL_API_KEY"
@@ -99,10 +109,19 @@ wire_api = "responses"`}
               <strong>
                 <code>wire_api</code> must be <code>responses</code>.
               </strong>{' '}
-              Codex withdrew support for Chat Completions in February 2026 and
-              refuses to start on <code>wire_api = &quot;chat&quot;</code>. Any
-              instructions still specifying <code>&quot;chat&quot;</code>
-              predate that change.
+              The current OpenAI{' '}
+              <a
+                className="underline underline-offset-2"
+                href="https://learn.chatgpt.com/docs/config-file/config-reference"
+                rel="noreferrer"
+                target="_blank"
+              >
+                configuration reference
+              </a>{' '}
+              documents only <code>responses</code>. This project observed the
+              client refusing <code>wire_api = &quot;chat&quot;</code> at its
+              February 2026 compatibility boundary; that date is project
+              evidence, not an OpenAI compatibility promise.
             </p>
             <p>
               <strong>
@@ -117,14 +136,27 @@ wire_api = "responses"`}
                 <code>env_key</code> is the <em>name</em> of an environment
                 variable, not the key itself.
               </strong>{' '}
-              Leave it as <code>RCSL_API_KEY</code> and place the key in that
-              variable at step 4. A key pasted here does not work, and it writes
-              a credential into a file that is copied, committed and shared.
+              Leave it as <code>RCSL_API_KEY</code>. The CLI reads that named
+              environment variable; the Windows switcher supplies it only to
+              the App process it launches. A key pasted here does not work, and
+              it writes a credential into a file that is copied, committed and
+              shared.
             </p>
             <p>
-              The Windows App switcher writes this provider block and selection
-              for you. Treat this example as the wire-level reference; do not
-              hand-edit it while the App is running.
+              This is the manual CLI provider. The Windows App switcher writes
+              an isolated <code>rcsl_nexus_switcher</code> provider instead, so
+              it cannot overwrite this table. Treat the example as the
+              wire-level reference; do not hand-edit App configuration while
+              the App is running. The fields follow OpenAI&apos;s{' '}
+              <a
+                className="underline underline-offset-2"
+                href="https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers"
+                rel="noreferrer"
+                target="_blank"
+              >
+                custom model-provider schema
+              </a>
+              .
             </p>
           </Step>
 

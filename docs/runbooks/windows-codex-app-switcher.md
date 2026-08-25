@@ -5,12 +5,19 @@ This runbook covers the Windows desktop App distributed as the
 not cover Codex on the web, which runs on OpenAI infrastructure and cannot read
 local provider configuration.
 
-The switcher exists because editing `%USERPROFILE%\.codex\config.toml` while
-the App is running is not a safe procedure. The App owns the directory, updates
-its plugin and MCP state, and rewrites the file. A provider block inserted into
-an in-memory configuration the App has already loaded can disappear at the next
-rewrite. The supported workflow is therefore a transaction around an App
-restart: validate, close, back up, update, launch, and retain recovery state.
+OpenAI's [Windows App documentation](https://learn.chatgpt.com/docs/windows/windows-app)
+is the authoritative source for supported Windows installation and operating
+modes. The `OpenAI.Codex` package identity and executable layout named here are
+runtime-checked implementation assumptions, not identifiers promised by that
+documentation or re-observed during this non-interactive change.
+
+The switcher exists because project measurements found that editing
+`%USERPROFILE%\.codex\config.toml` while the App is running is not a safe
+procedure. On the measured builds, the App updated plugin and MCP state and
+rewrote the file. A provider block inserted into an in-memory configuration the
+App had already loaded could disappear at the next rewrite. This switcher's
+guarded workflow is therefore a transaction around an App restart: validate,
+close, back up, update, launch, and retain recovery state.
 
 ## 1. What the switch changes
 
@@ -30,6 +37,12 @@ wire_api = "responses"
 `model` is a Nexus capability, not the backing Ollama or MLX model. Routing on
 the server decides which registered model serves `code`.
 
+The provider fields follow OpenAI's documented
+[custom model-provider schema](https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers).
+The [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
+defines `model_provider`, `model_providers.<id>.base_url`, `env_key`, and
+`wire_api`; `responses` is the only currently documented wire API.
+
 The switcher passes `RCSL_API_KEY` only to the new App process. It does not use
 `setx`, modify the user or machine environment, write the key into TOML, or
 replace ChatGPT authentication. The Nexus key authenticates the custom model
@@ -47,26 +60,33 @@ though new tasks should use OpenAI.
 
 ## 2. Requirements
 
-- Windows 10 or Windows 11.
-- Windows PowerShell 5.1 or later.
+- A Windows release supported by the current ChatGPT desktop App. This project
+  does not independently establish the App's minimum Windows version.
+- Windows PowerShell 5.1 (`powershell.exe`). PowerShell 7 is not claimed by
+  this runbook.
 - Windows-native agent mode. WSL agent-mode environment inheritance has not
   been verified by this project.
 - An RCSL AI Nexus key scoped to `code`.
 - Network access to `https://llmapi.rcsl.online`.
 - `winget` and Microsoft Store access only if Codex App is not installed.
 
-The switcher currently discovers the App by the observed `OpenAI.Codex` AppX identity. If AppX
+OpenAI documents the App's native Windows and WSL2 agent modes, but does not
+document the process-environment inheritance on which this switcher's native
+launch path relies. This project therefore limits its claim to Windows-native
+mode pending the interactive acceptance test in section 7.
+
+The switcher currently attempts discovery through the `OpenAI.Codex` AppX identity. If AppX
 discovery is unavailable, it derives the package root from the `codex.exe`
 execution alias. Package installation paths contain the App version and must
 never be hard-coded. The Store ID below is documented by OpenAI; the package
-identity, `app\ChatGPT.exe` layout, direct executable launch, and child-process
-environment inheritance are package-internal observations rather than an
-official compatibility contract. The switcher checks that the discovered App
+identity, `app\ChatGPT.exe` layout, and direct executable launch are guarded
+implementation assumptions; child-process environment inheritance is an
+unverified project hypothesis. None is an official compatibility contract. The switcher checks that the discovered App
 process appears and that its managed configuration survives startup, then still
 requires the interactive acceptance step in section 7.
 
-When installation is required, the switcher runs the command documented for
-the Windows App:
+When installation is required, the switcher runs the command in OpenAI's
+[Windows App download instructions](https://learn.chatgpt.com/docs/windows/windows-app#download-the-chatgpt-desktop-app):
 
 ```powershell
 winget install --id 9PLM9XGG6VKS --source msstore `
@@ -109,9 +129,14 @@ The GUI shows the detected App version, whether it is running, the user-level
 top-level provider selection, and whether a persistent legacy
 `RCSL_API_KEY` exists.
 
-A trusted project's `.codex/config.toml` has higher precedence than the user
-file. Enter the project directory in the GUI so Doctor can report any such file.
-Neither the GUI nor the user file alone can claim the effective project setting.
+A trusted project's `.codex/config.toml` may define `model` with higher
+precedence than the user file, changing the effective Nexus capability. Codex
+explicitly ignores project-local `model_provider` and `model_providers`, so a
+project file cannot redirect this switcher's provider or authentication. Enter
+the project directory in the GUI so Doctor can report project files that
+actually define a top-level `model`. This follows OpenAI's documented
+[project-config rules](https://learn.chatgpt.com/docs/config-file/config-advanced#project-config-files-codexconfigtoml)
+and [configuration precedence](https://learn.chatgpt.com/docs/config-file/config-basic#configuration-precedence).
 
 `ExecutionPolicy Bypass` applies only to that PowerShell process. The script
 does not change the machine or user execution policy.
@@ -135,23 +160,34 @@ The switcher then performs these operations in order:
    capability in the response.
 3. Ask all ChatGPT App windows to close normally.
 4. Refuse to continue if any App process remains after the timeout.
-5. Copy the exact pre-switch configuration under
+5. Copy a UTF-8 text snapshot of the pre-switch configuration under
    `%LOCALAPPDATA%\RCSL-AI-Nexus\codex-app-switcher\backups`.
-6. Record the original top-level model/provider lines in a secret-free state
-   document.
+6. Record the original top-level model/provider lines in state without the
+   newly entered Nexus API key.
 7. Update the selection and RCSL provider definition with an atomic file move.
 8. Start `ChatGPT.exe` directly with a process-scoped `RCSL_API_KEY`.
 9. Confirm a process under the discovered package path appears and the managed
    configuration projection survives startup.
 10. Restore the launcher's own process environment immediately.
 
-The App and its child app-server inherit the key; later terminals, unrelated
-applications, and a normally launched App do not.
+The switcher relies on the App and its child app-server inheriting the key from
+the directly launched process. Later terminals, unrelated applications, and a
+normally launched App do not receive that process-scoped environment. The
+launcher's startup checks prove only that the expected App process appears and
+the managed configuration survives startup; only section 7's real App task can
+prove that the internal app-server consumed the inherited key.
 
-The App and CLI share the selected `config.toml`. While Nexus mode is active, a
-separately launched CLI also sees `model_provider = "rcsl_nexus_switcher"` but does not inherit
-the GUI's key. Either give that CLI process its own `RCSL_API_KEY` or restore
-OpenAI before using it. The switcher does not install or operate the npm CLI.
+OpenAI documents that the Windows App and a native Windows CLI use the same
+Codex home, normally `%USERPROFILE%\.codex`, while a WSL CLI defaults to the
+Linux home and does not automatically share it; see
+[Share config, auth, and sessions with WSL](https://learn.chatgpt.com/docs/windows/windows-app#share-config-auth-and-sessions-with-wsl).
+The [`CODEX_HOME` reference](https://learn.chatgpt.com/docs/config-file/environment-variables#core-locations)
+also states that the CLI, IDE extension, and app-server use that directory for
+configuration and other state. While Nexus mode is active, a separately
+launched native CLI therefore sees `model_provider = "rcsl_nexus_switcher"` but
+does not inherit the GUI's key. Either give that CLI process its own
+`RCSL_API_KEY` or restore OpenAI before using it. The switcher does not install
+or operate the npm CLI.
 
 The masked field prevents shoulder-surfing and the tool never persists the key.
 Like any GUI text field, it necessarily holds the pasted value briefly in
@@ -212,7 +248,8 @@ The doctor reports:
 - App process state;
 - `config.toml` path and selected model/provider;
 - complete managed-provider values and state/config drift;
-- higher-precedence `.codex/config.toml` files from the supplied project path;
+- `.codex/config.toml` files from the supplied project path that define a
+  higher-precedence top-level `model`;
 - recovery-state and backup availability;
 - legacy user- or machine-level key presence, without reading the value;
 - DNS, TLS, and `/healthz` when `-Online` is used;
@@ -275,9 +312,11 @@ Recovery artifacts are under:
 └── backups\config.toml.before-rcsl-<UTC timestamp>
 ```
 
-`state.json` contains paths, mode, managed-projection hashes, original model/provider lines, App
-version, URL, and capability. It never contains the Nexus key or ChatGPT
-credentials.
+`state.json` contains paths, mode, managed-projection hashes, original
+model/provider lines, App version, the validated credential-free gateway
+origin, and capability. It never contains the newly entered Nexus key or
+ChatGPT authentication. Treat it as sensitive anyway: original TOML lines are
+preserved verbatim and could include an operator-written secret in a comment.
 
 The whole-file backup can contain credentials that were already present in
 `config.toml`. The switcher protects its state directory with a current-user-only
@@ -297,3 +336,24 @@ If manual recovery is necessary:
 Revoking the key in the Nexus management UI is the only server-side disconnect.
 Removing configuration from one Windows machine does not invalidate copies of
 the key or configuration elsewhere.
+
+## 10. Source and evidence matrix
+
+The following classification prevents project observations from being mistaken
+for OpenAI compatibility guarantees. Official pages were rechecked on
+2026-08-25.
+
+| Claim | Evidence class | Source |
+|---|---|---|
+| The Windows App supports native Windows and WSL2 agent modes. | OpenAI documentation | [Windows App](https://learn.chatgpt.com/docs/windows/windows-app) |
+| The Microsoft Store install command uses Store ID `9PLM9XGG6VKS`. | OpenAI documentation | [Download the Windows App](https://learn.chatgpt.com/docs/windows/windows-app#download-the-chatgpt-desktop-app) |
+| Native App and native CLI normally share `%USERPROFILE%\.codex`; WSL defaults to a separate Linux home. | OpenAI documentation | [Share config, auth, and sessions with WSL](https://learn.chatgpt.com/docs/windows/windows-app#share-config-auth-and-sessions-with-wsl) |
+| `CODEX_HOME` controls the state directory used by the CLI, IDE extension, and app-server. | OpenAI documentation | [`CODEX_HOME`](https://learn.chatgpt.com/docs/config-file/environment-variables#core-locations) |
+| Trusted project configuration can override `model`, while project-local provider and auth keys are ignored. | OpenAI documentation | [Project config files](https://learn.chatgpt.com/docs/config-file/config-advanced#project-config-files-codexconfigtoml) and [Configuration precedence](https://learn.chatgpt.com/docs/config-file/config-basic#configuration-precedence) |
+| Custom providers support `base_url`, `env_key`, and `wire_api = "responses"`; `env_key` names an environment variable rather than containing its secret. | OpenAI documentation | [Custom model providers](https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers) and [Configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference) |
+| The switcher assumes the installed App exposes the `OpenAI.Codex` AppX identity, an `app\ChatGPT.exe` executable, or a `codex.exe` alias usable for discovery. | Runtime-checked implementation assumption | Discovery and startup checks in [`CodexAppSwitcher.Common.psm1`](../../scripts/windows/codex-app/CodexAppSwitcher.Common.psm1); not documented by OpenAI and not re-observed during this non-interactive change |
+| A directly launched packaged executable passes `RCSL_API_KEY` through to the App's internal app-server. | Project hypothesis requiring interactive acceptance | Launch code in [`CodexAppSwitcher.Common.psm1`](../../scripts/windows/codex-app/CodexAppSwitcher.Common.psm1) plus section 7 of this runbook; not documented by OpenAI |
+| The App may rewrite user configuration and inject plugins, MCP servers, hidden model slots, and large tool sets. | Project-observed behavior | Historical measurements in [Connect an agent client](./connect-an-agent-client.md#32-the-same-sharing-in-the-direction-that-can-break-it); not presented as OpenAI guarantees |
+| WSL agent mode inherits a key injected into a native Windows App process. | Unknown / out of scope | No supporting OpenAI documentation or completed project acceptance test |
+| CLI profiles load `$CODEX_HOME/<profile-name>.config.toml` and do not use `[profiles.<name>]`. | OpenAI documentation | [Profiles](https://learn.chatgpt.com/docs/config-file/config-advanced#profiles) |
+| Nexus exposes the Responses and model-catalogue paths required by this integration. | Repository implementation | [`/v1/responses`](../../backend/app/interfaces/http/routers/responses/route.py) and [`/v1/models`](../../backend/app/interfaces/http/routers/chat/route.py) route sources |

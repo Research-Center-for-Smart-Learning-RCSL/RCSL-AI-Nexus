@@ -6,10 +6,12 @@ Codex desktop app between the built-in OpenAI provider and RCSL AI Nexus.
 The tools are deliberately App-first. The bundled `codex.exe` is used only as
 an installation discovery fallback; these scripts do not install the npm Codex
 CLI and do not use CLI profiles as a substitute for changing the desktop app.
-The App and CLI share `config.toml`, so the selected provider is also visible to
-a later CLI process. The switcher's process-scoped key is inherited only by the
-App it starts; a separately launched CLI needs its own process-scoped key or an
-OpenAI restoration first.
+OpenAI documents that the native Windows App and native CLI share the same
+Codex home, so the selected provider is also visible to a later native CLI
+process. The switcher relies on the directly launched App passing its
+process-scoped key to the internal app-server; that inheritance is a project
+hypothesis, not a documented compatibility guarantee. A separately launched
+CLI needs its own process-scoped key or an OpenAI restoration first.
 
 ## Files
 
@@ -99,16 +101,43 @@ user access. Treat backups as sensitive and remove obsolete ones deliberately.
 
 The doctor can prove that the package, user-level configuration, network, TLS,
 key, and `code` capability are available. It warns when a project
-`.codex/config.toml` can override the user default. It cannot prove the complete desktop App
+`.codex/config.toml` defines a higher-precedence `model`; project-local provider
+and authentication keys are ignored by Codex. It cannot prove the complete desktop App
 agent loop. The App adds its own plugins, hidden model slots, tool definitions,
 and picker behavior. After switching, create a new App task and request a real
 file operation; a greeting proves only text generation.
 
-Direct `ChatGPT.exe` launch and process-scoped key inheritance rely on observed
-package internals, not a documented OpenAI compatibility contract. Startup
+Direct `ChatGPT.exe` launch is a runtime-checked implementation assumption, and
+process-scoped key inheritance into the internal app-server is an unverified
+project hypothesis. Neither is a documented OpenAI compatibility contract. Startup
 confirmation detects a changed path or an immediate managed-config rewrite, but
 the integration remains experimental until the interactive App task passes on
 the installed build. WSL agent mode is outside the verified scope.
+
+## Source basis
+
+- OpenAI's [Windows App documentation](https://learn.chatgpt.com/docs/windows/windows-app)
+  defines the supported native/WSL2 modes, the Store installation command, and
+  how native App and CLI configuration sharing differs from WSL.
+- [Basic configuration](https://learn.chatgpt.com/docs/config-file/config-basic)
+  defines general precedence, while [project config rules](https://learn.chatgpt.com/docs/config-file/config-advanced#project-config-files-codexconfigtoml)
+  specify that project-local provider and authentication keys are ignored.
+- [Advanced configuration](https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers)
+  and the [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
+  define custom-provider fields including `base_url`, `env_key`, and
+  `wire_api = "responses"`.
+- The [`CODEX_HOME` reference](https://learn.chatgpt.com/docs/config-file/environment-variables#core-locations)
+  identifies the state directory used by the CLI, IDE extension, and
+  app-server.
+- `OpenAI.Codex`, `app\ChatGPT.exe`, the alias fallback, and propagation of a
+  directly launched process environment into the internal app-server are not
+  documented by OpenAI. They remain project observations or hypotheses and are
+  guarded by discovery, startup checks, and a required interactive App task.
+
+The primary runbook's
+[source and evidence matrix](../../../docs/runbooks/windows-codex-app-switcher.md#10-source-and-evidence-matrix)
+classifies every external and project-specific claim. Its official links were
+rechecked on 2026-08-25.
 
 The detailed operator workflow and recovery procedure are in
 [`docs/runbooks/windows-codex-app-switcher.md`](../../../docs/runbooks/windows-codex-app-switcher.md).

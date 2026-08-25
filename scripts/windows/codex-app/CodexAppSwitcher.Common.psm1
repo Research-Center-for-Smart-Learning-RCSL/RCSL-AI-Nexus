@@ -307,10 +307,15 @@ function Join-TomlLines {
 
 function Assert-SafeTomlForManagedEdit {
     param([Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines)
+    $managedProviderPattern = [regex]::Escape($script:ManagedProviderId)
+    $currentTable = ''
     for ($i = 0; $i -lt $Lines.Count; $i++) {
         $line = $Lines[$i]
         if ($line -match '("""|'''''')') {
             throw "config.toml line $($i + 1) uses a multiline string. The switcher cannot safely preserve this TOML form."
+        }
+        if ($line -match '^\s*model_providers\.[^=]*["'']') {
+            throw "config.toml line $($i + 1) uses a quoted dotted model-provider key. Normalize it to an unquoted provider table before using the switcher."
         }
         if ($line -match '^\s*["''][^"'']+["'']\s*=') {
             throw "config.toml line $($i + 1) uses a quoted key. Normalize quoted keys before using the switcher."
@@ -326,6 +331,17 @@ function Assert-SafeTomlForManagedEdit {
             if ($headerName -notmatch '^[A-Za-z0-9_.-]+$') {
                 throw "config.toml line $($i + 1) uses an unsupported table-header form. The switcher will not guess at its meaning."
             }
+            if ($headerName -match ("^model_providers\.$managedProviderPattern\.")) {
+                throw "config.toml line $($i + 1) defines a nested table under the managed provider. Remove or migrate that table before using the switcher."
+            }
+            $currentTable = $headerName
+            continue
+        }
+        if ($currentTable -eq '' -and ($line -match '^\s*model_providers\s*=' -or $line -match ("^\s*model_providers\.$managedProviderPattern(?:\.|\s*=)"))) {
+            throw "config.toml line $($i + 1) defines model providers through an inline or dotted key the switcher cannot own safely. Normalize it to provider tables first."
+        }
+        if ($currentTable -eq 'model_providers' -and $line -match ("^\s*$managedProviderPattern(?:\.|\s*=)")) {
+            throw "config.toml line $($i + 1) defines the managed provider through an inline or dotted key. Normalize it to a [model_providers.$($script:ManagedProviderId)] table first."
         }
     }
 }
@@ -616,6 +632,23 @@ function Set-StateProperty {
     $State | Add-Member -MemberType NoteProperty -Name $Name -Value $Value -Force
 }
 
+function Get-NormalizedGatewayBaseUrl {
+    param([Parameter(Mandatory = $true)][string]$BaseUrl)
+    $uri = $null
+    $invalid = (
+        -not [Uri]::TryCreate($BaseUrl, [UriKind]::Absolute, [ref]$uri) -or
+        $uri.Scheme -ne 'https' -or
+        -not [string]::IsNullOrEmpty($uri.UserInfo) -or
+        -not [string]::IsNullOrEmpty($uri.Query) -or
+        -not [string]::IsNullOrEmpty($uri.Fragment) -or
+        $uri.AbsolutePath.Trim('/') -ne ''
+    )
+    if ($invalid) {
+        throw 'The gateway base URL must be an HTTPS origin without credentials, a path, a query, or a fragment.'
+    }
+    return $uri.GetLeftPart([UriPartial]::Authority).TrimEnd('/')
+}
+
 function Test-RcslGateway {
     param(
         [Parameter(Mandatory = $true)][Security.SecureString]$ApiKey,
@@ -623,10 +656,7 @@ function Test-RcslGateway {
         [string]$Capability = $script:DefaultCapability,
         [ValidateRange(5, 120)][int]$TimeoutSeconds = 30
     )
-    $uri = $null
-    if (-not [Uri]::TryCreate($BaseUrl, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne 'https') {
-        throw 'The gateway base URL must be an absolute HTTPS URL.'
-    }
+    $BaseUrl = Get-NormalizedGatewayBaseUrl -BaseUrl $BaseUrl
 
     $plainKey = ConvertFrom-SecureStringPlainText -SecureString $ApiKey
     try {
@@ -719,10 +749,7 @@ function Invoke-EnableRcslCodexAppCore {
     )
     Assert-Windows
 
-    $uri = $null
-    if (-not [Uri]::TryCreate($BaseUrl, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne 'https') {
-        throw 'The gateway base URL must be an absolute HTTPS URL.'
-    }
+    $BaseUrl = Get-NormalizedGatewayBaseUrl -BaseUrl $BaseUrl
     if ($Capability -notmatch '^[a-z][a-z0-9_-]*$') {
         throw 'The capability must be a lowercase capability identifier.'
     }
@@ -850,7 +877,8 @@ function Invoke-DisableRcslCodexAppCore {
             throw "The recovery state belongs to '$($state.ConfigPath)', but CODEX_HOME now resolves to '$configPath'. Restore the original CODEX_HOME value and retry."
         }
         if ($null -ne $state.PSObject.Properties['ProviderId'] -and [string]$state.ProviderId -eq $script:ManagedProviderId) {
-            Set-RcslProviderTable -Lines $parts.Lines -BaseUrl ([string]$state.GatewayBaseUrl) -AllowExistingManaged
+            $restoredBaseUrl = Get-NormalizedGatewayBaseUrl -BaseUrl ([string]$state.GatewayBaseUrl)
+            Set-RcslProviderTable -Lines $parts.Lines -BaseUrl $restoredBaseUrl -AllowExistingManaged
             $configChanged = $true
         }
         $activeState = ([string]$state.Mode -in @('preparing-rcsl', 'rcsl'))
@@ -925,7 +953,11 @@ function Get-ProjectConfigPaths {
     while ($null -ne $directory) {
         $candidate = Join-Path $directory.FullName '.codex\config.toml'
         if ((Test-Path -LiteralPath $candidate -PathType Leaf) -and [IO.Path]::GetFullPath($candidate) -ne $userConfigPath) {
-            $paths.Add($candidate)
+            $projectText = Read-Utf8Text -Path $candidate
+            $projectParts = Split-TomlLines -Text $projectText
+            if ((Find-TopLevelKeyIndices -Lines $projectParts.Lines -Key 'model').Count -gt 0) {
+                $paths.Add($candidate)
+            }
         }
         $directory = $directory.Parent
     }
@@ -960,12 +992,42 @@ function Get-CodexSwitcherStatus {
     }
     $state = Get-SwitcherState
     $managedHashMatchesState = $null
-    if ($null -ne $state -and [string]$state.Mode -eq 'rcsl') {
-        $hashProperty = $state.PSObject.Properties['ManagedSha256After']
-        if ($null -ne $hashProperty) {
-            $managedHashMatchesState = ([string]$hashProperty.Value -eq (Get-ManagedProjectionSha256 -Lines $parts.Lines))
-            if (-not $managedHashMatchesState) {
-                $issues.Add('The managed model/provider projection has drifted since the switch was recorded.')
+    if ($null -ne $state) {
+        $stateMode = [string]$state.Mode
+        $stateConfigPath = $state.PSObject.Properties['ConfigPath']
+        if ($null -ne $stateConfigPath -and [string]$stateConfigPath.Value -ne $configPath) {
+            $issues.Add("Recovery state belongs to '$($stateConfigPath.Value)', not the active config '$configPath'.")
+        }
+        switch ($stateMode) {
+            'rcsl' {
+                if ($provider -ne $script:ManagedProviderId) {
+                    $issues.Add('Recovery state says RCSL mode, but the managed provider is not selected.')
+                }
+                $stateCapability = $state.PSObject.Properties['Capability']
+                if ($null -eq $stateCapability -or $model -ne [string]$stateCapability.Value) {
+                    $issues.Add('The selected model does not match the capability recorded in recovery state.')
+                }
+                $hashProperty = $state.PSObject.Properties['ManagedSha256After']
+                if ($null -eq $hashProperty) {
+                    $issues.Add('RCSL recovery state has no managed-projection hash.')
+                }
+                else {
+                    $managedHashMatchesState = ([string]$hashProperty.Value -eq (Get-ManagedProjectionSha256 -Lines $parts.Lines))
+                    if (-not $managedHashMatchesState) {
+                        $issues.Add('The managed model/provider projection has drifted since the switch was recorded.')
+                    }
+                }
+            }
+            'openai' {
+                if ($provider -eq $script:ManagedProviderId) {
+                    $issues.Add('Recovery state says OpenAI mode, but the managed provider is still selected.')
+                }
+            }
+            'preparing-rcsl' {
+                $issues.Add('Recovery state records an interrupted RCSL transition. Recover manually before switching again.')
+            }
+            default {
+                $issues.Add("Recovery state uses unknown mode '$stateMode'.")
             }
         }
     }

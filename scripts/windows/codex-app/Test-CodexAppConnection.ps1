@@ -136,7 +136,7 @@ Invoke-Check -Name 'Codex configuration' -Action {
     }
 }
 
-Invoke-Check -Name 'Higher-precedence project configuration' -Action {
+Invoke-Check -Name 'Project model override' -Action {
     if ($null -eq $script:status) {
         throw 'Configuration status was unavailable.'
     }
@@ -145,10 +145,10 @@ Invoke-Check -Name 'Higher-precedence project configuration' -Action {
     }
     $projectConfigs = @($script:status.HigherPrecedenceProjectConfigs)
     if ($projectConfigs.Count -gt 0) {
-        Add-Check -Name 'Higher-precedence project configuration' -Status 'WARN' -Detail ("Trusted project config can override the user-level switch: {0}" -f ($projectConfigs -join ', '))
+        Add-Check -Name 'Project model override' -Status 'WARN' -Detail ("Project config defines a top-level model that can override the user-level Nexus capability: {0}. Project-local provider keys are ignored by Codex." -f ($projectConfigs -join ', '))
     }
     else {
-        Add-Check -Name 'Higher-precedence project configuration' -Status 'PASS' -Detail "No .codex\config.toml was found from '$ProjectPath' through its ancestors."
+        Add-Check -Name 'Project model override' -Status 'PASS' -Detail "No project .codex\config.toml from '$ProjectPath' through its ancestors defines a top-level model override."
     }
 }
 

@@ -35,9 +35,19 @@ export function OtherClientsSection({ agentCapability }: OtherClientsSectionProp
               Supported, subject to the volume of tool definitions the
               application injects.
             </strong>{' '}
-            Both the application and the CLI read{' '}
-            <code>~/.codex/config.toml</code>, so completing step 3 configures
-            the application as well; this has been observed on macOS.{' '}
+            Local surfaces using the same Codex home read the same user
+            configuration, so completing step 3 configures the application as
+            well; this has been observed on macOS. OpenAI documents the native
+            Windows App/CLI sharing and the separate WSL default in its{' '}
+            <a
+              className="underline underline-offset-2"
+              href="https://learn.chatgpt.com/docs/windows/windows-app#share-config-auth-and-sessions-with-wsl"
+              rel="noreferrer"
+              target="_blank"
+            >
+              Windows App guide
+            </a>
+            .{' '}
             <strong>The sharing operates in both directions.</strong> The
             application owns that directory: it rewrites the file, and it
             supplies the CLI with its own tool surface, which is resent on every
@@ -74,8 +84,9 @@ export function OtherClientsSection({ agentCapability }: OtherClientsSectionProp
             one further step: after the lines are removed, the application can
             still fail at startup on a conversation created against the former
             provider, and deleting that conversation is what clears the
-            condition. Leaving the <code>[model_providers.rcsl]</code> block in
-            place avoids the error entirely.
+            condition. Leaving the{' '}
+            <code>[model_providers.rcsl]</code> block in place
+            avoids the error entirely.
             <br />
             <strong>
               Both figures above are qualified by a build for a reason.
