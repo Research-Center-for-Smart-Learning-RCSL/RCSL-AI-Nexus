@@ -20,6 +20,7 @@ import {
   ApiKeyCapabilities,
   CidrTextarea,
   DefaultCapabilitySelect,
+  ExpiryField,
 } from '@/features/api-keys/components/api-key-policy-controls';
 import { useSession } from '@/lib/session';
 import { useUsers } from '@/features/users/hooks/use-users';
@@ -71,8 +72,8 @@ export function CreateApiKeyDialog({
     defaultValues: {
       name: '',
       scopes: ['chat'],
-      rate_limit_rpm: 60,
-      quota_tokens_per_day: 1_000_000,
+      rate_limit_rpm: 240,
+      quota_tokens_per_day: 90_000_000,
       allowed_cidrs_text: '',
       expires_at: defaultExpiry(),
       owner_id: ownerId,
@@ -234,8 +235,14 @@ export function CreateApiKeyDialog({
                   control={form.control}
                   name="expires_at"
                   label="Expires"
-                  type="date"
-                  description={`Required. Defaults to ${DEFAULT_EXPIRY_DAYS} days.`}
+                  description={`Required. Defaults to ${DEFAULT_EXPIRY_DAYS} days. Up to 10 years.`}
+                  render={(field) => (
+                    <ExpiryField
+                      value={field.value as string}
+                      onChange={(value) => field.onChange(value)}
+                      onBlur={field.onBlur}
+                    />
+                  )}
                 />
 
                 {/* A form field rather than local state. Held separately, the

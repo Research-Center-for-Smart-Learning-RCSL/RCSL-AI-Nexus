@@ -28,15 +28,16 @@ one and touched a ChatGPT login it never needed to touch.
 
 `scripts/windows/codex-app` makes that sequence one transaction. The Windows
 Forms launcher discovers the `OpenAI.Codex` AppX package, or installs the
-  official Microsoft Store package through `winget`; validates a masked Nexus key
+official Microsoft Store package through `winget`; validates a masked Nexus key
 against `GET /v1/models`; asks the App to close normally and refuses to
-  force-kill it; copies a UTF-8 text snapshot of the pre-switch TOML; records the original top-level
-model and provider without the newly entered credential; updates only those fields and the
-dedicated `rcsl_nexus_switcher` provider table; and starts `ChatGPT.exe` with a key present only in the
-new process environment. Switching back restores the captured selection and
-launches without that key. It deliberately leaves the inactive provider table,
-because the runbook's 2026-08-18 evidence established that old conversations
-continue to reference it.
+force-kill it; copies a UTF-8 text snapshot of the pre-switch TOML; records the
+original top-level model and provider without the newly entered credential;
+updates only those fields and the dedicated `rcsl_nexus_switcher` provider
+table; and starts `ChatGPT.exe` with a key present only in the new process
+environment. Switching back restores the captured selection and launches
+without that key. It deliberately leaves the inactive provider table, because
+the runbook's 2026-08-18 evidence established that old conversations continue
+to reference it.
 
 The whole backup is a disaster-recovery artifact, not the normal undo. Restoring
 it automatically would roll back plugin, MCP, permission and App-preference
@@ -63,7 +64,7 @@ trusting. The repair uses a collision-resistant provider ID, fails closed on
 unknown state and ambiguous TOML, serialises transitions with a mutex, protects
 state/backups with a current-user ACL, reconciles App-driven selection drift,
 checks the managed projection after startup, and warns about higher-precedence
-project configuration. Doctor key entry is now a masked Windows dialog and the
+project `model` overrides. Doctor key entry is now a masked Windows dialog and the
 main GUI performs long operations in a background runspace.
 
 That review also corrected the delivery claim. OpenAI documents the
@@ -71,13 +72,133 @@ That review also corrected the delivery claim. OpenAI documents the
 and the public [custom-provider schema](https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers);
 `OpenAI.Codex`, `app\ChatGPT.exe`, and direct package launch are runtime-checked
 implementation assumptions, while key inheritance into the internal app-server
-is a project hypothesis; none is an OpenAI compatibility contract. The implementation commit passed remote
-repository CI, but the integration remains experimental until a Windows-native App task
-performs a real file operation. WSL agent mode is outside that claim. The
-operator runbook now carries a dated
+is a project hypothesis; none is an OpenAI compatibility contract. The
+implementation commit passed remote repository CI, but the integration remains
+experimental until a Windows-native App task performs a real file operation.
+WSL agent mode is outside that claim. The operator runbook now carries a dated
 [source and evidence matrix](./runbooks/windows-codex-app-switcher.md#10-source-and-evidence-matrix)
 that separates official documentation, repository implementation,
 project-observed behavior, and unverified assumptions.
+
+---
+
+## 2026-08-25 — Issuing defaults raised, the expiry ceiling moved to ten years, and a deploy that spent an hour on a credential helper rather than a network
+
+The three figures an operator sets when issuing a key were all sized for a
+platform with no long-lived integrations. `rate_limit_rpm` defaulted to 60 and
+now defaults to **240**; the issuing form's daily token quota defaulted to
+1,000,000 and now defaults to **90,000,000**. Neither needed a validation
+change — the backend's bound on the rate limit is `le=100_000` and the quota has
+only `ge=1` — so both are one-line default moves, in
+`domain/entities/api_key.py` and in the create dialog respectively. The quota
+has no backend default at all: `None` means unmetered, and the form has always
+been the only place a number is chosen.
+
+**The expiry ceiling is the one that needed an argument rather than an edit.**
+`api_key_max_lifetime_days` moved from 365 to **3650**, and the request that
+started it was for no ceiling at all. That was declined, and the reason is
+recorded in [security.md](./architecture/security.md) §4.2 rather than only
+here: expiry is mandatory *in order to* force rotation, `expires_at` of the year
+9999 satisfied "must be in the future" and rotated nothing, and a field with no
+upper bound is the same field with its purpose removed. Ten years makes room for
+an integration nobody wants to re-key every twelve months while keeping the
+refusal that makes the column mean something. The figure moved in four places
+that must agree — the settings default, the use case's own default,
+`.env` and `.env.example` — because [deployment.md](./architecture/deployment.md)
+§10 records what happens when they disagree: until 2026-07-29 the use case
+carried an identical 365 of its own, the two agreed by coincidence, and setting
+`API_KEY_MAX_LIFETIME_DAYS` changed nothing.
+
+**Verified against the running service rather than the source**, for that exact
+reason. With the deployed image and the real settings: 90 days accepted, 400
+days accepted where it would previously have been refused, 3650 accepted, 3651
+refused carrying `maximum_days=3650`, 4000 refused the same way, and a date in
+the past still refused as not in the future. The lower bound is untouched and
+the upper bound is demonstrably the new number, which is more than reading
+`3650` out of `Settings` would have established.
+
+**The issuing form now offers durations, and the date field is still the field.**
+Thirty days, ninety, one year, three years and ten years are buttons that write
+into the existing date input; the input remains the only source of truth, so a
+preset and a typed date cannot disagree about which one won. The last preset
+lands exactly on the ceiling. The edit dialog's description said "within a year"
+— hardcoded prose, never derived from the setting — and now says ten years,
+which is the second time that string has needed hand-editing and is worth
+remembering the next time the figure moves.
+
+### The build failed for an hour, and every layer it appeared to implicate was healthy
+
+`docker compose build` failed at `load metadata for ghcr.io/astral-sh/uv:0.5.14`
+with `DeadlineExceeded`, roughly forty seconds in, on every attempt. Read as a
+network fault it is completely convincing, and it is not one. What was actually
+measured, in the order it was ruled out: the host reaches `ghcr.io` over TLS; a
+container reaches both `ghcr.io` and `registry-1.docker.io` and gets `401
+Unauthorized`, which is the correct answer to an unauthenticated `/v2/` and
+therefore proof of reachability; the Docker proxy the daemon is configured to
+use, `http.docker.internal:3128`, accepts a connection and returns `301` then
+`401` when driven by hand from inside a container; DNS resolves in both places;
+and the VM's disk is 37.7 GB of 2.0 TB. There is no macOS system proxy and no
+proxy in the environment — the `3128` entry is Docker Desktop's own transparent
+proxy and is the default.
+
+**The signature that mattered was an absence.** `docker pull alpine:3.20` hung
+indefinitely without printing `Pulling from library/alpine` — without printing
+anything at all. A pull that cannot reach a registry fails; a pull that has not
+yet decided to make a request hangs silently. So the blockage was before the
+first byte, which excludes every layer listed above no matter how suspicious the
+error message is.
+
+**It is the credential helper.** `~/.docker/config.json` sets `credsStore:
+desktop`, so every registry operation first asks `docker-credential-desktop` for
+credentials, and that binary talks to the Docker Desktop backend. Driven
+directly — `echo "https://index.docker.io/v1/" | docker-credential-desktop get`
+— it produces no output and has to be killed; a healthy helper answers in
+milliseconds, with a credential or with `credentials not found`. That single
+hang explains all three symptoms, including the one that looked unrelated:
+`docker desktop diagnose` also produced nothing in ten minutes, because its
+connectivity checks go through the same path. `auths` is empty, so no credential
+was ever going to be returned.
+
+The build was completed by pointing `DOCKER_CONFIG` at a throwaway directory
+containing `{"auths":{}}`, which removes `credsStore` from the lookup and makes
+the pulls anonymous — correct for these three public base images. It worked
+immediately. **`DOCKER_CONFIG` also relocates the CLI plugin search path**, so
+`docker compose` becomes "unknown command" until `cli-plugins` is symlinked into
+the same directory; that costs one confusing minute if it is not expected.
+
+This is a workaround and the user's own configuration was deliberately left
+alone: `credsStore: desktop` is still set, and the helper is still broken.
+The fix is a Docker Desktop re-login or reinstall, which is a decision about the
+machine rather than about this repository. **A Docker Desktop restart does not
+clear it** — the helper was hung both before and after one.
+
+### Restarting Docker Desktop is a third path the reconciler does not cover
+
+`docker desktop restart` stopped all twelve containers cleanly — eleven
+`Exited (0)`, `qdrant` `Exited (143)` — and restored none of them. The platform
+was entirely down until `docker compose up -d` was run by hand, after which
+`migrate` exited 0, eleven services ran, all six published bindings matched the
+pre-restart baseline exactly and all six entrances answered 200.
+
+**`restart: unless-stopped` is not broken here; it is doing what it says.** A
+restart stops containers explicitly, which is precisely the "unless", so the
+daemon has no event to act on when it returns. The state is identical to the one
+[deployment.md](./architecture/deployment.md) §9 records for the 2026-07-26
+19:10 boot, and the recovery is the same command.
+
+What is new is that **this is not a boot**, and the two things written to cover
+this state are both boot-shaped: `reconcile-port-bindings.sh` is a LaunchDaemon
+that runs when the machine starts, and the injectors that rehearse it
+(`stop-stack-once.sh`, `delay-tailscaled-once.sh`) both work by rebooting. An
+operator restarting Docker Desktop mid-session — which is an ordinary thing to
+do, and was done here on purpose — gets no reconciler at all. The safety net
+that does cover it is `check-platform-health.sh`, which runs every five minutes
+and mails on a change of state, so the worst case is a five-minute outage
+noticed by mail rather than an indefinite one noticed by a person. That is a
+real net and it is worth knowing it is the only one, because the port-binding
+reconciler's name suggests a generality it does not have.
+
+---
 
 ## 2026-08-21 — A frontend pass, and a deploy that shipped the defect it was written to fix
 

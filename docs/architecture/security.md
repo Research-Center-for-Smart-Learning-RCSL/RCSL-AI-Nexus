@@ -378,7 +378,7 @@ Bound metadata:
 | `rate_limit_rpm` | Requests per minute |
 | `quota_tokens_per_day` | Daily token ceiling |
 | `allowed_cidrs` | Source restriction, §4.1(d). Empty means unrestricted |
-| `expires_at` | **Required**, `NOT NULL` in the schema. The issuing form defaults to 90 days and the use case refuses anything beyond **365**, forcing rotation. The maximum reaches the caller as `maximum_days` on the refusal, for the reason §9.2 gives |
+| `expires_at` | **Required**, `NOT NULL` in the schema. The issuing form defaults to 90 days and the use case refuses anything beyond **3650** (10 years, raised from 365 on 2026-08-25 to make room for long-lived integrations while keeping expiry mandatory), forcing rotation. The maximum reaches the caller as `maximum_days` on the refusal, for the reason §9.2 gives |
 | `owner_id` | Which team member holds it, revoked when they leave |
 | `revoked_at` | Revocation timestamp |
 | `tenant_id` | The tenant the key belongs to, carried onto `Actor.tenant_id` so a key reaches only its own tenant's data (§7.3). Omitted from this table until 2026-08-18, though it is the field the whole isolation boundary rests on |
