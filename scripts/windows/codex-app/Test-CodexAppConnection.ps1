@@ -2,6 +2,7 @@
 param(
     [string]$BaseUrl = 'https://llmapi.rcsl.online',
     [string]$Capability = 'code',
+    [string]$ProjectPath = (Get-Location).Path,
     [switch]$Online,
     [switch]$Authenticated,
     [switch]$AsJson
@@ -12,6 +13,61 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'CodexAppSwitcher.Common.psm1') -Force
 
 $results = [Collections.Generic.List[object]]::new()
+
+function Read-NexusKeyFromDialog {
+    if ([Threading.Thread]::CurrentThread.ApartmentState -ne [Threading.ApartmentState]::STA) {
+        throw 'Authenticated Doctor checks require an STA PowerShell process so the masked Windows dialog can be shown. Launch with powershell.exe -STA.'
+    }
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    $dialog = New-Object Windows.Forms.Form
+    $dialog.Text = 'RCSL AI Nexus - Doctor authentication'
+    $dialog.StartPosition = 'CenterScreen'
+    $dialog.ClientSize = New-Object Drawing.Size(540, 155)
+    $dialog.FormBorderStyle = 'FixedDialog'
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+
+    $label = New-Object Windows.Forms.Label
+    $label.Text = 'Nexus API key (never passed on the command line or persisted)'
+    $label.Location = New-Object Drawing.Point(18, 18)
+    $label.AutoSize = $true
+    $dialog.Controls.Add($label)
+
+    $keyBox = New-Object Windows.Forms.TextBox
+    $keyBox.Location = New-Object Drawing.Point(21, 47)
+    $keyBox.Size = New-Object Drawing.Size(498, 25)
+    $keyBox.UseSystemPasswordChar = $true
+    $dialog.Controls.Add($keyBox)
+
+    $okButton = New-Object Windows.Forms.Button
+    $okButton.Text = 'Run authenticated check'
+    $okButton.Location = New-Object Drawing.Point(325, 95)
+    $okButton.Size = New-Object Drawing.Size(194, 32)
+    $okButton.DialogResult = [Windows.Forms.DialogResult]::OK
+    $dialog.Controls.Add($okButton)
+    $dialog.AcceptButton = $okButton
+
+    $cancelButton = New-Object Windows.Forms.Button
+    $cancelButton.Text = 'Cancel'
+    $cancelButton.Location = New-Object Drawing.Point(229, 95)
+    $cancelButton.Size = New-Object Drawing.Size(86, 32)
+    $cancelButton.DialogResult = [Windows.Forms.DialogResult]::Cancel
+    $dialog.Controls.Add($cancelButton)
+    $dialog.CancelButton = $cancelButton
+
+    $dialog.Add_Shown({ $keyBox.Focus() })
+    try {
+        if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK -or [string]::IsNullOrWhiteSpace($keyBox.Text)) {
+            throw 'Authenticated Doctor check was cancelled or no API key was entered.'
+        }
+        return (ConvertTo-SecureString -String $keyBox.Text.Trim() -AsPlainText -Force)
+    }
+    finally {
+        $keyBox.Clear()
+        $dialog.Dispose()
+    }
+}
 
 function Add-Check {
     param(
@@ -67,12 +123,32 @@ Invoke-Check -Name 'Codex App process' -Action {
 
 $status = $null
 Invoke-Check -Name 'Codex configuration' -Action {
-    $script:status = Get-CodexSwitcherStatus
+    $script:status = Get-CodexSwitcherStatus -ProjectPath $ProjectPath
     if (-not $script:status.ConfigExists) {
         Add-Check -Name 'Codex configuration' -Status 'WARN' -Detail "No config.toml exists at $($script:status.ConfigPath); Codex will use built-in defaults."
     }
     else {
-        Add-Check -Name 'Codex configuration' -Status 'PASS' -Detail ("{0}; model_provider={1}; model={2}" -f $script:status.ConfigPath, $script:status.ModelProvider, $script:status.Model)
+        $issueCount = @($script:status.ConfigurationIssues).Count
+        if ($issueCount -gt 0) {
+            throw ([string]::Join(' ', [string[]]$script:status.ConfigurationIssues))
+        }
+        Add-Check -Name 'Codex configuration' -Status 'PASS' -Detail ("User-level default: {0}; model_provider={1}; model={2}" -f $script:status.ConfigPath, $script:status.ModelProvider, $script:status.Model)
+    }
+}
+
+Invoke-Check -Name 'Higher-precedence project configuration' -Action {
+    if ($null -eq $script:status) {
+        throw 'Configuration status was unavailable.'
+    }
+    if (-not (Test-Path -LiteralPath $ProjectPath -PathType Container)) {
+        throw "ProjectPath is not an existing directory: $ProjectPath"
+    }
+    $projectConfigs = @($script:status.HigherPrecedenceProjectConfigs)
+    if ($projectConfigs.Count -gt 0) {
+        Add-Check -Name 'Higher-precedence project configuration' -Status 'WARN' -Detail ("Trusted project config can override the user-level switch: {0}" -f ($projectConfigs -join ', '))
+    }
+    else {
+        Add-Check -Name 'Higher-precedence project configuration' -Status 'PASS' -Detail "No .codex\config.toml was found from '$ProjectPath' through its ancestors."
     }
 }
 
@@ -81,10 +157,10 @@ Invoke-Check -Name 'RCSL provider definition' -Action {
         throw 'Configuration status was unavailable.'
     }
     if ($script:status.RcslProviderDefined) {
-        Add-Check -Name 'RCSL provider definition' -Status 'PASS' -Detail '[model_providers.rcsl] is present.'
+        Add-Check -Name 'RCSL provider definition' -Status 'PASS' -Detail ("[model_providers.{0}] is present; managed projection matches state: {1}" -f $script:status.ManagedProviderId, $script:status.ManagedHashMatchesState)
     }
-    elseif ($script:status.ModelProvider -eq 'rcsl') {
-        throw 'model_provider selects rcsl, but [model_providers.rcsl] is absent.'
+    elseif ($script:status.ModelProvider -eq $script:status.ManagedProviderId) {
+        throw "model_provider selects $($script:status.ManagedProviderId), but its provider table is absent."
     }
     else {
         Add-Check -Name 'RCSL provider definition' -Status 'WARN' -Detail 'The provider has not been configured yet.'
@@ -154,7 +230,7 @@ else {
 if ($Authenticated) {
     $secureKey = $null
     try {
-        $secureKey = Read-Host 'Enter the Nexus API key (input is hidden)' -AsSecureString
+        $secureKey = Read-NexusKeyFromDialog
         Invoke-Check -Name 'Authenticated model catalogue' -Action {
             $gateway = Test-RcslGateway -ApiKey $secureKey -BaseUrl $BaseUrl -Capability $Capability
             Add-Check -Name 'Authenticated model catalogue' -Status 'PASS' -Detail ("GET /v1/models includes '{0}'." -f $gateway.Capability)

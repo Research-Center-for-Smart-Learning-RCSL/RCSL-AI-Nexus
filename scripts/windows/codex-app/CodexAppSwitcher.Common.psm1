@@ -5,7 +5,9 @@ $script:CodexPackageName = 'OpenAI.Codex'
 $script:CodexStoreId = '9PLM9XGG6VKS'
 $script:DefaultGatewayBaseUrl = 'https://llmapi.rcsl.online'
 $script:DefaultCapability = 'code'
-$script:StateSchemaVersion = 1
+$script:ManagedProviderId = 'rcsl_nexus_switcher'
+$script:SwitcherMutexName = 'Local\RCSL.AI.Nexus.CodexAppSwitcher'
+$script:StateSchemaVersion = 2
 
 function Assert-Windows {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
@@ -41,6 +43,48 @@ function New-DirectoryIfMissing {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {
         [void](New-Item -ItemType Directory -Path $Path -Force)
+    }
+}
+
+function Protect-SwitcherStateDirectory {
+    $path = Get-SwitcherStateDirectory
+    New-DirectoryIfMissing -Path $path
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $security = New-Object Security.AccessControl.DirectorySecurity
+    $security.SetAccessRuleProtection($true, $false)
+    $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+        $identity.User,
+        [Security.AccessControl.FileSystemRights]::FullControl,
+        [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit',
+        [Security.AccessControl.PropagationFlags]::None,
+        [Security.AccessControl.AccessControlType]::Allow
+    )
+    $security.AddAccessRule($rule)
+    [IO.Directory]::SetAccessControl($path, $security)
+    return $path
+}
+
+function Invoke-WithSwitcherLock {
+    param([Parameter(Mandatory = $true)][scriptblock]$Action)
+    $mutex = New-Object Threading.Mutex($false, $script:SwitcherMutexName)
+    $acquired = $false
+    try {
+        try {
+            $acquired = $mutex.WaitOne(0)
+        }
+        catch [Threading.AbandonedMutexException] {
+            $acquired = $true
+        }
+        if (-not $acquired) {
+            throw 'Another Codex App switch operation is already running for this Windows session.'
+        }
+        return (& $Action)
+    }
+    finally {
+        if ($acquired) {
+            $mutex.ReleaseMutex()
+        }
+        $mutex.Dispose()
     }
 }
 
@@ -168,15 +212,22 @@ function Get-CodexAppProcesses {
     }
     $installRoot = $app.InstallLocation.TrimEnd('\') + '\'
     $processes = @(Get-Process -Name ChatGPT -ErrorAction SilentlyContinue)
-    return @($processes | Where-Object {
+    $matching = [Collections.Generic.List[object]]::new()
+    foreach ($process in $processes) {
         try {
-            -not [string]::IsNullOrWhiteSpace($_.Path) -and
-                $_.Path.StartsWith($installRoot, [StringComparison]::OrdinalIgnoreCase)
+            $path = [string]$process.Path
+            if ([string]::IsNullOrWhiteSpace($path)) {
+                throw "The executable path for ChatGPT process $($process.Id) is unavailable."
+            }
+            if ($path.StartsWith($installRoot, [StringComparison]::OrdinalIgnoreCase)) {
+                $matching.Add($process)
+            }
         }
         catch {
-            $false
+            throw "Cannot determine whether ChatGPT process $($process.Id) belongs to Codex App. Close it manually before switching. $($_.Exception.Message)"
         }
-    })
+    }
+    return @($matching)
 }
 
 function Stop-CodexAppGracefully {
@@ -254,6 +305,31 @@ function Join-TomlLines {
     return $text
 }
 
+function Assert-SafeTomlForManagedEdit {
+    param([Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines)
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        $line = $Lines[$i]
+        if ($line -match '("""|'''''')') {
+            throw "config.toml line $($i + 1) uses a multiline string. The switcher cannot safely preserve this TOML form."
+        }
+        if ($line -match '^\s*["''][^"'']+["'']\s*=') {
+            throw "config.toml line $($i + 1) uses a quoted key. Normalize quoted keys before using the switcher."
+        }
+        if ($line -match '^\s*\[\[') {
+            throw "config.toml line $($i + 1) uses an array-of-tables header. The switcher fails closed rather than edit a TOML document it cannot preserve safely."
+        }
+        if ($line -match '^\s*\[[^\]]+\]\s*(?:#.*)?$') {
+            $headerName = [regex]::Match($line, '^\s*\[([^\]]+)\]').Groups[1].Value
+            if ($headerName -match '["'']') {
+                throw "config.toml line $($i + 1) uses a quoted table segment. Normalize it before using the switcher."
+            }
+            if ($headerName -notmatch '^[A-Za-z0-9_.-]+$') {
+                throw "config.toml line $($i + 1) uses an unsupported table-header form. The switcher will not guess at its meaning."
+            }
+        }
+    }
+}
+
 function Find-TopLevelKeyIndices {
     param(
         [Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines,
@@ -261,7 +337,7 @@ function Find-TopLevelKeyIndices {
     )
     $indices = [Collections.Generic.List[int]]::new()
     for ($i = 0; $i -lt $Lines.Count; $i++) {
-        if ($Lines[$i] -match '^\s*\[') {
+        if ($Lines[$i] -match '^\s*\[[A-Za-z0-9_.-]+\]\s*(?:#.*)?$') {
             break
         }
         if ($Lines[$i] -match ('^\s*{0}\s*=' -f [regex]::Escape($Key))) {
@@ -324,24 +400,41 @@ function Get-OriginalTopLevelKey {
     return [pscustomobject]@{ Present = $false; Line = '' }
 }
 
+function Get-TopLevelTomlValue {
+    param(
+        [Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][ValidateSet('model', 'model_provider')][string]$Key
+    )
+    $indices = Find-TopLevelKeyIndices -Lines $Lines -Key $Key
+    if ($indices.Count -eq 1 -and $Lines[$indices[0]] -match ('^\s*{0}\s*=\s*["'']([^"'']+)["'']\s*(?:#.*)?$' -f [regex]::Escape($Key))) {
+        return $Matches[1]
+    }
+    return ''
+}
+
 function Set-RcslProviderTable {
     param(
         [Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines,
-        [Parameter(Mandatory = $true)][string]$BaseUrl
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [switch]$AllowExistingManaged
     )
 
-    if ($Lines | Where-Object { $_ -match '^\s*\[model_providers\.rcsl\.auth\]\s*$' }) {
-        throw 'config.toml already contains [model_providers.rcsl.auth]. Remove or migrate that table before using the env_key-based switcher.'
+    $providerPattern = [regex]::Escape($script:ManagedProviderId)
+    if ($Lines | Where-Object { $_ -match ("^\s*\[model_providers\.$providerPattern\.auth\]\s*(?:#.*)?$") }) {
+        throw "config.toml already contains [model_providers.$($script:ManagedProviderId).auth]. Remove or migrate that table before using the env_key-based switcher."
     }
 
     $headerIndices = [Collections.Generic.List[int]]::new()
     for ($i = 0; $i -lt $Lines.Count; $i++) {
-        if ($Lines[$i] -match '^\s*\[model_providers\.rcsl\]\s*$') {
+        if ($Lines[$i] -match ("^\s*\[model_providers\.$providerPattern\]\s*(?:#.*)?$")) {
             $headerIndices.Add($i)
         }
     }
     if ($headerIndices.Count -gt 1) {
-        throw 'config.toml contains more than one [model_providers.rcsl] table.'
+        throw "config.toml contains more than one [model_providers.$($script:ManagedProviderId)] table."
+    }
+    if ($headerIndices.Count -eq 1 -and -not $AllowExistingManaged) {
+        throw "config.toml already contains [model_providers.$($script:ManagedProviderId)] without active switcher state. Refusing to overwrite a provider the switcher cannot prove it owns."
     }
 
     $desired = [ordered]@{
@@ -355,7 +448,7 @@ function Set-RcslProviderTable {
         if ($Lines.Count -gt 0 -and $Lines[$Lines.Count - 1] -ne '') {
             $Lines.Add('')
         }
-        $Lines.Add('[model_providers.rcsl]')
+        $Lines.Add("[model_providers.$($script:ManagedProviderId)]")
         foreach ($line in $desired.Values) {
             $Lines.Add($line)
         }
@@ -365,17 +458,22 @@ function Set-RcslProviderTable {
     $start = $headerIndices[0]
     $end = $Lines.Count
     for ($i = $start + 1; $i -lt $Lines.Count; $i++) {
-        if ($Lines[$i] -match '^\s*\[') {
+        if ($Lines[$i] -match '^\s*\[[A-Za-z0-9_.-]+\]\s*(?:#.*)?$') {
             $end = $i
             break
         }
     }
 
-    foreach ($incompatibleKey in @('experimental_bearer_token', 'requires_openai_auth')) {
+    foreach ($incompatibleKey in @('experimental_bearer_token')) {
         for ($i = $start + 1; $i -lt $end; $i++) {
             if ($Lines[$i] -match ('^\s*{0}\s*=' -f [regex]::Escape($incompatibleKey))) {
-                throw "[model_providers.rcsl] already defines '$incompatibleKey', which cannot be combined with env_key. Remove or migrate it before using the switcher."
+                throw "[model_providers.$($script:ManagedProviderId)] already defines '$incompatibleKey', which cannot be combined with env_key. Remove or migrate it before using the switcher."
             }
+        }
+    }
+    for ($i = $start + 1; $i -lt $end; $i++) {
+        if ($Lines[$i] -match '^\s*requires_openai_auth\s*=\s*true\s*(?:#.*)?$') {
+            throw "[model_providers.$($script:ManagedProviderId)] requires OpenAI authentication and cannot be used with the switcher's env_key authentication."
         }
     }
 
@@ -387,7 +485,7 @@ function Set-RcslProviderTable {
             }
         }
         if ($matches.Count -gt 1) {
-            throw "[model_providers.rcsl] contains more than one '$key' key."
+            throw "[model_providers.$($script:ManagedProviderId)] contains more than one '$key' key."
         }
         if ($matches.Count -eq 1) {
             $Lines[$matches[0]] = $desired[$key]
@@ -399,12 +497,92 @@ function Set-RcslProviderTable {
     }
 }
 
+function Get-ManagedProjectionSha256 {
+    param([Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines)
+    $projection = [Collections.Generic.List[string]]::new()
+    foreach ($key in @('model', 'model_provider')) {
+        $indices = Find-TopLevelKeyIndices -Lines $Lines -Key $key
+        if ($indices.Count -eq 1) {
+            $projection.Add($Lines[$indices[0]].Trim())
+        }
+    }
+    $providerPattern = [regex]::Escape($script:ManagedProviderId)
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match ("^\s*\[model_providers\.$providerPattern\]\s*(?:#.*)?$")) {
+            for ($j = $i; $j -lt $Lines.Count; $j++) {
+                if ($j -gt $i -and $Lines[$j] -match '^\s*\[[A-Za-z0-9_.-]+\]\s*(?:#.*)?$') {
+                    break
+                }
+                $projection.Add($Lines[$j].Trim())
+            }
+            break
+        }
+    }
+    return (Get-TextSha256 -Text ([string]::Join("`n", $projection.ToArray())))
+}
+
+function Get-ManagedProviderIssues {
+    param([Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines)
+    $issues = [Collections.Generic.List[string]]::new()
+    $providerPattern = [regex]::Escape($script:ManagedProviderId)
+    $start = -1
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match ("^\s*\[model_providers\.$providerPattern\]\s*(?:#.*)?$")) {
+            if ($start -ne -1) {
+                $issues.Add("Duplicate [model_providers.$($script:ManagedProviderId)] tables were found.")
+            }
+            $start = $i
+        }
+    }
+    if ($start -eq -1) {
+        return @($issues)
+    }
+    $end = $Lines.Count
+    for ($i = $start + 1; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match '^\s*\[[A-Za-z0-9_.-]+\]\s*(?:#.*)?$') {
+            $end = $i
+            break
+        }
+    }
+    $expectedStrings = [ordered]@{
+        name = 'RCSL AI Nexus'
+        env_key = 'RCSL_API_KEY'
+        wire_api = 'responses'
+    }
+    foreach ($key in $expectedStrings.Keys) {
+        $values = @()
+        for ($i = $start + 1; $i -lt $end; $i++) {
+            if ($Lines[$i] -match ('^\s*{0}\s*=\s*["'']([^"'']*)["'']\s*(?:#.*)?$' -f [regex]::Escape($key))) {
+                $values += $Matches[1]
+            }
+        }
+        if ($values.Count -ne 1 -or $values[0] -ne $expectedStrings[$key]) {
+            $issues.Add("Provider key '$key' must appear exactly once with value '$($expectedStrings[$key])'.")
+        }
+    }
+    $baseUrls = @()
+    for ($i = $start + 1; $i -lt $end; $i++) {
+        if ($Lines[$i] -match '^\s*base_url\s*=\s*["'']([^"'']+)["'']\s*(?:#.*)?$') {
+            $baseUrls += $Matches[1]
+        }
+        if ($Lines[$i] -match '^\s*experimental_bearer_token\s*=' -or $Lines[$i] -match '^\s*requires_openai_auth\s*=\s*true\s*(?:#.*)?$') {
+            $issues.Add('Provider authentication conflicts with env_key-based Nexus authentication.')
+        }
+    }
+    $baseUri = $null
+    if ($baseUrls.Count -ne 1 -or -not [Uri]::TryCreate($baseUrls[0], [UriKind]::Absolute, [ref]$baseUri) -or $baseUri.Scheme -ne 'https' -or -not $baseUrls[0].TrimEnd('/').EndsWith('/v1')) {
+        $issues.Add("Provider key 'base_url' must appear exactly once as an absolute HTTPS URL ending in /v1.")
+    }
+    return @($issues)
+}
+
 function New-ConfigBackup {
     param(
         [Parameter(Mandatory = $true)][string]$ConfigPath,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text
     )
-    $backupDirectory = Join-Path (Get-SwitcherStateDirectory) 'backups'
+    $stateDirectory = Protect-SwitcherStateDirectory
+    $backupDirectory = Join-Path $stateDirectory 'backups'
     New-DirectoryIfMissing -Path $backupDirectory
     $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
     $backupPath = Join-Path $backupDirectory ("config.toml.before-rcsl-$stamp")
@@ -414,6 +592,7 @@ function New-ConfigBackup {
 
 function Save-SwitcherState {
     param([Parameter(Mandatory = $true)]$State)
+    [void](Protect-SwitcherStateDirectory)
     $path = Get-SwitcherStatePath
     New-DirectoryIfMissing -Path (Split-Path -Parent $path)
     $json = $State | ConvertTo-Json -Depth 8
@@ -500,7 +679,36 @@ function Start-CodexAppWithEnvironment {
     }
 }
 
-function Enable-RcslCodexApp {
+function Confirm-CodexAppLaunch {
+    param(
+        [Collections.Generic.List[string]]$ExpectedManagedLines,
+        [ValidateRange(5, 60)][int]$TimeoutSeconds = 15
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (@(Get-CodexAppProcesses).Count -gt 0) {
+            Start-Sleep -Milliseconds 2000
+            if (@(Get-CodexAppProcesses).Count -eq 0) {
+                throw 'The discovered Codex App process exited during startup.'
+            }
+            if ($null -ne $ExpectedManagedLines) {
+                $currentText = Read-Utf8Text -Path (Get-CodexConfigPath)
+                $currentParts = Split-TomlLines -Text $currentText
+                Assert-SafeTomlForManagedEdit -Lines $currentParts.Lines
+                $expectedHash = Get-ManagedProjectionSha256 -Lines $ExpectedManagedLines
+                $actualHash = Get-ManagedProjectionSha256 -Lines $currentParts.Lines
+                if ($expectedHash -ne $actualHash) {
+                    throw 'Codex App launched but changed the managed provider selection during startup. Use the recovery state to restore OpenAI; this App build has not accepted the switch.'
+                }
+            }
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    throw 'ChatGPT.exe was started, but a process belonging to the discovered Codex App package was not observed before the timeout. Package internals may have changed.'
+}
+
+function Invoke-EnableRcslCodexAppCore {
     param(
         [Parameter(Mandatory = $true)][Security.SecureString]$ApiKey,
         [string]$BaseUrl = $script:DefaultGatewayBaseUrl,
@@ -536,12 +744,30 @@ function Enable-RcslCodexApp {
     $configPath = Get-CodexConfigPath
     $originalText = Read-Utf8Text -Path $configPath
     $parts = Split-TomlLines -Text $originalText
+    Assert-SafeTomlForManagedEdit -Lines $parts.Lines
     $state = Get-SwitcherState
+    if ($null -ne $state) {
+        $schemaProperty = $state.PSObject.Properties['SchemaVersion']
+        if ($null -eq $schemaProperty -or [int]$schemaProperty.Value -ne $script:StateSchemaVersion) {
+            throw 'Switcher recovery state is missing a supported schema version. Preserve it and recover manually; the switcher will not overwrite unknown state.'
+        }
+    }
     $activeState = ($null -ne $state -and [string]$state.Mode -in @('preparing-rcsl', 'rcsl'))
+    $ownedState = ($null -ne $state -and $null -ne $state.PSObject.Properties['ProviderId'] -and [string]$state.ProviderId -eq $script:ManagedProviderId)
     if ($activeState -and [string]$state.ConfigPath -ne $configPath) {
         throw "The switcher has an active RCSL session for '$($state.ConfigPath)', but CODEX_HOME now resolves to '$configPath'. Restore OpenAI with the original CODEX_HOME before switching another profile."
     }
     $captureOriginal = -not $activeState
+    $originalModel = Get-OriginalTopLevelKey -Lines $parts.Lines -Key 'model'
+    $originalModelProvider = Get-OriginalTopLevelKey -Lines $parts.Lines -Key 'model_provider'
+    if (-not $activeState -and (Get-TopLevelTomlValue -Lines $parts.Lines -Key 'model_provider') -eq $script:ManagedProviderId) {
+        throw 'The managed provider is selected while recovery state says the previous switch is inactive. Use Switch App back to OpenAI first so the recorded original selection is reconciled.'
+    }
+
+    Set-TopLevelTomlKey -Lines $parts.Lines -Key 'model_provider' -Line ('model_provider = "{0}"' -f $script:ManagedProviderId)
+    Set-TopLevelTomlKey -Lines $parts.Lines -Key 'model' -Line ('model = "{0}"' -f (Escape-TomlString -Value $Capability))
+    Set-RcslProviderTable -Lines $parts.Lines -BaseUrl $BaseUrl -AllowExistingManaged:($activeState -or $ownedState)
+    $updatedText = Join-TomlLines -Lines $parts.Lines -Newline $parts.Newline -TrailingNewline $true
 
     if ($captureOriginal) {
         $backupPath = New-ConfigBackup -ConfigPath $configPath -Text $originalText
@@ -551,8 +777,9 @@ function Enable-RcslCodexApp {
             ConfigPath = $configPath
             BackupPath = $backupPath
             ConfigSha256Before = Get-TextSha256 -Text $originalText
-            OriginalModel = Get-OriginalTopLevelKey -Lines $parts.Lines -Key 'model'
-            OriginalModelProvider = Get-OriginalTopLevelKey -Lines $parts.Lines -Key 'model_provider'
+            OriginalModel = $originalModel
+            OriginalModelProvider = $originalModelProvider
+            ProviderId = $script:ManagedProviderId
             GatewayBaseUrl = $BaseUrl.TrimEnd('/')
             Capability = $Capability
             AppVersion = $app.Version
@@ -560,33 +787,30 @@ function Enable-RcslCodexApp {
         }
         Save-SwitcherState -State $state
     }
-
-    Set-TopLevelTomlKey -Lines $parts.Lines -Key 'model_provider' -Line ('model_provider = "{0}"' -f 'rcsl')
-    Set-TopLevelTomlKey -Lines $parts.Lines -Key 'model' -Line ('model = "{0}"' -f (Escape-TomlString -Value $Capability))
-    Set-RcslProviderTable -Lines $parts.Lines -BaseUrl $BaseUrl
-    $updatedText = Join-TomlLines -Lines $parts.Lines -Newline $parts.Newline -TrailingNewline $true
     Write-Utf8TextAtomic -Path $configPath -Text $updatedText
 
     $state.Mode = 'rcsl'
     $state.GatewayBaseUrl = $BaseUrl.TrimEnd('/')
     $state.Capability = $Capability
     $state.AppVersion = $app.Version
-    Set-StateProperty -State $state -Name 'ConfigSha256After' -Value (Get-TextSha256 -Text $updatedText)
+    Set-StateProperty -State $state -Name 'ManagedSha256After' -Value (Get-ManagedProjectionSha256 -Lines $parts.Lines)
     Save-SwitcherState -State $state
 
     $process = Start-CodexAppWithEnvironment -ExecutablePath $app.ExecutablePath -ApiKey $ApiKey
+    Confirm-CodexAppLaunch -ExpectedManagedLines $parts.Lines
     return [pscustomobject]@{
-        Mode = 'rcsl'
+        Mode = 'rcsl-configured'
         AppVersion = $app.Version
         ProcessId = $process.Id
         ConfigPath = $configPath
         BackupPath = $state.BackupPath
         GatewayBaseUrl = $BaseUrl.TrimEnd('/')
         Capability = $Capability
+        InteractiveAcceptanceRequired = $true
     }
 }
 
-function Disable-RcslCodexApp {
+function Invoke-DisableRcslCodexAppCore {
     param(
         [switch]$InstallIfMissing,
         [switch]$RemovePersistedUserKey,
@@ -606,54 +830,55 @@ function Disable-RcslCodexApp {
 
     $state = Get-SwitcherState
     $configPath = Get-CodexConfigPath
-    $activeState = ($null -ne $state -and [string]$state.Mode -in @('preparing-rcsl', 'rcsl'))
-    if ($activeState -and [string]$state.ConfigPath -ne $configPath) {
-        throw "The active RCSL session belongs to '$($state.ConfigPath)', but CODEX_HOME now resolves to '$configPath'. Restore the original CODEX_HOME value and retry."
-    }
     $text = Read-Utf8Text -Path $configPath
     $parts = Split-TomlLines -Text $text
+    Assert-SafeTomlForManagedEdit -Lines $parts.Lines
+    $currentProvider = Get-TopLevelTomlValue -Lines $parts.Lines -Key 'model_provider'
+    $configChanged = $false
 
-    if ($activeState -and [int]$state.SchemaVersion -eq $script:StateSchemaVersion) {
-        Restore-TopLevelTomlKey -Lines $parts.Lines -Key 'model' -Original $state.OriginalModel
-        Restore-TopLevelTomlKey -Lines $parts.Lines -Key 'model_provider' -Original $state.OriginalModelProvider
+    if ($null -eq $state) {
+        if ($currentProvider -eq $script:ManagedProviderId) {
+            throw 'The managed provider is selected but recovery state is missing. The switcher will not guess what OpenAI selection preceded it; follow the manual recovery procedure.'
+        }
+    }
+    else {
+        $schemaProperty = $state.PSObject.Properties['SchemaVersion']
+        if ($null -eq $schemaProperty -or [int]$schemaProperty.Value -ne $script:StateSchemaVersion) {
+            throw 'Switcher recovery state uses an unsupported schema. Preserve it and recover manually; no configuration was changed.'
+        }
+        if ([string]$state.ConfigPath -ne $configPath) {
+            throw "The recovery state belongs to '$($state.ConfigPath)', but CODEX_HOME now resolves to '$configPath'. Restore the original CODEX_HOME value and retry."
+        }
+        if ($null -ne $state.PSObject.Properties['ProviderId'] -and [string]$state.ProviderId -eq $script:ManagedProviderId) {
+            Set-RcslProviderTable -Lines $parts.Lines -BaseUrl ([string]$state.GatewayBaseUrl) -AllowExistingManaged
+            $configChanged = $true
+        }
+        $activeState = ([string]$state.Mode -in @('preparing-rcsl', 'rcsl'))
+        if ($activeState -or $currentProvider -eq $script:ManagedProviderId) {
+            Restore-TopLevelTomlKey -Lines $parts.Lines -Key 'model' -Original $state.OriginalModel
+            Restore-TopLevelTomlKey -Lines $parts.Lines -Key 'model_provider' -Original $state.OriginalModelProvider
+            $configChanged = $true
+        }
         $state.Mode = 'openai'
         Set-StateProperty -State $state -Name 'RestoredAtUtc' -Value ([DateTime]::UtcNow.ToString('o'))
         $state.AppVersion = $app.Version
     }
-    elseif ($null -ne $state -and [string]$state.Mode -eq 'openai' -and [int]$state.SchemaVersion -eq $script:StateSchemaVersion) {
-        Set-StateProperty -State $state -Name 'RestoredAtUtc' -Value ([DateTime]::UtcNow.ToString('o'))
-        $state.AppVersion = $app.Version
-    }
-    else {
-        $modelProviderIndices = Find-TopLevelKeyIndices -Lines $parts.Lines -Key 'model_provider'
-        if ($modelProviderIndices.Count -eq 1 -and $parts.Lines[$modelProviderIndices[0]] -match '^\s*model_provider\s*=\s*["'']rcsl["'']\s*$') {
-            $parts.Lines.RemoveAt($modelProviderIndices[0])
-        }
-        $modelIndices = Find-TopLevelKeyIndices -Lines $parts.Lines -Key 'model'
-        if ($modelIndices.Count -eq 1 -and $parts.Lines[$modelIndices[0]] -match '^\s*model\s*=\s*["'']code["'']\s*$') {
-            $parts.Lines.RemoveAt($modelIndices[0])
-        }
-        $state = [pscustomobject]@{
-            SchemaVersion = $script:StateSchemaVersion
-            Mode = 'openai'
-            ConfigPath = $configPath
-            BackupPath = ''
-            AppVersion = $app.Version
-            RestoredAtUtc = [DateTime]::UtcNow.ToString('o')
-            Recovery = 'No prior switcher state existed; only exact rcsl/code top-level selections were removed.'
-        }
-    }
 
-    $updatedText = Join-TomlLines -Lines $parts.Lines -Newline $parts.Newline -TrailingNewline $true
-    Write-Utf8TextAtomic -Path $configPath -Text $updatedText
-    Set-StateProperty -State $state -Name 'ConfigSha256AfterRestore' -Value (Get-TextSha256 -Text $updatedText)
-    Save-SwitcherState -State $state
+    if ($configChanged) {
+        $updatedText = Join-TomlLines -Lines $parts.Lines -Newline $parts.Newline -TrailingNewline $true
+        Write-Utf8TextAtomic -Path $configPath -Text $updatedText
+    }
+    if ($null -ne $state) {
+        Set-StateProperty -State $state -Name 'ManagedSha256AfterRestore' -Value (Get-ManagedProjectionSha256 -Lines $parts.Lines)
+        Save-SwitcherState -State $state
+    }
 
     if ($RemovePersistedUserKey) {
         [Environment]::SetEnvironmentVariable('RCSL_API_KEY', $null, 'User')
     }
 
     $process = Start-CodexAppWithEnvironment -ExecutablePath $app.ExecutablePath
+    Confirm-CodexAppLaunch
     return [pscustomobject]@{
         Mode = 'openai'
         AppVersion = $app.Version
@@ -664,24 +889,87 @@ function Disable-RcslCodexApp {
     }
 }
 
+function Enable-RcslCodexApp {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][Security.SecureString]$ApiKey,
+        [string]$BaseUrl = $script:DefaultGatewayBaseUrl,
+        [string]$Capability = $script:DefaultCapability,
+        [switch]$InstallIfMissing,
+        [switch]$ValidateGateway,
+        [ValidateRange(5, 120)][int]$CloseTimeoutSeconds = 30
+    )
+    $parameters = @{} + $PSBoundParameters
+    return (Invoke-WithSwitcherLock -Action { Invoke-EnableRcslCodexAppCore @parameters })
+}
+
+function Disable-RcslCodexApp {
+    [CmdletBinding()]
+    param(
+        [switch]$InstallIfMissing,
+        [switch]$RemovePersistedUserKey,
+        [ValidateRange(5, 120)][int]$CloseTimeoutSeconds = 30
+    )
+    $parameters = @{} + $PSBoundParameters
+    return (Invoke-WithSwitcherLock -Action { Invoke-DisableRcslCodexAppCore @parameters })
+}
+
+function Get-ProjectConfigPaths {
+    param([string]$ProjectPath = (Get-Location).Path)
+    $paths = [Collections.Generic.List[string]]::new()
+    if ([string]::IsNullOrWhiteSpace($ProjectPath) -or -not (Test-Path -LiteralPath $ProjectPath -PathType Container)) {
+        return @()
+    }
+    $directory = [IO.DirectoryInfo](Resolve-Path -LiteralPath $ProjectPath).Path
+    $userConfigPath = [IO.Path]::GetFullPath((Get-CodexConfigPath))
+    while ($null -ne $directory) {
+        $candidate = Join-Path $directory.FullName '.codex\config.toml'
+        if ((Test-Path -LiteralPath $candidate -PathType Leaf) -and [IO.Path]::GetFullPath($candidate) -ne $userConfigPath) {
+            $paths.Add($candidate)
+        }
+        $directory = $directory.Parent
+    }
+    return @($paths)
+}
+
 function Get-CodexSwitcherStatus {
+    param([string]$ProjectPath = (Get-Location).Path)
     Assert-Windows
     $app = Get-CodexAppInfo
     $configPath = Get-CodexConfigPath
     $text = Read-Utf8Text -Path $configPath
     $parts = Split-TomlLines -Text $text
-    $model = ''
-    $provider = ''
-    $modelIndices = Find-TopLevelKeyIndices -Lines $parts.Lines -Key 'model'
-    $providerIndices = Find-TopLevelKeyIndices -Lines $parts.Lines -Key 'model_provider'
-    if ($modelIndices.Count -eq 1 -and $parts.Lines[$modelIndices[0]] -match '^\s*model\s*=\s*["'']([^"'']+)["'']') {
-        $model = $Matches[1]
+    $issues = [Collections.Generic.List[string]]::new()
+    try {
+        Assert-SafeTomlForManagedEdit -Lines $parts.Lines
     }
-    if ($providerIndices.Count -eq 1 -and $parts.Lines[$providerIndices[0]] -match '^\s*model_provider\s*=\s*["'']([^"'']+)["'']') {
-        $provider = $Matches[1]
+    catch {
+        $issues.Add($_.Exception.Message)
     }
-    $hasProviderTable = [bool]($parts.Lines | Where-Object { $_ -match '^\s*\[model_providers\.rcsl\]\s*$' })
+    $model = Get-TopLevelTomlValue -Lines $parts.Lines -Key 'model'
+    $provider = Get-TopLevelTomlValue -Lines $parts.Lines -Key 'model_provider'
+    $providerPattern = [regex]::Escape($script:ManagedProviderId)
+    $hasProviderTable = [bool]($parts.Lines | Where-Object { $_ -match ("^\s*\[model_providers\.$providerPattern\]\s*(?:#.*)?$") })
+    if ($provider -eq $script:ManagedProviderId -and -not $hasProviderTable) {
+        $issues.Add("model_provider selects $($script:ManagedProviderId), but its provider table is absent.")
+    }
+    if ($hasProviderTable) {
+        foreach ($providerIssue in @(Get-ManagedProviderIssues -Lines $parts.Lines)) {
+            $issues.Add($providerIssue)
+        }
+    }
     $state = Get-SwitcherState
+    $managedHashMatchesState = $null
+    if ($null -ne $state -and [string]$state.Mode -eq 'rcsl') {
+        $hashProperty = $state.PSObject.Properties['ManagedSha256After']
+        if ($null -ne $hashProperty) {
+            $managedHashMatchesState = ([string]$hashProperty.Value -eq (Get-ManagedProjectionSha256 -Lines $parts.Lines))
+            if (-not $managedHashMatchesState) {
+                $issues.Add('The managed model/provider projection has drifted since the switch was recorded.')
+            }
+        }
+    }
+    $projectConfigs = @(Get-ProjectConfigPaths -ProjectPath $ProjectPath)
     return [pscustomobject]@{
         IsWindows = ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT)
         AppInstalled = $app.Installed
@@ -692,7 +980,12 @@ function Get-CodexSwitcherStatus {
         Model = $model
         ModelProvider = $provider
         RcslProviderDefined = $hasProviderTable
-        EffectiveMode = if ($provider -eq 'rcsl') { 'rcsl' } else { 'openai-or-default' }
+        ManagedProviderId = $script:ManagedProviderId
+        UserSelectionMode = if ($provider -eq $script:ManagedProviderId) { 'rcsl-user-default' } else { 'openai-or-other-user-default' }
+        EffectiveMode = if ($provider -eq $script:ManagedProviderId) { 'rcsl-user-default' } else { 'openai-or-other-user-default' }
+        ConfigurationIssues = @($issues)
+        ManagedHashMatchesState = $managedHashMatchesState
+        HigherPrecedenceProjectConfigs = $projectConfigs
         State = $state
         PersistedUserKeyPresent = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('RCSL_API_KEY', 'User'))
         PersistedMachineKeyPresent = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('RCSL_API_KEY', 'Machine'))

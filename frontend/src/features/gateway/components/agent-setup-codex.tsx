@@ -60,19 +60,22 @@ export function CodexConfigurationSection({ baseUrl, agentCapability }: CodexCon
             </p>
           </Step>
 
-          <Step n={2} title="Install the Windows App or CLI">
+          <Step n={2} title="Download the Windows switcher or install the CLI">
             <CodeBlock
-              code={'winget install --id 9PLM9XGG6VKS --source msstore'}
-              label="Copy (Windows App)"
+              code={String.raw`$archive = Join-Path $env:TEMP 'RCSL-AI-Nexus-main.zip'
+$toolsRoot = Join-Path $env:LOCALAPPDATA 'RCSL-AI-Nexus\client-tools'
+Invoke-WebRequest 'https://github.com/Research-Center-for-Smart-Learning-RCSL/RCSL-AI-Nexus/archive/refs/heads/main.zip' -OutFile $archive
+Expand-Archive -LiteralPath $archive -DestinationPath $toolsRoot -Force`}
+              label="Copy (download Windows App tools)"
             />
             <CodeBlock code={'npm install -g @openai/codex'} label="Copy (CLI)" />
             <p>
-              The Windows switcher under{' '}
-              <code>scripts/windows/codex-app</code> installs the Store App
+              The first command downloads the published repository archive to a
+              user-local tools directory, so it does not assume the operator can
+              read the deployment repository. Inspect the downloaded scripts
+              before running them. The switcher installs the Store App
               automatically when it is absent. Node.js is required only for the
-              separately installed CLI. On Windows, PowerShell may refuse to run
-              <code>npm</code> until local scripts are permitted once:{' '}
-              <code>Set-ExecutionPolicy -Scope CurrentUser RemoteSigned</code>.
+              separately installed CLI.
             </p>
           </Step>
 
@@ -83,9 +86,9 @@ export function CodexConfigurationSection({ baseUrl, agentCapability }: CodexCon
             </p>
             <CodeBlock
               code={`model = "${agentCapability}"
-model_provider = "rcsl"
+model_provider = "rcsl_nexus_switcher"
 
-[model_providers.rcsl]
+[model_providers.rcsl_nexus_switcher]
 name = "RCSL AI Nexus"
 base_url = "${baseUrl}/v1"
 env_key = "RCSL_API_KEY"
@@ -125,14 +128,14 @@ wire_api = "responses"`}
             </p>
           </Step>
 
-          <Step n={4} title="Export the key">
+          <Step n={4} title="Provide the key to the selected client">
             <CodeBlock
               code={'export RCSL_API_KEY=nx_live_...'}
               label="Copy (macOS, Linux)"
             />
             <CodeBlock
               code={
-                'powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\\scripts\\windows\\codex-app\\Start-CodexAppSwitcher.ps1'
+                String.raw`powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\RCSL-AI-Nexus\client-tools\RCSL-AI-Nexus-main\scripts\windows\codex-app\Start-CodexAppSwitcher.ps1"`
               }
               label="Copy (Windows App switcher)"
             />
@@ -145,17 +148,18 @@ wire_api = "responses"`}
             </p>
           </Step>
 
-          <Step n={5} title="Verify the platform before involving the agent">
+          <Step n={5} title="Verify the selected client path">
             <CodeBlock
               code={`curl ${baseUrl}/v1/models -H "Authorization: Bearer $RCSL_API_KEY"`}
-              label="Copy the check"
+              label="Copy (CLI on macOS or Linux)"
             />
             <p>
-              A list naming the capability establishes that the whole path
-              works: network, perimeter, key and routing. A failure at this step
-              is a deployment fault; a failure only within the agent is a client
-              fault. Distinguishing the two is the single most economical step
-              on this page.
+              The Windows App GUI performs the same authenticated catalogue
+              check before changing configuration. Its Doctor button rechecks
+              the exact URL and capability selected in the GUI and asks for the
+              key in a masked dialog. The shell command applies only to a shell
+              where step 4 exported the variable; the App-scoped key is not
+              available to <code>curl</code> or a separately launched CLI.
             </p>
           </Step>
 
