@@ -20,6 +20,7 @@ import {
   ApiKeyCapabilities,
   CidrTextarea,
   DefaultCapabilitySelect,
+  ExpiryField,
 } from '@/features/api-keys/components/api-key-policy-controls';
 import { useUpdateApiKey } from '@/features/api-keys/hooks/use-api-keys';
 import { useAssistantSurface } from '@/features/assistant/context';
@@ -221,8 +222,14 @@ export function EditApiKeyDialog({
               control={form.control}
               name="expires_at"
               label="Expires"
-              type="date"
-              description="Must be in the future, and within a year. Extending is how a key is kept alive without reissuing it."
+              description="Must be in the future, and within 10 years. Extending is how a key is kept alive without reissuing it."
+              render={(field) => (
+                <ExpiryField
+                  value={field.value as string}
+                  onChange={(value) => field.onChange(value)}
+                  onBlur={field.onBlur}
+                />
+              )}
             />
 
             <FormField

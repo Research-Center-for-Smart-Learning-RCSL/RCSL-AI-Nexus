@@ -2,11 +2,26 @@ import type { ApiKey } from './schema-response';
 
 export const DEFAULT_EXPIRY_DAYS = 90;
 
-export function defaultExpiry(): string {
+export function expiryFromToday(days: number): string {
   const date = new Date();
-  date.setDate(date.getDate() + DEFAULT_EXPIRY_DAYS);
+  date.setDate(date.getDate() + days);
   return date.toISOString().slice(0, 10);
 }
+
+export function defaultExpiry(): string {
+  return expiryFromToday(DEFAULT_EXPIRY_DAYS);
+}
+
+/** Quick-pick shortcuts shown beside the date field. The 3650-day ceiling
+ * (`api_key_max_lifetime_days`, see security.md §4.2) is what "10 years"
+ * lands on exactly. */
+export const EXPIRY_PRESETS = [
+  { label: '30 days', days: 30 },
+  { label: '90 days', days: 90 },
+  { label: '1 year', days: 365 },
+  { label: '3 years', days: 365 * 3 },
+  { label: '10 years', days: 3650 },
+] as const;
 
 export function keyStatus(key: ApiKey): 'active' | 'revoked' | 'expired' {
   if (key.revoked_at) return 'revoked';
