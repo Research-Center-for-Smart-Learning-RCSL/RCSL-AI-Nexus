@@ -541,7 +541,7 @@ Non-secret values are environment variables; secrets are mounted files read thro
 | `QDRANT_BASE_URL` | `http://qdrant:6333` | The passage index. Its API key is a file secret, because Qdrant ships with no authentication at all |
 | `QDRANT_TIMEOUT_SECONDS` | `30` | |
 | `POSTGRES_USER`, `POSTGRES_DB` | `nexus` | Role and database names are not secrets; the superuser password is. Read by the `postgres` container |
-| `API_KEY_MAX_LIFETIME_DAYS` | `365` | Ceiling on how far ahead a key may be set to expire. Expiry exists to force rotation, and a mandatory field with no upper bound does not: an `expires_at` in the year 9999 satisfies "must be in the future" and rotates nothing. Also the figure the management assistant quotes |
+| `API_KEY_MAX_LIFETIME_DAYS` | `3650` | Ceiling on how far ahead a key may be set to expire. Expiry exists to force rotation, and a mandatory field with no upper bound does not: an `expires_at` in the year 9999 satisfies "must be in the future" and rotates nothing. Raised from `365` to `3650` (10 years) on 2026-08-25. Also the figure the management assistant quotes |
 | `ASSISTANT_MAX_TOKENS` | `1536` | Token ceiling for one advisory reply. Small on purpose: it answers in two or three sentences, and a reply that runs past the ceiling loses its proposal card rather than arriving malformed. The `assist` capability needs a routing policy of its own or the drawer reports it has no model to run on |
 
 `API_KEY_PEPPER_PREVIOUS` was listed here until 2026-08-18 and is not an

@@ -5,10 +5,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import type { IssuableCapability } from '@/features/models/schema';
 
 import { CapabilityPicker } from './capability-picker';
-import { NO_DEFAULT } from '../schema';
+import { EXPIRY_PRESETS, expiryFromToday, NO_DEFAULT } from '../schema';
 
 export function ApiKeyCapabilities({
   scopes,
@@ -57,6 +59,43 @@ export function DefaultCapabilitySelect({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+/** The custom date field stays the source of truth; the preset buttons are
+ * shortcuts that write into it rather than a separate control, so switching
+ * between them and typing a date never fights over which one wins. */
+export function ExpiryField({
+  value,
+  onChange,
+  onBlur,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onBlur: () => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-1.5">
+        {EXPIRY_PRESETS.map((preset) => (
+          <Button
+            key={preset.label}
+            type="button"
+            variant={value === expiryFromToday(preset.days) ? 'secondary' : 'outline'}
+            size="xs"
+            onClick={() => onChange(expiryFromToday(preset.days))}
+          >
+            {preset.label}
+          </Button>
+        ))}
+      </div>
+      <Input
+        type="date"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onBlur={onBlur}
+      />
+    </div>
   );
 }
 

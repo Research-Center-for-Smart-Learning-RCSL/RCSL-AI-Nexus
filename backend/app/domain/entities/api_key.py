@@ -46,7 +46,7 @@ class ApiKey:
     """Empty means unrestricted. Defends against key leakage specifically:
     a key committed to a public repository is unusable from elsewhere."""
 
-    rate_limit_rpm: int = 60
+    rate_limit_rpm: int = 240
     quota_tokens_per_day: int | None = None
 
     default_capability: str | None = None
