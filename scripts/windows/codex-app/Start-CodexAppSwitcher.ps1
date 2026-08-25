@@ -167,7 +167,7 @@ function Refresh-UiStatus {
             Write-UiStatus "Configuration warning: $configurationIssue"
         }
         if (@($status.HigherPrecedenceProjectConfigs).Count -gt 0) {
-            Write-UiStatus 'Warning: a project .codex/config.toml can override this user-level selection. Run Doctor for its path.'
+            Write-UiStatus 'Warning: a project .codex/config.toml defines model and can override the Nexus capability. Project provider keys are ignored. Run Doctor for its path.'
         }
         if ($status.PersistedMachineKeyPresent) {
             Write-UiStatus 'Warning: a machine-level RCSL_API_KEY exists. This tool cannot remove it without elevation.'

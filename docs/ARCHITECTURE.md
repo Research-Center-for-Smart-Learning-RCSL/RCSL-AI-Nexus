@@ -133,7 +133,7 @@ There are **two** sets and they are defined together, in `domain/entities/capabi
 
 **The name is what a caller puts in the `model` field**, which is the platform's one departure from the OpenAI convention and the thing an integrator is least able to guess. `GET /v1/models` exists to answer it, listing the capabilities a routing policy currently serves, narrowed to the calling key.
 
-**Only chat-shaped capabilities are reachable today.** The gateway mounts `/v1/chat/completions` and `/v1/responses` and nothing else — the second added 2026-08-07 for agent clients that dropped Chat Completions, and a translation onto the same use case rather than a second inference path — so `embedding` and `rerank` can be named in a policy and issued on a key but have no endpoint whose request and response shapes fit them. They are part of the model, not yet part of the API; `/v1/embeddings` belongs with the knowledge base in Phase 2, which is the first thing that will need it.
+**Only chat-shaped capabilities are reachable today.** The gateway mounts `/v1/chat/completions` and `/v1/responses` and nothing else — the second added 2026-08-07 after this project measured agent clients refusing Chat Completions, while OpenAI's current [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference) documents only the Responses wire API. It is a translation onto the same use case rather than a second inference path — so `embedding` and `rerank` can be named in a policy and issued on a key but have no endpoint whose request and response shapes fit them. They are part of the model, not yet part of the API; `/v1/embeddings` belongs with the knowledge base in Phase 2, which is the first thing that will need it.
 
 **A prompt is counted with the vocabulary of the model that will read it.** The context guardrail was a flat four-characters-per-token estimate until 2026-08-18, which ran roughly 1.2x-1.6x high on prose, source and tool schemas and about 0.37x on a list of dense identifiers — so it refused a conversation the hardware would have served. `TokenCounterPort` now resolves a counter per target the way routing resolves the model, and `GgufTokenCounter` reads the vocabulary and chat template out of the GGUF that the registry's `ref` points at, so the count cannot describe a different model from the one about to answer. A counter may answer "cannot say" — an MLX target, or a host with no local GGUF — in which case the character estimate stays as a labelled fallback, and the caller is always told which of `tokenizer`, `estimate` or `lower_bound` produced the figure. See [security.md](./architecture/security.md) §4.3 and §13.0.
 
@@ -288,7 +288,9 @@ startup, and because `model` takes a capability rather than a model name, which
 is a convention no caller guesses and which `/openapi.json` cannot tell them
 either (it is disabled in production,
 [security.md](./architecture/security.md) §4.4). `/v1/responses` landed
-2026-08-07 for agent clients that dropped Chat Completions; it translates onto
+2026-08-07 for agent clients this project measured refusing Chat Completions;
+OpenAI's current [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
+documents only the Responses wire API. The endpoint translates onto
 the same `RouteChatRequest`, so routing, quota, rate limiting, the resource
 guardrails, cancellation and usage recording are the ones already in force.
 

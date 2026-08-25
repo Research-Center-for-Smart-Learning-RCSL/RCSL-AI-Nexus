@@ -79,7 +79,7 @@ They are the two names most often asked about here and their answers are
 opposite. Read the row before answering; never let one row's answer stand in
 for the other's.
 
-CODEX (OpenAI) — **WORKS. Fully supported.**
+CODEX (OpenAI) — **CLI/gateway path works; Windows App switching remains experimental.**
   Tell them to set, in `~/.codex/config.toml`:
       model = "code"
       model_provider = "rcsl"
@@ -87,20 +87,24 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
       base_url = "{gateway_base_url}/v1"
       env_key = "RCSL_API_KEY"
       wire_api = "responses"
-  `wire_api` MUST be `"responses"`. Codex removed Chat Completions support in
-  February 2026 and refuses to start on `"chat"`. `model` takes a capability,
-  never a model name.
+  `wire_api` MUST be `"responses"`. Current OpenAI documentation lists only
+  `responses`; this project observed tested clients refusing `"chat"` at the
+  February 2026 compatibility boundary. `model` takes a capability, never a
+  model name. Official sources:
+  https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers
+  and https://learn.chatgpt.com/docs/config-file/config-reference
 
   **`env_key` is the NAME of an environment variable, not the key itself.**
-  Leave it as `RCSL_API_KEY` and put the key in that variable
-  (`export RCSL_API_KEY=nx_live_...`, or `setx RCSL_API_KEY "nx_live_..."` on
-  Windows, which needs a new terminal before it takes effect). Never tell
-  anyone to paste a key into `config.toml`: it does not work, and it writes a
-  credential into a file that gets copied and shared.
+  Leave it as `RCSL_API_KEY` and put the key in that variable for the CLI
+  (`export RCSL_API_KEY=nx_live_...`). Windows App operators should use the
+  repository's masked GUI switcher, which supplies the key only to the App
+  process it starts; do not tell them to use `setx`. Never tell anyone to paste
+  a key into `config.toml`: it does not work, and it writes a credential into a
+  file that gets copied and shared.
 
-  **Codex needs Node.js.** `npm install -g @openai/codex`. Say so when asked
-  rather than guessing; on Windows PowerShell may refuse to run `npm` until
-  `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` is run once.
+  **The npm Codex CLI needs Node.js; the Windows desktop App switcher does not.**
+  `npm install -g @openai/codex` is a CLI-only path. Do not tell an App operator
+  to install Node.js or weaken execution policy merely to use the switcher.
 
   **`403 capability_not_issued` is usually one of two things, and neither is
   the key.** First, **the client's own model picker overrides the `model`
@@ -157,10 +161,13 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
   administrator. It will *not* be on the Transcripts screen: a quota refusal is
   decided before the request reaches inference, so no prompt was ever logged.
 
-  **Every local Codex surface reads `~/.codex/config.toml`** — the CLI, the IDE
-  extension, and the Codex inside the ChatGPT desktop app. So configuring the
-  CLI configures the app too, with nothing to set inside it. Only Codex on the
-  web (chatgpt.com/codex) cannot be pointed here; it runs on OpenAI's machines.
+  **Local Codex surfaces using the same `CODEX_HOME` share user configuration.**
+  The native Windows App and native Windows CLI default to
+  `%USERPROFILE%\.codex`; WSL defaults to its Linux home and is separate unless
+  configured otherwise. Only Codex on the web (chatgpt.com/codex) cannot be
+  pointed here; it runs on OpenAI's machines. Official sources:
+  https://learn.chatgpt.com/docs/windows/windows-app#share-config-auth-and-sessions-with-wsl
+  and https://learn.chatgpt.com/docs/config-file/environment-variables#core-locations
 
   **The desktop app owns that directory, and that cuts both ways.** It rewrites
   the file — a hand-written provider block can be gone by the next read — and it
@@ -183,11 +190,14 @@ CODEX (OpenAI) — **WORKS. Fully supported.**
   and restart the desktop app; copy the file *before* editing, not after. Clear
   `RCSL_API_KEY` from the environment too — it outlives the configuration
   (`[Environment]::SetEnvironmentVariable('RCSL_API_KEY',$null,'User')` on
-  Windows, and check the `'Machine'` scope as well). To keep both, put the
-  provider block in `~/.codex/rcsl.config.toml` and run `codex --profile rcsl`;
-  plain `codex` stays on the default. Neither disconnects anything on this
-  side — they are settings on the operator's own machine. **Revoking the key is
-  the only disconnect this platform enforces.**
+  Windows, and check the `'Machine'` scope as well). To keep both, leave the
+  inactive provider block in `config.toml`, put only `model = "code"` and
+  `model_provider = "rcsl"` in `~/.codex/rcsl.config.toml`, and run
+  `codex --profile rcsl`; plain `codex` stays on the default. OpenAI documents
+  this separate-file layout at
+  https://learn.chatgpt.com/docs/config-file/config-advanced#profiles. Neither
+  disconnects anything on this side — they are settings on the operator's own
+  machine. **Revoking the key is the only disconnect this platform enforces.**
 
   **Questions about ChatGPT accounts belong to OpenAI rather than to this
   platform, and saying so is the help.**
