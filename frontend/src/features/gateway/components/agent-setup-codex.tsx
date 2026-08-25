@@ -60,16 +60,19 @@ export function CodexConfigurationSection({ baseUrl, agentCapability }: CodexCon
             </p>
           </Step>
 
-          <Step n={2} title="Install the client">
-            <CodeBlock code={'npm install -g @openai/codex'} label="Copy" />
+          <Step n={2} title="Install the Windows App or CLI">
+            <CodeBlock
+              code={'winget install --id 9PLM9XGG6VKS --source msstore'}
+              label="Copy (Windows App)"
+            />
+            <CodeBlock code={'npm install -g @openai/codex'} label="Copy (CLI)" />
             <p>
-              <strong>Node.js is required.</strong> Install it from nodejs.org,
-              or with <code>winget install OpenJS.NodeJS.LTS</code> on Windows,
-              then reopen the terminal. On Windows, PowerShell may refuse to run{' '}
+              The Windows switcher under{' '}
+              <code>scripts/windows/codex-app</code> installs the Store App
+              automatically when it is absent. Node.js is required only for the
+              separately installed CLI. On Windows, PowerShell may refuse to run
               <code>npm</code> until local scripts are permitted once:{' '}
               <code>Set-ExecutionPolicy -Scope CurrentUser RemoteSigned</code>.
-              That setting is per-user, requires no administrator, and is the
-              value Microsoft recommends for a workstation.
             </p>
           </Step>
 
@@ -115,6 +118,11 @@ wire_api = "responses"`}
               variable at step 4. A key pasted here does not work, and it writes
               a credential into a file that is copied, committed and shared.
             </p>
+            <p>
+              The Windows App switcher writes this provider block and selection
+              for you. Treat this example as the wire-level reference; do not
+              hand-edit it while the App is running.
+            </p>
           </Step>
 
           <Step n={4} title="Export the key">
@@ -123,14 +131,17 @@ wire_api = "responses"`}
               label="Copy (macOS, Linux)"
             />
             <CodeBlock
-              code={'setx RCSL_API_KEY "nx_live_..."'}
-              label="Copy (Windows)"
+              code={
+                'powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\\scripts\\windows\\codex-app\\Start-CodexAppSwitcher.ps1'
+              }
+              label="Copy (Windows App switcher)"
             />
             <p>
-              On Windows, <code>setx</code> writes the variable for future
-              processes only.{' '}
-              <strong>Close the terminal and open a new one</strong>, or the
-              client will not see it.
+              On Windows, paste the key into the switcher&apos;s masked field. It
+              validates the key and passes it only to the newly launched App
+              process. It does not use <code>setx</code>, write the key into
+              TOML, or change the ChatGPT sign-in. The same GUI restores the
+              prior OpenAI provider selection.
             </p>
           </Step>
 
@@ -148,10 +159,11 @@ wire_api = "responses"`}
             </p>
           </Step>
 
-          <Step n={6} title="Run it against a task that requires a file">
-            <CodeBlock code={'codex'} label="Copy" />
+          <Step n={6} title="Run a new task that requires a file">
+            <CodeBlock code={'codex'} label="Copy (CLI)" />
             <p>
-              Request something that requires reading a file, such as
+              In the App, create a new task after switching. In either surface,
+              request something that requires reading a file, such as
               &quot;read README.md and summarise it&quot;. A greeting
               establishes only that text flows; a tool call establishes that the
               agent loop works, which is the part with a silent failure mode.

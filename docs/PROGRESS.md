@@ -15,6 +15,52 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-25 — The Windows App connection became a reversible operation instead of a remembered edit
+
+The agent runbook had reached the point where every individual fact was written
+down and the operator still had to assemble a dangerous procedure from them:
+stop an App that rewrites its own configuration, take the backup before rather
+than after the edit, add a custom provider without replacing plugins or MCP,
+put a key in an environment the new process can see, restart, avoid the model
+picker, and remember that removing the provider definition can break a
+conversation created against it. The reverse path was longer than the forward
+one and touched a ChatGPT login it never needed to touch.
+
+`scripts/windows/codex-app` makes that sequence one transaction. The Windows
+Forms launcher discovers the `OpenAI.Codex` AppX package, or installs the
+official Microsoft Store package through `winget`; validates a masked Nexus key
+against `GET /v1/models`; asks the App to close normally and refuses to
+force-kill it; copies the exact pre-switch TOML; records the original top-level
+model and provider without any credential; updates only those fields and the
+`rcsl` provider table; and starts `ChatGPT.exe` with a key present only in the
+new process environment. Switching back restores the captured selection and
+launches without that key. It deliberately leaves the inactive provider table,
+because the runbook's 2026-08-18 evidence established that old conversations
+continue to reference it.
+
+The whole backup is a disaster-recovery artifact, not the normal undo. Restoring
+it automatically would roll back plugin, MCP, permission and App-preference
+changes made after the switch — the same class of ownership collision that made
+hand editing unreliable. Normal restoration changes only the two captured
+top-level keys. It never deletes `auth.json`, `.codex-global-state.json`,
+sessions or conversations, and never signs out of ChatGPT. A legacy key created
+with `setx` is reported and can be removed explicitly at user scope; a
+machine-scope key is reported but left for an elevated operator decision.
+
+The companion doctor separates what can be proved. It checks Windows, package
+and process state, TOML selection, provider and recovery artifacts, persistent
+key presence, DNS, TLS, `/healthz`, and an authenticated `GET /v1/models`. It
+then reports the complete App agent loop as unproven. That boundary is the
+important part: the App's plugins, hidden model slots, tool definitions and
+picker are absent from an HTTP or CLI probe. A new App task that reads a real
+file remains the final acceptance step, stated as such rather than represented
+by a green network check.
+
+No implementation-time local execution, test, lint, build or smoke check was
+performed for this change by request. The pull request therefore carries code
+review evidence only; Windows runtime verification is still required before the
+scripts are offered to an integrator.
+
 ## 2026-08-21 — A frontend pass, and a deploy that shipped the defect it was written to fix
 
 The management UI was reviewed for its scrolling behaviour, its copy and its
