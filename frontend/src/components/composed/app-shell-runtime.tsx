@@ -75,8 +75,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     router.replace(`/login?next=${next}`);
   }, [shouldRedirectToLogin, pathname, router]);
 
-  // Someone who navigates to a route their scopes do not cover (the dashboard
-  // is the index, so this includes just opening the app) is sent to the one
+  // Someone who navigates to a route their scopes do not cover (including the
+  // dashboard at its explicit `/dashboard` route) is sent to the one
   // screen everybody can use, rather than left on a page whose data 403s. The
   // nav already hides these links; this covers the URL bar and bookmarks.
   //

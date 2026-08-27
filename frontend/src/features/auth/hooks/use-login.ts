@@ -26,7 +26,7 @@ import {
 
 export type LoginStep = 'password' | 'totp';
 
-export function useLogin(redirectTo = '/') {
+export function useLogin(redirectTo = '/dashboard') {
   const router = useRouter();
   const queryClient = useQueryClient();
 

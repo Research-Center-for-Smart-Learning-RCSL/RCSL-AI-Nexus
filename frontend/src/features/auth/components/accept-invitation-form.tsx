@@ -85,7 +85,7 @@ export function AcceptInvitationForm({ token }: { token: string }) {
       <RecoveryCodes
         codes={recoveryCodes}
         continueLabel="Go to the dashboard"
-        onContinue={() => router.replace('/')}
+        onContinue={() => router.replace('/dashboard')}
       />
     );
   }
