@@ -15,6 +15,50 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-28 — The landing page deployed, and a credential helper that is still broken three days later
+
+PR 15 merged to `main` as `74b258c` and deployed on the Mac Studio. The
+platform now serves a public front door: `/` is the landing page on both
+entrances, the Dashboard answers at `/dashboard`, and the two entry curtains
+are live. Backend image `ed5e763f0351`, frontend `3d0a355755a6`.
+
+The deploy itself was uneventful, which is worth recording only because the
+checks that make it so all ran. `migrate` exited 0 with `db_roles` and
+`provision` behind it; the six published bindings all read requested-equals-
+actual, so neither of the two boot faults §9 documents was in play; the three
+frontend entrances, the three `/healthz` endpoints and Grafana all answered
+200; and the running containers were checked against the image ids just built
+rather than assumed to be them. The image was asked both of §9's questions
+before anything was recreated — it imports, and it constructs `Settings`
+against real secret files in production mode — and answered both.
+
+`rollback-20260828` names the 2026-08-26 build, which had been running healthy
+for 41 hours. That is the convention this file already states and the reason it
+exists: the tag names the last build known to be good, not merely the previous
+one, and 41 hours of health is what makes this one known.
+
+**`docker-credential-desktop` is still hung.** The 2026-08-25 entry recorded
+finding it, and [deployment.md](./architecture/deployment.md) §9 recorded that a
+Docker Desktop restart does not clear it and the fix is a re-login or a
+reinstall. Neither has happened, so `docker compose build` still cannot resolve
+a base image without the `DOCKER_CONFIG` bypass, which is what this build used.
+Three days is long enough that the workaround has quietly become the procedure,
+which is exactly what a workaround should not be allowed to do. The check costs
+one command and answers in milliseconds when it is well:
+
+```bash
+echo "https://index.docker.io/v1/" | docker-credential-desktop get
+```
+
+It did not answer in sixty seconds today.
+
+Nothing about the deployment's shape changed: no migration, no new service, no
+configuration or secret moved. The frontend image is the only one whose
+contents differ, and the backend was rebuilt only because `docker compose build`
+builds both.
+
+---
+
 ## 2026-08-28 — The review pass on the landing branch: one untested join, one door that needed no scripting
 
 A review of the landing-page branch before merge, with every CI step run
