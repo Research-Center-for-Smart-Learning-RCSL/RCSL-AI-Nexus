@@ -59,7 +59,6 @@ export function LandingPage() {
         className="absolute inset-0 bg-[radial-gradient(circle_at_72%_28%,color-mix(in_oklab,var(--primary)_18%,transparent),transparent_34%),radial-gradient(circle_at_18%_78%,color-mix(in_oklab,var(--chart-3)_13%,transparent),transparent_38%)]"
         aria-hidden="true"
       />
-      <LandingThreeBackdrop />
       <div className="absolute top-4 right-4 z-10">
         <ThemeToggle />
       </div>
@@ -73,12 +72,17 @@ export function LandingPage() {
           </div>
         </header>
 
-        <section className="grid items-center gap-12 py-8 sm:py-10 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.72fr)] lg:py-14">
+        <section className="grid items-center gap-12 py-8 sm:py-10 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.72fr)]">
           <div className="max-w-3xl">
             <p className="mb-5 font-mono text-xs font-medium tracking-[0.24em] text-primary uppercase">
               Your models. One intelligent gateway.
             </p>
-            <h1 className="font-heading text-5xl leading-[0.98] font-semibold tracking-[-0.055em] text-balance sm:text-6xl xl:text-7xl 2xl:text-8xl">
+            {/* The scale stops at 7xl: the hero column is ~642px wide once the
+                container hits its max, and this line at 8xl needs 643px — the
+                one-pixel miss that put "AI" alone on the first line. 8xl also
+                made the hero taller than a 1080p viewport, and this is a
+                one-screen page. */}
+            <h1 className="font-heading text-5xl leading-[0.98] font-semibold tracking-[-0.055em] text-balance sm:text-6xl xl:text-7xl">
               AI infrastructure,
               <span className="block text-primary">under your control.</span>
             </h1>
@@ -104,6 +108,11 @@ export function LandingPage() {
                 ))}
               </div>
             </div>
+            {/* Above the icon card, not behind it: the scene carries a depth
+                mask matching the card, so each orbit passes in front of the
+                icons on one side and disappears behind them on the other,
+                instead of being flattened under the card everywhere. */}
+            <LandingThreeBackdrop />
           </div>
         </section>
 

@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic';
 import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTheme } from 'next-themes';
 
+import { useMediaQuery } from '@/lib/use-media-query';
 import { useReducedMotion } from '@/lib/use-reduced-motion';
 
 export type EntrySceneKind = 'tunnel' | 'layers';
@@ -225,9 +226,22 @@ export function AppEntryTransition({
   );
 }
 
+/**
+ * Fills the landing page's visual panel, not the viewport. Mounting inside the
+ * panel is what keeps the scene aligned with the card it decorates at every
+ * viewport — as a full-page layer its world-space offset only lined up with the
+ * panel at one aspect ratio, and elsewhere the geometry poked out from behind
+ * the card as stray diagonals. The panel is display:none below `lg`, which also
+ * spares phone batteries a permanent render loop for an effect that would sit
+ * behind the hero text there.
+ */
 export function LandingThreeBackdrop() {
   const { resolvedTheme } = useTheme();
   const reducedMotion = useReducedMotion();
+  // The panel is display:none below `lg`, which hides but does not unmount:
+  // without this gate a phone still paid for a WebGL context and render loop
+  // behind a panel it never shows. 64rem is Tailwind's `lg`.
+  const panelShown = useMediaQuery('(min-width: 64rem)');
   const [available, setAvailable] = useState(false);
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const [onScreen, setOnScreen] = useState(true);
@@ -247,12 +261,16 @@ export function LandingThreeBackdrop() {
     return () => observer.disconnect();
   }, [container]);
 
-  if (reducedMotion !== false || !available || !resolvedTheme) return null;
+  if (reducedMotion !== false || panelShown !== true || !available || !resolvedTheme) {
+    return null;
+  }
 
   return (
+    // The clip radius matches the panel's outer border. The shadow lives on a
+    // sibling, so clipping here cannot cut it off.
     <div
       ref={setContainer}
-      className="pointer-events-none absolute inset-0 opacity-70"
+      className="pointer-events-none absolute inset-0 overflow-hidden rounded-[2.5rem] opacity-80"
       aria-hidden="true"
     >
       <SceneBoundary onError={() => setAvailable(false)}>

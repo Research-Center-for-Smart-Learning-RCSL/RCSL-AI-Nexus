@@ -94,11 +94,50 @@ the frame-rate guard and the context-loss listener are driven through a stubbed
 fiber runtime.
 
 Verified: TypeScript, ESLint with zero warnings, a production Next build with
-the route sizes above unchanged, and **400 Vitest tests across 50 files**.
+the route sizes above unchanged, and **403 Vitest tests across 51 files**.
 Browser inspection at 1280×720 caught and fixed a first draft whose primary
 action fell below the fold; the final page has no document overflow at that
 viewport, the loading/sign-in action is visible, `/login?next=...` mounts no
 curtain, and the login field owns focus.
+
+A later same-day pass swept the page headlessly at six viewports in both
+themes, which is what the first inspection's single viewport could not do, and
+found four more faults. The hero heading at `2xl` needed 643px for its first
+line against a 642px column — the one-pixel miss that put "AI" alone on the
+first line — and made the hero taller than a 1080p viewport, so the scale now
+stops at 7xl and the page fits with zero overflow from 390×844 through
+1920×1080. The landing scene, mounted as a full-viewport layer, only lined up
+with the panel it decorates at one aspect ratio, and elsewhere poked out from
+behind the card as stray diagonals; it now mounts inside the panel, so
+alignment holds by construction. That move exposed that `display:none` hides
+without unmounting: below `lg` a phone still created the WebGL context and ran
+the render loop for a panel it never shows, which a `(min-width: 64rem)` gate
+now prevents — `useReducedMotion` was generalised into a shared
+`useMediaQuery` for it, with its own suite. And two rendering faults: the
+landing scene's lines are a third the width of the tunnel's and aliased into
+broken dashes without MSAA, so that one canvas is antialiased; and the fog
+dimmed the tunnel's destination sphere into a grey ball mid-flight, so the
+light at the end of the tunnel is now excluded from fog. The sweep also
+demonstrated the watchdog doing its job for real: in a hidden tab no
+requestAnimationFrame ever fires, no frame ever lifts the cover, and the
+watchdog is the only reason the curtain leaves.
+
+The same review then rejected the geometry itself as stiff — rectangles built
+from four straight bars read as stray sticks whenever a rotation caught them
+edge-on, and their corners as broken joints. Every rectangle became a
+continuous curve: the landing panel now carries five glowing orbit rings
+precessing at mutually irrational speeds around the icon card, the tunnel's
+square rings became concentric ellipses with nothing to break at the corners,
+and the shell dive's slabs are rounded like every card in the interface they
+open onto, each shell easing through its sweep instead of snapping into linear
+motion. The orbits wrap the card in depth rather than sliding under it: the
+canvas sits above the card in the DOM, and a colour-silent depth mask matching
+the card's footprint swallows each ring's rear arc while its front arc draws
+over the icons. A white-on-white fault came out of the same look: the tunnel's
+destination orb, freed from fog, vanished into the light theme's background,
+so light mode's destination is the brand blue. Headless captures of both
+curtains mid-flight — the layers one behind a fulfilled `/admin/me`, since it
+only plays for a session — verified all of it in both themes.
 
 ---
 

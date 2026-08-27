@@ -317,8 +317,8 @@ security defect is covered, the two authentication state machines and the API
 key management lifecycle are driven in Chromium, and presentation is not
 exhaustively covered.
 
-Currently 400 Vitest tests across 50 files (376 across 46 until 2026-08-27,
-when the landing page and the two entry curtains added twenty-four; 374 across
+Currently 403 Vitest tests across 51 files (376 across 46 until 2026-08-27,
+when the landing page and the two entry curtains added twenty-seven; 374 across
 45 from the 2026-08-20 re-count, after the shell and refusal scenarios were
 separated; the two added 2026-08-21 guard the transcript scroll) — the SSE
 reader and frame schema, the
