@@ -15,6 +15,82 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-28 — The review pass on the landing branch: one untested join, one door that needed no scripting
+
+A review of the landing-page branch before merge, with every CI step run
+locally rather than read. Five findings were confirmed and fixed; one was
+raised and deliberately left alone.
+
+**The join between the shell and the curtain was the only part of yesterday's
+work with no test at all, and it rests on an implicit contract.** `AppShell`
+renders `AppEntryTransition` from two different branches — beside the loading
+gate, then beside the authenticated shell — and the reason that is *one*
+curtain rather than two is only that React reconciles a fragment's children by
+position, so both branches place it second. Neither existing suite could see
+it: `app-shell-test-support.tsx` mocks the curtain away so the navigation tests
+observe a settled shell, and `entry-transition.test.tsx` drives the curtain with
+no shell around it. Inserting any element ahead of the curtain in either
+fragment remounts it, which restarts the 1.6-second timeline at the exact
+moment the session settles and it should be ending — the inverse of the
+minimum-duration hold the whole state machine exists to provide — and every
+test of both halves stays green. `app-shell.entry-transition.test.tsx` now
+asserts DOM-node identity across the transition, that a curtain held past its
+timeline needs only its 220 ms exit once the identity arrives, and that the
+watchdog still returns the shell if the identity never does. Verified by
+inserting a sibling ahead of the curtain: two of the three fail.
+
+**The public front door had no door for a reader whose scripting never runs.**
+`/` is prerendered, and the session is by definition unresolved at build time,
+so the loading branch *is* the static HTML — which meant the platform's one
+public page shipped with a disabled `Loading` button, the string `Sign in`
+nowhere in it, and no way in without JavaScript. This is not the general
+"the app needs JavaScript" observation: every other screen is behind
+authentication, and this is the page whose whole job is to be found. A
+`<noscript>` link to `/login` now sits beside the disabled control, seen only
+by the readers the branch was failing. The test renders the page through
+`renderToStaticMarkup` rather than into jsdom, because what is under test is
+the build output, not the mounted component.
+
+Three smaller corrections. The browser spec's deadline for the opaque cover
+lifting was 4000 ms, above the tunnel's own 3800 ms watchdog: a scene that
+never painted would have taken the whole curtain away first, and the assertion
+would then have failed on a detached element, reporting a missing test id for
+what is really a scene that never rendered. It is 3000 ms now, which fails
+while the cover is still there to describe. The pre-hydration cover's CSS
+comment claimed its 4-second timeout "matches the JS watchdog's floor"; the
+floor is 3200 ms, and what 4 seconds actually clears is the watchdog's
+*ceiling* for both curtains, which is the property that matters — hydration
+that arrives at all is always the layer that lifts the cover, and the CSS only
+ever fires when hydration is not coming. And `EntrySceneKind` was declared in
+`entry-transition.tsx` and imported by the scene module, making the shared type
+a static edge between two modules held apart on purpose; it now lives in
+`entry-transition-kind.ts`, owned by neither. Both sides wrote `import type`, so
+nothing was loading today — but nothing in the type checker distinguishes an
+erased edge from one that pulls a 238 kB gzip chunk into the first load it was
+split out of. `architecture/frontend.md` §2 now documents that boundary and why
+the three rendering packages are pinned to exact versions, which the tree there
+had also stopped listing.
+
+**Raised and left alone: the authenticated curtain plays on every entry**,
+including every reload, which is 1.6 seconds and a 238 kB gzip download each
+time for an operator who reloads a dashboard all day. Curtain A already has a
+once-per-tab `sessionStorage` gate that Curtain B could reuse for almost
+nothing. This is a decision, not a defect — `plans/landing-page-and-entry-transitions.md`
+§6.3 chose "every entry" and priced it — and it stands.
+
+Not changed: the route sizes recorded above measure one kilobyte below what a
+local Node 26 build reports for the same commits. The differences the entry
+claims — shared JS unchanged, `/dashboard` unchanged, `/login` up five — all
+reproduce exactly, so the deltas are right and only the absolute figures are in
+question, which is a build-environment difference rather than a finding. CI
+builds on Node 22 and is where a re-measurement should come from.
+
+Verified: TypeScript, ESLint with zero warnings, a production Next build, all
+seven Playwright paths, and **416 Vitest tests across 53 files** (412 across 52
+before this pass).
+
+---
+
 ## 2026-08-27 — A public front door, and two entry curtains that cannot hold the application hostage
 
 The management UI has a public home page now. `/` is a one-screen,
