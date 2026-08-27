@@ -1,12 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
-import type { Me, SessionStatus } from '@/lib/session';
+import type { AuthMode, Me, SessionStatus } from '@/lib/session';
 import { LandingPage } from './landing-page';
 
-const state: { me: Me | null; status: SessionStatus } = {
+const state: {
+  me: Me | null;
+  status: SessionStatus;
+  authMode: AuthMode | null;
+  error: Error | null;
+  refresh: () => Promise<void>;
+} = {
   me: null,
   status: 'loading',
+  authMode: null,
+  error: null,
+  refresh: () => Promise.resolve(),
 };
 
 vi.mock('@/lib/session', async (importOriginal) => {
@@ -34,6 +43,8 @@ vi.mock('next/image', () => ({
 beforeEach(() => {
   state.me = null;
   state.status = 'loading';
+  state.authMode = null;
+  state.error = null;
 });
 
 describe('the public landing page action', () => {
@@ -53,6 +64,26 @@ describe('the public landing page action', () => {
       'href',
       '/login',
     );
+  });
+
+  it('keeps the API-error diagnosis instead of a dead-end sign-in link', () => {
+    state.status = 'error';
+    state.error = new Error('fetch failed');
+    render(<LandingPage />);
+
+    expect(screen.getByText('Could not reach the admin API')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+    // /login asks the same unreachable API for a login; do not offer it.
+    expect(screen.queryByRole('link', { name: /sign in/i })).toBeNull();
+  });
+
+  it('keeps the lost-tailnet diagnosis instead of a password login it cannot use', () => {
+    state.status = 'unauthenticated';
+    state.authMode = 'tailnet';
+    render(<LandingPage />);
+
+    expect(screen.getByText('Tailscale connection lost')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /sign in/i })).toBeNull();
   });
 
   it('names the account and sends an authenticated visitor to the console', () => {

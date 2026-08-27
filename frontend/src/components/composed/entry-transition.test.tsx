@@ -2,30 +2,22 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { REDUCED_MOTION_QUERY, stubMatchMedia } from '@/test-support/match-media';
 import {
   AppEntryTransition,
   EntryCurtain,
   LoginEntryTransition,
+  resetWebGLProbeForTests,
 } from './entry-transition';
 
 function setReducedMotion(matches: boolean) {
-  vi.spyOn(window, 'matchMedia').mockImplementation(
-    (query: string): MediaQueryList => ({
-      matches,
-      media: query,
-      onchange: null,
-      addListener: () => undefined,
-      removeListener: () => undefined,
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-      dispatchEvent: () => false,
-    }),
-  );
+  stubMatchMedia({ [REDUCED_MOTION_QUERY]: matches });
 }
 
 beforeEach(() => {
   vi.useFakeTimers();
   window.sessionStorage.clear();
+  resetWebGLProbeForTests();
   setReducedMotion(false);
 });
 
@@ -41,6 +33,9 @@ describe('the shared curtain controller', () => {
     render(<EntryCurtain kind="tunnel" durationMs={2000} onComplete={complete} />);
 
     expect(screen.getByTestId('entry-curtain-tunnel')).toBeInTheDocument();
+    // The cover must lift, or the fallback animation plays invisibly under an
+    // opaque layer — which is exactly what it did until 2026-08-27.
+    expect(screen.getByTestId('entry-curtain-cover').className).toContain('opacity-0');
     act(() => vi.advanceTimersByTime(180));
     expect(complete).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(220));
@@ -162,6 +157,16 @@ describe('where each curtain is allowed to play', () => {
 
   it('never plays the login curtain for a bounced next URL', () => {
     render(<LoginEntryTransition bypass />);
+    expect(screen.queryByTestId('entry-curtain-tunnel')).toBeNull();
+  });
+
+  it('counts a bounced visit toward the once-per-tab gate', () => {
+    // Without this, sign in through a bounce and then Sign out: the return to
+    // a plain /login found the gate unwritten and replayed the full curtain.
+    const bounced = render(<LoginEntryTransition bypass />);
+    bounced.unmount();
+
+    render(<LoginEntryTransition bypass={false} />);
     expect(screen.queryByTestId('entry-curtain-tunnel')).toBeNull();
   });
 

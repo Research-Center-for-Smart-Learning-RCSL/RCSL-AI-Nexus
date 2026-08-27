@@ -317,16 +317,17 @@ security defect is covered, the two authentication state machines and the API
 key management lifecycle are driven in Chromium, and presentation is not
 exhaustively covered.
 
-Currently 403 Vitest tests across 51 files (376 across 46 until 2026-08-27,
-when the landing page and the two entry curtains added twenty-seven; 374 across
+Currently 412 Vitest tests across 52 files (376 across 46 until 2026-08-27,
+when the landing page and the two entry curtains added thirty-six; 374 across
 45 from the 2026-08-20 re-count, after the shell and refusal scenarios were
 separated; the two added 2026-08-21 guard the transcript scroll) — the SSE
 reader and frame schema, the
 API client's CSRF and 401 handling, `safe-redirect`, the password schema, the key
 form's own rules, the assistant's proposal parsing, transcript handling and
 page-context registry, the observer that keeps a streaming reply in view, and
-the entry curtains' escape hatches — plus five Playwright paths, and one more under §9.1 that
-runs against a real backend. The five intercept
+the entry curtains' escape hatches — plus six Playwright paths, and one more under §9.1 that
+runs against a real backend. One of the six opts back into motion and drives the
+real entry-curtain Canvas that every reduced-motion context skips. The others intercept
 the admin API at the network boundary: they cover the real Next.js pages,
 accessible controls, form state, requests and navigation without needing a
 shared account or mutable Postgres fixture. The API key path keeps a stateful

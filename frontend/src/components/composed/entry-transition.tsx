@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTheme } from 'next-themes';
 
-import { useMediaQuery } from '@/lib/use-media-query';
+import { useIsomorphicLayoutEffect, useMediaQuery } from '@/lib/use-media-query';
 import { useReducedMotion } from '@/lib/use-reduced-motion';
 
 export type EntrySceneKind = 'tunnel' | 'layers';
@@ -37,9 +37,19 @@ class SceneBoundary extends Component<BoundaryProps, { failed: boolean }> {
   }
 }
 
+// Cached: support cannot change within a page lifetime, and the probe is a
+// real, blocking context creation. Uncached, a landing -> login -> app pass
+// paid for it three times, the login one landing exactly on the first frame
+// the opaque cover was waiting for.
+let webglProbe: boolean | null = null;
+
 export function supportsWebGL(): boolean {
+  if (webglProbe !== null) return webglProbe;
   if (typeof document === 'undefined' || typeof window === 'undefined') return false;
-  if (!window.WebGLRenderingContext && !window.WebGL2RenderingContext) return false;
+  if (!window.WebGLRenderingContext && !window.WebGL2RenderingContext) {
+    webglProbe = false;
+    return false;
+  }
 
   try {
     const canvas = document.createElement('canvas');
@@ -47,10 +57,17 @@ export function supportsWebGL(): boolean {
     const supported = Boolean(context);
     const loseContext = context?.getExtension('WEBGL_lose_context');
     loseContext?.loseContext();
+    webglProbe = supported;
     return supported;
   } catch {
+    webglProbe = false;
     return false;
   }
+}
+
+/** Tests redefine the WebGL globals between cases; production never needs this. */
+export function resetWebGLProbeForTests() {
+  webglProbe = null;
 }
 
 export function EntryCurtain({
@@ -95,8 +112,11 @@ export function EntryCurtain({
   }, []);
 
   useEffect(() => {
-    setMode(supportsWebGL() ? 'webgl' : 'fallback');
-  }, []);
+    // Through fallBack(), not setMode alone: fallBack also lifts the cover,
+    // and without that the CSS fallback played invisibly behind it.
+    if (supportsWebGL()) setMode('webgl');
+    else fallBack();
+  }, [fallBack]);
 
   useEffect(() => {
     if (mode !== 'fallback') return;
@@ -173,36 +193,62 @@ export function EntryCurtain({
   );
 }
 
+/**
+ * The opaque layer both curtains show before their mount decision has landed.
+ * It shares `nexus-entry-curtain` so the reduced-motion CSS removes it before
+ * any JavaScript runs, and its own class carries a CSS-only timeout fade: if
+ * hydration never comes — script blocked, bundle failed — no watchdog exists,
+ * and this must not be the layer that bricks the page.
+ */
+function EntryPrecover({ kind }: { kind: EntrySceneKind }) {
+  return (
+    <div
+      data-testid={`entry-precover-${kind}`}
+      aria-hidden="true"
+      className="nexus-entry-curtain nexus-entry-precover fixed inset-0 z-[100] bg-background"
+    />
+  );
+}
+
 export function LoginEntryTransition({ bypass }: { bypass: boolean }) {
-  const reducedMotion = useReducedMotion();
-  const [playing, setPlaying] = useState(false);
+  const [phase, setPhase] = useState<'undecided' | 'playing' | 'done'>('undecided');
 
-  useEffect(() => {
-    if (reducedMotion === null) return;
-    if (bypass || reducedMotion) {
-      setPlaying(false);
-      return;
-    }
-
+  // A layout effect with a synchronous matchMedia read: the whole login page
+  // renders client-side in one pass, and deciding before that pass paints is
+  // what stops the form from showing for a frame and then being covered.
+  // Deciding exactly once is what keeps an OS reduced-motion toggle, flipped
+  // while the form is already in use, from replaying the curtain over it.
+  useIsomorphicLayoutEffect(() => {
+    if (phase !== 'undecided') return;
+    let alreadyPlayed = false;
     try {
       const key = 'nexus.entry.login.v1';
-      if (window.sessionStorage.getItem(key)) return;
+      alreadyPlayed = Boolean(window.sessionStorage.getItem(key));
+      // Any arrival at the login screen is the tab's one entrance — a bounced
+      // `next=...` visit and a reduced-motion visit included. Marking only the
+      // played case meant signing out after a bounced sign-in replayed the
+      // full curtain for someone who had just clicked Sign out.
       window.sessionStorage.setItem(key, 'played');
     } catch {
       // Storage is only the frequency gate. A blocked store must not break the
       // entrance, and playing once is the safer degradation than a blank page.
     }
-    setPlaying(true);
-  }, [bypass, reducedMotion]);
+    const reduce =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    setPhase(bypass || reduce || alreadyPlayed ? 'done' : 'playing');
+  }, [bypass, phase]);
 
-  return playing ? (
+  if (phase === 'done') return null;
+  if (phase === 'undecided') return bypass ? null : <EntryPrecover kind="tunnel" />;
+  return (
     <EntryCurtain
       kind="tunnel"
       durationMs={2000}
       skippable
-      onComplete={() => setPlaying(false)}
+      onComplete={() => setPhase('done')}
     />
-  ) : null;
+  );
 }
 
 export function AppEntryTransition({
@@ -213,7 +259,14 @@ export function AppEntryTransition({
   const reducedMotion = useReducedMotion();
   const [complete, setComplete] = useState(false);
 
-  if (reducedMotion !== false || complete) return null;
+  if (complete || reducedMotion === true) return null;
+
+  // Null means undecided, which is exactly the server render and the pass that
+  // hydrates it: the precover puts an opaque layer in the SSR HTML itself, so
+  // the shell cannot paint uncovered and then have the curtain slam over it.
+  // The reduced-motion CSS strips the precover without JavaScript, and the
+  // media-query hook resolves in a layout effect, before the next paint.
+  if (reducedMotion === null) return <EntryPrecover kind="layers" />;
 
   return (
     <EntryCurtain
@@ -270,6 +323,7 @@ export function LandingThreeBackdrop() {
     // sibling, so clipping here cannot cut it off.
     <div
       ref={setContainer}
+      data-testid="landing-backdrop"
       className="pointer-events-none absolute inset-0 overflow-hidden rounded-[2.5rem] opacity-80"
       aria-hidden="true"
     >

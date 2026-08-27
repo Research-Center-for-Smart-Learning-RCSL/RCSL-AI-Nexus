@@ -96,19 +96,19 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [onForbiddenRoute, router]);
 
   const gate = renderSessionGate({ status, authMode, error, refresh });
-  if (
-    status === 'error' ||
-    (status === 'unauthenticated' && authMode === 'tailnet')
-  ) {
-    return gate;
-  }
-
-  if (status === 'loading') {
-    return (
+  if (gate !== undefined) {
+    // The gate's contract is "undefined means proceed" — honouring it, rather
+    // than re-enumerating its states here, is what makes a state added there
+    // block here without this file knowing about it. Only the loading state
+    // carries the entry curtain; error and lost-tailnet keep their precedence
+    // over decoration.
+    return status === 'loading' ? (
       <>
         {gate}
         <AppEntryTransition sessionSettled={false} />
       </>
+    ) : (
+      gate
     );
   }
 

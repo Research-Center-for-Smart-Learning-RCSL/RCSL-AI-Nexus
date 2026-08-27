@@ -94,7 +94,10 @@ the frame-rate guard and the context-loss listener are driven through a stubbed
 fiber runtime.
 
 Verified: TypeScript, ESLint with zero warnings, a production Next build with
-the route sizes above unchanged, and **403 Vitest tests across 51 files**.
+the route sizes above unchanged, and **412 Vitest tests across 52 files** (403
+across 51 until the review pass below added nine; the same pass gave the
+browser suite its two entry-curtain specs, the only ones that opt back into
+motion).
 Browser inspection at 1280×720 caught and fixed a first draft whose primary
 action fell below the fold; the final page has no document overflow at that
 viewport, the loading/sign-in action is visible, `/login?next=...` mounts no
@@ -122,7 +125,7 @@ demonstrated the watchdog doing its job for real: in a hidden tab no
 requestAnimationFrame ever fires, no frame ever lifts the cover, and the
 watchdog is the only reason the curtain leaves.
 
-The same review then rejected the geometry itself as stiff — rectangles built
+A design pass the same day rejected the geometry itself as stiff — rectangles built
 from four straight bars read as stray sticks whenever a rotation caught them
 edge-on, and their corners as broken joints. Every rectangle became a
 continuous curve: the landing panel now carries five glowing orbit rings
@@ -138,6 +141,50 @@ destination orb, freed from fog, vanished into the light theme's background,
 so light mode's destination is the brand blue. Headless captures of both
 curtains mid-flight — the layers one behind a fulfilled `/admin/me`, since it
 only plays for a session — verified all of it in both themes.
+
+An adversarial code review of the finished branch then surfaced ten faults the
+earlier passes had missed, all fixed the same day. Four were correctness. The
+landing page's catch-all action routed the error and lost-tailnet states to a
+password login that dead-ends both, where the old '/' had shown the shell's
+diagnosis and a retry; those states now render the same ErrorState the shell
+uses. The no-WebGL fallback animation played entirely behind the still-opaque
+cover, because only the runtime fallback path lifted it and the mount-time
+path did not — the designed reveal was invisible on exactly the machines it
+was designed for, and the fallback test now asserts the cover is lifted, not
+just that completion fires. A bounced `next=...` login never wrote the
+once-per-tab key, so signing out after such a sign-in replayed the full
+curtain; any arrival at the login screen now counts as the tab's entrance, and
+the decision is taken exactly once, so an OS reduced-motion toggle mid-form no
+longer replays it either. And both curtains mounted only after a post-paint
+effect resolved the media query, letting the page show for the hydration
+window before the curtain covered it — the media-query hook now resolves in a
+layout effect, the login gate reads matchMedia synchronously before first
+paint, and an opaque pre-cover rides the shell's server HTML, stripped by the
+reduced-motion CSS without JavaScript and given a CSS-only 4-second timeout
+fade so a page whose script never arrives cannot be bricked by its own
+decoration.
+
+The rest: the shell re-enumerated the session gate's states instead of
+honouring its undefined-means-proceed contract, so a state added to the gate
+would have fallen through to a blank page — the call site now branches on the
+contract. The orbit scene's depth mask hard-coded the icon card at 192px when
+the card is sized in rem, misaligning the occlusion for any reader-enlarged
+root font; it now probes the live root font size. The scenes built hundreds of
+identical geometries and materials per mount — during exactly the warm-up
+window the frame-rate guard measures around — and now share module-level
+caches. `supportsWebGL` created a throwaway context on every call and is now
+cached for the page lifetime. The three hand-written matchMedia stubs became
+one query-keyed factory, which is what finally made the landing backdrop's
+active path expressible: reduced motion off and the panel breakpoint met at
+once, a state no single-boolean stub could represent, plus the Safari <14
+deprecated-listener path. And the navigation-catalog test anchored its page
+lookup to the working directory — silently green when run from anywhere but
+frontend/ — and guarded one hard-coded route; it now resolves from its own
+file and asserts every catalog entry maps to a page that exists. The one gap
+every layer shared — no automated test ever mounted the real curtain Canvas,
+since Vitest mocks the fiber runtime and Playwright runs reduced-motion — is
+closed by a browser spec that opts back into motion, watches the real tunnel's
+cover lift, and takes the form focus after it leaves.
 
 ---
 
