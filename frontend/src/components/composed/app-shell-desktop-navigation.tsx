@@ -1,3 +1,5 @@
+import Link from 'next/link';
+
 import { Badge } from '@/components/ui/badge';
 import { Logo } from '@/components/composed/logo';
 import { authModeLabel, type AuthMode } from '@/lib/session';
@@ -15,7 +17,9 @@ export function DesktopNavigation({ authMode, pinned: visiblePinned, groups: vis
                 wide, which leaves room for the mark at a size it survives;
                 inline next to the text it would have to shrink to about 24px,
                 where the monogram becomes an unreadable blob. */}
-            <Logo height={48} className="mb-2" />
+            <Link href="/" aria-label="RCSL AI Nexus, home" className="mb-2 inline-block rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <Logo height={48} />
+            </Link>
             <p className="font-heading text-sm font-semibold">RCSL AI Nexus</p>
             <Badge variant="outline" className="mt-1">
               {authModeLabel(authMode)}

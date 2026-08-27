@@ -72,6 +72,13 @@ frontend/
         theme-toggle.tsx
         spinner.tsx
         logo.tsx
+        landing-page.tsx        # the public front door at `/`
+        entry-transition.tsx    # the two curtain state machines, and every
+                                #   way out of a mounted one
+        entry-transition-scenes.tsx   # the three.js scenes, reached only
+                                #   through next/dynamic (see below)
+        entry-transition-kind.ts      # the one type both of those need,
+                                #   owned by neither
 
     features/
       models/
@@ -155,6 +162,12 @@ frontend/
     styles/
       globals.css
 ```
+
+**The 3D entry transitions are the one place a dependency is deliberately not reachable from the module that uses it.** `three`, `@react-three/fiber` and `@react-three/drei` are 888 kB raw / 238 kB gzip across four chunks — larger than the entire application — and they exist for decoration that every reduced-motion reader, every machine without WebGL and every Playwright context skips entirely. So `entry-transition.tsx` holds the state machines and reaches the scene module only through `next/dynamic` with `ssr: false`, which is what keeps all of it off the server render and out of the first-load figure for `/`, `/login` and every route the shell renders. The measured cost of the split is in [PROGRESS.md](../PROGRESS.md) 2026-08-27: shared JS unchanged, `/dashboard` unchanged, `/login` up five kilobytes.
+
+That boundary is enforced by nothing but the import graph, which is why `EntrySceneKind` sits in a third file rather than in either module. A shared type declared on either side is a static edge between them; it is erased today because both sides write `import type`, but nothing in the type checker distinguishes an erased edge from one that would pull the chunk back in — and in the likelier direction, into the first load it was split out of. A file neither side owns has no edge to get wrong.
+
+**These three packages are pinned to exact versions**, unlike every other dependency here. `@react-three/fiber` is a renderer for a specific `three` revision and `@react-three/drei` for a specific fiber, and three's minor releases move its API; a caret range lets a lockfile refresh resolve a combination nobody built against, and the failure is a blank canvas at runtime rather than a type error. The curtains step aside when a scene throws (§ the escape hatches, tested in `entry-transition-scenes.test.tsx`), so such a break would degrade quietly rather than loudly — which is a reason to pin, not a reason not to. Upgrading is a deliberate, three-package move.
 
 ## 3. Authentication: One Build, Two Modes
 
@@ -317,14 +330,20 @@ security defect is covered, the two authentication state machines and the API
 key management lifecycle are driven in Chromium, and presentation is not
 exhaustively covered.
 
-Currently 376 Vitest tests across 46 files (374 across 45 from the 2026-08-20
-re-count, after the shell and refusal scenarios were separated; the two added
-2026-08-21 guard the transcript scroll) — the SSE reader and frame schema, the
+Currently 416 Vitest tests across 53 files (412 across 52 until 2026-08-28,
+when the pre-merge review pass added the join between the shell and the entry
+curtain, which neither side's suite could see, and the landing page's
+no-script door; 376 across 46 until 2026-08-27,
+when the landing page and the two entry curtains added thirty-six; 374 across
+45 from the 2026-08-20 re-count, after the shell and refusal scenarios were
+separated; the two added 2026-08-21 guard the transcript scroll) — the SSE
+reader and frame schema, the
 API client's CSRF and 401 handling, `safe-redirect`, the password schema, the key
 form's own rules, the assistant's proposal parsing, transcript handling and
-page-context registry, and the observer that keeps a streaming reply in
-view — plus five Playwright paths, and one more under §9.1 that
-runs against a real backend. The five intercept
+page-context registry, the observer that keeps a streaming reply in view, and
+the entry curtains' escape hatches — plus six Playwright paths, and one more under §9.1 that
+runs against a real backend. One of the six opts back into motion and drives the
+real entry-curtain Canvas that every reduced-motion context skips. The others intercept
 the admin API at the network boundary: they cover the real Next.js pages,
 accessible controls, form state, requests and navigation without needing a
 shared account or mutable Postgres fixture. The API key path keeps a stateful
