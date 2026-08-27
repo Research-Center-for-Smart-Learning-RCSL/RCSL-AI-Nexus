@@ -126,21 +126,13 @@ function GlowBar({
 }) {
   return (
     <group position={position}>
-      <mesh scale={scale}>
-        <boxGeometry />
-        <meshBasicMaterial color={color} toneMapped={false} />
-      </mesh>
-      <mesh scale={scale.map((value) => value * 1.12) as [number, number, number]}>
-        <boxGeometry />
-        <meshBasicMaterial
-          color={color}
-          transparent
-          opacity={0.14}
-          blending={THREE.AdditiveBlending}
-          depthWrite={false}
-          toneMapped={false}
-        />
-      </mesh>
+      <mesh scale={scale} geometry={UNIT_BOX} material={glowMaterial(color, 'solid')} dispose={null} />
+      <mesh
+        scale={scale.map((value) => value * 1.12) as [number, number, number]}
+        geometry={UNIT_BOX}
+        material={glowMaterial(color, 'halo')}
+        dispose={null}
+      />
     </group>
   );
 }
@@ -296,6 +288,44 @@ export function EntryScene({
   );
 }
 
+// Module-level, never disposed (`dispose={null}` on every consumer): the bars
+// and rings differ only by transform and colour, and per-element geometries
+// and materials made the scenes construct hundreds of identical objects during
+// exactly the warm-up window the frame-rate guard measures around.
+const UNIT_BOX = new THREE.BoxGeometry();
+
+const torusCache = new Map<string, THREE.TorusGeometry>();
+function sharedTorus(radius: number, tube: number): THREE.TorusGeometry {
+  const key = `${radius}|${tube}`;
+  let geometry = torusCache.get(key);
+  if (!geometry) {
+    geometry = new THREE.TorusGeometry(radius, tube, 12, 96);
+    torusCache.set(key, geometry);
+  }
+  return geometry;
+}
+
+const materialCache = new Map<string, THREE.MeshBasicMaterial>();
+function glowMaterial(color: string, variant: 'solid' | 'halo'): THREE.MeshBasicMaterial {
+  const key = `${color}|${variant}`;
+  let material = materialCache.get(key);
+  if (!material) {
+    material =
+      variant === 'solid'
+        ? new THREE.MeshBasicMaterial({ color, toneMapped: false })
+        : new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.15,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            toneMapped: false,
+          });
+    materialCache.set(key, material);
+  }
+  return material;
+}
+
 function GlowRing({
   radius,
   color,
@@ -307,28 +337,15 @@ function GlowRing({
 }) {
   return (
     <>
-      <mesh>
-        <torusGeometry args={[radius, tube, 12, 96]} />
-        <meshBasicMaterial color={color} toneMapped={false} />
-      </mesh>
-      <mesh>
-        <torusGeometry args={[radius, tube * 2.5, 12, 96]} />
-        <meshBasicMaterial
-          color={color}
-          transparent
-          opacity={0.16}
-          blending={THREE.AdditiveBlending}
-          depthWrite={false}
-          toneMapped={false}
-        />
-      </mesh>
+      <mesh geometry={sharedTorus(radius, tube)} material={glowMaterial(color, 'solid')} dispose={null} />
+      <mesh geometry={sharedTorus(radius, tube * 2.5)} material={glowMaterial(color, 'halo')} dispose={null} />
     </>
   );
 }
 
 /**
  * Writes depth only, no colour, over the footprint of the landing panel's CSS
- * icon card (192px square, rotated 6deg clockwise, centred). The canvas sits
+ * icon card (12rem square, rotated 6deg clockwise, centred). The canvas sits
  * above that card in the DOM, so this mask is what hands occlusion back to the
  * 3D scene: an orbit's rear arc is swallowed here while its front arc draws
  * over the icons, which is what makes the rings read as wrapping the card
@@ -339,7 +356,14 @@ function CardDepthMask() {
   const { camera, size } = useThree();
   const worldHeight =
     2 * camera.position.z * Math.tan(((camera as THREE.PerspectiveCamera).fov * Math.PI) / 360);
-  const side = (192 / size.height) * worldHeight;
+  // The card is sized in rem (size-48 = 12rem), so a reader-enlarged root font
+  // moves its pixel edge; a hard-coded 192px left the mask ~20% small at a
+  // 20px root and let rear arcs draw over the card's outer band.
+  const rootFontPx =
+    typeof document === 'undefined'
+      ? 16
+      : Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  const side = ((12 * rootFontPx) / size.height) * worldHeight;
   return (
     <mesh rotation={[0, 0, -0.105]} scale={[side, side, 1]} renderOrder={-1}>
       <boxGeometry args={[1, 1, 0.9]} />

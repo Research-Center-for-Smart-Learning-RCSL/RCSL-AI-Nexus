@@ -56,6 +56,20 @@
   animation: nexus-curtain-exit 220ms ease-out both;
 }
 
+@keyframes nexus-precover-timeout {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+/* The pre-hydration cover has no JavaScript watchdog by definition, so CSS
+   itself removes it. The 4s delay matches the JS watchdog's floor; in normal
+   operation hydration replaces this layer within the first frames. */
+.nexus-entry-precover {
+  animation: nexus-precover-timeout 300ms ease-out 4s forwards;
+}
+
 .nexus-spinner {
   --dot: 4.5px;
   --radius: 24.6px;

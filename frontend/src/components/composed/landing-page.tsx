@@ -1,16 +1,28 @@
 'use client';
 
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 import { ArrowRightIcon, LockKeyholeIcon, NetworkIcon, ServerIcon } from 'lucide-react';
 
+import { ErrorState } from '@/components/composed/error-state';
 import { Logo } from '@/components/composed/logo';
 import { ThemeToggle } from '@/components/composed/theme-toggle';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { TAILSCALE_CONNECTION_LOST } from '@/features/auth/messages';
 import { useSession } from '@/lib/session';
 import { LandingThreeBackdrop } from '@/components/composed/entry-transition';
 
+function CtaLink({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <Link href={href} className={buttonVariants({ size: 'lg', className: 'group min-w-44' })}>
+      {children}
+      <ArrowRightIcon className="transition-transform group-hover:translate-x-0.5" />
+    </Link>
+  );
+}
+
 function PrimaryAction() {
-  const { me, status } = useSession();
+  const { me, status, authMode, error, refresh } = useSession();
 
   if (status === 'loading') {
     return (
@@ -29,26 +41,29 @@ function PrimaryAction() {
         <p className="text-sm text-muted-foreground">
           Signed in as <span className="font-medium text-foreground">{me.display_name}</span>
         </p>
-        <Link
-          href="/dashboard"
-          className={buttonVariants({ size: 'lg', className: 'group min-w-44' })}
-        >
-          Go to the console
-          <ArrowRightIcon className="transition-transform group-hover:translate-x-0.5" />
-        </Link>
+        <CtaLink href="/dashboard">Go to the console</CtaLink>
       </div>
     );
   }
 
-  return (
-    <Link
-      href="/login"
-      className={buttonVariants({ size: 'lg', className: 'group min-w-44' })}
-    >
-      Sign in
-      <ArrowRightIcon className="transition-transform group-hover:translate-x-0.5" />
-    </Link>
-  );
+  // The failure states keep the diagnosis the shell would have shown at the
+  // old '/' instead of falling through to Sign in: /login dead-ends both — a
+  // tailnet identity never reaches that route, and an unreachable API rejects
+  // the very login it asks for.
+  if (status === 'error' || authMode === 'tailnet') {
+    return (
+      <ErrorState
+        title={
+          status === 'error' ? 'Could not reach the admin API' : 'Tailscale connection lost'
+        }
+        error={status === 'error' ? error : TAILSCALE_CONNECTION_LOST}
+        onRetry={() => void refresh()}
+        className="max-w-md px-5 py-6"
+      />
+    );
+  }
+
+  return <CtaLink href="/login">Sign in</CtaLink>;
 }
 
 export function LandingPage() {
