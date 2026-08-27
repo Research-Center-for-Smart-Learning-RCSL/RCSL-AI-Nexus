@@ -7,6 +7,7 @@ import { Logo } from '@/components/composed/logo';
 import { ThemeToggle } from '@/components/composed/theme-toggle';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { useSession } from '@/lib/session';
+import { LandingThreeBackdrop } from '@/components/composed/entry-transition';
 
 function PrimaryAction() {
   const { me, status } = useSession();
@@ -58,6 +59,7 @@ export function LandingPage() {
         className="absolute inset-0 bg-[radial-gradient(circle_at_72%_28%,color-mix(in_oklab,var(--primary)_18%,transparent),transparent_34%),radial-gradient(circle_at_18%_78%,color-mix(in_oklab,var(--chart-3)_13%,transparent),transparent_38%)]"
         aria-hidden="true"
       />
+      <LandingThreeBackdrop />
       <div className="absolute top-4 right-4 z-10">
         <ThemeToggle />
       </div>
@@ -71,20 +73,20 @@ export function LandingPage() {
           </div>
         </header>
 
-        <section className="grid items-center gap-12 py-16 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.72fr)]">
+        <section className="grid items-center gap-12 py-8 sm:py-10 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.72fr)] lg:py-14">
           <div className="max-w-3xl">
             <p className="mb-5 font-mono text-xs font-medium tracking-[0.24em] text-primary uppercase">
               Your models. One intelligent gateway.
             </p>
-            <h1 className="font-heading text-5xl leading-[0.98] font-semibold tracking-[-0.055em] text-balance sm:text-6xl lg:text-8xl">
+            <h1 className="font-heading text-5xl leading-[0.98] font-semibold tracking-[-0.055em] text-balance sm:text-6xl xl:text-7xl 2xl:text-8xl">
               AI infrastructure,
               <span className="block text-primary">under your control.</span>
             </h1>
-            <p className="mt-7 max-w-2xl text-lg leading-8 text-muted-foreground sm:text-xl">
+            <p className="mt-5 max-w-2xl text-lg leading-7 text-muted-foreground xl:text-xl xl:leading-8">
               A self-hosted LLM gateway and management platform for secure access,
               observable operations, and models that can grow with your work.
             </p>
-            <div className="mt-9">
+            <div className="mt-6">
               <PrimaryAction />
             </div>
           </div>

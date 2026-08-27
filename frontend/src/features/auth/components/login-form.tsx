@@ -72,6 +72,7 @@ export function LoginForm({ redirectTo = '/dashboard' }: { redirectTo?: string }
             type="email"
             autoComplete="username"
             placeholder="you@example.org"
+            autoFocus
           />
           <FormField
             control={passwordForm.control}

@@ -18,11 +18,17 @@ vi.mock('@/lib/session', async (importOriginal) => {
 });
 
 vi.mock('next/image', () => ({
-  default: ({ alt, priority: _priority, ...props }: React.ImgHTMLAttributes<HTMLImageElement> & { priority?: boolean }) => (
-    // The image optimizer is not part of the landing page's session contract.
-    // eslint-disable-next-line @next/next/no-img-element
-    <img alt={alt} {...props} />
-  ),
+  default: (properties: React.ImgHTMLAttributes<HTMLImageElement> & { priority?: boolean }) => {
+    const imageProperties = { ...properties };
+    const alt = imageProperties.alt ?? '';
+    delete imageProperties.priority;
+    delete imageProperties.alt;
+    return (
+      // The image optimizer is not part of the landing page's session contract.
+      // eslint-disable-next-line @next/next/no-img-element
+      <img alt={alt} {...imageProperties} />
+    );
+  },
 }));
 
 beforeEach(() => {
