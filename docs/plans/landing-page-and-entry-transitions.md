@@ -1,7 +1,6 @@
 # Plan: A Public Landing Page, and Two 3D Entry Transitions
 
-**Status: planned, not built. Nothing in this document describes code that
-exists.** Written 2026-08-26. Every file and line reference below was read at
+**Status: implemented 2026-08-27.** Written 2026-08-26. Every file and line reference below was read at
 that date against `main` at `e8373ca`; line numbers will drift and the
 surrounding reasoning is what should be trusted if they disagree.
 
