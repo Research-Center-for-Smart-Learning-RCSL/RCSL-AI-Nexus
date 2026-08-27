@@ -18,8 +18,14 @@ test('the login curtain plays its real path and releases the form', async ({ pag
 
   // The cover lifting is the signal that something actually rendered — the
   // WebGL scene's first frame, or the CSS fallback on a machine without one.
+  //
+  // Below the tunnel's own watchdog (durationMs + 1800 = 3800ms), not above
+  // it: at 4000ms a first frame that never arrives took the whole curtain with
+  // it at 3800, and this line then failed on a detached element — reporting a
+  // missing test id for what is really a scene that never painted. Anything
+  // under 3800 fails while the cover is still there to be described.
   await expect(page.getByTestId('entry-curtain-cover')).toHaveClass(/opacity-0/, {
-    timeout: 4000,
+    timeout: 3000,
   });
 
   // Gone within its own watchdog ceiling, and the form is usable after it.

@@ -102,6 +102,16 @@ export function AppShell({ children }: { children: ReactNode }) {
     // block here without this file knowing about it. Only the loading state
     // carries the entry curtain; error and lost-tailnet keep their precedence
     // over decoration.
+    //
+    // **The curtain is the second child, and so is the one below.** React
+    // reconciles a fragment's children by position, so keeping the two
+    // branches the same shape is the whole reason one curtain instance spans
+    // both: it is mounted here while the identity is still loading and
+    // *inherited* by the authenticated branch, rather than being remounted
+    // there with its timeline back at zero. Inserting anything ahead of it in
+    // either fragment silently restarts the hold at the moment it should be
+    // ending. `app-shell.entry-transition.test.tsx` asserts node identity
+    // across the transition and fails on exactly that edit.
     return status === 'loading' ? (
       <>
         {gate}
@@ -225,6 +235,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             the same identity the failed call did. */}
         <AssistantDrawer />
       </div>
+      {/* Second child, matching the loading branch above — see the note there.
+          This is not a new curtain; it is the one that mounted while the
+          identity was loading, now told the identity has settled. */}
       <AppEntryTransition sessionSettled />
     </>
   );

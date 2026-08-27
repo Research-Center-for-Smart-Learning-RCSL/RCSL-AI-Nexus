@@ -5,7 +5,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Float, RoundedBox } from '@react-three/drei';
 import * as THREE from 'three';
 
-import type { EntrySceneKind } from './entry-transition';
+import type { EntrySceneKind } from './entry-transition-kind';
 
 type PaletteName = 'light' | 'dark';
 

@@ -7,7 +7,7 @@ import { useTheme } from 'next-themes';
 import { useIsomorphicLayoutEffect, useMediaQuery } from '@/lib/use-media-query';
 import { useReducedMotion } from '@/lib/use-reduced-motion';
 
-export type EntrySceneKind = 'tunnel' | 'layers';
+import type { EntrySceneKind } from './entry-transition-kind';
 
 const DynamicEntryScene = dynamic(
   () => import('./entry-transition-scenes').then((module) => module.EntryScene),
