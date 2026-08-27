@@ -78,12 +78,17 @@ once-per-tab `sessionStorage` gate that Curtain B could reuse for almost
 nothing. This is a decision, not a defect — `plans/landing-page-and-entry-transitions.md`
 §6.3 chose "every entry" and priced it — and it stands.
 
-Not changed: the route sizes recorded above measure one kilobyte below what a
-local Node 26 build reports for the same commits. The differences the entry
-claims — shared JS unchanged, `/dashboard` unchanged, `/login` up five — all
-reproduce exactly, so the deltas are right and only the absolute figures are in
-question, which is a build-environment difference rather than a finding. CI
-builds on Node 22 and is where a re-measurement should come from.
+**Every route size in yesterday's entry was one kilobyte low, and the shared
+line described a rise that never happened.** The review first read this as a
+build-environment difference — the figures were being checked on a local Node
+26 against a CI that builds on Node 22 — and it was not one: CI's own build of
+`4bb8ada` reports `/` 146 kB, `/dashboard` 158 kB, `/login` 173 kB and shared
+103 kB, to the kilobyte what the local build reports. The pre-3D baseline is
+one low the same way, so every delta the entry claims survives and only the
+absolutes were wrong. The one claim that does not survive is that shared first
+load rose from 102 kB to 103 kB: it was already 103 kB, and the split cost the
+shared bundle nothing. A number that is only ever transcribed is a number
+nobody re-measures; the corrected figures are now the ones CI prints.
 
 Verified: TypeScript, ESLint with zero warnings, a production Next build, all
 seven Playwright paths, and **416 Vitest tests across 53 files** (412 across 52
@@ -124,9 +129,15 @@ retains its place, and Playwright runs with reduced motion so the decorative
 layer cannot intercept existing browser paths.
 
 **The measured bundle is larger than the estimate in the plan.** Before the
-3D work the shared first load was 102 kB, `/login` 167 kB and `/dashboard`
-157 kB. After it, shared is 103 kB, `/login` 172 kB, `/dashboard` remains
-157 kB, and `/` is 144 kB. The four dynamically loaded scene chunks are
+3D work the shared first load was 103 kB, `/login` 168 kB and `/dashboard`
+158 kB. After it, shared **remains** 103 kB, `/login` is 173 kB, `/dashboard`
+remains 158 kB, and `/` is 146 kB. (These six figures each read one kilobyte
+lower here until 2026-08-28, and the shared line claimed a 102→103 rise that
+never happened — the 3D work costs no shared JavaScript at all. The deltas
+were right and only the absolutes were wrong, which is exactly the shape of
+error a figure transcribed once and never re-measured takes. Corrected against
+the CI build of `4bb8ada` on Node 22, which is the environment that ships.)
+The four dynamically loaded scene chunks are
 888.2 kB raw / **237.9 kB gzip** together. That is materially above the rough
 150 kB expectation; it remains off the server render and ordinary first-load
 route table, but it is the cost paid when a curtain or landing scene actually
