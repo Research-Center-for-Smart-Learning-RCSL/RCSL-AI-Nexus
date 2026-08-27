@@ -5,8 +5,18 @@ import { FlatCompat } from "@eslint/eslintrc";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const nextConfigDirectory = dirname(
+  fileURLToPath(import.meta.resolve('eslint-config-next/package.json')),
+);
 
-const compat = new FlatCompat({ baseDirectory: __dirname });
+// FlatCompat otherwise resolves legacy plugins from the project root. pnpm
+// correctly keeps eslint-config-next's plugins beside that package, so point
+// the resolver at the dependency that declares them instead of relying on a
+// hoisted node_modules layout that pnpm does not promise.
+const compat = new FlatCompat({
+  baseDirectory: __dirname,
+  resolvePluginsRelativeTo: nextConfigDirectory,
+});
 
 const eslintConfig = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
