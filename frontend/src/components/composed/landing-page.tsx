@@ -31,6 +31,22 @@ function PrimaryAction() {
         <Button size="lg" disabled className="min-w-44">
           Loading
         </Button>
+        {/* This branch is what the prerendered HTML contains: the session is
+            always unresolved at build time, so the static ‘/’ carries a
+            disabled control and no way in. With scripting the state resolves
+            in a few hundred milliseconds and this markup is never seen; with
+            scripting blocked or failed it is the whole page, and the one
+            public door to the platform would otherwise be a button that never
+            enables. Sign in is the right guess for a reader we know nothing
+            about — an existing session lands them past the form anyway. */}
+        <noscript>
+          <Link
+            href="/login"
+            className={buttonVariants({ size: 'lg', className: 'min-w-44' })}
+          >
+            Sign in
+          </Link>
+        </noscript>
       </div>
     );
   }

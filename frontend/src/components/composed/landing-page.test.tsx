@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { AuthMode, Me, SessionStatus } from '@/lib/session';
 import { LandingPage } from './landing-page';
@@ -25,6 +26,12 @@ vi.mock('@/lib/session', async (importOriginal) => {
     useSession: () => state,
   };
 });
+
+// The decorative WebGL panel needs a GPU and is not part of what this page
+// promises a visitor; the gate in front of it has its own suite.
+vi.mock('./entry-transition', () => ({
+  LandingThreeBackdrop: () => null,
+}));
 
 vi.mock('next/image', () => ({
   default: (properties: React.ImgHTMLAttributes<HTMLImageElement> & { priority?: boolean }) => {
@@ -54,6 +61,19 @@ describe('the public landing page action', () => {
     expect(screen.getByText('Checking your access…')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /sign in/i })).toBeNull();
     expect(screen.queryByRole('link', { name: /console/i })).toBeNull();
+  });
+
+  it('offers a way in to a reader whose scripting never runs', () => {
+    // `/` is prerendered, and the session is unresolved at build time, so the
+    // loading branch above *is* the static HTML. Rendering it the way the
+    // build does is the only way to see what a reader without working
+    // scripting is left holding: before this, a disabled button and nothing
+    // else, on the platform's one public door.
+    const markup = renderToStaticMarkup(<LandingPage />);
+
+    expect(markup).toContain('<noscript>');
+    expect(markup).toMatch(/<noscript>[\s\S]*href="\/login"[\s\S]*<\/noscript>/);
+    expect(markup).toMatch(/<noscript>[\s\S]*Sign in[\s\S]*<\/noscript>/);
   });
 
   it('sends an anonymous visitor to sign in', () => {

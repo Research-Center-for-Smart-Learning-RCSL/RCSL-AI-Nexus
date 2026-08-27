@@ -64,8 +64,12 @@
 }
 
 /* The pre-hydration cover has no JavaScript watchdog by definition, so CSS
-   itself removes it. The 4s delay matches the JS watchdog's floor; in normal
-   operation hydration replaces this layer within the first frames. */
+   itself removes it. The 4s delay clears the JS watchdog's ceiling for both
+   curtains — 3.8s for the 2s tunnel, 3.4s for the 1.6s dive, from
+   `Math.max(durationMs + 1800, 3200)` — so hydration that arrives at all is
+   always the layer that lifts this one, and this animation only ever fires
+   when hydration is not coming. In normal operation the layer is replaced
+   within the first frames. */
 .nexus-entry-precover {
   animation: nexus-precover-timeout 300ms ease-out 4s forwards;
 }
