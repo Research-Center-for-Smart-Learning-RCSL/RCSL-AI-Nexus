@@ -2,16 +2,19 @@
 
 import { useEffect, useMemo, useRef } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Float } from '@react-three/drei';
+import { Float, RoundedBox } from '@react-three/drei';
 import * as THREE from 'three';
 
 import type { EntrySceneKind } from './entry-transition';
 
 type PaletteName = 'light' | 'dark';
 
+// `wash` is the tunnel's destination orb. In dark it is near-white against the
+// void; in light a white orb vanished into the white page, so the destination
+// is the brand blue there instead.
 const PALETTES = {
   dark: { background: '#090d16', line: '#67e8f9', glow: '#dffcff', wash: '#f8fafc' },
-  light: { background: '#f7f9ff', line: '#1e40af', glow: '#60a5fa', wash: '#ffffff' },
+  light: { background: '#f7f9ff', line: '#1e40af', glow: '#60a5fa', wash: '#3b82f6' },
 } satisfies Record<PaletteName, Record<string, string>>;
 
 const SHELL_COUNT = 6;
@@ -36,7 +39,10 @@ export function layerCameraZ(progress: number): number {
 }
 
 export function shellTransform(progress: number, index: number) {
-  const passed = Math.max(0, Math.min(1, progress * SHELL_COUNT - index));
+  const linear = Math.max(0, Math.min(1, progress * SHELL_COUNT - index));
+  // Smoothstep: each shell starts and ends its sweep without a jolt, instead
+  // of snapping into linear motion the frame the camera reaches it.
+  const passed = linear * linear * (3 - 2 * linear);
   const direction = index % 2 ? -1 : 1;
   return {
     rotationZ: passed * direction * 0.8,
@@ -166,17 +172,26 @@ function Tunnel({
 
   return (
     <>
+      {/* Elliptical rings rather than four bars: the bars met at corners that
+          read as broken joints when a ring passed close to the camera, and a
+          continuous curve has no joints to break. The alternating twist keeps
+          the depth readable. */}
       {rings.map((z, index) => (
-        <group key={z} position={[0, 0, z]} rotation={[0, 0, index % 2 ? 0.035 : -0.035]}>
-          <GlowBar position={[0, 3.2, 0]} scale={[5.4, 0.055, 0.055]} color={palette.line} />
-          <GlowBar position={[0, -3.2, 0]} scale={[5.4, 0.055, 0.055]} color={palette.line} />
-          <GlowBar position={[5.35, 0, 0]} scale={[0.055, 3.2, 0.055]} color={palette.line} />
-          <GlowBar position={[-5.35, 0, 0]} scale={[0.055, 3.2, 0.055]} color={palette.line} />
+        <group
+          key={z}
+          position={[0, 0, z]}
+          rotation={[0, 0, index % 2 ? 0.06 : -0.06]}
+          scale={[1.66, 1, 1]}
+        >
+          <GlowRing radius={3.35} tube={0.05} color={palette.line} />
         </group>
       ))}
       <mesh position={[0, 0, -48]}>
         <sphereGeometry args={[2.6, 24, 24]} />
-        <meshBasicMaterial color={palette.wash} toneMapped={false} />
+        {/* fog={false}: this is the light at the end of the tunnel, and letting
+            the fog dim it left a grey ball where the destination should read as
+            bright from the first frame. */}
+        <meshBasicMaterial color={palette.wash} toneMapped={false} fog={false} />
       </mesh>
       <fog attach="fog" args={[palette.background, 8, 32]} />
     </>
@@ -222,8 +237,9 @@ function LayerDive({
     <>
       {shells.map((z, index) => (
         <group key={z} ref={(node) => { groups.current[index] = node; }} position={[0, 0, z]}>
-          <mesh>
-            <boxGeometry args={[11, 7, 0.16]} />
+          {/* Rounded like every card in the interface it opens onto; a sharp
+              slab read as a pane of glass from a different product. */}
+          <RoundedBox args={[11, 7, 0.16]} radius={0.55} smoothness={4}>
             <meshBasicMaterial
               color={palette.line}
               transparent
@@ -231,7 +247,7 @@ function LayerDive({
               blending={THREE.AdditiveBlending}
               depthWrite={false}
             />
-          </mesh>
+          </RoundedBox>
           {Array.from({ length: 7 }, (_, line) => (
             <GlowBar key={`h-${line}`} position={[0, -3 + line, 0.11]} scale={[5.3, 0.012, 0.012]} color={palette.glow} />
           ))}
@@ -280,29 +296,96 @@ export function EntryScene({
   );
 }
 
+function GlowRing({
+  radius,
+  color,
+  tube = 0.02,
+}: {
+  radius: number;
+  color: string;
+  tube?: number;
+}) {
+  return (
+    <>
+      <mesh>
+        <torusGeometry args={[radius, tube, 12, 96]} />
+        <meshBasicMaterial color={color} toneMapped={false} />
+      </mesh>
+      <mesh>
+        <torusGeometry args={[radius, tube * 2.5, 12, 96]} />
+        <meshBasicMaterial
+          color={color}
+          transparent
+          opacity={0.16}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </mesh>
+    </>
+  );
+}
+
+/**
+ * Writes depth only, no colour, over the footprint of the landing panel's CSS
+ * icon card (192px square, rotated 6deg clockwise, centred). The canvas sits
+ * above that card in the DOM, so this mask is what hands occlusion back to the
+ * 3D scene: an orbit's rear arc is swallowed here while its front arc draws
+ * over the icons, which is what makes the rings read as wrapping the card
+ * rather than sliding beneath it. Sized from the render height because the
+ * camera shows a fixed world height regardless of panel pixel size.
+ */
+function CardDepthMask() {
+  const { camera, size } = useThree();
+  const worldHeight =
+    2 * camera.position.z * Math.tan(((camera as THREE.PerspectiveCamera).fov * Math.PI) / 360);
+  const side = (192 / size.height) * worldHeight;
+  return (
+    <mesh rotation={[0, 0, -0.105]} scale={[side, side, 1]} renderOrder={-1}>
+      <boxGeometry args={[1, 1, 0.9]} />
+      <meshBasicMaterial colorWrite={false} />
+    </mesh>
+  );
+}
+
+// Tilts near edge-on read as orbits; speeds and phases are mutually irrational
+// enough that the composition never visibly repeats.
+const ORBITS = [
+  { radius: 2.9, tilt: [1.45, 0.0], speed: 0.31, phase: 0 },
+  { radius: 3.7, tilt: [1.15, 0.35], speed: -0.24, phase: 2.1 },
+  { radius: 4.5, tilt: [1.5, -0.3], speed: 0.19, phase: 4.2 },
+  { radius: 5.3, tilt: [0.95, 0.6], speed: -0.16, phase: 1.3 },
+  { radius: 6.1, tilt: [1.3, -0.55], speed: 0.13, phase: 3.4 },
+] as const;
+
 function LandingGeometry({ theme }: { theme: PaletteName }) {
   const group = useRef<THREE.Group>(null);
+  const rings = useRef<Array<THREE.Group | null>>([]);
   const palette = PALETTES[theme];
+
   useFrame(({ clock }) => {
-    if (!group.current) return;
-    group.current.rotation.z = clock.elapsedTime * 0.035;
-    group.current.rotation.x = Math.sin(clock.elapsedTime * 0.2) * 0.08;
+    const t = clock.elapsedTime;
+    group.current?.rotation.set(0, 0, t * 0.02);
+    rings.current.forEach((ring, index) => {
+      if (!ring) return;
+      const { tilt, speed, phase } = ORBITS[index];
+      ring.rotation.x = tilt[0] + Math.sin(t * speed + phase) * 0.14;
+      ring.rotation.y = tilt[1] + Math.cos(t * speed * 0.8 + phase) * 0.12;
+    });
   });
 
   return (
-    <Float speed={0.7} rotationIntensity={0.12} floatIntensity={0.25}>
-      <group ref={group} position={[3.2, 0.2, 0]} rotation={[0.8, 0.1, 0.15]}>
-        {Array.from({ length: 7 }, (_, index) => {
-          const size = 2.2 + index * 0.75;
-          return (
-            <group key={size} position={[0, 0, -index * 0.45]}>
-              <GlowBar position={[0, size * 0.62, 0]} scale={[size, 0.018, 0.018]} color={palette.line} />
-              <GlowBar position={[0, -size * 0.62, 0]} scale={[size, 0.018, 0.018]} color={palette.line} />
-              <GlowBar position={[size, 0, 0]} scale={[0.018, size * 0.62, 0.018]} color={palette.line} />
-              <GlowBar position={[-size, 0, 0]} scale={[0.018, size * 0.62, 0.018]} color={palette.line} />
-            </group>
-          );
-        })}
+    <Float speed={0.7} rotationIntensity={0.1} floatIntensity={0.2}>
+      {/* Centered: the canvas fills the landing panel, so these orbit the icon
+          card the panel carries. Rings rather than frames — continuous curves
+          around the card's rounded corners, where rectangles of straight bars
+          read as stray sticks whenever the rotation caught them edge-on. */}
+      <group ref={group}>
+        {ORBITS.map((orbit, index) => (
+          <group key={orbit.radius} ref={(node) => { rings.current[index] = node; }}>
+            <GlowRing radius={orbit.radius} color={palette.line} />
+          </group>
+        ))}
       </group>
     </Float>
   );
@@ -322,10 +405,14 @@ export function LandingScene({
       dpr={[1, 1.35]}
       frameloop={animating ? 'always' : 'never'}
       camera={{ position: [0, 0, 12], fov: 52 }}
-      gl={{ antialias: false, alpha: true, powerPreference: 'high-performance' }}
+      // Antialiased, unlike the curtains: these lines are a third the width of
+      // the tunnel's, and without MSAA they alias into broken dashes. The
+      // canvas is one panel, not a viewport, so the cost stays small.
+      gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
       fallback={null}
     >
       <ContextLossGuard onContextLost={onContextLost} />
+      <CardDepthMask />
       <LandingGeometry theme={theme} />
     </Canvas>
   );
