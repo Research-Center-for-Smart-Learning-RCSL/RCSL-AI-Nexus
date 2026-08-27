@@ -31,7 +31,7 @@ function ErrorLine({ message }: { message: string | null }) {
  * message never distinguishes an unknown login from a wrong password; the hook
  * collapses every failure to one constant.
  */
-export function LoginForm({ redirectTo = '/' }: { redirectTo?: string }) {
+export function LoginForm({ redirectTo = '/dashboard' }: { redirectTo?: string }) {
   const login = useLogin(redirectTo);
   const [useRecoveryCode, setUseRecoveryCode] = useState(false);
 
