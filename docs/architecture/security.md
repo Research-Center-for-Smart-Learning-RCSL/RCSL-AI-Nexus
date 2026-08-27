@@ -1374,3 +1374,15 @@ Recorded explicitly so they are not later mistaken for oversights, with the cond
 **Reconsider when.** Any of: FileVault is enabled and this stops being a plaintext-on-an-unencrypted-disk question; a second person operates the platform, since a shared credential to one person's mailbox is a different proposition; or the alerting grows beyond the health daemon, at which point a dedicated account costs no more than the second consumer would. Rotating it is one revocation and one file, so this is cheap to reverse and should be reversed rather than argued about if the situation changes.
 
 **Status.** In force since 2026-07-26. Verified by delivering all three mail kinds — baseline, failure and recovery — to the live mailbox.
+
+### 15.8 The Public Landing Page Shows an Admin API Error to an Anonymous Reader
+
+**Situation.** `/` became a public, session-aware page on 2026-08-27. It reads `useSession()`, and when the `/admin/me` call fails with anything other than a 401 it renders `ErrorState`, whose body is `describeError(error)` — the API's own message, unparaphrased. Before this the same component only ever rendered behind the shell, on routes an unauthenticated reader is redirected away from. It is now among the first things an anonymous visitor from the internet can see when the admin entrance is unwell.
+
+**Why accepted.** The message is not new text written for this page; it is whatever the backend chose to return, and §5 of [backend.md](./backend.md) is where that choice is made and constrained. Error bodies there are already written for a possibly-unauthenticated audience, because `/login` is public and has always rendered these same states from this same component. What changed on 2026-08-27 is the route, not the disclosure. The alternative — a generic "something went wrong" on `/` alone — splits one failure across two vocabularies and makes the public page the one place a reader cannot tell an unreachable API from a refused call, which is the distinction the panel exists to draw.
+
+**What carries the load.** The backend deciding disclosure at the point of the error, and the 401 path never reaching this branch: an ordinary unauthenticated visitor is `status === 'unauthenticated'`, which renders Sign in and no diagnosis at all. Only a non-401 failure — the admin API down, unreachable, or answering 5xx — reaches `ErrorState` here. `landing-page.test.tsx` pins which session state renders which action.
+
+**Reconsider when.** A non-401 failure starts returning messages that name internal hosts, filesystem paths or dependency versions. That is worth fixing at the source rather than by hiding it at `/`, because `/login` would be showing the same string to the same reader.
+
+**Status.** In force since 2026-08-27, recorded 2026-08-28 with the landing page's follow-up pass.
