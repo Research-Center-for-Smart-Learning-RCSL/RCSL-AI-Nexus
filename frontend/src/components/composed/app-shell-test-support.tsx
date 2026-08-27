@@ -48,6 +48,12 @@ vi.mock('@/features/assistant/context', () => ({
   useAssistantContext: () => ({ isOpen: false, setOpen: vi.fn() }),
 }));
 
+// Entry timing has its own suite. Navigation tests should observe the shell
+// after the decorative curtain has resolved.
+vi.mock('@/components/composed/entry-transition', () => ({
+  AppEntryTransition: () => null,
+}));
+
 const session = {
   me: {
     id: 'u1',
