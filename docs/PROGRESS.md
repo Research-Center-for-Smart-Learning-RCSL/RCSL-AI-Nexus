@@ -15,6 +15,93 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-27 — A public front door, and two entry curtains that cannot hold the application hostage
+
+The management UI has a public home page now. `/` is a one-screen,
+session-aware landing page; the Dashboard moved to `/dashboard`, and every
+default login, invitation continuation, navigation entry and route-guard test
+moved with it. The coupling worth recording is the guard: it matches the
+navigation catalogue's own hrefs to withhold a forbidden page before its data
+hooks mount. Moving the file without moving that href would have restored the
+two `authz.denied` audit rows a plain member used to write on every sign-in.
+The catalogue test now pins the href to the page that actually owns the route.
+The desktop mark and compact header both link home.
+
+Two independent entry curtains implement the plan in
+`plans/landing-page-and-entry-transitions.md`. The login entrance is a
+two-second emissive depth tunnel, once per tab session and never after a
+`next=...` bounce. The authenticated shell is a 1.6-second dive through six
+translucent grid layers on every entry. It owns a timeline independent of the
+session query, waits for both its minimum duration and settled identity. Either
+curtain can be aborted immediately by any key or pointer input. Error,
+lost-tailnet and redirect-to-login states retain precedence over decoration.
+
+The rendering stack is `three@0.185.1`, R3F `9.7.0` and drei `10.7.8`; their
+published peers were checked at install time against React 19.2.4. Both scenes
+use theme-specific light and dark palettes and additive geometry for glow, not
+a post-processing pass. `prefers-reduced-motion` mounts no curtain, missing or
+slow WebGL falls to a roughly 400 ms CSS perspective reveal, scene exceptions
+and context loss take the same path, and a hard watchdog removes the fixed
+cover even if no renderer callback arrives. The login field keeps focus and the
+first keystroke lifts the cover over it, the shell's skip-to-content link
+retains its place, and Playwright runs with reduced motion so the decorative
+layer cannot intercept existing browser paths.
+
+**The measured bundle is larger than the estimate in the plan.** Before the
+3D work the shared first load was 102 kB, `/login` 167 kB and `/dashboard`
+157 kB. After it, shared is 103 kB, `/login` 172 kB, `/dashboard` remains
+157 kB, and `/` is 144 kB. The four dynamically loaded scene chunks are
+888.2 kB raw / **237.9 kB gzip** together. That is materially above the rough
+150 kB expectation; it remains off the server render and ordinary first-load
+route table, but it is the cost paid when a curtain or landing scene actually
+loads. Removing the small drei helper would not recover the difference, and
+dropping R3F would still leave current three itself above the old estimate, so
+the decided stack remains and the real figure is recorded rather than hidden.
+
+**The watchdog did not work, and the first version of this entry claimed it
+did.** Every caller passes `onComplete` as an inline closure, so its identity
+changed on each render of the parent. That identity was a dependency of the
+effect holding the watchdog timer, which meant any re-render of the shell tore
+the timer down and started it again from zero. A shell re-rendering faster than
+the timeout, with a session that never settles, is exactly the case the watchdog
+exists for, and it was the case in which the opaque cover stayed on screen
+indefinitely. This was established by test before it was fixed: fifty re-renders
+at 200 ms intervals against a 3400 ms watchdog left the curtain mounted. The
+callback now reaches `finish` through a ref, `finish` has no dependencies, and
+that scenario is a regression test.
+
+Three further faults were closed with it. The login curtain was not skippable,
+so two seconds of opaque cover sat over an autofocused email field with no way
+out; it is now dismissed by the same first keystroke or pointer press as the
+shell's, which is also what keeps keyboard and screen-reader users from being
+held behind a cover that makes nothing beneath it inert. The landing backdrop
+animates for as long as the page is open, but had neither a stop when scrolled
+out of view nor any handling for a lost context, so a dropped context left it
+silently blank; an IntersectionObserver now parks the render loop and the
+context-loss listener that the curtains already had was extracted and given to
+it. And the frame-rate guard that demotes a slow machine sampled the first
+300 ms, which is precisely the window paying for shader compilation and buffer
+upload, so it was most likely to misfire on capable hardware; it now skips a
+450 ms warm-up and samples the 500 ms after it.
+
+**The scene module had no automated coverage at all.** Playwright runs with
+reduced motion, the Vitest environment has no WebGL, and the shell's own suite
+mocks the transition away, so nothing exercised the 266 lines that decide when
+to demote or step aside. The rendering itself still cannot be asserted without a
+GPU, but the parts the curtain's escape hatches depend on now can be: the
+timeline arithmetic is exported and tested directly, and the first-frame signal,
+the frame-rate guard and the context-loss listener are driven through a stubbed
+fiber runtime.
+
+Verified: TypeScript, ESLint with zero warnings, a production Next build with
+the route sizes above unchanged, and **400 Vitest tests across 50 files**.
+Browser inspection at 1280×720 caught and fixed a first draft whose primary
+action fell below the fold; the final page has no document overflow at that
+viewport, the loading/sign-in action is visible, `/login?next=...` mounts no
+curtain, and the login field owns focus.
+
+---
+
 ## 2026-08-25 — Issuing defaults raised, the expiry ceiling moved to ten years, and a deploy that spent an hour on a credential helper rather than a network
 
 The three figures an operator sets when issuing a key were all sized for a
