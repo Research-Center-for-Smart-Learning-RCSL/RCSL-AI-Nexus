@@ -29,3 +29,8 @@ if (typeof window !== 'undefined' && !window.localStorage) {
   };
   Object.defineProperty(window, 'localStorage', { value: storage, configurable: true });
 }
+
+if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
+  const { stubMatchMedia } = await import('./src/test-support/match-media');
+  stubMatchMedia(); // Every query answers false until a test says otherwise.
+}

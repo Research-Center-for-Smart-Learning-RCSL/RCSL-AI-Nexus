@@ -26,6 +26,54 @@
   }
 }
 
+@keyframes nexus-curtain-fallback {
+  from {
+    opacity: 0.15;
+    transform: perspective(900px) translateZ(-180px) scale(0.86);
+  }
+  55% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.7;
+    transform: perspective(900px) translateZ(0) scale(1);
+  }
+}
+
+@keyframes nexus-curtain-exit {
+  to {
+    opacity: 0;
+    transform: scale(1.015);
+  }
+}
+
+.nexus-curtain-fallback > div {
+  animation: nexus-curtain-fallback 400ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+
+.nexus-curtain-exit {
+  pointer-events: none;
+  animation: nexus-curtain-exit 220ms ease-out both;
+}
+
+@keyframes nexus-precover-timeout {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+/* The pre-hydration cover has no JavaScript watchdog by definition, so CSS
+   itself removes it. The 4s delay clears the JS watchdog's ceiling for both
+   curtains — 3.8s for the 2s tunnel, 3.4s for the 1.6s dive, from
+   `Math.max(durationMs + 1800, 3200)` — so hydration that arrives at all is
+   always the layer that lifts this one, and this animation only ever fires
+   when hydration is not coming. In normal operation the layer is replaced
+   within the first frames. */
+.nexus-entry-precover {
+  animation: nexus-precover-timeout 300ms ease-out 4s forwards;
+}
+
 .nexus-spinner {
   --dot: 4.5px;
   --radius: 24.6px;
@@ -54,6 +102,10 @@
 @media (prefers-reduced-motion: reduce) {
   .nexus-spinner {
     animation-duration: 3s;
+  }
+
+  .nexus-entry-curtain {
+    display: none !important;
   }
 }
 

@@ -15,7 +15,7 @@
  * So resolve the value properly and compare origins, rather than reasoning
  * about which prefixes are dangerous.
  */
-export const DEFAULT_REDIRECT = '/';
+export const DEFAULT_REDIRECT = '/dashboard';
 
 export function sameOriginPath(
   requested: string | null | undefined,

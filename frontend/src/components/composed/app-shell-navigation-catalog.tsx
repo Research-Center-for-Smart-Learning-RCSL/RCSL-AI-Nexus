@@ -176,7 +176,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'Insight',
     items: [
       {
-        href: '/',
+        href: '/dashboard',
         label: 'Dashboard',
         icon: <GaugeIcon className="size-4" />,
         requires: 'usage:read_all',
@@ -274,7 +274,6 @@ export const PINNED: NavItem[] = [
 export const NAV: NavItem[] = [...PINNED, ...NAV_GROUPS.flatMap((group) => group.items)];
 
 export function isActive(pathname: string | null, href: string): boolean {
-  if (href === '/') return pathname === '/';
   return pathname?.startsWith(href) ?? false;
 }
 

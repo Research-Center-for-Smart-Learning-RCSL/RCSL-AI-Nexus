@@ -23,18 +23,18 @@ describe('a URL the account has no scope for', () => {
     expect(replace).not.toHaveBeenCalled();
   });
 
-  it('sends a member off the dashboard, which is the index everyone opens', () => {
-    // `/` requires `usage:read_all`, so for a member the landing page is one
+  it('sends a member off the dashboard', () => {
+    // `/dashboard` requires `usage:read_all`, so for a member the page is one
     // they cannot read. Without the guard they would arrive on a 403 rather
     // than anywhere useful.
-    signedInWith(SCOPES.user, '/');
+    signedInWith(SCOPES.user, '/dashboard');
     render(<TestAppShell>content</TestAppShell>);
 
     expect(replace).toHaveBeenCalledWith('/chat');
   });
 
   it('leaves the dashboard alone for someone who can read it', () => {
-    signedInWith(SCOPES.operator, '/');
+    signedInWith(SCOPES.operator, '/dashboard');
     render(<TestAppShell>content</TestAppShell>);
 
     expect(replace).not.toHaveBeenCalled();
@@ -45,7 +45,7 @@ describe('a URL the account has no scope for', () => {
     // rendering the children can. What mounts sends its queries, and each
     // refusal is an `authz.denied` audit row — so before this, every sign-in
     // by a member wrote two, for scopes they were never shown a link to.
-    signedInWith(SCOPES.user, '/');
+    signedInWith(SCOPES.user, '/dashboard');
     render(<TestAppShell>content</TestAppShell>);
 
     expect(replace).toHaveBeenCalledWith('/chat');
@@ -57,5 +57,16 @@ describe('a URL the account has no scope for', () => {
     render(<TestAppShell>content</TestAppShell>);
 
     expect(screen.getByText('content')).toBeInTheDocument();
+  });
+
+  it('offers home links in both desktop and compact shell chrome', () => {
+    signedInWith(SCOPES.operator, '/dashboard');
+    render(<TestAppShell>content</TestAppShell>);
+
+    const homeLinks = screen.getAllByRole('link', {
+      name: 'RCSL AI Nexus, home',
+    });
+    expect(homeLinks).toHaveLength(2);
+    expect(homeLinks.every((link) => link.getAttribute('href') === '/')).toBe(true);
   });
 });
