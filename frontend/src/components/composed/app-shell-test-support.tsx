@@ -30,7 +30,7 @@ import type { ScopeName } from '@/lib/session';
  */
 
 export const replace = vi.fn();
-let pathname = '/';
+let pathname = '/dashboard';
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace }),
@@ -46,6 +46,12 @@ vi.mock('@/features/assistant/components/assistant-drawer', () => ({
 vi.mock('@/features/assistant/context', () => ({
   AssistantContextProvider: ({ children }: { children: ReactNode }) => children,
   useAssistantContext: () => ({ isOpen: false, setOpen: vi.fn() }),
+}));
+
+// Entry timing has its own suite. Navigation tests should observe the shell
+// after the decorative curtain has resolved.
+vi.mock('@/components/composed/entry-transition', () => ({
+  AppEntryTransition: () => null,
 }));
 
 const session = {
@@ -91,16 +97,16 @@ vi.mock('@/lib/session', async (importOriginal) => {
 // the expected list beside it. Generation removes the copy, not the check.
 export const SCOPES: Record<string, readonly ScopeName[]> = ROLE_SCOPES;
 
-export function signedInWith(scopes: readonly ScopeName[] | undefined, at = '/') {
+export function signedInWith(scopes: readonly ScopeName[] | undefined, at = '/dashboard') {
   session.me.scopes = scopes ? [...scopes] : undefined;
   pathname = at;
 }
 
 export function sidebarLinks(): string[] {
-  // The sidebar is the `complementary` landmark; the narrow-screen panel is a
-  // dialog and is asserted separately, so this cannot accidentally read both.
+  // Scope this to the navigation landmark: the sidebar also contains the home
+  // logo link, which is shell chrome rather than a screen catalog entry.
   const aside = screen.getByRole('complementary');
-  return within(aside)
+  return within(within(aside).getByRole('navigation', { name: 'Screens' }))
     .getAllByRole('link')
     .map((a) => a.textContent?.trim() ?? '');
 }

@@ -25,6 +25,13 @@ export function AppShellHeader({ navButtonRef, navOpen, setNavOpen, me, authMode
               >
                 <MenuIcon />
               </Button>
+              <Link
+                href="/"
+                aria-label="RCSL AI Nexus, home"
+                className="shrink-0 rounded-sm font-heading text-sm font-semibold tracking-tight focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:hidden"
+              >
+                AI Nexus
+              </Link>
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">{me.display_name}</p>
                 {/* The role as it is named to people, not as the wire spells
