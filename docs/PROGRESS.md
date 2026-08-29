@@ -15,6 +15,62 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-30 — The platform now hands over the tools it tells people to run
+
+Asked whether the scripts could be downloaded from the site, the answer turned
+out to be no, and not in a way anybody would have noticed. The management UI
+carried a copy-paste `Invoke-WebRequest` of
+`github.com/.../archive/refs/heads/main.zip`, and that was the whole of the
+distribution story: nothing under `backend/app` served a file, `frontend/public`
+held six SVGs and a logo, and no release had ever been published.
+
+The snippet worked. The repository is public, which was checked rather than
+assumed. But it fetched a deployment's worth of files to deliver five; it named
+`main`, so two operators following the same page on different days ran different
+code and neither could say which; it offered no integrity check beyond an
+instruction to read the scripts first; and it sent somebody who trusts this
+platform to a different origin for a program that would hold their API key. The
+runbook already conceded the shape of this, in a sentence recommending that an
+organization needing immutable distribution publish a signed versioned asset.
+
+`GET /admin/client-tools/windows-codex-app` now serves them as a zip, from the
+image the deployment is running, over the origin and session the operator is
+already signed in to, and it requires that session. It sits beside
+`gateway_info` in the composition because it answers the second half of the same
+question: that route says where to send a key, this one hands over the thing
+that puts the key into a client. The operator path also stops depending on the
+repository staying public.
+
+The awkward part was the build context. The scripts live at
+`scripts/windows/codex-app`, outside `./backend`, and one copy of them is the
+point: moving them under the backend would make operator tools into backend
+code, and copying them would guarantee drift. Widening the context to the
+repository root would drag `frontend/node_modules` into every image build. A
+named build context reaches exactly that directory and nothing else, so the
+Dockerfile copies from `client_tools` and Compose supplies it. `docker build
+./backend` on its own no longer works, which the Dockerfile says in the place
+somebody would hit it.
+
+The archive is built deterministically, and the reason that is worth doing is
+the reason it was worth checking. Built from a Windows checkout and inside the
+Linux image, the five files were byte-identical, the archives were the same
+length, and the hashes differed: `ZipInfo` takes `create_system` from whatever
+built it, 0 for MS-DOS and 3 for Unix, one byte per entry in the central
+directory and no change to the length at all. Pinning it makes an archive built
+from a checkout equal to the one the deployment serves, which is what lets
+anybody verify the claim. A same-process determinism test passes on either
+machine and would never have found it; the test that would have, and now does,
+asserts every field a zip takes from its host.
+
+Verified rather than described: the image was built and the files inspected
+inside it, the resolver found them at the image path, the archive hashed
+identically from the checkout and from the container, the integration test
+drove the real ASGI app against a real Postgres and got a valid zip back, and
+the platform-independence test was checked against its own defect by removing
+the fix and watching it fail.
+
+---
+
 ## 2026-08-29 — A review of the day's own work found four more, and one of them was the lesson the day had already learned
 
 An adversarial pass over the branch produced nine findings. Eight were real and

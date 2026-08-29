@@ -6,6 +6,19 @@ type CodexConfigurationSectionProps = {
   agentCapability: string;
 };
 
+/**
+ * Same-origin on purpose. `next.config.js` forwards `/admin/:path*` to the
+ * admin API keeping the prefix, so the browser's session cookie goes with it
+ * and the bytes come from the deployed image.
+ *
+ * This replaced a copy-paste `Invoke-WebRequest` of the whole repository
+ * archive from GitHub `main`, which delivered a deployment's worth of files to
+ * get four, named no version anybody could refer to, and sent an operator who
+ * trusts this platform to a different origin for a script that will hold their
+ * key. `tests/unit/test_route_prefix.py` pins the path.
+ */
+const CLIENT_TOOLS_DOWNLOAD_PATH = '/admin/client-tools/windows-codex-app';
+
 export function CodexConfigurationSection({ baseUrl, agentCapability }: CodexConfigurationSectionProps) {
   return (
 <section className="space-y-3">
@@ -61,21 +74,26 @@ export function CodexConfigurationSection({ baseUrl, agentCapability }: CodexCon
           </Step>
 
           <Step n={2} title="Download the Windows switcher or install the CLI">
-            <CodeBlock
-              code={String.raw`$archive = Join-Path $env:TEMP 'RCSL-AI-Nexus-main.zip'
-$toolsRoot = Join-Path $env:LOCALAPPDATA 'RCSL-AI-Nexus\client-tools'
-Invoke-WebRequest 'https://github.com/Research-Center-for-Smart-Learning-RCSL/RCSL-AI-Nexus/archive/refs/heads/main.zip' -OutFile $archive
-Expand-Archive -LiteralPath $archive -DestinationPath $toolsRoot -Force`}
-              label="Copy (download Windows App tools)"
-            />
+            <p>
+              <a
+                className="inline-flex items-center rounded-md border border-border bg-muted/40 px-3 py-2 font-medium underline underline-offset-2"
+                download
+                href={CLIENT_TOOLS_DOWNLOAD_PATH}
+              >
+                Download the Windows App tools (.zip)
+              </a>
+            </p>
+            <p>
+              Served by this deployment, from the revision it is running, over
+              the session you are already signed in to. Unzip it anywhere you
+              can read, and inspect the scripts before running them: they will
+              hold your API key.
+            </p>
             <CodeBlock code={'npm install -g @openai/codex'} label="Copy (CLI)" />
             <p>
-              The first command downloads the published repository archive to a
-              user-local tools directory, so it does not assume the operator can
-              read the deployment repository. Inspect the downloaded scripts
-              before running them. The switcher installs the Store App
-              automatically when it is absent. Node.js is required only for the
-              separately installed CLI. OpenAI publishes the{' '}
+              The switcher installs the Store App automatically when it is
+              absent. Node.js is required only for the separately installed CLI.
+              OpenAI publishes the{' '}
               <a
                 className="underline underline-offset-2"
                 href="https://learn.chatgpt.com/docs/windows/windows-app#download-the-chatgpt-desktop-app"
@@ -167,7 +185,7 @@ wire_api = "responses"`}
             />
             <CodeBlock
               code={
-                String.raw`powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\RCSL-AI-Nexus\client-tools\RCSL-AI-Nexus-main\scripts\windows\codex-app\Start-CodexAppSwitcher.ps1"`
+                String.raw`powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\RCSL-AI-Nexus\client-tools\Start-CodexAppSwitcher.ps1"`
               }
               label="Copy (Windows App switcher)"
             />
