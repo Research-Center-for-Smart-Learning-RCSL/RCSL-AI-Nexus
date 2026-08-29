@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import zipfile
+from io import BytesIO
+
 from fastapi.testclient import TestClient
 
 from tests.integration.admin_api_end_to_end_fixtures import (
@@ -226,6 +229,32 @@ def test_an_expiry_in_the_past_is_refused(admin: TestClient) -> None:
     )
 
     assert refused.status_code == 409
+
+
+def test_the_windows_tools_download_from_the_platform_that_issued_the_key(
+    admin: TestClient,
+) -> None:
+    """The other half of the same answer as `/admin/gateway`.
+
+    That one says where to send a key; this hands over the scripts that put the
+    key into the Windows App. It is served here rather than as a link to a
+    GitHub branch so that the bytes come from the deployed image, over the
+    origin and session the operator is already trusting, and so that the
+    operator path does not quietly break if the repository stops being public.
+    """
+    response = admin.get("/admin/client-tools/windows-codex-app")
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/zip"
+    assert "rcsl-codex-app-tools.zip" in response.headers["content-disposition"]
+
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        assert archive.testzip() is None
+        names = set(archive.namelist())
+
+    # The switcher without the module it imports is a download that fails on the
+    # operator's machine rather than here.
+    assert {"Start-CodexAppSwitcher.ps1", "CodexAppSwitcher.Common.psm1"} <= names
 
 
 def test_the_gateway_endpoint_tells_the_ui_where_to_send_a_key(admin: TestClient) -> None:

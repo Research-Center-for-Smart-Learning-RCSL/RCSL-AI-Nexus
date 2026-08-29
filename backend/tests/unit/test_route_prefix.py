@@ -38,6 +38,9 @@ FRONTEND_PATHS = [
     "/admin/assistant",
     "/admin/invitations",
     "/admin/password-resets",
+    # The agent-setup page links this directly, so a rename here is a broken
+    # download link rather than a failing call somebody sees in a console.
+    "/admin/client-tools/windows-codex-app",
 ]
 
 

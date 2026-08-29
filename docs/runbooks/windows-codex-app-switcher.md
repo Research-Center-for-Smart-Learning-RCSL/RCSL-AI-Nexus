@@ -129,24 +129,34 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass `
   -File .\scripts\windows\codex-app\Start-CodexAppSwitcher.ps1
 ```
 
-Operators following the deployed management UI do not need access to the
-deployment checkout. Download the public source archive into a user-local tools
-directory, inspect the scripts, and launch the extracted copy:
+Operators following the deployed management UI do not need a checkout. Step 2 of
+the agent-setup page links a zip of these scripts, served by the deployment
+itself from `GET /admin/client-tools/windows-codex-app`. Unzip it and launch the
+switcher from wherever it landed:
 
 ```powershell
-$archive = Join-Path $env:TEMP 'RCSL-AI-Nexus-main.zip'
 $toolsRoot = Join-Path $env:LOCALAPPDATA 'RCSL-AI-Nexus\client-tools'
-Invoke-WebRequest `
-  'https://github.com/Research-Center-for-Smart-Learning-RCSL/RCSL-AI-Nexus/archive/refs/heads/main.zip' `
-  -OutFile $archive
-Expand-Archive -LiteralPath $archive -DestinationPath $toolsRoot -Force
+Expand-Archive -LiteralPath "$env:USERPROFILE\Downloads\rcsl-codex-app-tools.zip" `
+  -DestinationPath $toolsRoot -Force
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File `
-  "$toolsRoot\RCSL-AI-Nexus-main\scripts\windows\codex-app\Start-CodexAppSwitcher.ps1"
+  "$toolsRoot\Start-CodexAppSwitcher.ps1"
 ```
 
-The archive tracks `main`; inspect its commit and script contents before use.
-An organization that requires immutable distribution should publish a signed,
-versioned release archive and replace this moving URL with that asset.
+The download comes from the image the deployment is running, over the origin and
+session the operator is already signed in to, and the endpoint requires that
+session. It replaced an `Invoke-WebRequest` of the whole repository archive from
+GitHub `main`, which fetched a deployment's worth of files to deliver five,
+named no version anyone could refer to, and sent somebody who trusts this
+platform to a different origin for a script that will hold their API key. It
+also means the operator path no longer depends on the repository staying public.
+
+The archive is byte-for-byte reproducible: entry order, timestamps, mode and
+originating system are all fixed, so an archive built from a checkout equals the
+one the deployment serves. That was measured across a Windows checkout and the
+Linux image rather than assumed, and the first attempt was not equal.
+
+Inspect the scripts before running them. They will hold an API key, and the fact
+that they arrived over an authenticated origin is provenance, not a warrant.
 
 The GUI shows the detected App version, whether it is running, the user-level
 top-level provider selection, and whether a persistent legacy
