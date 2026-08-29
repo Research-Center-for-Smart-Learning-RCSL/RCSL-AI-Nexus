@@ -102,7 +102,6 @@ Invoke-Check -Name 'Operating system' -Action {
     Add-Check -Name 'Operating system' -Status 'PASS' -Detail ([Environment]::OSVersion.VersionString)
 }
 
-$app = $null
 Invoke-Check -Name 'Codex App installation' -Action {
     $script:app = Get-CodexAppInfo
     if (-not $script:app.Installed) {
@@ -198,11 +197,9 @@ Invoke-Check -Name 'Persistent Nexus key' -Action {
 
 if ($Online) {
     Invoke-Check -Name 'Gateway URL' -Action {
-        $uri = $null
-        if (-not [Uri]::TryCreate($BaseUrl, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne 'https') {
-            throw 'BaseUrl must be an absolute HTTPS URL.'
-        }
-        Add-Check -Name 'Gateway URL' -Status 'PASS' -Detail $uri.AbsoluteUri.TrimEnd('/')
+        # The same normalizer the switch path uses, so a URL the Doctor passes is a
+        # URL a switch will accept.
+        Add-Check -Name 'Gateway URL' -Status 'PASS' -Detail (Get-NormalizedGatewayBaseUrl -BaseUrl $BaseUrl)
     }
 
     Invoke-Check -Name 'DNS resolution' -Action {

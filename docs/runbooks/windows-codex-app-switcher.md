@@ -78,12 +78,18 @@ mode pending the interactive acceptance test in section 7.
 The switcher currently attempts discovery through the `OpenAI.Codex` AppX identity. If AppX
 discovery is unavailable, it derives the package root from the `codex.exe`
 execution alias. Package installation paths contain the App version and must
-never be hard-coded. The Store ID below is documented by OpenAI; the package
-identity, `app\ChatGPT.exe` layout, and direct executable launch are guarded
-implementation assumptions; child-process environment inheritance is an
-unverified project hypothesis. None is an official compatibility contract. The switcher checks that the discovered App
-process appears and that its managed configuration survives startup, then still
-requires the interactive acceptance step in section 7.
+never be hard-coded. The Store ID below is documented by OpenAI.
+
+The package identity and the `app\ChatGPT.exe` layout were observed on one
+Windows 11 machine on 2026-08-29 (`OpenAI.Codex` `26.825.4187.0`, whose
+`AppxManifest.xml` names `app/ChatGPT.exe` as its entry point), which is one
+build on one machine rather than a compatibility contract. Two things remain
+unverified and are the reason section 7 exists: that launching that executable
+directly activates the App the way the Store entry does, since a direct launch
+from `WindowsApps` does not go through package activation; and that the App's
+internal app-server inherits the process-scoped key. The switcher checks that
+the discovered App process appears and that its managed configuration survives
+startup, then still requires the interactive acceptance step in section 7.
 
 When installation is required, the switcher runs the command in OpenAI's
 [Windows App download instructions](https://learn.chatgpt.com/docs/windows/windows-app#download-the-chatgpt-desktop-app):
@@ -156,19 +162,52 @@ does not change the machine or user execution policy.
 The switcher then performs these operations in order:
 
 1. Discover or install the App.
-2. Validate the key against `GET /v1/models` and require the selected
+2. Read `config.toml` and the recovery state, and refuse now if either is a
+   form the switcher will not own. Every refusal that can be decided from the
+   document alone is decided here, before the operator's App is touched, so
+   that a refusal costs nothing.
+3. Validate the key against `GET /v1/models` and require the selected
    capability in the response.
-3. Ask all ChatGPT App windows to close normally.
-4. Refuse to continue if any App process remains after the timeout.
-5. Copy a UTF-8 text snapshot of the pre-switch configuration under
+4. Ask all ChatGPT App windows to close normally.
+5. Refuse to continue if any App process remains after the timeout.
+6. Re-read `config.toml` and repeat the checks. The App rewrites the file as it
+   exits, so the document validated in step 2 is not necessarily the document
+   about to be edited.
+7. Copy a UTF-8 text snapshot of the pre-switch configuration under
    `%LOCALAPPDATA%\RCSL-AI-Nexus\codex-app-switcher\backups`.
-6. Record the original top-level model/provider lines in state without the
+8. Record the original top-level model/provider lines in state without the
    newly entered Nexus API key.
-7. Update the selection and RCSL provider definition with an atomic file move.
-8. Start `ChatGPT.exe` directly with a process-scoped `RCSL_API_KEY`.
-9. Confirm a process under the discovered package path appears and the managed
-   configuration projection survives startup.
-10. Restore the launcher's own process environment immediately.
+9. Update the selection and RCSL provider definition with an atomic file move.
+10. Start `ChatGPT.exe` directly with a process-scoped `RCSL_API_KEY`.
+11. Confirm a process under the discovered package path appears and the managed
+    configuration projection survives startup.
+12. Restore the launcher's own process environment immediately.
+
+### 4.1 What the switcher will not edit
+
+The switcher edits `config.toml` line by line rather than through a TOML
+parser, so it refuses any document whose meaning a line cannot carry. The
+refusals are narrow on purpose, because the documents being refused belong to
+the operator and most of what is in them was written by the App itself.
+
+Accepted, and normal in an App-written file: quoted table headers such as
+`[projects.'c:\dev\my project']` and `[plugins."browser@openai-bundled"]`,
+quoted keys inside tables the switcher does not own, blank lines anywhere,
+array-of-tables headers other than `model_providers`, and any line ending
+convention.
+
+Refused, with the line number and the reason:
+
+| Form | Why |
+|---|---|
+| A multiline string (`"""` or `'''`) | Its content can spell a table header or a `model` key that is not one. |
+| A quoted key in the top-level section, or inside `[model_providers.rcsl_nexus_switcher]` | It can spell `model`, `model_provider`, or a provider field the switcher would then write twice. |
+| A multi-line array in either of those two places | Its continuation lines cannot be told apart from table headers, and a header is what decides where the top-level section ends. |
+| `model_providers` defined inline, through a dotted key, or as an array of tables | The provider table is the only shape the switcher can add to and remove from. |
+| A table nested under `[model_providers.rcsl_nexus_switcher]` | The switcher owns that table and would not preserve a child of it. |
+| A table-header segment written as a basic string containing a backslash escape | Resolving it needs full TOML escape processing; the switcher fails closed rather than miss a provider hiding under an escaped spelling. |
+
+A refusal names the line and what to change. None of them modifies anything.
 
 The switcher relies on the App and its child app-server inheriting the key from
 the directly launched process. Later terminals, unrelated applications, and a
@@ -259,6 +298,34 @@ The doctor reports:
 `-AsJson` emits machine-readable results and exits non-zero if any check is
 `FAIL`.
 
+### 6.1 The suite that runs without an App
+
+The doctor inspects one machine. The configuration handling underneath it is
+covered separately, and that suite is what CI runs:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\scripts\windows\codex-app\Invoke-CodexAppSwitcherTests.ps1
+```
+
+It touches no App, no network, no registry, no `config.toml`, and no recovery
+state; it calls the module's configuration functions directly against fixtures
+in the shape the App writes. It deliberately uses no test framework, because
+the faults it pins were visible only under Windows PowerShell 5.1 with
+`Set-StrictMode -Version Latest`, and that is the host it therefore runs on
+with nothing to install first.
+
+The suite has been checked against the defects it exists to catch: with each of
+them reintroduced one at a time, it fails 11, 12, 3, 7 and 2 of its cases
+respectively. A suite that passes on the broken code proves nothing, and this
+one was measured rather than assumed.
+
+The `windows-client-tools` CI job runs it on `windows-latest`, together with
+PSScriptAnalyzer under
+[`scripts/windows/PSScriptAnalyzerSettings.psd1`](../../scripts/windows/PSScriptAnalyzerSettings.psd1).
+Every other CI job runs on Linux, so before that job existed a green pipeline
+said nothing whatever about this directory.
+
 ## 7. What the doctor cannot prove
 
 An HTTP check can prove the network, perimeter, key, capability, and routing
@@ -288,6 +355,8 @@ screen. Do not retry a `413 context_too_long`, `429 quota_exceeded`, or
 | Symptom | Meaning and action |
 |---|---|
 | App is still running | The normal close path did not finish. Resolve active work and exit from the App or tray; the tool will not force-kill it. |
+| A message names a `config.toml` line and a TOML form | One of the refusals in section 4.1. Nothing was changed and the App was not closed. Edit that line, or keep using the CLI path in [Connect an agent client](./connect-an-agent-client.md). |
+| The same refusal appears only after the App closes | The App rewrote `config.toml` on exit and introduced the form. Report the line: a shape the App itself writes belongs in section 4.1's accepted list, not in its refused one. |
 | App is absent and winget is unavailable | Install Microsoft App Installer or use the Store manually, then retry. |
 | `GET /v1/models` returns 401 | The key is wrong, expired, revoked, or outside its CIDR. The public response deliberately does not distinguish them. |
 | `code` is absent from `/v1/models` | The key does not hold that capability or no routable policy is visible to it. Do not change the App yet. |
@@ -351,9 +420,12 @@ for OpenAI compatibility guarantees. Official pages were rechecked on
 | `CODEX_HOME` controls the state directory used by the CLI, IDE extension, and app-server. | OpenAI documentation | [`CODEX_HOME`](https://learn.chatgpt.com/docs/config-file/environment-variables#core-locations) |
 | Trusted project configuration can override `model`, while project-local provider and auth keys are ignored. | OpenAI documentation | [Project config files](https://learn.chatgpt.com/docs/config-file/config-advanced#project-config-files-codexconfigtoml) and [Configuration precedence](https://learn.chatgpt.com/docs/config-file/config-basic#configuration-precedence) |
 | Custom providers support `base_url`, `env_key`, and `wire_api = "responses"`; `env_key` names an environment variable rather than containing its secret. | OpenAI documentation | [Custom model providers](https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers) and [Configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference) |
-| The switcher assumes the installed App exposes the `OpenAI.Codex` AppX identity, an `app\ChatGPT.exe` executable, or a `codex.exe` alias usable for discovery. | Runtime-checked implementation assumption | Discovery and startup checks in [`CodexAppSwitcher.Common.psm1`](../../scripts/windows/codex-app/CodexAppSwitcher.Common.psm1); not documented by OpenAI and not re-observed during this non-interactive change |
+| The installed App exposes the `OpenAI.Codex` AppX identity and an `app\ChatGPT.exe` executable. | Project measurement, 2026-08-29 | Observed on one Windows 11 machine: `Get-AppxPackage -Name OpenAI.Codex` returned `26.825.4187.0`, and that package's `AppxManifest.xml` names `app/ChatGPT.exe` as the `Windows.FullTrustApplication` entry point. One machine and one build; still not an OpenAI compatibility contract |
+| Direct execution of the packaged executable activates the App as the Store entry does. | Unverified implementation assumption | The path exists and matches the manifest, but a direct launch from `WindowsApps` does not go through package activation. Not exercised by this change |
+| The configuration handling accepts what the App writes and refuses only what a line-oriented edit cannot carry. | Repository implementation, under test | 50 cases in [`Invoke-CodexAppSwitcherTests.ps1`](../../scripts/windows/codex-app/Invoke-CodexAppSwitcherTests.ps1), run by the `windows-client-tools` CI job on Windows PowerShell 5.1, and measured against each reintroduced defect (section 6.1) |
 | A directly launched packaged executable passes `RCSL_API_KEY` through to the App's internal app-server. | Project hypothesis requiring interactive acceptance | Launch code in [`CodexAppSwitcher.Common.psm1`](../../scripts/windows/codex-app/CodexAppSwitcher.Common.psm1) plus section 7 of this runbook; not documented by OpenAI |
 | The App may rewrite user configuration and inject plugins, MCP servers, hidden model slots, and large tool sets. | Project-observed behavior | Historical measurements in [Connect an agent client](./connect-an-agent-client.md#32-the-same-sharing-in-the-direction-that-can-break-it); not presented as OpenAI guarantees |
 | WSL agent mode inherits a key injected into a native Windows App process. | Unknown / out of scope | No supporting OpenAI documentation or completed project acceptance test |
 | CLI profiles load `$CODEX_HOME/<profile-name>.config.toml` and do not use `[profiles.<name>]`. | OpenAI documentation | [Profiles](https://learn.chatgpt.com/docs/config-file/config-advanced#profiles) |
 | Nexus exposes the Responses and model-catalogue paths required by this integration. | Repository implementation | [`/v1/responses`](../../backend/app/interfaces/http/routers/responses/route.py) and [`/v1/models`](../../backend/app/interfaces/http/routers/chat/route.py) route sources |
+| The doctor's unauthenticated online checks reach the production gateway. | Project measurement, 2026-08-29 | `Test-CodexAppConnection.ps1 -Online` resolved `llmapi.rcsl.online` and got HTTP 200 from `/healthz` over a trusted TLS connection. The authenticated `/v1/models` check was not run for this change |
