@@ -76,7 +76,10 @@ to catch.
 ## Safety properties
 
 - The App is asked to exit through its normal window close path. It is never
-  force-terminated.
+  force-terminated. On the measured build there is no window to ask, because the
+  App sits in the notification area, so the switcher stops immediately and says
+  to quit it from the tray icon. Quit the App before switching in either
+  direction.
 - `config.toml` is copied before the first Nexus switch in a cycle.
 - Changes are written through a same-directory temporary file.
 - Only top-level `model` and `model_provider` plus the
@@ -123,12 +126,15 @@ agent loop. The App adds its own plugins, hidden model slots, tool definitions,
 and picker behavior. After switching, create a new App task and request a real
 file operation; a greeting proves only text generation.
 
-Direct `ChatGPT.exe` launch is a runtime-checked implementation assumption, and
-process-scoped key inheritance into the internal app-server is an unverified
-project hypothesis. Neither is a documented OpenAI compatibility contract. Startup
-confirmation detects a changed path or an immediate managed-config rewrite, but
-the integration remains experimental until the interactive App task passes on
-the installed build. WSL agent mode is outside the verified scope.
+Direct `ChatGPT.exe` launch and key inheritance were measured on 2026-08-29
+against `OpenAI.Codex` `26.825.4187.0`: the App started, and its main process
+plus most of its children carried the process-scoped `RCSL_API_KEY`. Neither is
+a documented OpenAI compatibility contract, and one utility child carried no
+inherited environment at all, so what the app-server does with the key is still
+unproven. Startup confirmation detects a changed path or an immediate
+managed-config rewrite, but the integration remains experimental until the
+interactive App task passes on the installed build. WSL agent mode is outside
+the verified scope.
 
 ## Source basis
 

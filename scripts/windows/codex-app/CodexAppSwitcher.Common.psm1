@@ -336,6 +336,17 @@ function Get-CodexAppProcesses {
 }
 
 function Stop-CodexAppGracefully {
+    <#
+        Measured against OpenAI.Codex 26.825.4187.0 on 2026-08-29: that build runs
+        as eight Chromium processes and every one of its top-level windows is
+        invisible, because it lives in the notification area. `MainWindowHandle`
+        only reports a *visible* unowned window, so it is 0 for all eight and there
+        is nothing here to ask; posting WM_CLOSE to those windows was tried and did
+        not end the App either. Asking is still attempted, because a build that
+        does show a window should be closed politely -- but when nothing can be
+        asked, the operator is told that immediately instead of after a silent
+        timeout that was never going to succeed.
+    #>
     param([ValidateRange(5, 120)][int]$TimeoutSeconds = 30)
 
     $processes = @(Get-CodexAppProcesses)
@@ -343,16 +354,25 @@ function Stop-CodexAppGracefully {
         return
     }
 
+    $asked = 0
     foreach ($process in $processes) {
         try {
+            # Refresh first: MainWindowHandle is cached from when the object was
+            # created, which for a just-started App is before its window exists.
+            $process.Refresh()
             if ($process.MainWindowHandle -ne 0) {
                 [void]$process.CloseMainWindow()
+                $asked++
             }
         }
         catch {
             # A protected helper process may not expose a window. The main process
             # is still asked to close, and all helpers are checked below.
         }
+    }
+
+    if ($asked -eq 0) {
+        throw "Codex App is running as $($processes.Count) process(es) and none of them exposes a window to close, which is what this build looks like when it is sitting in the notification area. Quit it from its tray icon -- closing its window is not enough -- then retry. The switcher never force-terminates it."
     }
 
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -363,7 +383,7 @@ function Stop-CodexAppGracefully {
         Start-Sleep -Milliseconds 500
     }
 
-    throw 'Codex App is still running. Finish or cancel active work, exit the app from its menu or tray icon, and retry. The switcher never force-terminates it.'
+    throw 'Codex App is still running after being asked to close. Finish or cancel active work, quit it from its tray icon, and retry. The switcher never force-terminates it.'
 }
 
 function ConvertFrom-SecureStringPlainText {
