@@ -6,7 +6,10 @@
     there with nothing to install first.
 
     None of these tests touch the App, the registry, the network, config.toml, or
-    switcher state. They call the pure functions in module scope.
+    switcher state. They call the pure functions in module scope. Two of them
+    write and delete a file of their own under the temp directory, because the
+    defects they pin are encoding defects and there is no way to pin those
+    without a file.
 
     Keep this file ASCII: Windows PowerShell reads a BOM-less script in the system
     codepage, so a literal non-ASCII character here would not survive the round
@@ -481,6 +484,216 @@ $outcome = & $module {
     Test-Case 'a TOML string value is escaped before it is written' {
         Assert-Equal 'c:\\dev\\x' (ConvertTo-TomlEscapedString -Value 'c:\dev\x')
         Assert-Equal '\"quoted\"' (ConvertTo-TomlEscapedString -Value '"quoted"')
+    }
+
+    # -- reading a model catalogue ---------------------------------------------
+
+    Test-Case 'the capability list is read out of a well-formed catalogue' {
+        $body = '{"object":"list","data":[{"id":"code"},{"id":"chat"}]}' | ConvertFrom-Json
+        $ids = Get-ModelCatalogueIds -Response $body
+        Assert-Equal 2 $ids.Count
+        Assert-True ($ids -contains 'code')
+    }
+
+    Test-Case 'a catalogue with no data key yields nothing rather than throwing' {
+        # Dotting into a missing property is a terminating error under
+        # Set-StrictMode, so a proxy or error page answering 200 used to abort the
+        # switch with a message about a missing property.
+        foreach ($body in @(
+                ('{"object":"list"}' | ConvertFrom-Json),
+                ('{"data":null}' | ConvertFrom-Json),
+                ('"a string"' | ConvertFrom-Json)
+            )) {
+            $ids = Get-ModelCatalogueIds -Response $body
+            Assert-Equal 0 $ids.Count
+        }
+        Assert-Equal 0 (Get-ModelCatalogueIds -Response $null).Count
+    }
+
+    Test-Case 'catalogue entries without an id are skipped, not rendered empty' {
+        $body = '{"data":[{"id":"code"},{"name":"no id here"}]}' | ConvertFrom-Json
+        $ids = Get-ModelCatalogueIds -Response $body
+        Assert-Equal 1 $ids.Count
+        Assert-Equal 'code' $ids[0]
+    }
+
+    # -- refusing before the App is closed -------------------------------------
+
+    Test-Case 'a duplicate top-level key is refused by the preflight, not by the write' {
+        $lines = New-Lines -Text "model = `"a`"`nmodel = `"b`"`n"
+        # The safety guard alone lets this through; the rehearsal is what catches
+        # it, and the rehearsal is what runs before the operator's App is closed.
+        Assert-SafeTomlForManagedEdit -Lines $lines
+        Assert-Throws -MessagePattern "more than one top-level 'model'" -Body {
+            Assert-DocumentCanBeSwitched -Lines $lines -BaseUrl 'https://llmapi.rcsl.online' -Capability 'code'
+        }
+    }
+
+    Test-Case 'an incompatible provider field is refused by the preflight' {
+        $lines = New-Lines -Text "[model_providers.rcsl_nexus_switcher]`nname = `"RCSL AI Nexus`"`nexperimental_bearer_token = `"x`"`n"
+        Assert-SafeTomlForManagedEdit -Lines $lines
+        Assert-Throws -MessagePattern 'experimental_bearer_token' -Body {
+            Assert-DocumentCanBeSwitched -Lines $lines -BaseUrl 'https://llmapi.rcsl.online' -Capability 'code' -AllowExistingManaged
+        }
+    }
+
+    Test-Case 'the preflight rehearses on a copy and leaves the document alone' {
+        $lines = New-Lines -Text $appWrittenConfig
+        $before = Join-TomlLines -Lines $lines -Newline "`n"
+        Assert-DocumentCanBeSwitched -Lines $lines -BaseUrl 'https://llmapi.rcsl.online' -Capability 'code'
+        Assert-Equal $before (Join-TomlLines -Lines $lines -Newline "`n") -Because 'the rehearsal mutated the caller''s lines'
+        Assert-True ($null -eq (Find-ManagedProviderTableRange -Lines $lines))
+    }
+
+    Test-Case 'a document the switcher can own passes the preflight' {
+        Assert-DocumentCanBeSwitched -Lines (New-Lines -Text $appWrittenConfig) `
+            -BaseUrl 'https://llmapi.rcsl.online' -Capability 'code'
+    }
+
+    Test-Case 'the restore preflight refuses a duplicate key before the App is closed' {
+        $state = [pscustomobject]@{
+            ProviderId = 'rcsl_nexus_switcher'
+            GatewayBaseUrl = 'https://llmapi.rcsl.online'
+            OriginalModel = [pscustomobject]@{ Present = $true; Line = 'model = "gpt-5"' }
+            OriginalModelProvider = [pscustomobject]@{ Present = $false; Line = '' }
+        }
+        $lines = New-Lines -Text "model = `"a`"`nmodel = `"b`"`n"
+        Assert-Throws -MessagePattern "more than one top-level 'model'" -Body {
+            Assert-DocumentCanBeRestored -Lines $lines -State $state
+        }
+    }
+
+    Test-Case 'restoring does not resurrect a provider table the operator deleted' {
+        # The GUI reports the inactive definition as "preserved". Adding it back
+        # when it is absent would make that message describe a resurrection.
+        $state = [pscustomobject]@{
+            ProviderId = 'rcsl_nexus_switcher'
+            GatewayBaseUrl = 'https://llmapi.rcsl.online'
+            OriginalModel = [pscustomobject]@{ Present = $true; Line = 'model = "gpt-5"' }
+            OriginalModelProvider = [pscustomobject]@{ Present = $false; Line = '' }
+        }
+        $absent = New-Lines -Text "model = `"code`"`nmodel_provider = `"rcsl_nexus_switcher`"`n"
+        Assert-True ($null -eq (Find-ManagedProviderTableRange -Lines $absent))
+        Assert-True (-not (Test-ShouldRefreshManagedProvider -Lines $absent -State $state)) -Because 'an absent table would be written back'
+        Assert-DocumentCanBeRestored -Lines $absent -State $state
+        Assert-True ($null -eq (Find-ManagedProviderTableRange -Lines $absent)) -Because 'the table came back'
+
+        $present = New-Lines -Text "model = `"code`"`nmodel_provider = `"rcsl_nexus_switcher`"`n`n[model_providers.rcsl_nexus_switcher]`nname = `"RCSL AI Nexus`"`n"
+        Assert-True (Test-ShouldRefreshManagedProvider -Lines $present -State $state) -Because 'a present table would not be refreshed'
+
+        Assert-True (-not (Test-ShouldRefreshManagedProvider -Lines $present -State $null)) -Because 'no state should mean no write'
+    }
+
+    # -- encodings that only bite on a non-UTF-8 locale ------------------------
+
+    Test-Case 'switcher state survives a non-ASCII path through the reader it uses' {
+        # Get-Content -Raw decodes a BOM-less file in the system codepage, which
+        # mangles a ConfigPath containing non-ASCII and then blocks restoration on
+        # a path mismatch. Read-Utf8Text is what Get-SwitcherState uses instead.
+        $nonAscii = -join ([char]0x8A9E, [char]0x8A00)
+        $payload = [pscustomobject]@{
+            SchemaVersion = 2
+            ConfigPath = "C:\Users\$nonAscii\.codex\config.toml"
+            Mode = 'rcsl'
+        }
+        $file = Join-Path ([IO.Path]::GetTempPath()) ("switcher-state-test-{0}.json" -f [Guid]::NewGuid().ToString('N'))
+        try {
+            Write-Utf8TextAtomic -Path $file -Text (($payload | ConvertTo-Json -Depth 8) + "`n")
+            $roundTripped = (Read-Utf8Text -Path $file | ConvertFrom-Json)
+            Assert-Equal $payload.ConfigPath $roundTripped.ConfigPath
+        }
+        finally {
+            if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force }
+        }
+    }
+
+    Test-Case 'the recorded config hash is comparable with the backup file on disk' {
+        # The doctor compares ConfigSha256Before, taken over the text, against
+        # Get-FileHash of the backup. That only means anything if the two agree.
+        $text = "model = `"code`"`n# " + (-join ([char]0x8A9E, [char]0x8A00)) + "`n"
+        $file = Join-Path ([IO.Path]::GetTempPath()) ("switcher-hash-test-{0}.toml" -f [Guid]::NewGuid().ToString('N'))
+        try {
+            Write-Utf8TextAtomic -Path $file -Text $text
+            $fromText = Get-TextSha256 -Text $text
+            $fromFile = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            Assert-Equal $fromText $fromFile
+        }
+        finally {
+            if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force }
+        }
+    }
+
+    # -- invariants pinned over the source ------------------------------------
+    #
+    # These three are properties of the call sites rather than of any function, so
+    # a test that exercises a helper cannot hold them: the orchestration they
+    # belong to needs a real App to run. They follow the precedent already set in
+    # backend/tests/unit/test_refusal_identity_and_permissions.py, which checks a
+    # rule over the source for the same reason.
+
+    $modulePath = Join-Path $PSScriptRoot 'CodexAppSwitcher.Common.psm1'
+
+    function Get-CommandOrder {
+        param(
+            [Parameter(Mandatory = $true)][string]$Path,
+            [Parameter(Mandatory = $true)][string]$FunctionName
+        )
+        $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$null, [ref]$errors)
+        if ($errors.Count -gt 0) { throw "the module does not parse: $($errors[0].Message)" }
+        $function = $ast.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $FunctionName
+            }, $true)
+        if ($null -eq $function) { throw "no function named $FunctionName" }
+        $names = [Collections.Generic.List[string]]::new()
+        foreach ($command in $function.FindAll({
+                    param($node) $node -is [System.Management.Automation.Language.CommandAst]
+                }, $true)) {
+            $name = $command.GetCommandName()
+            if (-not [string]::IsNullOrEmpty($name)) { $names.Add($name) }
+        }
+        return ,$names
+    }
+
+    Test-Case 'the module parses and the source invariants have something to check' {
+        Assert-True (Test-Path -LiteralPath $modulePath) -Because "module not found at $modulePath"
+        Assert-True ((Get-CommandOrder -Path $modulePath -FunctionName 'Invoke-EnableRcslCodexAppCore').Count -gt 0)
+    }
+
+    Test-Case 'the enable path validates the document before it closes the App' {
+        $order = Get-CommandOrder -Path $modulePath -FunctionName 'Invoke-EnableRcslCodexAppCore'
+        $validate = $order.IndexOf('Assert-DocumentCanBeSwitched')
+        $close = $order.IndexOf('Stop-CodexAppGracefully')
+        Assert-True ($validate -ge 0) -Because 'the enable path no longer rehearses the edit'
+        Assert-True ($close -ge 0) -Because 'the enable path no longer closes the App'
+        Assert-True ($validate -lt $close) -Because 'a refusal now costs the operator a closed App'
+    }
+
+    Test-Case 'the restore path validates the document before it closes the App' {
+        $order = Get-CommandOrder -Path $modulePath -FunctionName 'Invoke-DisableRcslCodexAppCore'
+        $validate = $order.IndexOf('Assert-DocumentCanBeRestored')
+        $close = $order.IndexOf('Stop-CodexAppGracefully')
+        Assert-True ($validate -ge 0) -Because 'the restore path no longer rehearses the edit'
+        Assert-True ($close -ge 0) -Because 'the restore path no longer closes the App'
+        Assert-True ($validate -lt $close) -Because 'a refusal now costs the operator a closed App'
+    }
+
+    Test-Case 'nothing in the module reads a file with Get-Content' {
+        # Get-Content decodes a BOM-less file in the system codepage on Windows
+        # PowerShell 5.1. Read-Utf8Text exists so that no reader here has to
+        # remember that, and Get-SwitcherState is the one that once forgot.
+        $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($modulePath, [ref]$null, [ref]$errors)
+        $offenders = [Collections.Generic.List[string]]::new()
+        foreach ($command in $ast.FindAll({
+                    param($node) $node -is [System.Management.Automation.Language.CommandAst]
+                }, $true)) {
+            if ($command.GetCommandName() -in @('Get-Content', 'gc', 'cat', 'type')) {
+                $offenders.Add("line $($command.Extent.StartLineNumber): $($command.Extent.Text)")
+            }
+        }
+        Assert-Equal 0 $offenders.Count -Because ("use Read-Utf8Text instead: " + ($offenders -join '; '))
     }
 
     return [pscustomobject]@{

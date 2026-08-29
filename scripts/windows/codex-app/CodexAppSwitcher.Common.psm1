@@ -405,6 +405,12 @@ function Stop-CodexAppGracefully {
     }
 
     if ($asked -eq 0) {
+        $servers = @(Get-CodexAppServerProcesses).Count
+        if ($servers -gt 0 -and $servers -eq $processes.Count) {
+            # No App windows left, only the server. Pointing at a tray icon that
+            # is already gone would be the one instruction that cannot work.
+            throw "Codex App's windows have closed but its app-server is still running ($servers process(es) of codex.exe). It holds config.toml, so the switcher waits for it rather than editing underneath it. Give it a moment and retry; if it persists, end codex.exe yourself. The switcher never force-terminates it."
+        }
         throw "Codex App is running as $($processes.Count) process(es) and none of them exposes a window to close, which is what this build looks like when it is sitting in the notification area. Quit it from its tray icon -- closing its window is not enough -- then retry. The switcher never force-terminates it."
     }
 
@@ -798,6 +804,85 @@ function Get-ManagedProviderIssues {
     return ,$issues
 }
 
+function Assert-DocumentCanBeSwitched {
+    <#
+        Rehearses the whole edit against a copy and throws the copy away.
+
+        `Assert-SafeTomlForManagedEdit` is not the only thing that refuses on the
+        document alone: a duplicated top-level key, a second managed table, a
+        duplicated key inside it, `experimental_bearer_token` and
+        `requires_openai_auth = true` are all decided by reading, and all of them
+        used to surface from the write, which happens after the operator's App has
+        been closed for them. Running the transformation twice is cheap; closing
+        somebody's App to tell them about a duplicate line is not.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)][string]$Capability,
+        [switch]$AllowExistingManaged
+    )
+    Assert-SafeTomlForManagedEdit -Lines $Lines
+    $rehearsal = [Collections.Generic.List[string]]::new($Lines)
+    Set-TopLevelTomlKey -Lines $rehearsal -Key 'model_provider' -Line ('model_provider = "{0}"' -f $script:ManagedProviderId)
+    Set-TopLevelTomlKey -Lines $rehearsal -Key 'model' -Line ('model = "{0}"' -f (ConvertTo-TomlEscapedString -Value $Capability))
+    Set-RcslProviderTable -Lines $rehearsal -BaseUrl $BaseUrl -AllowExistingManaged:$AllowExistingManaged
+}
+
+function Assert-DocumentCanBeRestored {
+    <#
+        The same rehearsal for the way back. Restoration reads the document too,
+        and a refusal there would cost the operator a closed App for nothing.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][Collections.Generic.List[string]]$Lines,
+        $State
+    )
+    Assert-SafeTomlForManagedEdit -Lines $Lines
+    $rehearsal = [Collections.Generic.List[string]]::new($Lines)
+    if ($null -eq $State) {
+        [void](Get-TopLevelTomlValue -Lines $rehearsal -Key 'model_provider')
+        return
+    }
+    if (Test-StateOwnsManagedProvider -State $State) {
+        if (Test-ShouldRefreshManagedProvider -Lines $rehearsal -State $State) {
+            Set-RcslProviderTable -Lines $rehearsal -BaseUrl (Get-NormalizedGatewayBaseUrl -BaseUrl ([string]$State.GatewayBaseUrl)) -AllowExistingManaged
+        }
+        Restore-TopLevelTomlKey -Lines $rehearsal -Key 'model' -Original $State.OriginalModel
+        Restore-TopLevelTomlKey -Lines $rehearsal -Key 'model_provider' -Original $State.OriginalModelProvider
+        return
+    }
+    [void](Get-TopLevelTomlValue -Lines $rehearsal -Key 'model_provider')
+}
+
+function Test-StateOwnsManagedProvider {
+    param($State)
+    return (
+        $null -ne $State -and
+        $null -ne $State.PSObject.Properties['ProviderId'] -and
+        [string]$State.ProviderId -eq $script:ManagedProviderId
+    )
+}
+
+function Test-ShouldRefreshManagedProvider {
+    <#
+        Refresh a table that is there; never put one back that is not.
+
+        Re-adding it would resurrect a definition the operator had deleted, while
+        the GUI reported it as preserved, and would make every no-op restore
+        rewrite config.toml without a backup. One helper rather than the same
+        condition in two places, so the rehearsal and the write cannot drift.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][Collections.Generic.List[string]]$Lines,
+        $State
+    )
+    if (-not (Test-StateOwnsManagedProvider -State $State)) {
+        return $false
+    }
+    return ($null -ne (Find-ManagedProviderTableRange -Lines $Lines))
+}
+
 function New-ConfigBackup {
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
     $stateDirectory = Protect-SwitcherStateDirectory
@@ -823,7 +908,16 @@ function Get-SwitcherState {
     if (-not (Test-Path -LiteralPath $path)) {
         return $null
     }
-    return (Get-Content -Raw -LiteralPath $path | ConvertFrom-Json)
+    # Read-Utf8Text rather than Get-Content -Raw. The state is written as UTF-8
+    # without a BOM, and Get-Content decodes a BOM-less file in the system
+    # codepage: a ConfigPath or BackupPath containing any non-ASCII character
+    # comes back mangled, and restoration then refuses on a path mismatch the
+    # operator cannot resolve.
+    $json = Read-Utf8Text -Path $path
+    if ([string]::IsNullOrWhiteSpace($json)) {
+        throw "Switcher recovery state at '$path' is empty. Preserve it and recover manually; the switcher will not treat an empty state as no state."
+    }
+    return ($json | ConvertFrom-Json)
 }
 
 function Assert-SwitcherStateUsable {
@@ -869,6 +963,37 @@ function Get-NormalizedGatewayBaseUrl {
     return $uri.GetLeftPart([UriPartial]::Authority).TrimEnd('/')
 }
 
+function Get-ModelCatalogueIds {
+    <#
+        Reads the capability names out of a `/v1/models` body.
+
+        Every access goes through PSObject.Properties because dotting into a
+        missing property is a terminating error under Set-StrictMode, not $null.
+        A proxy, a captive portal or an error page answering 200 with a body that
+        has no `data` would otherwise abort the switch with "The property 'data'
+        cannot be found on this object", which tells the operator nothing.
+    #>
+    param($Response)
+    $ids = [Collections.Generic.List[string]]::new()
+    if ($null -eq $Response) {
+        return ,$ids
+    }
+    $data = $Response.PSObject.Properties['data']
+    if ($null -eq $data -or $null -eq $data.Value) {
+        return ,$ids
+    }
+    foreach ($entry in @($data.Value)) {
+        if ($null -eq $entry) {
+            continue
+        }
+        $id = $entry.PSObject.Properties['id']
+        if ($null -ne $id -and $null -ne $id.Value) {
+            $ids.Add([string]$id.Value)
+        }
+    }
+    return ,$ids
+}
+
 function Test-RcslGateway {
     param(
         [Parameter(Mandatory = $true)][Security.SecureString]$ApiKey,
@@ -886,10 +1011,7 @@ function Test-RcslGateway {
         $headers = @{ Authorization = "Bearer $plainKey"; Accept = 'application/json' }
         $modelsUri = '{0}/v1/models' -f $BaseUrl.TrimEnd('/')
         $response = Invoke-RestMethod -Method Get -Uri $modelsUri -Headers $headers -TimeoutSec $TimeoutSeconds
-        $ids = @()
-        if ($null -ne $response.data) {
-            $ids = @($response.data | ForEach-Object { [string]$_.id })
-        }
+        $ids = Get-ModelCatalogueIds -Response $response
         if ($ids -notcontains $Capability) {
             throw "The key reached the gateway, but GET /v1/models did not include capability '$Capability'."
         }
@@ -930,6 +1052,14 @@ function Start-CodexAppWithEnvironment {
 }
 
 function Confirm-CodexAppLaunch {
+    <#
+        A sample, not a guarantee, and callers must not describe it as one. The
+        process that reads and rewrites config.toml is `codex.exe app-server`,
+        a child that need not have started within the couple of seconds this
+        waits, so a rewrite can still follow a passing check. What this does rule
+        out is the App failing to start, exiting immediately, or rewriting the
+        selection while the switcher is still watching.
+    #>
     param(
         [Collections.Generic.List[string]]$ExpectedManagedLines,
         [ValidateRange(5, 60)][int]$TimeoutSeconds = 15
@@ -988,8 +1118,11 @@ function Invoke-EnableRcslCodexAppCore {
     # closed, so a refusal costs them nothing. The App rewrites config.toml as it
     # exits, so the authoritative pass below re-reads it after the close.
     $preflight = Split-TomlLines -Text (Read-Utf8Text -Path $configPath)
-    Assert-SafeTomlForManagedEdit -Lines $preflight.Lines
-    Assert-SwitcherStateUsable -State (Get-SwitcherState) -ConfigPath $configPath
+    $preflightState = Get-SwitcherState
+    Assert-SwitcherStateUsable -State $preflightState -ConfigPath $configPath
+    $preflightActive = ($null -ne $preflightState -and [string]$preflightState.Mode -in @('preparing-rcsl', 'rcsl'))
+    Assert-DocumentCanBeSwitched -Lines $preflight.Lines -BaseUrl $BaseUrl -Capability $Capability `
+        -AllowExistingManaged:($preflightActive -or (Test-StateOwnsManagedProvider -State $preflightState))
 
     if ($ValidateGateway) {
         [void](Test-RcslGateway -ApiKey $ApiKey -BaseUrl $BaseUrl -Capability $Capability)
@@ -1078,7 +1211,7 @@ function Invoke-DisableRcslCodexAppCore {
     # Same reason as the enable path: a document the switcher will not edit is a
     # refusal, and a refusal must not cost the operator a closed App.
     $preflight = Split-TomlLines -Text (Read-Utf8Text -Path $configPath)
-    Assert-SafeTomlForManagedEdit -Lines $preflight.Lines
+    Assert-DocumentCanBeRestored -Lines $preflight.Lines -State (Get-SwitcherState)
 
     Stop-CodexAppGracefully -TimeoutSeconds $CloseTimeoutSeconds
 
@@ -1102,7 +1235,7 @@ function Invoke-DisableRcslCodexAppCore {
         if ([string]$state.ConfigPath -ne $configPath) {
             throw "The recovery state belongs to '$($state.ConfigPath)', but CODEX_HOME now resolves to '$configPath'. Restore the original CODEX_HOME value and retry."
         }
-        if ($null -ne $state.PSObject.Properties['ProviderId'] -and [string]$state.ProviderId -eq $script:ManagedProviderId) {
+        if (Test-ShouldRefreshManagedProvider -Lines $parts.Lines -State $state) {
             $restoredBaseUrl = Get-NormalizedGatewayBaseUrl -BaseUrl ([string]$state.GatewayBaseUrl)
             Set-RcslProviderTable -Lines $parts.Lines -BaseUrl $restoredBaseUrl -AllowExistingManaged
             $configChanged = $true
@@ -1265,9 +1398,18 @@ function Get-CodexSwitcherStatus {
                     $issues.Add('RCSL recovery state has no managed-projection hash.')
                 }
                 else {
-                    $managedHashMatchesState = ([string]$hashProperty.Value -eq (Get-ManagedProjectionSha256 -Lines $parts.Lines))
-                    if (-not $managedHashMatchesState) {
-                        $issues.Add('The managed model/provider projection has drifted since the switch was recorded.')
+                    # Guarded for the same reason as the reads above: the
+                    # projection walks the top-level keys and throws on a
+                    # duplicate, and a read-only status that dies takes eight
+                    # other checks down with it without naming the offending line.
+                    try {
+                        $managedHashMatchesState = ([string]$hashProperty.Value -eq (Get-ManagedProjectionSha256 -Lines $parts.Lines))
+                        if (-not $managedHashMatchesState) {
+                            $issues.Add('The managed model/provider projection has drifted since the switch was recorded.')
+                        }
+                    }
+                    catch {
+                        $issues.Add($_.Exception.Message)
                     }
                 }
             }
@@ -1284,7 +1426,13 @@ function Get-CodexSwitcherStatus {
             }
         }
     }
-    $projectConfigs = Get-ProjectConfigPaths -ProjectPath $ProjectPath
+    $projectConfigs = [Collections.Generic.List[string]]::new()
+    try {
+        $projectConfigs = Get-ProjectConfigPaths -ProjectPath $ProjectPath
+    }
+    catch {
+        $issues.Add($_.Exception.Message)
+    }
     return [pscustomobject]@{
         IsWindows = ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT)
         AppInstalled = $app.Installed

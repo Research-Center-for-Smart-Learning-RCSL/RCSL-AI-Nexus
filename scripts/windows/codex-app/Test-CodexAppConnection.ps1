@@ -180,7 +180,21 @@ Invoke-Check -Name 'Switcher recovery state' -Action {
         if (-not [string]::IsNullOrWhiteSpace($backup) -and -not (Test-Path -LiteralPath $backup)) {
             throw "Switcher state names a missing backup: $backup"
         }
-        Add-Check -Name 'Switcher recovery state' -Status 'PASS' -Detail ("Recorded mode: {0}; backup: {1}" -f $script:status.State.Mode, $backup)
+        # `ConfigSha256Before` exists to be checked. Recording a hash of the
+        # pre-switch document and never comparing it would leave a silently
+        # truncated or edited backup looking exactly like an intact one, which is
+        # the state an operator discovers at the worst possible moment.
+        $integrity = 'not recorded'
+        $recordedProperty = $script:status.State.PSObject.Properties['ConfigSha256Before']
+        if ($null -ne $recordedProperty -and -not [string]::IsNullOrWhiteSpace($backup) -and (Test-Path -LiteralPath $backup)) {
+            $actual = Get-FileHash -LiteralPath $backup -Algorithm SHA256
+            if ($actual.Hash.ToLowerInvariant() -ne ([string]$recordedProperty.Value).ToLowerInvariant()) {
+                throw "The backup at $backup no longer matches the hash recorded when it was taken. Do not restore from it without inspecting it."
+            }
+            $integrity = 'matches the hash recorded at switch time'
+        }
+        Add-Check -Name 'Switcher recovery state' -Status 'PASS' -Detail (
+            "Recorded mode: {0}; backup: {1}; backup integrity: {2}" -f $script:status.State.Mode, $backup, $integrity)
     }
 }
 
@@ -231,10 +245,21 @@ else {
 if ($Authenticated) {
     $secureKey = $null
     try {
-        $secureKey = Read-NexusKeyFromDialog
-        Invoke-Check -Name 'Authenticated model catalogue' -Action {
-            $gateway = Test-RcslGateway -ApiKey $secureKey -BaseUrl $BaseUrl -Capability $Capability
-            Add-Check -Name 'Authenticated model catalogue' -Status 'PASS' -Detail ("GET /v1/models includes '{0}'." -f $gateway.Capability)
+        # Cancelling the dialog must not discard the checks already collected.
+        # The GUI always passes -Authenticated, so an operator who runs Doctor
+        # and then decides not to paste a key would otherwise lose the whole
+        # report to a terminating error.
+        try {
+            $secureKey = Read-NexusKeyFromDialog
+        }
+        catch {
+            Add-Check -Name 'Authenticated model catalogue' -Status 'SKIP' -Detail $_.Exception.Message
+        }
+        if ($null -ne $secureKey) {
+            Invoke-Check -Name 'Authenticated model catalogue' -Action {
+                $gateway = Test-RcslGateway -ApiKey $secureKey -BaseUrl $BaseUrl -Capability $Capability
+                Add-Check -Name 'Authenticated model catalogue' -Status 'PASS' -Detail ("GET /v1/models includes '{0}'." -f $gateway.Capability)
+            }
         }
     }
     finally {
