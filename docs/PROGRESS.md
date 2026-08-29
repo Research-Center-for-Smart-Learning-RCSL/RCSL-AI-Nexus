@@ -15,6 +15,74 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-29 — Running the switcher against the real App settled two hypotheses and refuted a third
+
+The four faults fixed earlier today were found by reading and by unit-level
+measurement. What remained were the claims the runbook had always gated on an
+interactive Windows session: that launching the packaged executable directly
+starts the App at all, and that the process-scoped key reaches it. Both were
+answered by running the thing, in a redirected `CODEX_HOME` so the operator's
+own `config.toml` was not reachable by any step of the transaction.
+
+`Enable-RcslCodexApp` succeeded end to end against `OpenAI.Codex`
+`26.825.4187.0`. The App started from `WindowsApps\...\app\ChatGPT.exe` as eight
+Chromium processes, the switcher's startup confirmation observed one under the
+discovered package path, and the managed configuration survived startup. The
+nineteen `[projects.…]`, `[plugins.…]` and `[mcp_servers.…]` tables in the copied
+document were still there afterwards, which is the narrowed guard doing the job
+it was narrowed for.
+
+Key inheritance is real, and was read rather than inferred: the environment
+blocks of the running processes were read out of their PEBs, and four of the
+eight, including the main process, carried both `RCSL_API_KEY` and the
+redirected `CODEX_HOME`. The reader was itself checked first against two
+processes launched with and without a known variable, because a reader that
+cannot tell those apart proves nothing about the App. One process, a
+`storage.mojom.StorageService` utility, carried neither. That does not undo the
+result, but it is the reason the claim stays at "the key reaches the App's
+processes" rather than "the App uses it": the App does not hand every child what
+it was started with, and only a real task against a real key shows what the
+component issuing the inference request reads.
+
+The App also rewrote `config.toml` while starting, changing a hashed path inside
+its `notify` array. The runbook had asserted that behavior from older
+measurements and used it to justify re-reading the file after the App closes.
+It is now observed on the current build.
+
+The third claim did not survive. `Stop-CodexAppGracefully` cannot close this
+App, and never could have. The build sits in the notification area, and every
+one of its fourteen top-level windows is invisible, including the
+`Chrome_WidgetWin_1` window titled "ChatGPT". Windows reports a main window only
+when it is visible and unowned, so `MainWindowHandle` was zero for all eight
+processes, `CloseMainWindow` was therefore called on nothing at all, and the
+function spent its timeout waiting for an exit it had never asked for. Posting
+`WM_CLOSE` to those windows directly was then measured and did not end the App
+either, which is ordinary for a program whose window close means hide.
+
+The practical consequence was that the round trip did not work: the enable path
+succeeded only because the App happened to be closed, and the disable path
+failed immediately afterwards because the enable path had started it. The tool
+could switch to Nexus and then not switch back. That was invisible to every
+check written before today, because all of them either ran on Linux or stopped
+at the edge of the process.
+
+The fix keeps the design promise rather than trading it away. Force-terminating
+the App was never acceptable and still is not. What changed is that the switcher
+now distinguishes "asked and it did not exit" from "there was nothing to ask",
+and in the second case stops at once with the instruction that actually works,
+which is to quit the App from its tray icon. It also refreshes each process
+before reading `MainWindowHandle`, since that value is cached from before a
+just-started App has a window. Section 4.2 of the runbook now states the
+limitation, and step 1 of the connect procedure tells the operator to quit the
+App first instead of implying the switcher will.
+
+What is still unproven is exactly one thing, and it is the same thing as before:
+whether the App's internal app-server authenticates with the inherited key. That
+needs a real Nexus key and a real App task on the installed build. Every claim
+around it is now measured rather than assumed.
+
+---
+
 ## 2026-08-29 — The Windows switcher had never been run, and four separate faults were each enough to prove it
 
 PR 14 added about 1,650 lines of PowerShell under `scripts/windows/codex-app`
