@@ -9,6 +9,15 @@ $script:ManagedProviderId = 'rcsl_nexus_switcher'
 $script:SwitcherMutexName = 'Local\RCSL.AI.Nexus.CodexAppSwitcher'
 $script:StateSchemaVersion = 2
 
+# A TOML key segment is a bare key, a basic string, or a literal string. The App
+# writes all three -- `[projects.'c:\path']` and `[plugins."name@source"]` are its
+# normal output -- so header parsing has to accept quoting rather than refuse it.
+$script:TomlKeySegmentPattern = '(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|' + "'[^']*'" + ')'
+$script:TomlKeyPathPattern = '{0}(?:\s*\.\s*{0})*' -f $script:TomlKeySegmentPattern
+$script:TomlTableHeaderPattern = '^\s*\[\s*({0})\s*\]\s*(?:#.*)?$' -f $script:TomlKeyPathPattern
+$script:TomlArrayTableHeaderPattern = '^\s*\[\[\s*({0})\s*\]\]\s*(?:#.*)?$' -f $script:TomlKeyPathPattern
+$script:TomlQuotedKeyPattern = '^\s*(?:"(?:[^"\\]|\\.)*"|' + "'[^']*'" + ')\s*(?:\.|=)'
+
 function Assert-Windows {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
         throw 'The Codex App switcher supports Windows only.'
@@ -128,11 +137,107 @@ function Get-TextSha256 {
     }
 }
 
+function ConvertFrom-TomlKeySegment {
+    <#
+        Returns the key a segment denotes, or $null when the switcher will not
+        resolve it. A literal string carries no escapes, so stripping its quotes is
+        exact. A basic string containing a backslash would need full escape
+        processing to compare against a provider name, so it fails closed instead.
+    #>
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Segment)
+    if ($Segment.StartsWith("'")) {
+        return $Segment.Substring(1, $Segment.Length - 2)
+    }
+    if ($Segment.StartsWith('"')) {
+        $inner = $Segment.Substring(1, $Segment.Length - 2)
+        if ($inner.Contains('\')) {
+            return $null
+        }
+        return $inner
+    }
+    return $Segment
+}
+
+function Get-TomlTableHeader {
+    <#
+        Describes a table-header line, or returns $null when the line is not one.
+        `Resolvable` is false when any segment fails closed, which callers must
+        treat as "this document may define the managed provider under a spelling
+        the switcher cannot see".
+    #>
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Line)
+    $isArrayOfTables = $false
+    $path = $null
+    if ($Line -match $script:TomlArrayTableHeaderPattern) {
+        $isArrayOfTables = $true
+        $path = $Matches[1]
+    }
+    elseif ($Line -match $script:TomlTableHeaderPattern) {
+        $path = $Matches[1]
+    }
+    else {
+        return $null
+    }
+
+    $segments = [Collections.Generic.List[string]]::new()
+    $resolvable = $true
+    foreach ($match in ([regex]$script:TomlKeySegmentPattern).Matches($path)) {
+        $segment = ConvertFrom-TomlKeySegment -Segment $match.Value
+        if ($null -eq $segment) {
+            $resolvable = $false
+            break
+        }
+        $segments.Add($segment)
+    }
+
+    return [pscustomobject]@{
+        IsArrayOfTables = $isArrayOfTables
+        Resolvable = $resolvable
+        Segments = [string[]]$segments.ToArray()
+        Path = $path
+    }
+}
+
+function Test-TomlTableHeader {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Line)
+    return ($null -ne (Get-TomlTableHeader -Line $Line))
+}
+
+function Test-ManagedProviderHeader {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Line)
+    $header = Get-TomlTableHeader -Line $Line
+    if ($null -eq $header -or $header.IsArrayOfTables -or -not $header.Resolvable) {
+        return $false
+    }
+    return (
+        $header.Segments.Count -eq 2 -and
+        $header.Segments[0] -eq 'model_providers' -and
+        $header.Segments[1] -eq $script:ManagedProviderId
+    )
+}
+
+function Test-ManagedProviderAuthHeader {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Line)
+    $header = Get-TomlTableHeader -Line $Line
+    if ($null -eq $header -or $header.IsArrayOfTables -or -not $header.Resolvable) {
+        return $false
+    }
+    return (
+        $header.Segments.Count -eq 3 -and
+        $header.Segments[0] -eq 'model_providers' -and
+        $header.Segments[1] -eq $script:ManagedProviderId -and
+        $header.Segments[2] -eq 'auth'
+    )
+}
+
 function Get-CodexAppInfo {
     Assert-Windows
 
     $package = Get-AppxPackage -Name $script:CodexPackageName -ErrorAction SilentlyContinue |
-        Sort-Object Version -Descending |
+        Sort-Object -Property @{ Expression = {
+            $parsed = $null
+            if ([Version]::TryParse([string]$_.Version, [ref]$parsed)) { $parsed } else { [Version]::new(0, 0) }
+        } } -Descending |
         Select-Object -First 1
 
     if ($null -ne $package) {
@@ -272,16 +377,24 @@ function ConvertFrom-SecureStringPlainText {
     }
 }
 
-function Escape-TomlString {
-    param([Parameter(Mandatory = $true)][string]$Value)
+function ConvertTo-TomlEscapedString {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
     return $Value.Replace('\', '\\').Replace('"', '\"')
 }
 
 function Split-TomlLines {
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    # Split on every line ending rather than on one guessed separator: a mixed-ending
+    # file would otherwise leave a stray CR or LF inside a line, and the anchored key
+    # patterns would then miss a key that is really there and insert a duplicate.
     $newline = if ($Text.Contains("`r`n")) { "`r`n" } else { "`n" }
-    $hasTrailingNewline = $Text.EndsWith($newline)
-    $lines = if ($Text.Length -eq 0) { [string[]]@() } else { [string[]]$Text.Split([string[]]@($newline), [StringSplitOptions]::None) }
+    $hasTrailingNewline = ($Text -match "(`r`n|`n|`r)$")
+    # Assigned directly rather than out of an if-expression: an empty array leaving
+    # a statement block is enumerated away and arrives as $null.
+    $lines = [string[]]@()
+    if ($Text.Length -gt 0) {
+        $lines = [string[]][regex]::Split($Text, "`r`n|`n|`r")
+    }
     if ($hasTrailingNewline -and $lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq '') {
         $lines = [string[]]$lines[0..($lines.Count - 2)]
     }
@@ -294,7 +407,7 @@ function Split-TomlLines {
 
 function Join-TomlLines {
     param(
-        [Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][Collections.Generic.List[string]]$Lines,
         [Parameter(Mandatory = $true)][string]$Newline,
         [bool]$TrailingNewline = $true
     )
@@ -306,54 +419,81 @@ function Join-TomlLines {
 }
 
 function Assert-SafeTomlForManagedEdit {
-    param([Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines)
+    <#
+        Fails closed only on forms that could hide the managed selection from a
+        line-oriented edit. Quoting elsewhere in the document is the App's own
+        output and is left alone -- see docs/runbooks/windows-codex-app-switcher.md
+        section 4.1 for the accepted and refused shapes.
+    #>
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][Collections.Generic.List[string]]$Lines)
     $managedProviderPattern = [regex]::Escape($script:ManagedProviderId)
-    $currentTable = ''
+    $inTopLevel = $true
+    $inManagedTable = $false
+    $currentPath = ''
+
     for ($i = 0; $i -lt $Lines.Count; $i++) {
         $line = $Lines[$i]
-        if ($line -match '("""|'''''')') {
-            throw "config.toml line $($i + 1) uses a multiline string. The switcher cannot safely preserve this TOML form."
+        $number = $i + 1
+
+        if ($line.Contains('"""') -or $line.Contains("'''")) {
+            throw "config.toml line $number uses a multiline string. The switcher cannot safely preserve this TOML form."
         }
-        if ($line -match '^\s*model_providers\.[^=]*["'']') {
-            throw "config.toml line $($i + 1) uses a quoted dotted model-provider key. Normalize it to an unquoted provider table before using the switcher."
-        }
-        if ($line -match '^\s*["''][^"'']+["'']\s*=') {
-            throw "config.toml line $($i + 1) uses a quoted key. Normalize quoted keys before using the switcher."
-        }
-        if ($line -match '^\s*\[\[') {
-            throw "config.toml line $($i + 1) uses an array-of-tables header. The switcher fails closed rather than edit a TOML document it cannot preserve safely."
-        }
-        if ($line -match '^\s*\[[^\]]+\]\s*(?:#.*)?$') {
-            $headerName = [regex]::Match($line, '^\s*\[([^\]]+)\]').Groups[1].Value
-            if ($headerName -match '["'']') {
-                throw "config.toml line $($i + 1) uses a quoted table segment. Normalize it before using the switcher."
+
+        $header = Get-TomlTableHeader -Line $line
+        if ($null -ne $header) {
+            if (-not $header.Resolvable) {
+                throw "config.toml line $number uses an escaped table-key segment the switcher will not resolve. Normalize it to a bare or literal key before using the switcher."
             }
-            if ($headerName -notmatch '^[A-Za-z0-9_.-]+$') {
-                throw "config.toml line $($i + 1) uses an unsupported table-header form. The switcher will not guess at its meaning."
+            $segments = $header.Segments
+            if ($segments.Count -gt 0 -and $segments[0] -eq 'model_providers') {
+                if ($header.IsArrayOfTables) {
+                    throw "config.toml line $number declares model_providers as an array of tables. The switcher fails closed rather than edit a TOML document it cannot preserve safely."
+                }
+                if ($segments.Count -gt 2 -and $segments[1] -eq $script:ManagedProviderId) {
+                    throw "config.toml line $number defines a nested table under the managed provider. Remove or migrate that table before using the switcher."
+                }
             }
-            if ($headerName -match ("^model_providers\.$managedProviderPattern\.")) {
-                throw "config.toml line $($i + 1) defines a nested table under the managed provider. Remove or migrate that table before using the switcher."
-            }
-            $currentTable = $headerName
+            $inTopLevel = $false
+            $inManagedTable = (Test-ManagedProviderHeader -Line $line)
+            $currentPath = ($segments -join '.')
             continue
         }
-        if ($currentTable -eq '' -and ($line -match '^\s*model_providers\s*=' -or $line -match ("^\s*model_providers\.$managedProviderPattern(?:\.|\s*=)"))) {
-            throw "config.toml line $($i + 1) defines model providers through an inline or dotted key the switcher cannot own safely. Normalize it to provider tables first."
+
+        # An array value left open at end of line makes its continuation lines
+        # indistinguishable from table headers, and a header is what decides where
+        # the top-level section ends.
+        if (($inTopLevel -or $inManagedTable) -and $line -match '=\s*\[[^\]]*$') {
+            throw "config.toml line $number opens a multi-line array. Put the array on one line before using the switcher."
         }
-        if ($currentTable -eq 'model_providers' -and $line -match ("^\s*$managedProviderPattern(?:\.|\s*=)")) {
-            throw "config.toml line $($i + 1) defines the managed provider through an inline or dotted key. Normalize it to a [model_providers.$($script:ManagedProviderId)] table first."
+
+        # A quoted key can only shadow the switcher's own keys where those keys
+        # live: the top-level section, and the managed provider's own table.
+        if (($inTopLevel -or $inManagedTable) -and $line -match $script:TomlQuotedKeyPattern) {
+            $where = if ($inTopLevel) { 'the top-level section' } else { "[model_providers.$($script:ManagedProviderId)]" }
+            throw "config.toml line $number uses a quoted key in $where. Normalize quoted keys there before using the switcher."
+        }
+
+        if ($inTopLevel -and (
+                $line -match '^\s*model_providers\s*=' -or
+                $line -match ("^\s*model_providers\.$managedProviderPattern(?:\.|\s*=)")
+            )) {
+            throw "config.toml line $number defines model providers through an inline or dotted key the switcher cannot own safely. Normalize it to provider tables first."
+        }
+
+        if ($currentPath -eq 'model_providers' -and $line -match ("^\s*$managedProviderPattern(?:\.|\s*=)")) {
+            throw "config.toml line $number defines the managed provider through an inline or dotted key. Normalize it to a [model_providers.$($script:ManagedProviderId)] table first."
         }
     }
 }
 
 function Find-TopLevelKeyIndices {
     param(
-        [Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][Collections.Generic.List[string]]$Lines,
         [Parameter(Mandatory = $true)][ValidateSet('model', 'model_provider')][string]$Key
     )
     $indices = [Collections.Generic.List[int]]::new()
     for ($i = 0; $i -lt $Lines.Count; $i++) {
-        if ($Lines[$i] -match '^\s*\[[A-Za-z0-9_.-]+\]\s*(?:#.*)?$') {
+        if (Test-TomlTableHeader -Line $Lines[$i]) {
             break
         }
         if ($Lines[$i] -match ('^\s*{0}\s*=' -f [regex]::Escape($Key))) {
@@ -363,12 +503,46 @@ function Find-TopLevelKeyIndices {
     if ($indices.Count -gt 1) {
         throw "config.toml contains more than one top-level '$Key' key. Resolve the duplicate before using the switcher."
     }
-    return $indices
+    # The unary comma keeps the list a list. Returned bare, a one-element list
+    # arrives at the caller as a scalar and an empty one as $null, and every
+    # caller here reads .Count under Set-StrictMode.
+    return ,$indices
+}
+
+function Find-ManagedProviderTableRange {
+    <#
+        Returns the managed provider table's header index and the exclusive index
+        of the next table header, or $null when the table is absent.
+    #>
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][Collections.Generic.List[string]]$Lines)
+    $start = -1
+    $duplicate = $false
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if (Test-ManagedProviderHeader -Line $Lines[$i]) {
+            if ($start -eq -1) {
+                $start = $i
+            }
+            else {
+                $duplicate = $true
+            }
+        }
+    }
+    if ($start -eq -1) {
+        return $null
+    }
+    $end = $Lines.Count
+    for ($i = $start + 1; $i -lt $Lines.Count; $i++) {
+        if (Test-TomlTableHeader -Line $Lines[$i]) {
+            $end = $i
+            break
+        }
+    }
+    return [pscustomobject]@{ Start = $start; End = $end; Duplicate = $duplicate }
 }
 
 function Set-TopLevelTomlKey {
     param(
-        [Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][Collections.Generic.List[string]]$Lines,
         [Parameter(Mandatory = $true)][ValidateSet('model', 'model_provider')][string]$Key,
         [Parameter(Mandatory = $true)][string]$Line
     )
@@ -386,7 +560,7 @@ function Set-TopLevelTomlKey {
 
 function Restore-TopLevelTomlKey {
     param(
-        [Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][Collections.Generic.List[string]]$Lines,
         [Parameter(Mandatory = $true)][ValidateSet('model', 'model_provider')][string]$Key,
         [Parameter(Mandatory = $true)]$Original
     )
@@ -406,7 +580,7 @@ function Restore-TopLevelTomlKey {
 
 function Get-OriginalTopLevelKey {
     param(
-        [Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][Collections.Generic.List[string]]$Lines,
         [Parameter(Mandatory = $true)][ValidateSet('model', 'model_provider')][string]$Key
     )
     $indices = Find-TopLevelKeyIndices -Lines $Lines -Key $Key
@@ -418,7 +592,7 @@ function Get-OriginalTopLevelKey {
 
 function Get-TopLevelTomlValue {
     param(
-        [Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][Collections.Generic.List[string]]$Lines,
         [Parameter(Mandatory = $true)][ValidateSet('model', 'model_provider')][string]$Key
     )
     $indices = Find-TopLevelKeyIndices -Lines $Lines -Key $Key
@@ -430,37 +604,33 @@ function Get-TopLevelTomlValue {
 
 function Set-RcslProviderTable {
     param(
-        [Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][Collections.Generic.List[string]]$Lines,
         [Parameter(Mandatory = $true)][string]$BaseUrl,
         [switch]$AllowExistingManaged
     )
 
-    $providerPattern = [regex]::Escape($script:ManagedProviderId)
-    if ($Lines | Where-Object { $_ -match ("^\s*\[model_providers\.$providerPattern\.auth\]\s*(?:#.*)?$") }) {
-        throw "config.toml already contains [model_providers.$($script:ManagedProviderId).auth]. Remove or migrate that table before using the env_key-based switcher."
-    }
-
-    $headerIndices = [Collections.Generic.List[int]]::new()
-    for ($i = 0; $i -lt $Lines.Count; $i++) {
-        if ($Lines[$i] -match ("^\s*\[model_providers\.$providerPattern\]\s*(?:#.*)?$")) {
-            $headerIndices.Add($i)
+    foreach ($line in $Lines) {
+        if (Test-ManagedProviderAuthHeader -Line $line) {
+            throw "config.toml already contains [model_providers.$($script:ManagedProviderId).auth]. Remove or migrate that table before using the env_key-based switcher."
         }
     }
-    if ($headerIndices.Count -gt 1) {
+
+    $range = Find-ManagedProviderTableRange -Lines $Lines
+    if ($null -ne $range -and $range.Duplicate) {
         throw "config.toml contains more than one [model_providers.$($script:ManagedProviderId)] table."
     }
-    if ($headerIndices.Count -eq 1 -and -not $AllowExistingManaged) {
+    if ($null -ne $range -and -not $AllowExistingManaged) {
         throw "config.toml already contains [model_providers.$($script:ManagedProviderId)] without active switcher state. Refusing to overwrite a provider the switcher cannot prove it owns."
     }
 
     $desired = [ordered]@{
         name = 'name = "RCSL AI Nexus"'
-        base_url = ('base_url = "{0}/v1"' -f (Escape-TomlString -Value $BaseUrl.TrimEnd('/')))
+        base_url = ('base_url = "{0}/v1"' -f (ConvertTo-TomlEscapedString -Value $BaseUrl.TrimEnd('/')))
         env_key = 'env_key = "RCSL_API_KEY"'
         wire_api = 'wire_api = "responses"'
     }
 
-    if ($headerIndices.Count -eq 0) {
+    if ($null -eq $range) {
         if ($Lines.Count -gt 0 -and $Lines[$Lines.Count - 1] -ne '') {
             $Lines.Add('')
         }
@@ -471,40 +641,32 @@ function Set-RcslProviderTable {
         return
     }
 
-    $start = $headerIndices[0]
-    $end = $Lines.Count
-    for ($i = $start + 1; $i -lt $Lines.Count; $i++) {
-        if ($Lines[$i] -match '^\s*\[[A-Za-z0-9_.-]+\]\s*(?:#.*)?$') {
-            $end = $i
-            break
-        }
-    }
+    $start = $range.Start
+    $end = $range.End
 
-    foreach ($incompatibleKey in @('experimental_bearer_token')) {
-        for ($i = $start + 1; $i -lt $end; $i++) {
-            if ($Lines[$i] -match ('^\s*{0}\s*=' -f [regex]::Escape($incompatibleKey))) {
-                throw "[model_providers.$($script:ManagedProviderId)] already defines '$incompatibleKey', which cannot be combined with env_key. Remove or migrate it before using the switcher."
-            }
-        }
-    }
     for ($i = $start + 1; $i -lt $end; $i++) {
+        if ($Lines[$i] -match '^\s*experimental_bearer_token\s*=') {
+            throw "[model_providers.$($script:ManagedProviderId)] already defines 'experimental_bearer_token', which cannot be combined with env_key. Remove or migrate it before using the switcher."
+        }
         if ($Lines[$i] -match '^\s*requires_openai_auth\s*=\s*true\s*(?:#.*)?$') {
             throw "[model_providers.$($script:ManagedProviderId)] requires OpenAI authentication and cannot be used with the switcher's env_key authentication."
         }
     }
 
     foreach ($key in $desired.Keys) {
-        $matches = [Collections.Generic.List[int]]::new()
+        # Never name this $matches: -match rebinds the automatic $Matches to a
+        # Hashtable on its first success, and the accumulator is lost with it.
+        $keyIndices = [Collections.Generic.List[int]]::new()
         for ($i = $start + 1; $i -lt $end; $i++) {
             if ($Lines[$i] -match ('^\s*{0}\s*=' -f [regex]::Escape($key))) {
-                $matches.Add($i)
+                $keyIndices.Add($i)
             }
         }
-        if ($matches.Count -gt 1) {
+        if ($keyIndices.Count -gt 1) {
             throw "[model_providers.$($script:ManagedProviderId)] contains more than one '$key' key."
         }
-        if ($matches.Count -eq 1) {
-            $Lines[$matches[0]] = $desired[$key]
+        if ($keyIndices.Count -eq 1) {
+            $Lines[$keyIndices[0]] = $desired[$key]
         }
         else {
             $Lines.Insert($end, $desired[$key])
@@ -514,7 +676,7 @@ function Set-RcslProviderTable {
 }
 
 function Get-ManagedProjectionSha256 {
-    param([Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][Collections.Generic.List[string]]$Lines)
     $projection = [Collections.Generic.List[string]]::new()
     foreach ($key in @('model', 'model_provider')) {
         $indices = Find-TopLevelKeyIndices -Lines $Lines -Key $key
@@ -522,44 +684,34 @@ function Get-ManagedProjectionSha256 {
             $projection.Add($Lines[$indices[0]].Trim())
         }
     }
-    $providerPattern = [regex]::Escape($script:ManagedProviderId)
-    for ($i = 0; $i -lt $Lines.Count; $i++) {
-        if ($Lines[$i] -match ("^\s*\[model_providers\.$providerPattern\]\s*(?:#.*)?$")) {
-            for ($j = $i; $j -lt $Lines.Count; $j++) {
-                if ($j -gt $i -and $Lines[$j] -match '^\s*\[[A-Za-z0-9_.-]+\]\s*(?:#.*)?$') {
-                    break
-                }
-                $projection.Add($Lines[$j].Trim())
+    $range = Find-ManagedProviderTableRange -Lines $Lines
+    if ($null -ne $range) {
+        # Blank lines are excluded so that a table appended after ours, which moves
+        # the trailing blank inside our range, does not read as the App having
+        # changed the selection.
+        for ($i = $range.Start; $i -lt $range.End; $i++) {
+            $trimmed = $Lines[$i].Trim()
+            if ($trimmed -ne '') {
+                $projection.Add($trimmed)
             }
-            break
         }
     }
     return (Get-TextSha256 -Text ([string]::Join("`n", $projection.ToArray())))
 }
 
 function Get-ManagedProviderIssues {
-    param([Parameter(Mandatory = $true)][Collections.Generic.List[string]]$Lines)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][Collections.Generic.List[string]]$Lines)
     $issues = [Collections.Generic.List[string]]::new()
-    $providerPattern = [regex]::Escape($script:ManagedProviderId)
-    $start = -1
-    for ($i = 0; $i -lt $Lines.Count; $i++) {
-        if ($Lines[$i] -match ("^\s*\[model_providers\.$providerPattern\]\s*(?:#.*)?$")) {
-            if ($start -ne -1) {
-                $issues.Add("Duplicate [model_providers.$($script:ManagedProviderId)] tables were found.")
-            }
-            $start = $i
-        }
+    $range = Find-ManagedProviderTableRange -Lines $Lines
+    if ($null -eq $range) {
+        return ,$issues
     }
-    if ($start -eq -1) {
-        return @($issues)
+    if ($range.Duplicate) {
+        $issues.Add("Duplicate [model_providers.$($script:ManagedProviderId)] tables were found.")
     }
-    $end = $Lines.Count
-    for ($i = $start + 1; $i -lt $Lines.Count; $i++) {
-        if ($Lines[$i] -match '^\s*\[[A-Za-z0-9_.-]+\]\s*(?:#.*)?$') {
-            $end = $i
-            break
-        }
-    }
+    $start = $range.Start
+    $end = $range.End
+
     $expectedStrings = [ordered]@{
         name = 'RCSL AI Nexus'
         env_key = 'RCSL_API_KEY'
@@ -576,6 +728,7 @@ function Get-ManagedProviderIssues {
             $issues.Add("Provider key '$key' must appear exactly once with value '$($expectedStrings[$key])'.")
         }
     }
+
     $baseUrls = @()
     for ($i = $start + 1; $i -lt $end; $i++) {
         if ($Lines[$i] -match '^\s*base_url\s*=\s*["'']([^"'']+)["'']\s*(?:#.*)?$') {
@@ -589,14 +742,11 @@ function Get-ManagedProviderIssues {
     if ($baseUrls.Count -ne 1 -or -not [Uri]::TryCreate($baseUrls[0], [UriKind]::Absolute, [ref]$baseUri) -or $baseUri.Scheme -ne 'https' -or -not $baseUrls[0].TrimEnd('/').EndsWith('/v1')) {
         $issues.Add("Provider key 'base_url' must appear exactly once as an absolute HTTPS URL ending in /v1.")
     }
-    return @($issues)
+    return ,$issues
 }
 
 function New-ConfigBackup {
-    param(
-        [Parameter(Mandatory = $true)][string]$ConfigPath,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text
-    )
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
     $stateDirectory = Protect-SwitcherStateDirectory
     $backupDirectory = Join-Path $stateDirectory 'backups'
     New-DirectoryIfMissing -Path $backupDirectory
@@ -621,6 +771,23 @@ function Get-SwitcherState {
         return $null
     }
     return (Get-Content -Raw -LiteralPath $path | ConvertFrom-Json)
+}
+
+function Assert-SwitcherStateUsable {
+    param(
+        $State,
+        [Parameter(Mandatory = $true)][string]$ConfigPath
+    )
+    if ($null -eq $State) {
+        return
+    }
+    $schemaProperty = $State.PSObject.Properties['SchemaVersion']
+    if ($null -eq $schemaProperty -or [int]$schemaProperty.Value -ne $script:StateSchemaVersion) {
+        throw 'Switcher recovery state is missing a supported schema version. Preserve it and recover manually; the switcher will not overwrite unknown state.'
+    }
+    if ([string]$State.Mode -in @('preparing-rcsl', 'rcsl') -and [string]$State.ConfigPath -ne $ConfigPath) {
+        throw "The switcher has an active RCSL session for '$($State.ConfigPath)', but CODEX_HOME now resolves to '$ConfigPath'. Restore OpenAI with the original CODEX_HOME before switching another profile."
+    }
 }
 
 function Set-StateProperty {
@@ -762,28 +929,28 @@ function Invoke-EnableRcslCodexAppCore {
         $app = Install-CodexApp
     }
 
+    $configPath = Get-CodexConfigPath
+
+    # Refuse an unownable document or unusable state before the operator's App is
+    # closed, so a refusal costs them nothing. The App rewrites config.toml as it
+    # exits, so the authoritative pass below re-reads it after the close.
+    $preflight = Split-TomlLines -Text (Read-Utf8Text -Path $configPath)
+    Assert-SafeTomlForManagedEdit -Lines $preflight.Lines
+    Assert-SwitcherStateUsable -State (Get-SwitcherState) -ConfigPath $configPath
+
     if ($ValidateGateway) {
         [void](Test-RcslGateway -ApiKey $ApiKey -BaseUrl $BaseUrl -Capability $Capability)
     }
 
     Stop-CodexAppGracefully -TimeoutSeconds $CloseTimeoutSeconds
 
-    $configPath = Get-CodexConfigPath
     $originalText = Read-Utf8Text -Path $configPath
     $parts = Split-TomlLines -Text $originalText
     Assert-SafeTomlForManagedEdit -Lines $parts.Lines
     $state = Get-SwitcherState
-    if ($null -ne $state) {
-        $schemaProperty = $state.PSObject.Properties['SchemaVersion']
-        if ($null -eq $schemaProperty -or [int]$schemaProperty.Value -ne $script:StateSchemaVersion) {
-            throw 'Switcher recovery state is missing a supported schema version. Preserve it and recover manually; the switcher will not overwrite unknown state.'
-        }
-    }
+    Assert-SwitcherStateUsable -State $state -ConfigPath $configPath
     $activeState = ($null -ne $state -and [string]$state.Mode -in @('preparing-rcsl', 'rcsl'))
     $ownedState = ($null -ne $state -and $null -ne $state.PSObject.Properties['ProviderId'] -and [string]$state.ProviderId -eq $script:ManagedProviderId)
-    if ($activeState -and [string]$state.ConfigPath -ne $configPath) {
-        throw "The switcher has an active RCSL session for '$($state.ConfigPath)', but CODEX_HOME now resolves to '$configPath'. Restore OpenAI with the original CODEX_HOME before switching another profile."
-    }
     $captureOriginal = -not $activeState
     $originalModel = Get-OriginalTopLevelKey -Lines $parts.Lines -Key 'model'
     $originalModelProvider = Get-OriginalTopLevelKey -Lines $parts.Lines -Key 'model_provider'
@@ -792,12 +959,12 @@ function Invoke-EnableRcslCodexAppCore {
     }
 
     Set-TopLevelTomlKey -Lines $parts.Lines -Key 'model_provider' -Line ('model_provider = "{0}"' -f $script:ManagedProviderId)
-    Set-TopLevelTomlKey -Lines $parts.Lines -Key 'model' -Line ('model = "{0}"' -f (Escape-TomlString -Value $Capability))
+    Set-TopLevelTomlKey -Lines $parts.Lines -Key 'model' -Line ('model = "{0}"' -f (ConvertTo-TomlEscapedString -Value $Capability))
     Set-RcslProviderTable -Lines $parts.Lines -BaseUrl $BaseUrl -AllowExistingManaged:($activeState -or $ownedState)
     $updatedText = Join-TomlLines -Lines $parts.Lines -Newline $parts.Newline -TrailingNewline $true
 
     if ($captureOriginal) {
-        $backupPath = New-ConfigBackup -ConfigPath $configPath -Text $originalText
+        $backupPath = New-ConfigBackup -Text $originalText
         $state = [pscustomobject]@{
             SchemaVersion = $script:StateSchemaVersion
             Mode = 'preparing-rcsl'
@@ -853,10 +1020,16 @@ function Invoke-DisableRcslCodexAppCore {
         $app = Install-CodexApp
     }
 
+    $configPath = Get-CodexConfigPath
+
+    # Same reason as the enable path: a document the switcher will not edit is a
+    # refusal, and a refusal must not cost the operator a closed App.
+    $preflight = Split-TomlLines -Text (Read-Utf8Text -Path $configPath)
+    Assert-SafeTomlForManagedEdit -Lines $preflight.Lines
+
     Stop-CodexAppGracefully -TimeoutSeconds $CloseTimeoutSeconds
 
     $state = Get-SwitcherState
-    $configPath = Get-CodexConfigPath
     $text = Read-Utf8Text -Path $configPath
     $parts = Split-TomlLines -Text $text
     Assert-SafeTomlForManagedEdit -Lines $parts.Lines
@@ -946,7 +1119,7 @@ function Get-ProjectConfigPaths {
     param([string]$ProjectPath = (Get-Location).Path)
     $paths = [Collections.Generic.List[string]]::new()
     if ([string]::IsNullOrWhiteSpace($ProjectPath) -or -not (Test-Path -LiteralPath $ProjectPath -PathType Container)) {
-        return @()
+        return ,$paths
     }
     $directory = [IO.DirectoryInfo](Resolve-Path -LiteralPath $ProjectPath).Path
     $userConfigPath = [IO.Path]::GetFullPath((Get-CodexConfigPath))
@@ -961,7 +1134,7 @@ function Get-ProjectConfigPaths {
         }
         $directory = $directory.Parent
     }
-    return @($paths)
+    return ,$paths
 }
 
 function Get-CodexSwitcherStatus {
@@ -978,18 +1151,45 @@ function Get-CodexSwitcherStatus {
     catch {
         $issues.Add($_.Exception.Message)
     }
-    $model = Get-TopLevelTomlValue -Lines $parts.Lines -Key 'model'
-    $provider = Get-TopLevelTomlValue -Lines $parts.Lines -Key 'model_provider'
-    $providerPattern = [regex]::Escape($script:ManagedProviderId)
-    $hasProviderTable = [bool]($parts.Lines | Where-Object { $_ -match ("^\s*\[model_providers\.$providerPattern\]\s*(?:#.*)?$") })
+
+    $model = ''
+    $provider = ''
+    try {
+        $model = Get-TopLevelTomlValue -Lines $parts.Lines -Key 'model'
+        $provider = Get-TopLevelTomlValue -Lines $parts.Lines -Key 'model_provider'
+    }
+    catch {
+        $issues.Add($_.Exception.Message)
+    }
+
+    $hasProviderTable = $false
+    foreach ($line in $parts.Lines) {
+        if (Test-ManagedProviderHeader -Line $line) {
+            $hasProviderTable = $true
+            break
+        }
+    }
     if ($provider -eq $script:ManagedProviderId -and -not $hasProviderTable) {
         $issues.Add("model_provider selects $($script:ManagedProviderId), but its provider table is absent.")
     }
     if ($hasProviderTable) {
-        foreach ($providerIssue in @(Get-ManagedProviderIssues -Lines $parts.Lines)) {
+        # Not @(...): these functions return their list through a unary comma, and a
+        # second wrap would make the list itself the single element.
+        foreach ($providerIssue in (Get-ManagedProviderIssues -Lines $parts.Lines)) {
             $issues.Add($providerIssue)
         }
     }
+
+    # A read-only status must not fail because one unreadable process cannot be
+    # attributed; that refusal belongs to the switch path, which needs certainty.
+    $appRunning = $null
+    try {
+        $appRunning = (@(Get-CodexAppProcesses).Count -gt 0)
+    }
+    catch {
+        $issues.Add($_.Exception.Message)
+    }
+
     $state = Get-SwitcherState
     $managedHashMatchesState = $null
     if ($null -ne $state) {
@@ -1031,12 +1231,12 @@ function Get-CodexSwitcherStatus {
             }
         }
     }
-    $projectConfigs = @(Get-ProjectConfigPaths -ProjectPath $ProjectPath)
+    $projectConfigs = Get-ProjectConfigPaths -ProjectPath $ProjectPath
     return [pscustomobject]@{
         IsWindows = ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT)
         AppInstalled = $app.Installed
         AppVersion = $app.Version
-        AppRunning = (@(Get-CodexAppProcesses).Count -gt 0)
+        AppRunning = $appRunning
         ConfigPath = $configPath
         ConfigExists = (Test-Path -LiteralPath $configPath)
         Model = $model
@@ -1061,6 +1261,7 @@ Export-ModuleMember -Function @(
     'Get-CodexAppProcesses',
     'Get-CodexConfigPath',
     'Get-CodexSwitcherStatus',
+    'Get-NormalizedGatewayBaseUrl',
     'Get-SwitcherState',
     'Install-CodexApp',
     'Stop-CodexAppGracefully',

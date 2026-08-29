@@ -24,6 +24,9 @@ CLI needs its own process-scoped key or an OpenAI restoration first.
   dialog, not console or command-line input.
 - `CodexAppSwitcher.Common.psm1` — shared transactional configuration, App
   discovery, graceful shutdown, launch, backup, and gateway functions.
+- `Invoke-CodexAppSwitcherTests.ps1` — the configuration-handling suite, run by
+  the `windows-client-tools` CI job. It touches no App, network, registry,
+  `config.toml`, or recovery state.
 
 ## Launch
 
@@ -56,6 +59,19 @@ powershell.exe -NoProfile -STA -File `
 The authenticated form prompts for the API key with hidden input. There is no
 API-key command-line parameter because command lines are observable by other
 processes and frequently copied into shell history.
+
+Run the configuration-handling suite:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\scripts\windows\codex-app\Invoke-CodexAppSwitcherTests.ps1
+```
+
+It must be run on Windows PowerShell 5.1, which is the host the switcher itself
+targets and the host on which its first three faults were visible at all. See
+[the runbook, section 6.1](../../../docs/runbooks/windows-codex-app-switcher.md#61-the-suite-that-runs-without-an-app)
+for what the suite covers and how it was checked against the defects it exists
+to catch.
 
 ## Safety properties
 

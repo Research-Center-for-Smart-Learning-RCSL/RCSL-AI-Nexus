@@ -95,7 +95,11 @@ def test_every_identity_dependency_leaves_its_actor_on_the_request() -> None:
     definitions: dict[str, ast.AsyncFunctionDef | ast.FunctionDef] = {}
     returns_actor: set[str] = set()
     for module in sorted(root.rglob("*.py")):
-        for node in ast.walk(ast.parse(module.read_text())):
+        # `encoding` is not optional, for the reason spelled out in
+        # test_proxy_and_body_limits.py: without it these sources decode in the
+        # process locale, and this test died on a `UnicodeDecodeError` rather than
+        # on its invariant on every machine whose locale was not UTF-8.
+        for node in ast.walk(ast.parse(module.read_text(encoding="utf-8"))):
             if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
                 definitions[node.name] = node
                 if getattr(node.returns, "id", None) == "Actor":
@@ -143,7 +147,7 @@ def test_the_api_key_resolver_remembers_before_the_checks_that_refuse() -> None:
         / "api_key_auth"
         / "authentication.py"
     )
-    tree = ast.parse(module.read_text())
+    tree = ast.parse(module.read_text(encoding="utf-8"))
     resolver = next(
         node
         for node in ast.walk(tree)

@@ -15,6 +15,95 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-29 — The Windows switcher had never been run, and four separate faults were each enough to prove it
+
+PR 14 added about 1,650 lines of PowerShell under `scripts/windows/codex-app`
+and reported four green CI jobs on its head commit. All four jobs run on
+`ubuntu-latest`. Nothing in the pipeline executed, linted, or parsed a single
+line of that PowerShell, and the pull request said so plainly in its own
+verification section. The green checks were true and irrelevant, which is the
+more dangerous combination.
+
+Running the module on a Windows 11 machine with Codex App installed found four
+faults, each of which on its own made the feature inoperable. Three were
+specific to the host the switcher targets, Windows PowerShell 5.1 under
+`Set-StrictMode -Version Latest`. A `Mandatory` parameter typed
+`[Collections.Generic.List[string]]` applies the not-empty check to each
+element, so every function taking `-Lines` refused any `config.toml` containing
+a blank line; the fix is `[AllowEmptyString()]` and `[AllowEmptyCollection()]`
+together, and neither alone is sufficient. A `List[int]` returned from a
+function is unrolled on the way out, arriving as an `Int32` for one element and
+as `$null` for none, and all six callers of `Find-TopLevelKeyIndices` then read
+`.Count` on it; the fix is the unary comma. An accumulator was named `$matches`,
+which the `-match` operator replaces with a `Hashtable` on its first success, so
+the next `.Add($i)` failed on an overload that does not exist. That one sat on
+the restore path, after the operator's App had already been closed, which is the
+worst place in the design for a defect to be.
+
+The fourth was not a slip. `Assert-SafeTomlForManagedEdit` rejected any quoted
+table header, demanding the operator "normalize" it first. Codex App writes
+`[projects.'c:\path with spaces']` for every trusted directory and
+`[plugins."name@source"]` for every plugin, and those keys cannot be normalized,
+because TOML requires quoting for a key containing a backslash, a colon, a
+space, or a non-ASCII character. The guard was therefore a permanent refusal
+aimed precisely at the population the tool exists for, and it was reached on a
+real machine on the first attempt. Header parsing now accepts bare, basic-string
+and literal-string segments, and the refusals are narrowed to forms a
+line-oriented edit genuinely cannot carry: multiline strings, quoted keys in the
+top-level section or inside the managed provider's own table, multi-line arrays
+in those same two places, `model_providers` written inline or dotted or as an
+array of tables, a table nested under the managed provider, and a header segment
+hiding behind a backslash escape. Everything else the App writes is now left
+alone, and the boundary is documented in the runbook rather than discovered.
+
+Two ordering faults came out with them. The enable and disable paths closed the
+App before reading the configuration they might refuse, so a refusal cost the
+operator a closed App and gave nothing back; both now run every check that can
+be decided from the document alone before the App is touched, and then repeat
+them afterwards, because the App rewrites `config.toml` as it exits and the
+document validated first is not necessarily the document about to be edited.
+The read-only status also let a single unreadable process abort the whole
+report; that refusal belongs to the switch path, which needs certainty, not to
+a diagnostic.
+
+The suite that now covers this deliberately uses no test framework. Only Pester
+3.4.0 ships with Windows PowerShell 5.1 and its assertion syntax is not the one
+Pester 5 accepts, so depending on either would have meant a suite that could not
+be run on the host where three of these faults are visible at all. Fifty cases
+call the configuration functions directly against fixtures in the shape the App
+writes, and touch no App, network, registry, `config.toml`, or recovery state.
+They were then measured rather than trusted: with each of the four faults
+reintroduced one at a time, the suite fails 11, 12, 3 and 7 cases respectively,
+and 2 more for a fifth defect found while writing it, where an empty array
+leaving an `if`-expression is enumerated away to `$null`. A suite that stays
+green on the broken code is the same kind of artifact as a CI job that never
+runs the code.
+
+The `windows-client-tools` job runs it on `windows-latest`, with PSScriptAnalyzer
+under a rule set chosen for rules that catch defects rather than preferences.
+`PSAvoidAssignmentToAutomaticVariable` earns the job on its own: it flags the
+`$matches` fault directly. Two further findings from that pass were real and are
+fixed, an unused `ConfigPath` parameter and two event-handler parameters
+shadowing automatic variables, and the analyzer's remaining twenty-odd
+complaints about plural nouns and `ShouldProcess` are excluded on purpose,
+because a gate reporting thirty things nobody intends to act on stops being
+read.
+
+What is now established is narrow and worth stating exactly. The package
+identity and executable layout are real on one machine and one build:
+`OpenAI.Codex` `26.825.4187.0`, whose `AppxManifest.xml` names
+`app/ChatGPT.exe` as its `Windows.FullTrustApplication` entry point. The doctor
+runs end to end and its online checks reach the production gateway, resolving
+`llmapi.rcsl.online` and getting HTTP 200 from `/healthz`. What is still
+unverified is unchanged by any of this work: that launching that executable
+directly activates the App the way the Store entry does, since a direct launch
+out of `WindowsApps` does not go through package activation, and that the App's
+internal app-server inherits the process-scoped key. Neither can be settled
+without an interactive Windows session driving a real App task, and the runbook
+continues to gate the claim on exactly that.
+
+---
+
 ## 2026-08-28 — The landing page deployed, and a credential helper that is still broken three days later
 
 PR 15 merged to `main` as `74b258c` and deployed on the Mac Studio. The

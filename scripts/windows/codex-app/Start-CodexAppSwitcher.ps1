@@ -9,8 +9,12 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 }
 
 if ([Threading.Thread]::CurrentThread.ApartmentState -ne [Threading.ApartmentState]::STA) {
+    # The relaunch has to carry the execution policy too. Without it the new process
+    # inherits the machine default and dies before it can say why.
     $hostPath = (Get-Command powershell.exe -ErrorAction Stop).Path
-    Start-Process -FilePath $hostPath -ArgumentList @('-NoProfile', '-STA', '-File', ('"{0}"' -f $PSCommandPath))
+    Start-Process -FilePath $hostPath -ArgumentList @(
+        '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $PSCommandPath)
+    )
     return
 }
 
@@ -157,11 +161,11 @@ function Write-UiStatus {
     $statusBox.AppendText("[$stamp] $Message`r`n")
 }
 
-function Refresh-UiStatus {
+function Update-UiStatus {
     try {
         $status = Get-CodexSwitcherStatus -ProjectPath $projectPathBox.Text.Trim()
         $installed = if ($status.AppInstalled) { "installed $($status.AppVersion)" } else { 'not installed' }
-        $running = if ($status.AppRunning) { 'running' } else { 'stopped' }
+        $running = if ($null -eq $status.AppRunning) { 'run state unknown' } elseif ($status.AppRunning) { 'running' } else { 'stopped' }
         $modeLabel.Text = "User-level default: $($status.UserSelectionMode); App $installed; $running"
         foreach ($configurationIssue in @($status.ConfigurationIssues)) {
             Write-UiStatus "Configuration warning: $configurationIssue"
@@ -224,7 +228,7 @@ $operationTimer.Add_Tick({
         $operation.PowerShell.Dispose()
         $operation.Runspace.Dispose()
         Set-UiBusy -Busy $false
-        Refresh-UiStatus
+        Update-UiStatus
     }
 })
 
@@ -289,7 +293,7 @@ $doctorButton.Add_Click({
         $doctor = Join-Path $PSScriptRoot 'Test-CodexAppConnection.ps1'
         $hostPath = (Get-Command powershell.exe -ErrorAction Stop).Path
         $arguments = @(
-            '-NoProfile', '-STA', '-NoExit', '-File', ('"{0}"' -f $doctor),
+            '-NoProfile', '-STA', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $doctor),
             '-BaseUrl', ('"{0}"' -f $baseUrlBox.Text.Trim()),
             '-Capability', ('"{0}"' -f $capabilityBox.Text.Trim()),
             '-ProjectPath', ('"{0}"' -f $projectPathBox.Text.Trim()),
@@ -304,14 +308,16 @@ $doctorButton.Add_Click({
 
 $form.Add_Shown({
     Write-UiStatus 'No local or remote check has run yet.'
-    Refresh-UiStatus
+    Update-UiStatus
     $apiKeyBox.Focus()
 })
 
 $form.Add_FormClosing({
-    param($sender, $eventArgs)
+    # Not $sender/$eventArgs: both are automatic variables, and the handler binds
+    # positionally regardless of what these are called.
+    param($closingSender, $closingArgs)
     if ($null -ne $script:operation) {
-        $eventArgs.Cancel = $true
+        $closingArgs.Cancel = $true
         [Windows.Forms.MessageBox]::Show('Wait for the current switch transaction to finish before closing this window.', 'Operation in progress', 'OK', 'Warning') | Out-Null
     }
 })
