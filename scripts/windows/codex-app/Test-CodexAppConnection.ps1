@@ -116,7 +116,11 @@ Invoke-Check -Name 'Codex App process' -Action {
         Add-Check -Name 'Codex App process' -Status 'WARN' -Detail 'The App is not running. This is expected before a switch, but no App-specific state can be observed.'
     }
     else {
-        Add-Check -Name 'Codex App process' -Status 'PASS' -Detail "$count ChatGPT process(es) are running."
+        # Not all of them are ChatGPT.exe: the count includes the codex app-server,
+        # which runs outside the package directory and is the one holding config.
+        $servers = @(Get-CodexAppServerProcesses).Count
+        Add-Check -Name 'Codex App process' -Status 'PASS' -Detail (
+            "$count App process(es) are running, of which $servers is the codex app-server.")
     }
 }
 

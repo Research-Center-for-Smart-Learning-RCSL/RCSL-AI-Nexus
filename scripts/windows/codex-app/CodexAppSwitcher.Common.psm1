@@ -310,6 +310,31 @@ function Install-CodexApp {
     return $installed
 }
 
+function Get-CodexAppServerProcesses {
+    <#
+        The App's work is done by `codex.exe app-server`, which lives under
+        %LOCALAPPDATA%\OpenAI\Codex\bin rather than inside the package and is
+        therefore invisible to a search of the package directory. It is the
+        process that reads config.toml, so "has the App closed" cannot be
+        answered without it.
+
+        Measured 2026-08-29: it runs as a child of ChatGPT.exe and, on that
+        build, exited before its parent. Parentage is deliberately not the test,
+        because the case worth catching is the one where the parent has gone
+        first and this has not.
+
+        An interactive `codex` CLI session is not matched: the `app-server`
+        subcommand is the App's, and refusing to switch because someone has a
+        CLI open would be a false alarm.
+    #>
+    if (@(Get-Process -Name codex -ErrorAction SilentlyContinue).Count -eq 0) {
+        return @()
+    }
+    $servers = @(Get-CimInstance Win32_Process -Filter "Name='codex.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '(^|\s)app-server(\s|$)' })
+    return @($servers | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+}
+
 function Get-CodexAppProcesses {
     $app = Get-CodexAppInfo
     if (-not $app.Installed) {
@@ -332,20 +357,28 @@ function Get-CodexAppProcesses {
             throw "Cannot determine whether ChatGPT process $($process.Id) belongs to Codex App. Close it manually before switching. $($_.Exception.Message)"
         }
     }
+    foreach ($server in (Get-CodexAppServerProcesses)) {
+        $matching.Add($server)
+    }
     return @($matching)
 }
 
 function Stop-CodexAppGracefully {
     <#
-        Measured against OpenAI.Codex 26.825.4187.0 on 2026-08-29: that build runs
-        as eight Chromium processes and every one of its top-level windows is
-        invisible, because it lives in the notification area. `MainWindowHandle`
-        only reports a *visible* unowned window, so it is 0 for all eight and there
-        is nothing here to ask; posting WM_CLOSE to those windows was tried and did
-        not end the App either. Asking is still attempted, because a build that
-        does show a window should be closed politely -- but when nothing can be
-        asked, the operator is told that immediately instead of after a silent
-        timeout that was never going to succeed.
+        Measured against OpenAI.Codex 26.825.4187.0 on 2026-08-29, in both states
+        the App can be in, and it does not close in either.
+
+        Started with no profile it showed no visible window at all, so
+        `MainWindowHandle` -- which reports only a visible unowned window -- was 0
+        for every process and there was nothing to ask. Started with the real
+        profile it did show a window and `MainWindowHandle` was set, so
+        `CloseMainWindow` reached it; forty seconds later all nine processes and
+        the app-server were still running. `WM_CLOSE` posted directly to those
+        windows did nothing either. This App exits from its tray menu.
+
+        Asking is still attempted, because a future build may honour it. What
+        changed is that the operator is told which of the two situations they are
+        in, and in the second is not made to wait out a timeout first.
     #>
     param([ValidateRange(5, 120)][int]$TimeoutSeconds = 30)
 
@@ -1279,6 +1312,7 @@ Export-ModuleMember -Function @(
     'Enable-RcslCodexApp',
     'Get-CodexAppInfo',
     'Get-CodexAppProcesses',
+    'Get-CodexAppServerProcesses',
     'Get-CodexConfigPath',
     'Get-CodexSwitcherStatus',
     'Get-NormalizedGatewayBaseUrl',

@@ -15,6 +15,73 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-29 — The App task ran, and the process that ran it was one the switcher could not see
+
+The interactive gate the runbook had carried since the switcher was written was
+finally walked through, with a real `code` key against the operator's own
+`~/.codex/config.toml` rather than a copy. It passed. A new task in
+`OpenAI.Codex` `26.825.4187.0`, asked to read a file, ran `cat README.md` and
+returned a correct summary of it in five minutes seventeen seconds. The App's
+model picker showed the custom provider rather than substituting one of its own,
+which is the failure this runbook warns about most often and which did not
+happen.
+
+The evidence for *why* it worked is more useful than the fact that it did. While
+the task was in flight, no connection to the gateway could be found from any
+`ChatGPT.exe` process, which was alarming for about a minute. The App's own
+connections were all to Google and Cloudflare. The request was being made by a
+process that a search of the package directory cannot find:
+`codex.exe app-server`, running from
+`%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`, a child of the main App
+process. Its environment block, read out of its PEB, carried `RCSL_API_KEY`, and
+it held an established TLS connection to the gateway address. That is the
+component the hypothesis was always about, and it is now measured rather than
+assumed.
+
+It is also the component `Get-CodexAppProcesses` had never counted. That
+function matched processes named `ChatGPT` whose executable sat under the
+package root, and the app-server satisfies neither condition. So the question
+the whole transaction depends on -- has the App let go of `config.toml` -- was
+being answered by looking at everything except the process that holds it. On
+this build the app-server exited before the last `ChatGPT.exe` did, and polling
+at 200 ms found no interval where the switcher would have seen an idle App while
+the server was alive, so nothing was corrupted and nothing was ever going to be
+today. But that safety was a property of the App's shutdown ordering, not of any
+check the switcher performed, and shutdown ordering is not a thing this project
+gets to rely on. The app-server is now counted, matched on the `app-server`
+subcommand so that an operator's own `codex` CLI session is not mistaken for the
+App.
+
+The other correction is to yesterday's own conclusion. It had been recorded that
+the switcher cannot close the App because the App exposes no window to close.
+The first half is right and the second was too narrow, and only ran because the
+sandbox App had no profile: started against the real profile the App does show a
+window, `MainWindowHandle` is set, and `CloseMainWindow` reaches it. Forty
+seconds later all nine processes and the app-server were still running.
+`WM_CLOSE` posted directly to those windows did nothing either. So the App does
+not close on request in either state, which is a stronger statement than the one
+that was written down, arrived at by testing the case that would have refuted
+it.
+
+The switch itself behaved. `Enable` validated the key against `/v1/models`,
+which returned exactly `code` for it, took its backup, rewrote only the
+selection and the managed provider table, and launched. Restoration put
+`model = "gpt-5.6-terra"` back and removed `model_provider`, which had not been
+present before, and reported no configuration issues. The document is not
+byte-identical to its pre-switch copy and should not be: the App rewrote its own
+runtime paths, its version markers and a new `[mcp_servers.cua_repl]` table
+while it ran. All nine `[plugins.…]` tables, all eight `[projects.…]` trust
+entries and all three `[mcp_servers.…]` tables came through unchanged, which is
+the narrowed guard from earlier today doing the thing it was narrowed for. The
+relaunched App carries no `RCSL_API_KEY` in any of its processes.
+
+What is left is what was always going to be left. This is one build, one
+machine, one capability, one day, and the App updates itself. Section 7 stays in
+the runbook as a step to repeat after each App update rather than a box that has
+now been ticked.
+
+---
+
 ## 2026-08-29 — Running the switcher against the real App settled two hypotheses and refuted a third
 
 The four faults fixed earlier today were found by reading and by unit-level
