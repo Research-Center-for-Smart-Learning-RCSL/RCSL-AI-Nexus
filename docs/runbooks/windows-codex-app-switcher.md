@@ -80,23 +80,32 @@ discovery is unavailable, it derives the package root from the `codex.exe`
 execution alias. Package installation paths contain the App version and must
 never be hard-coded. The Store ID below is documented by OpenAI.
 
-A full switch was run against the real App on one Windows 11 machine on
-2026-08-29, in a redirected `CODEX_HOME` so that the operator's own
-configuration was never reachable by any step. It established three things that
-had been assumptions until then, on `OpenAI.Codex` `26.825.4187.0`:
+Everything this section used to hold open was measured on 2026-08-29, on one
+Windows 11 machine running `OpenAI.Codex` `26.825.4187.0`, first in a redirected
+`CODEX_HOME` and then, with a real Nexus key, against the operator's own
+configuration:
 
 - The package identity and layout are as assumed. `AppxManifest.xml` names
   `app/ChatGPT.exe` as its `Windows.FullTrustApplication` entry point.
-- Launching that executable directly does start the App. It came up as eight
-  Chromium processes, and the switcher's own startup confirmation observed them
-  and found the managed configuration intact.
-- The process-scoped key does reach the App. Four of those eight processes,
-  including the main one, carried both `RCSL_API_KEY` and the redirected
-  `CODEX_HOME` in their environment blocks, read out of their PEBs rather than
-  inferred. One utility process did not, which is noted in section 7.
+- Launching that executable directly does start the App, which came up as nine
+  processes and passed the switcher's own startup confirmation.
+- The process-scoped key reaches the App and, decisively, reaches
+  `codex.exe app-server` -- the internal component that actually issues the
+  request. Its environment block, read out of its PEB, carried `RCSL_API_KEY`,
+  and it held an established TLS connection to the gateway address.
+- The agent loop works end to end. A new App task asked to read a file ran
+  `cat README.md` and returned a correct summary of it, which is the acceptance
+  step section 7 describes.
 
-One machine, one build, one run: this is a measurement, not a compatibility
-contract, and the App's own use of that key is still what section 7 gates.
+One machine, one build, one run. This is a measurement rather than a
+compatibility contract, and the App updates itself.
+
+The app-server is worth naming, because it is not where a search for the App
+would look. It runs from `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`,
+outside the package directory entirely, and it is the process that reads
+`config.toml`. The switcher counts it as part of the App for exactly that
+reason; an interactive `codex` CLI session is not counted, since only the App
+starts the `app-server` subcommand.
 
 When installation is required, the switcher runs the command in OpenAI's
 [Windows App download instructions](https://learn.chatgpt.com/docs/windows/windows-app#download-the-chatgpt-desktop-app):
@@ -226,19 +235,23 @@ force-terminated. On the measured build, asking is not something the switcher
 can do at all, and it is better to know that than to discover it after a
 timeout.
 
-`OpenAI.Codex` `26.825.4187.0` runs as eight Chromium processes and sits in the
-notification area. Every one of its top-level windows is invisible, including
-the `Chrome_WidgetWin_1` window titled "ChatGPT". Windows reports a main window
-only when it is visible and unowned, so the App has none to report, and the
-polite close the switcher would send has no recipient. Posting `WM_CLOSE` to
-those windows directly was measured on 2026-08-29 and did not end the App
-either, which is ordinary behavior for a program whose window closing means
-"hide to the tray".
+`OpenAI.Codex` `26.825.4187.0` sits in the notification area, and it was
+measured in both of the states it can be in. Neither closes.
 
-So the switcher now stops as soon as it finds the App running with nothing to
-ask, and says to quit it from the tray icon. It does not wait thirty seconds
-first, and it still does not terminate anything. Quit the App before switching
-in either direction.
+Started without a profile, it showed no visible window at all. Windows reports a
+main window only when one is visible and unowned, so there was nothing for the
+switcher to ask, and its polite close had no recipient.
+
+Started with the real profile, it did show a window, and the close request
+reached it. Forty seconds later all nine processes and the app-server were still
+running. Posting `WM_CLOSE` to those windows directly did not end it either,
+which is ordinary behavior for a program whose window closing means "hide to the
+tray".
+
+So the switcher asks where there is something to ask, tells the operator
+immediately where there is not, and in both cases says the same thing: quit
+Codex App from its tray icon, because closing its window is not the same act.
+It still terminates nothing. Quit the App before switching in either direction.
 
 The switcher relies on the App and its child app-server inheriting the key from
 the directly launched process. Later terminals, unrelated applications, and a
@@ -368,13 +381,23 @@ catalogue. It cannot prove the desktop App-specific agent loop. The App may add:
 - a model picker that overrides the configured model;
 - behavior changed by a self-update since the last measured build.
 
-The 2026-08-29 measurement narrowed this gap without closing it. The key
-demonstrably reaches the App's main process and most of its children. It does
-not follow that the component issuing the request reads it: one of the eight
-processes, a `storage.mojom.StorageService` utility, carried neither
-`RCSL_API_KEY` nor `CODEX_HOME`, which is a reminder that the App does not give
-every child the environment it was started with. Only a real task in the App,
-against a real key, shows whether the inference request is authenticated.
+On 2026-08-29 this gate was walked through rather than reasoned about, and it
+passed. The acceptance step below was run on `26.825.4187.0` with a real Nexus
+key against the operator's own configuration: a new App task asked to read a
+file ran `cat README.md` and returned a correct summary of it. The App's model
+picker showed the custom provider rather than overriding it, and
+`codex.exe app-server` held an established connection to the gateway with
+`RCSL_API_KEY` in its environment. Tool call, translation, inference and result
+all worked.
+
+That does not retire this section. It closes it for one build on one machine on
+one day, against one capability. The App self-updates, the picker is a UI the
+operator can change, and the list above describes things that appear and
+disappear between versions. The step is cheap and the failure it catches is
+silent, so run it after switching, and run it again after the App updates
+itself. One figure worth recording from the passing run: the task took five
+minutes and seventeen seconds, which is the local runtime rather than the
+switcher, and is what an operator should expect to wait.
 
 After switching, request a real file operation in a new App task, for example:
 
@@ -462,8 +485,10 @@ for OpenAI compatibility guarantees. Official pages were rechecked on
 | Custom providers support `base_url`, `env_key`, and `wire_api = "responses"`; `env_key` names an environment variable rather than containing its secret. | OpenAI documentation | [Custom model providers](https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers) and [Configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference) |
 | The installed App exposes the `OpenAI.Codex` AppX identity and an `app\ChatGPT.exe` executable. | Project measurement, 2026-08-29 | Observed on one Windows 11 machine: `Get-AppxPackage -Name OpenAI.Codex` returned `26.825.4187.0`, and that package's `AppxManifest.xml` names `app/ChatGPT.exe` as the `Windows.FullTrustApplication` entry point. One machine and one build; still not an OpenAI compatibility contract |
 | Executing the packaged executable directly starts the App. | Project measurement, 2026-08-29 | A full `Enable-RcslCodexApp` in a redirected `CODEX_HOME` launched it as eight Chromium processes and passed the switcher's own startup confirmation. Package activation is bypassed by this path, so a build could stop tolerating it without notice |
-| The process-scoped key reaches the App's processes. | Project measurement, 2026-08-29 | Environment blocks read out of the running processes' PEBs: four of eight, including the main process, carried `RCSL_API_KEY` and the redirected `CODEX_HOME`; one utility process carried neither. Whether the app-server *uses* the key is still section 7 |
-| The switcher can close a running App. | Refuted by measurement, 2026-08-29 | The build sits in the notification area with every top-level window invisible, so it reports no main window to close, and `WM_CLOSE` posted to those windows did not end it. The operator must quit it from the tray; the switcher now says so immediately (section 4.2) |
+| The process-scoped key reaches the component that issues the request. | Project measurement, 2026-08-29 | `codex.exe app-server`, a child of ChatGPT.exe running from `%LOCALAPPDATA%\OpenAI\Codex\bin`, carried `RCSL_API_KEY` in its PEB environment block and held an established connection to the gateway address while a task ran |
+| The App's agent loop works against Nexus. | Project measurement, 2026-08-29 | A new task on the operator's own configuration, with a real `code` key, ran `cat README.md` and returned a correct summary. Model picker showed the custom provider. Elapsed five minutes seventeen seconds. One build, one capability, one run: section 7 stays as a step to repeat, not a box that is now ticked |
+| The switcher can close a running App. | Refuted by measurement, 2026-08-29 | Measured in both states: with no visible window there is nothing to ask, and with a visible window `CloseMainWindow` reached it and all nine processes plus the app-server were still running forty seconds later. `WM_CLOSE` posted directly did not end it either. The operator quits it from the tray; the switcher says so rather than waiting (section 4.2) |
+| Counting only `ChatGPT.exe` under the package directory answers "has the App closed". | Refuted by measurement, 2026-08-29 | The process that reads `config.toml` is `codex.exe app-server`, which lives outside the package. It was invisible to that count. On this build it exited before its parent, so no unsafe window was observed at 200 ms sampling, but the ordering was not something the switcher checked. It now counts the app-server too |
 | The configuration handling accepts what the App writes and refuses only what a line-oriented edit cannot carry. | Repository implementation, under test | 50 cases in [`Invoke-CodexAppSwitcherTests.ps1`](../../scripts/windows/codex-app/Invoke-CodexAppSwitcherTests.ps1), run by the `windows-client-tools` CI job on Windows PowerShell 5.1, and measured against each reintroduced defect (section 6.1) |
 | A directly launched packaged executable passes `RCSL_API_KEY` through to the App's internal app-server. | Project hypothesis requiring interactive acceptance | Launch code in [`CodexAppSwitcher.Common.psm1`](../../scripts/windows/codex-app/CodexAppSwitcher.Common.psm1) plus section 7 of this runbook; not documented by OpenAI |
 | The App may rewrite user configuration and inject plugins, MCP servers, hidden model slots, and large tool sets. | Project-observed behavior | Historical measurements in [Connect an agent client](./connect-an-agent-client.md#32-the-same-sharing-in-the-direction-that-can-break-it); not presented as OpenAI guarantees |
