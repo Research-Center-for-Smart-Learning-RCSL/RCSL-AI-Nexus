@@ -209,7 +209,7 @@ $operationTimer.Add_Tick({
         $outputs = @($operation.PowerShell.EndInvoke($operation.AsyncResult))
         $result = $outputs | Select-Object -Last 1
         if ($operation.Action -eq 'connect') {
-            Write-UiStatus "Codex App configuration survived startup (PID $($result.ProcessId)); backup: $($result.BackupPath)"
+            Write-UiStatus "Codex App started and the managed configuration was unchanged when sampled a moment later (PID $($result.ProcessId)); backup: $($result.BackupPath)"
             Write-UiStatus 'The full App agent loop is still unverified. Create a new task and request a real file operation.'
         }
         else {

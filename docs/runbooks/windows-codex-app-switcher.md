@@ -7,9 +7,10 @@ local provider configuration.
 
 OpenAI's [Windows App documentation](https://learn.chatgpt.com/docs/windows/windows-app)
 is the authoritative source for supported Windows installation and operating
-modes. The `OpenAI.Codex` package identity and executable layout named here are
-runtime-checked implementation assumptions, not identifiers promised by that
-documentation or re-observed during this non-interactive change.
+modes. The `OpenAI.Codex` package identity and executable layout named here were
+observed on one machine and one build on 2026-08-29, which makes them
+measurements rather than identifiers that documentation promises. Section 2
+records what that measurement covered and section 10 classifies every claim.
 
 The switcher exists because project measurements found that editing
 `%USERPROFILE%\.codex\config.toml` while the App is running is not a safe
@@ -181,9 +182,11 @@ The switcher then performs these operations in order:
 
 1. Discover or install the App.
 2. Read `config.toml` and the recovery state, and refuse now if either is a
-   form the switcher will not own. Every refusal that can be decided from the
-   document alone is decided here, before the operator's App is touched, so
-   that a refusal costs nothing.
+   form the switcher will not own. It does this by rehearsing the entire edit
+   against a copy of the document and discarding the result, so that every
+   refusal decidable by reading is decided here, before the operator's App is
+   touched, and a refusal costs nothing. Running the transformation twice is
+   cheaper than closing somebody's App to tell them about a duplicate line.
 3. Validate the key against `GET /v1/models` and require the selected
    capability in the response.
 4. Ask any ChatGPT App window to close normally, or stop immediately with
@@ -226,7 +229,19 @@ Refused, with the line number and the reason:
 | A table nested under `[model_providers.rcsl_nexus_switcher]` | The switcher owns that table and would not preserve a child of it. |
 | A table-header segment written as a basic string containing a backslash escape | Resolving it needs full TOML escape processing; the switcher fails closed rather than miss a provider hiding under an escaped spelling. |
 
-A refusal names the line and what to change. None of them modifies anything.
+The rehearsal in step 2 adds the refusals that only appear once the edit is
+attempted, and moves them ahead of the App being closed:
+
+| Form | Why |
+|---|---|
+| Two top-level `model` or `model_provider` keys | The switcher would not know which one it is meant to replace, and replacing one leaves the other selecting something else. |
+| A second `[model_providers.rcsl_nexus_switcher]` table | Same ambiguity, for the table it owns. |
+| A duplicated key inside that table | Same again, for a field it writes. |
+| `experimental_bearer_token`, or `requires_openai_auth = true`, inside that table | Both conflict with the `env_key` authentication the switcher configures. |
+| `[model_providers.rcsl_nexus_switcher.auth]` | The switcher would not preserve it, and it contradicts `env_key`. |
+
+A refusal names the line and what to change. None of them modifies anything, and
+none of them closes the App first.
 
 ### 4.2 The switcher cannot close this App for you
 
@@ -333,7 +348,9 @@ The doctor reports:
 - complete managed-provider values and state/config drift;
 - `.codex/config.toml` files from the supplied project path that define a
   higher-precedence top-level `model`;
-- recovery-state and backup availability;
+- recovery-state and backup availability, and whether the backup still hashes to
+  the value recorded when it was taken, since a truncated or edited backup
+  otherwise looks exactly like an intact one until it is needed;
 - legacy user- or machine-level key presence, without reading the value;
 - DNS, TLS, and `/healthz` when `-Online` is used;
 - authenticated `/v1/models` capability visibility when `-Authenticated` is
@@ -359,10 +376,20 @@ the faults it pins were visible only under Windows PowerShell 5.1 with
 `Set-StrictMode -Version Latest`, and that is the host it therefore runs on
 with nothing to install first.
 
-The suite has been checked against the defects it exists to catch: with each of
-them reintroduced one at a time, it fails 11, 12, 3, 7 and 2 of its cases
-respectively. A suite that passes on the broken code proves nothing, and this
-one was measured rather than assumed.
+The suite has been checked against the defects it exists to catch. With each of
+the nine reintroduced one at a time, it fails 14, 17, 3, 7, 2, 1, 1, 1 and 1 of
+its cases respectively, and never zero. A suite that passes on the broken code
+proves nothing, and this one was measured rather than assumed.
+
+Three of its cases assert over the module's own source rather than by calling
+it, following the precedent in
+`backend/tests/unit/test_refusal_identity_and_permissions.py`. They exist
+because the properties concerned belong to the call sites and not to any
+function: that both switch paths validate the document before closing the App,
+and that nothing in the module reads a file with `Get-Content`, whose Windows
+PowerShell default decodes a BOM-less file in the system codepage. Exercising a
+helper cannot hold either, since the orchestration around them needs a real App
+to run.
 
 The `windows-client-tools` CI job runs it on `windows-latest`, together with
 PSScriptAnalyzer under
@@ -489,7 +516,7 @@ for OpenAI compatibility guarantees. Official pages were rechecked on
 | The App's agent loop works against Nexus. | Project measurement, 2026-08-29 | A new task on the operator's own configuration, with a real `code` key, ran `cat README.md` and returned a correct summary. Model picker showed the custom provider. Elapsed five minutes seventeen seconds. One build, one capability, one run: section 7 stays as a step to repeat, not a box that is now ticked |
 | The switcher can close a running App. | Refuted by measurement, 2026-08-29 | Measured in both states: with no visible window there is nothing to ask, and with a visible window `CloseMainWindow` reached it and all nine processes plus the app-server were still running forty seconds later. `WM_CLOSE` posted directly did not end it either. The operator quits it from the tray; the switcher says so rather than waiting (section 4.2) |
 | Counting only `ChatGPT.exe` under the package directory answers "has the App closed". | Refuted by measurement, 2026-08-29 | The process that reads `config.toml` is `codex.exe app-server`, which lives outside the package. It was invisible to that count. On this build it exited before its parent, so no unsafe window was observed at 200 ms sampling, but the ordering was not something the switcher checked. It now counts the app-server too |
-| The configuration handling accepts what the App writes and refuses only what a line-oriented edit cannot carry. | Repository implementation, under test | 50 cases in [`Invoke-CodexAppSwitcherTests.ps1`](../../scripts/windows/codex-app/Invoke-CodexAppSwitcherTests.ps1), run by the `windows-client-tools` CI job on Windows PowerShell 5.1, and measured against each reintroduced defect (section 6.1) |
+| The configuration handling accepts what the App writes and refuses only what a line-oriented edit cannot carry. | Repository implementation, under test | 65 cases in [`Invoke-CodexAppSwitcherTests.ps1`](../../scripts/windows/codex-app/Invoke-CodexAppSwitcherTests.ps1), run by the `windows-client-tools` CI job on Windows PowerShell 5.1, and measured against each reintroduced defect (section 6.1) |
 | A directly launched packaged executable passes `RCSL_API_KEY` through to the App's internal app-server. | Project hypothesis requiring interactive acceptance | Launch code in [`CodexAppSwitcher.Common.psm1`](../../scripts/windows/codex-app/CodexAppSwitcher.Common.psm1) plus section 7 of this runbook; not documented by OpenAI |
 | The App may rewrite user configuration and inject plugins, MCP servers, hidden model slots, and large tool sets. | Project-observed behavior | Historical measurements in [Connect an agent client](./connect-an-agent-client.md#32-the-same-sharing-in-the-direction-that-can-break-it); not presented as OpenAI guarantees |
 | WSL agent mode inherits a key injected into a native Windows App process. | Unknown / out of scope | No supporting OpenAI documentation or completed project acceptance test |

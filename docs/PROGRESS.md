@@ -15,6 +15,81 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-29 — A review of the day's own work found four more, and one of them was the lesson the day had already learned
+
+An adversarial pass over the branch produced nine findings. Eight were real and
+one had a wrong example attached to a right argument, which is a good ratio and
+worth recording as such: the finding that the preflight let some refusals
+through cited `[model_providers.rcsl_nexus_switcher.auth]` as an example, and
+that one is caught by the safety guard. Its actual examples were elsewhere.
+
+The most uncomfortable of the four is the one this repository had already
+written down twice. `Get-SwitcherState` read `state.json` with
+`Get-Content -Raw`, which on Windows PowerShell 5.1 decodes a file without a BOM
+in the system codepage; the state is written as UTF-8 without a BOM. A
+`ConfigPath` of `C:\Users\語言\.codex\config.toml` reads back as
+`C:\Users\隤?\.codex\config.toml`. The consequence is not cosmetic: restoration
+compares the recorded path against the live one, so an operator whose profile
+contains any non-ASCII character could switch to Nexus and then never switch
+back, being told their `CODEX_HOME` had moved. Earlier the same day this branch
+fixed exactly this defect in two Python tests, and the comment it was told to
+follow was already sitting in `test_proxy_and_body_limits.py`. Knowing the
+lesson and applying it are separate acts.
+
+The second is a claim the runbook made that the code did not keep. Both switch
+paths were changed earlier today to validate before closing the App, and the
+runbook says every refusal decidable from the document is decided there. It was
+not true. A duplicated top-level `model` key, a second managed provider table, a
+duplicated key inside it, `experimental_bearer_token` and
+`requires_openai_auth` all threw from the write, which happens after the App has
+been closed for the operator. The guard never looked for them because the guard
+was written to protect the parse, not to predict the edit. Both paths now
+rehearse the entire transformation against a copy of the lines and throw the
+copy away. Running it twice costs nothing; closing somebody's App to tell them
+about a duplicate line costs them the thing the transaction exists to protect.
+
+The third: `Test-RcslGateway` read `$response.data`, and dotting into a missing
+property is a terminating error under `Set-StrictMode -Version Latest`, not
+`$null`. A proxy or captive portal answering 200 with a body that has no `data`
+would abort the switch with "The property 'data' cannot be found on this
+object". Every other read of a parsed object in the module already used
+`PSObject.Properties`; this was the one that did not, which is the shape most of
+today's defects have had.
+
+The fourth: `Get-CodexSwitcherStatus` carries a comment explaining that a
+read-only status must not fail, and guards two of its four throwing calls. The
+projection hash and the project-config walk both call into the top-level key
+lookup, which throws on a duplicate, and neither was wrapped. A duplicate
+`model` line therefore took down the whole status, so the GUI said "unavailable"
+and the doctor reported five checks as unknown, none of them naming the line
+that would have let the operator fix it.
+
+Five lower-severity findings were fixed alongside. Cancelling the doctor's key
+dialog discarded every check already collected, because that one call sat
+outside `Invoke-Check`. Restoring re-added the managed provider table when the
+operator had deleted it, while the GUI reported it as preserved, and rewrote
+`config.toml` on what should have been a no-op without taking a backup; it now
+refreshes a table that is present and never resurrects one that is not. The
+"nothing to ask" message told the operator to use a tray icon that, in the one
+state where only the app-server remains, no longer exists. The GUI claimed the
+configuration "survived startup" from a single sample taken two seconds in,
+before the app-server that rewrites it need even have started. And
+`ConfigSha256Before` had been written into state since the beginning and never
+read by anything; the doctor now compares it against the backup on disk, which
+turns an inert field into the check that a truncated backup is not discovered at
+the moment it is needed.
+
+The suite went from 50 cases to 65 and the mutation harness from five defects to
+nine; every one is caught, and never by zero tests. Three of the new cases
+assert over the module's source rather than by calling it, because what they
+pin belongs to the call sites: that both paths validate before closing, and that
+nothing in the module reads a file with `Get-Content`. That is the same
+technique `test_refusal_identity_and_permissions.py` uses on the Python side and
+for the same reason, which is that a test driving the functions that exist today
+passes on the day a new one forgets.
+
+---
+
 ## 2026-08-29 — The App task ran, and the process that ran it was one the switcher could not see
 
 The interactive gate the runbook had carried since the switcher was written was
