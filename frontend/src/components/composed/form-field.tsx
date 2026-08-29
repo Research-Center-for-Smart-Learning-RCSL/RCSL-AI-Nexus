@@ -34,6 +34,7 @@ export type FormFieldProps<
   placeholder?: string;
   type?: HTMLInputTypeAttribute;
   autoComplete?: string;
+  autoFocus?: boolean;
   disabled?: boolean;
   /**
    * Renders something other than a plain input, for example a Select. Receives
@@ -59,6 +60,7 @@ export function FormField<
   placeholder,
   type = 'text',
   autoComplete,
+  autoFocus,
   disabled,
   render,
 }: FormFieldProps<TFieldValues, TName>) {
@@ -85,6 +87,7 @@ export function FormField<
                 type={type}
                 placeholder={placeholder}
                 autoComplete={autoComplete}
+                autoFocus={autoFocus}
                 disabled={disabled ?? field.disabled}
               />
             )}
