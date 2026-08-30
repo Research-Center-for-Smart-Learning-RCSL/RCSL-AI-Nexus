@@ -188,6 +188,13 @@ This is the manual CLI reference. The Windows App switcher uses the dedicated
 provider ID `rcsl_nexus_switcher` instead of `rcsl`, so it cannot overwrite an
 operator's existing manual provider definition.
 
+**Operators using the Windows App switcher should not do this step at all.** The
+switcher records whatever `model_provider` says before it writes its own, and
+that recording is what *Switch App back to OpenAI* restores. Writing
+`model_provider = "rcsl"` by hand first makes `rcsl` the selection it records as
+the previous one, so switching back returns the App to this platform rather than
+to OpenAI, with nothing reporting an error.
+
 The file location and trusted-project override order follow OpenAI's
 [basic configuration](https://learn.chatgpt.com/docs/config-file/config-basic)
 documentation. The provider table follows the documented

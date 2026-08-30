@@ -623,6 +623,137 @@ $outcome = & $module {
         }
     }
 
+    # -- recovery state, which fails closed or does not fail at all -----------
+
+    function New-State {
+        # A complete schema-2 state, so that a case removing one property is
+        # testing that property and not the shape of the fixture.
+        param([hashtable]$Override = @{})
+        $state = [pscustomobject]@{
+            SchemaVersion = 2
+            Mode = 'rcsl'
+            ConfigPath = 'C:\Users\op\.codex\config.toml'
+            BackupPath = 'C:\Users\op\AppData\Local\RCSL\backups\config.toml.before-rcsl'
+            ConfigSha256Before = ('0' * 64)
+            OriginalModel = 'gpt-5.6-terra'
+            OriginalModelProvider = $null
+            ProviderId = 'rcsl_nexus_switcher'
+            GatewayBaseUrl = 'https://llmapi.rcsl.online'
+            Capability = 'code'
+            AppVersion = '26.825.4187.0'
+            SwitchedAtUtc = '2026-08-29T15:08:02.0000000Z'
+        }
+        foreach ($key in $Override.Keys) {
+            $state | Add-Member -MemberType NoteProperty -Name $key -Value $Override[$key] -Force
+        }
+        return $state
+    }
+
+    Test-Case 'every mode the switcher writes is accepted' {
+        foreach ($mode in @('preparing-rcsl', 'rcsl', 'openai')) {
+            $state = New-State @{ Mode = $mode }
+            Assert-SwitcherStateUsable -State $state -ConfigPath $state.ConfigPath
+        }
+    }
+
+    Test-Case 'an unknown mode is refused rather than read as inactive' {
+        # This is the fail-closed property section 6 of the runbook claims. The
+        # check used to ask only "is the mode one of the two active ones", so a
+        # truncated or hand-edited state answered "no" and the enable path then
+        # overwrote the recovery metadata that was the way back.
+        $state = New-State @{ Mode = 'corrupt' }
+        Assert-Throws -MessagePattern "unknown mode 'corrupt'" -Body {
+            Assert-SwitcherStateUsable -State $state -ConfigPath $state.ConfigPath
+        }
+    }
+
+    Test-Case 'an empty mode is refused, not treated as absent state' {
+        $state = New-State @{ Mode = '' }
+        Assert-Throws -MessagePattern 'unknown mode' -Body {
+            Assert-SwitcherStateUsable -State $state -ConfigPath $state.ConfigPath
+        }
+    }
+
+    Test-Case 'a state missing any property the switcher relies on is refused' {
+        # Named individually because each one is a different way back that would
+        # otherwise be read as $null under Set-StrictMode only at the point of
+        # use, which on this path is after the App has been closed.
+        foreach ($name in @('Mode', 'ConfigPath', 'BackupPath', 'OriginalModel', 'OriginalModelProvider', 'ProviderId', 'Capability')) {
+            $state = New-State
+            $state.PSObject.Properties.Remove($name)
+            Assert-Throws -MessagePattern ("missing: .*{0}" -f $name) -Body {
+                Assert-SwitcherStateUsable -State $state -ConfigPath 'C:\Users\op\.codex\config.toml'
+            }
+        }
+    }
+
+    Test-Case 'a null OriginalModelProvider is a value, not a missing property' {
+        # The common case: the operator had no model_provider line at all, and
+        # restoration has to put that absence back. A presence check that
+        # rejected $null would refuse every first switch.
+        $state = New-State @{ OriginalModelProvider = $null }
+        Assert-SwitcherStateUsable -State $state -ConfigPath $state.ConfigPath
+    }
+
+    Test-Case 'a null OriginalModelProvider survives the round trip the switcher makes' {
+        # The case above builds the object in memory, and the input the checks
+        # actually see is always ConvertTo-Json -> file -> ConvertFrom-Json. That
+        # matters more now that a missing property fails closed on both paths: if
+        # the round trip ever dropped a null-valued key, every operator whose
+        # config.toml had no model_provider line -- the common first switch --
+        # would be locked out of switching and of restoring, with this suite
+        # green. Save-SwitcherState is deliberately not called, because the suite
+        # promises to touch no recovery state; these are the two functions it
+        # would use, pointed at a file of the test's own.
+        $state = New-State @{ OriginalModelProvider = $null; OriginalModel = $null }
+        $file = Join-Path ([IO.Path]::GetTempPath()) ("switcher-roundtrip-{0}.json" -f [Guid]::NewGuid().ToString('N'))
+        try {
+            Write-Utf8TextAtomic -Path $file -Text (($state | ConvertTo-Json -Depth 8) + "`n")
+            $reloaded = (Read-Utf8Text -Path $file | ConvertFrom-Json)
+            Assert-True ($null -ne $reloaded.PSObject.Properties['OriginalModelProvider']) -Because 'the key did not survive serialization'
+            Assert-True ($null -eq $reloaded.OriginalModelProvider) -Because 'a null came back as something else'
+            Assert-SwitcherStateUsable -State $reloaded -ConfigPath $reloaded.ConfigPath
+            Assert-SwitcherStateUsable -State $reloaded -ConfigPath $reloaded.ConfigPath -ForRestore
+        }
+        finally {
+            if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force }
+        }
+    }
+
+    Test-Case 'an unsupported schema is still refused before anything else' {
+        $state = New-State @{ SchemaVersion = 1 }
+        Assert-Throws -MessagePattern 'supported schema version' -Body {
+            Assert-SwitcherStateUsable -State $state -ConfigPath $state.ConfigPath
+        }
+    }
+
+    Test-Case 'restoring refuses a state belonging to another CODEX_HOME in any mode' {
+        # -ForRestore is the stricter rule. An openai-mode state for another
+        # profile is harmless to the enable path and is exactly what restoration
+        # must not write back, and this used to be checked only after the App
+        # had been closed.
+        foreach ($mode in @('preparing-rcsl', 'rcsl', 'openai')) {
+            $state = New-State @{ Mode = $mode; ConfigPath = 'C:\old\.codex\config.toml' }
+            Assert-Throws -MessagePattern 'recovery state belongs to' -Body {
+                Assert-SwitcherStateUsable -State $state -ConfigPath 'C:\Users\op\.codex\config.toml' -ForRestore
+            }
+        }
+    }
+
+    Test-Case 'switching refuses only an active session belonging to another CODEX_HOME' {
+        $active = New-State @{ Mode = 'rcsl'; ConfigPath = 'C:\old\.codex\config.toml' }
+        Assert-Throws -MessagePattern 'active RCSL session' -Body {
+            Assert-SwitcherStateUsable -State $active -ConfigPath 'C:\Users\op\.codex\config.toml'
+        }
+        $settled = New-State @{ Mode = 'openai'; ConfigPath = 'C:\old\.codex\config.toml' }
+        Assert-SwitcherStateUsable -State $settled -ConfigPath 'C:\Users\op\.codex\config.toml'
+    }
+
+    Test-Case 'no state is not a refusal' {
+        Assert-SwitcherStateUsable -State $null -ConfigPath 'C:\Users\op\.codex\config.toml'
+        Assert-SwitcherStateUsable -State $null -ConfigPath 'C:\Users\op\.codex\config.toml' -ForRestore
+    }
+
     # -- invariants pinned over the source ------------------------------------
     #
     # These three are properties of the call sites rather than of any function, so
@@ -677,6 +808,21 @@ $outcome = & $module {
         Assert-True ($validate -ge 0) -Because 'the restore path no longer rehearses the edit'
         Assert-True ($close -ge 0) -Because 'the restore path no longer closes the App'
         Assert-True ($validate -lt $close) -Because 'a refusal now costs the operator a closed App'
+    }
+
+    Test-Case 'the restore path validates the state before it closes the App' {
+        # Separate from the document check above: the state is the other half of
+        # what restoration reads, and the path check on it lived inline after the
+        # close until a review reproduced a state for another CODEX_HOME passing
+        # preflight. The authoritative recheck after the close stays.
+        $order = Get-CommandOrder -Path $modulePath -FunctionName 'Invoke-DisableRcslCodexAppCore'
+        $close = $order.IndexOf('Stop-CodexAppGracefully')
+        $first = $order.IndexOf('Assert-SwitcherStateUsable')
+        $last = $order.LastIndexOf('Assert-SwitcherStateUsable')
+        Assert-True ($first -ge 0) -Because 'the restore path no longer validates the state at all'
+        Assert-True ($close -ge 0) -Because 'the restore path no longer closes the App'
+        Assert-True ($first -lt $close) -Because 'a state refusal again costs the operator a closed App'
+        Assert-True ($last -gt $close) -Because 'the authoritative recheck after the close was dropped'
     }
 
     Test-Case 'nothing in the module reads a file with Get-Content' {

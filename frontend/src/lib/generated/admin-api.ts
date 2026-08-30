@@ -147,11 +147,22 @@ export interface paths {
         };
         /**
          * Download Windows Codex App Tools
-         * @description The switcher, the doctor, the shared module and their README, as a zip.
+         * @description The switcher, the doctor, the shared module, the suite and their README.
          *
-         *     `actor` is here to require a session, which is the whole of the
-         *     authorization: these are the same scripts published in a public repository,
-         *     so the point is not secrecy but provenance.
+         *     `api_key:write_own`, which is narrower than the `chat:use` that
+         *     `GET /admin/gateway` is held to, and narrower deliberately. These scripts
+         *     exist to put an API key into a client, so the audience is whoever may have a
+         *     key to put there. `chat:use` was tried first and is not that check: every
+         *     role in `catalog.py` holds it — `_BASE_SCOPES` grants it, `_AUDITOR_SCOPES`
+         *     lists it again on purpose, `_SERVICE_SCOPES` is barely more than it — so the
+         *     guard refused nobody while its comment claimed to exclude a role that cannot
+         *     hold a key. `api_key:write_own` is the scope that role actually lacks, and
+         *     `catalog.py` says why in the same breath: an auditor who can mint themselves
+         *     a key can act through the gateway, which is the thing the role exists not to
+         *     do. Handing them the tooling for it is the same grant one step earlier.
+         *
+         *     Checked here rather than in a use case because there is no domain operation
+         *     to put one around — the response is a file that came with the image.
          */
         get: operations["download_windows_codex_app_tools_admin_client_tools_windows_codex_app_get"];
         put?: never;
@@ -2814,17 +2825,42 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description The switcher, the doctor, the module, the suite and their README. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/zip": string;
+                };
+            };
+            /** @description The archive already held by the caller is current. */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not hold an API key for these tools to carry. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
                 };
             };
             /** @description Unprocessable Entity */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+            /** @description This build does not carry the Windows client tools. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

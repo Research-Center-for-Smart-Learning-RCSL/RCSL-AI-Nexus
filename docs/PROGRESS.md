@@ -15,6 +15,132 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-30 — Ten review findings, and the two that were about a promise rather than a line
+
+A review of the branch produced six findings; four more came out of reading it
+afterwards. All ten are closed. What is worth recording is that the two that
+mattered most were not defects in a line of code. They were places where
+something the repository had already promised turned out not to be true.
+
+**The fail-closed state was not fail-closed.** `Assert-SwitcherStateUsable`
+checked the schema version, then asked whether the mode was one of the two
+active ones. A mode it did not recognise answered "no", which the enable path
+reads as "no switch in force" — so a truncated or hand-edited state was treated
+as no state at all, and its recovery metadata, which is the entire way back to
+OpenAI, was overwritten by the next switch. Section 5 of the runbook has said
+"fails closed" about this since it was written. It now means something: three
+modes are named, every property the switcher relies on must be present, and
+anything else is a refusal with the state left where it is. Presence rather than
+value, because `OriginalModel` and `OriginalModelProvider` are legitimately
+`$null` when the operator had no such line, and a check that rejected `$null`
+would refuse every first switch.
+
+**A refusal still cost the operator a closed App.** The previous pass moved the
+document-decidable refusals in front of `Stop-CodexAppGracefully`, and stopped
+there. The *state* was still read afterwards: a recovery state belonging to
+another `CODEX_HOME` passed preflight, the App was closed for it, and only then
+was it rejected. Both readings now go through one function, with a `-ForRestore`
+switch for the stricter rule the way back needs, and the source-order test that
+pins the document check has a sibling pinning this one. Same shape of fault as
+last time, one file over, which is the argument for the test rather than for the
+fix.
+
+**The archive was reproducible in its metadata and not in its contents.**
+`create_system` had been found and pinned by building on two machines and
+comparing. The files themselves were still whatever the checkout held: CRLF in a
+Windows working tree, LF in the index, so the same commit produced a different
+archive from a Windows checkout than inside the Linux image — every entry
+differing, while the test that had caught the first problem passed. There was no
+`.gitattributes` in this repository at all. There is now, and the builder
+normalizes line endings again on the way in, because a claim about bytes should
+not rest on the build host having honoured a git attribute.
+
+**The download instructions did not describe a workflow anybody could follow.**
+Step 2 of the setup page said to unzip the archive anywhere; step 4 launched from
+`%LOCALAPPDATA%\RCSL-AI-Nexus\client-tools`, which no step created. The zip's own
+README was no help, because every command in it was written from a repository
+root — a directory an operator who downloaded the zip does not have. Step 2 now
+shows the `Expand-Archive` that installs where step 4 looks, and the shipped
+README runs from the directory it sits in.
+
+**And the six-step flow could record this platform as the rollback target.** Step
+3 tells the reader to write `model_provider = "rcsl"`. A Windows App operator
+doing that before step 4 hands the switcher `rcsl` as the selection to remember,
+so *Switch App back to OpenAI* restores this platform, with nothing reporting an
+error. Step 3 is now marked CLI-only and says so before the block anybody would
+copy; the connect runbook carries the same warning.
+
+Four more from reading the diff afterwards. `build_archive` globbed the
+directory, which is a publication rule rather than a file list: anything that
+ever lands in `scripts/windows/codex-app` reaches every member who clicks
+download. It is an explicit tuple now, pinned in both directions, so adding a
+file is a decision somebody makes. The archive was rebuilt on every request —
+five file reads and 130 KB of deflate on the event loop, to produce bytes that
+are the same every time — and is now built once and served with an ETag, which
+also gives an operator a way to tell one deployment's tools from the next. The
+route required only a session, while `gateway_info`, the endpoint it says it is
+modelled on, is held to `chat:use` through its use case; it is held to
+`api_key:write_own` now, which is narrower than `chat:use` and narrower on
+purpose. And
+`additional_contexts` needs Compose v2.17, which nothing said: an older Compose
+reports the key as unsupported rather than as a missing file, so the deploy
+runbook now checks the version where it checks the others.
+
+The generated contract also disagreed with the route it describes — FastAPI
+inferred `application/json` from the return annotation while the endpoint answers
+`application/zip`, and the 503 was absent. Declared and regenerated. The suite is
+76 cases, up from 65, with the eleven new ones covering the state rules and the
+line-ending independence — and measured rather than trusted, as the last pass
+was: the four defects above, reintroduced one at a time, fail 2, 1, 1 and 1 of
+its cases, never zero.
+
+**A review of that pass found eight more, and the first was this file being
+wrong.** The scope above was `chat:use` when it was first written down here, and
+`chat:use` refuses nobody: `_BASE_SCOPES` grants it, `_AUDITOR_SCOPES` lists it
+again deliberately, `_SERVICE_SCOPES` is barely more than it, so all seven roles
+hold it. The stated reason — that requiring only a session would hand the tools
+to a role that cannot hold a key for them to carry — was true, and pointed at a
+different scope. `auditor` is that role, and what it lacks is
+`api_key:write_own`, which `catalog.py` withholds from it in so many words: an
+auditor who can mint themselves a key can act through the gateway, which is the
+one thing the role exists not to do. So the guard was inert, its justification
+was published in four places, and the test that should have caught it asserted
+over an `Actor` the application cannot construct — a `Role.USER` carrying one
+hand-picked scope, assembled by the test rather than by `_actor_for`. The route
+requires `api_key:write_own` now; the case runs over every role in the table,
+and a second case asserts separately that some role lacks the scope at all,
+because a scope nobody lacks decides nothing and no refusal-based test can
+notice that.
+
+Seven smaller ones, each the same shape as something already fixed on this
+branch once. The half-copied-image case re-implemented the resolver's predicate
+in the test rather than calling it, so reverting the resolver to a bare
+`is_dir()` left it green; `resolve_tools_directory` takes its candidates now.
+The `If-None-Match` comparison was an exact string match, missing `*` and the
+`W/` prefix an intermediary is free to add — every weakened tag costing the full
+130 KB the ETag was added to avoid. The 503 declared a description and no body
+while returning a hand-written `{"detail": …}` matching neither this
+application's envelope nor FastAPI's, and the 403 this pass made reachable was
+not declared at all: the drift the `responses=` block exists to close, two
+status codes over. The cache was keyed on the directory, and its comment said
+the files cannot change while the process runs — true in an image, false in the
+checkout the resolver falls back to, where `uvicorn --reload` does not restart
+on a `.ps1` edit and the developer is served the pre-edit zip with an ETag
+asserting it is current; it is keyed on the mtimes now. The PowerShell case for
+a null `OriginalModelProvider` built its state in memory and never crossed the
+`ConvertTo-Json` → file → `ConvertFrom-Json` the checks actually see, which is
+the path that would lock every first-time switcher out of both directions if it
+ever dropped a null-valued key. And step 2's `Expand-Archive` named
+`Downloads\rcsl-codex-app-tools.zip` exactly, so a redirected Downloads folder
+makes the path absent and a re-download after an update lands as
+`rcsl-codex-app-tools (1).zip` — quietly extracting the older archive, with step
+4 launching the previous switcher. It takes the newest match now.
+
+Measured the same way. The five backend defects above, reintroduced one at a
+time, fail 2, 1, 3, 1 and 1 of the 28 archive cases, never zero.
+
+---
+
 ## 2026-08-30 — The platform now hands over the tools it tells people to run
 
 Asked whether the scripts could be downloaded from the site, the answer turned

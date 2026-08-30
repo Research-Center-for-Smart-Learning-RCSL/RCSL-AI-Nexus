@@ -85,9 +85,31 @@ export function CodexConfigurationSection({ baseUrl, agentCapability }: CodexCon
             </p>
             <p>
               Served by this deployment, from the revision it is running, over
-              the session you are already signed in to. Unzip it anywhere you
-              can read, and inspect the scripts before running them: they will
-              hold your API key.
+              the session you are already signed in to. Inspect the scripts
+              before running them: they will hold your API key.
+            </p>
+            <p>
+              Extract it to the location step 4 launches from. The archive is
+              flat, so a different destination means editing that command:
+            </p>
+            <CodeBlock
+              code={
+                String.raw`$toolsRoot = Join-Path $env:LOCALAPPDATA 'RCSL-AI-Nexus\client-tools'
+$zip = Get-ChildItem "$env:USERPROFILE\Downloads\rcsl-codex-app-tools*.zip" |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+Expand-Archive -LiteralPath $zip.FullName -DestinationPath $toolsRoot -Force`
+              }
+              label="Copy (Windows, extract)"
+            />
+            <p>
+              It takes the newest matching download on purpose. A second download
+              after an update is saved as{' '}
+              <code>rcsl-codex-app-tools (1).zip</code>, and naming the plain
+              filename would quietly extract the older archive over the newer
+              one, leaving step 4 launching the previous switcher. If your
+              browser saves somewhere else — a redirected Downloads folder is
+              usual on a managed machine — point the first line at wherever the
+              file actually landed.
             </p>
             <CodeBlock code={'npm install -g @openai/codex'} label="Copy (CLI)" />
             <p>
@@ -107,9 +129,19 @@ export function CodexConfigurationSection({ baseUrl, agentCapability }: CodexCon
             </p>
           </Step>
 
-          <Step n={3} title="Write the configuration">
+          <Step n={3} title="Write the configuration (CLI only)">
+            <p className="rounded-md border border-border bg-muted/40 px-3 py-2">
+              <strong>Using the Windows App switcher? Skip this step</strong>{' '}
+              and go to step 4. The switcher writes its own provider table and
+              records what your configuration said beforehand, so that{' '}
+              <em>Switch App back to OpenAI</em> can put it back. Writing{' '}
+              <code>model_provider = &quot;rcsl&quot;</code> by hand first makes{' '}
+              <code>rcsl</code> the selection it records as your previous one,
+              and switching back then restores this platform rather than
+              OpenAI.
+            </p>
             <p>
-              <code>~/.codex/config.toml</code>, or{' '}
+              For the CLI, <code>~/.codex/config.toml</code>, or{' '}
               <code>%USERPROFILE%\.codex\config.toml</code> on Windows:
             </p>
             <CodeBlock
@@ -190,7 +222,9 @@ wire_api = "responses"`}
               label="Copy (Windows App switcher)"
             />
             <p>
-              On Windows, paste the key into the switcher&apos;s masked field. It
+              The Windows command launches what step 2 extracted; a different
+              destination there means a different path here. On Windows, paste
+              the key into the switcher&apos;s masked field. It
               validates the key and passes it only to the newly launched App
               process. It does not use <code>setx</code>, write the key into
               TOML, or change the ChatGPT sign-in. The same GUI restores the
