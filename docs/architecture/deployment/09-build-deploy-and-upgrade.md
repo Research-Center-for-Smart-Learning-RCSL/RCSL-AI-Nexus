@@ -1,6 +1,6 @@
 # 9. Build, Deploy, and Upgrade
 
-[← Deployment Architecture](../deployment.md)
+[← Deployment Topology](../deployment.md)
 
 **Images are built on the Mac Studio.** The development machine is Windows on x86 and the target is arm64, so `docker compose build` runs on the target host. This avoids operating a registry and cross-platform builds for a single-node deployment. If a second node is added later, publishing arm64 images to GHCR becomes worthwhile.
 

@@ -1,6 +1,6 @@
 # 11. Local Development
 
-[← Deployment Architecture](../deployment.md)
+[← Deployment Topology](../deployment.md)
 
 The Windows development machine has no `tailscale serve`, no openresty, and no GeoLite2 database. Taken literally, the middleware described here rejects every request and nothing runs locally.
 

@@ -1,6 +1,6 @@
 # 4. The Critical Design Point: Separate Services, Not One Service With Two Ports
 
-[← Deployment Architecture](../deployment.md)
+[← Deployment Topology](../deployment.md)
 
 This is the easiest thing in the deployment to get wrong, and the most dangerous.
 

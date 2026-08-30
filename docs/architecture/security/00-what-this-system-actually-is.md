@@ -18,5 +18,5 @@ Confirmed premises:
 | Role model | `admin` / `user` separation |
 | Data sensitivity | Internal unpublished research. No personal data, but disclosure causes real harm |
 | Management authentication | Tailscale identity on the tailnet; invitation-only local accounts with mandatory TOTP on the public entrance |
-| Tenancy | **Single tenant through Phase 1.** See [../ARCHITECTURE.md](../../ARCHITECTURE.md) §2.8 |
-| Runtime placement | **Native on the macOS host**, not in Docker. See [../ARCHITECTURE.md](../../ARCHITECTURE.md) §0.1 |
+| Tenancy | **Single tenant through Phase 1.** See [ARCHITECTURE.md](../../ARCHITECTURE.md) §2.8 |
+| Runtime placement | **Native on the macOS host**, not in Docker. See [ARCHITECTURE.md](../../ARCHITECTURE.md) §0.1 |

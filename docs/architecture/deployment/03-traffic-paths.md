@@ -1,6 +1,6 @@
 # 3. Traffic Paths
 
-[← Deployment Architecture](../deployment.md)
+[← Deployment Topology](../deployment.md)
 
 ```
 Control plane, entrance 1 (tailnet, everyday use)

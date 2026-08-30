@@ -1,6 +1,6 @@
 # 7. Resolving the Real Client Address
 
-[← Deployment Architecture](../deployment.md)
+[← Deployment Topology](../deployment.md)
 
 Behind the proxy, the true source is in `X-Forwarded-For`. The obvious implementation does not work here, and getting this wrong disables both the country filter and per-key CIDR allowlists.
 

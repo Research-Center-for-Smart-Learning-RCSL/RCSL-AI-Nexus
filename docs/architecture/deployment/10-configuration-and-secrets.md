@@ -1,6 +1,6 @@
 # 10. Configuration and Secrets
 
-[← Deployment Architecture](../deployment.md)
+[← Deployment Topology](../deployment.md)
 
 Non-secret values are environment variables; secrets are mounted files read through `secrets_dir` ([backend.md](../backend.md) §8).
 
@@ -41,7 +41,7 @@ Non-secret values are environment variables; secrets are mounted files read thro
 | `GEOIP_DB_PATH` | `/data/GeoLite2-Country.mmdb` | Refreshed weekly by `launchd/refresh-geolite2.sh` (runbook §5.1), which restarts the two enforcing services only when the file actually changed — geoip2 opens the database once at startup, so a swap alone changes nothing. Said "monthly" until 2026-08-03 and described no mechanism that existed |
 | `BOOTSTRAP_ADMIN_LOGIN` | `you@example.com` | Creates the first admin on first login through the **tailnet** entrance only, and only while `users` is empty. Inert thereafter |
 | `NODE_ID`, `NODE_NAME` | `local` | The single compute node `provision` writes on every start. There is no node-registration endpoint until the SSRF guard ships ([security.md](../security.md) §7.2) |
-| `NODE_TOTAL_MEMORY_GB` | `64` | Must match the real machine, and is the figure `MemoryBudgetService` refuses loads against. Too high lets the guardrail walk the host into swap; too low refuses models that would fit ([../ARCHITECTURE.md](../../ARCHITECTURE.md) §0.2) |
+| `NODE_TOTAL_MEMORY_GB` | `64` | Must match the real machine, and is the figure `MemoryBudgetService` refuses loads against. Too high lets the guardrail walk the host into swap; too low refuses models that would fit ([ARCHITECTURE.md](../../ARCHITECTURE.md) §0.2) |
 | `NODE_HEARTBEAT_INTERVAL_SECONDS` | `30` | How often the admin entrances probe each node and write the observed status, so a routing requirement of `node_status: online` reflects reality rather than what provisioning wrote once. Admin entrances only — the gateway may not write `nodes` (§6 of [security.md](../security.md)). Zero or negative disables it |
 | `MAX_CONCURRENT_INFERENCE` | `4` | Queueing depth, not throughput: the GPU serves one generation at a time |
 | `QUEUE_WAIT_SECONDS` | `120` | How long a request may wait for a slot before `503 overloaded` with `Retry-After`. It exists because of the number two rows down: a slot can legitimately be held for 35 minutes, and before 2026-08-05 a caller arriving with every slot taken waited that long producing zero bytes and no code, which is indistinguishable from a hung deployment. §6 makes this class of setting the only line of defence, and a guardrail that refuses silently is half a guardrail. Zero or negative restores the unbounded queue |
@@ -55,7 +55,7 @@ Non-secret values are environment variables; secrets are mounted files read thro
 | `METRICS_ENABLED` | `true` | Exposes `/metrics`; off lifts the production requirement for a real `metrics_scrape_token` |
 | `PARSER_BASE_URL` | `http://parser:8000` | The isolated document parser. A sibling container on an internal network, deliberately *not* on `host.docker.internal` like the runtimes: this one must be able to reach nothing at all ([security.md](../security.md) §7.3) |
 | `PARSER_TIMEOUT_SECONDS` | `120` | |
-| `DOCUMENT_STORAGE_PATH` | `/var/lib/nexus/documents` | Inside the container, backed by the `documents` volume. A mounted volume rather than MinIO; see [../ARCHITECTURE.md](../../ARCHITECTURE.md) §4 for that decision and the condition that would reverse it |
+| `DOCUMENT_STORAGE_PATH` | `/var/lib/nexus/documents` | Inside the container, backed by the `documents` volume. A mounted volume rather than MinIO; see [ARCHITECTURE.md](../../ARCHITECTURE.md) §4 for that decision and the condition that would reverse it |
 | `QDRANT_BASE_URL` | `http://qdrant:6333` | The passage index. Its API key is a file secret, because Qdrant ships with no authentication at all |
 | `QDRANT_TIMEOUT_SECONDS` | `30` | |
 | `POSTGRES_USER`, `POSTGRES_DB` | `nexus` | Role and database names are not secrets; the superuser password is. Read by the `postgres` container |

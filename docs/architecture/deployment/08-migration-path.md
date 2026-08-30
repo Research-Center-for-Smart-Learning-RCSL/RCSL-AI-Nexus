@@ -1,6 +1,6 @@
 # 8. Migration Path
 
-[← Deployment Architecture](../deployment.md)
+[← Deployment Topology](../deployment.md)
 
 The topology is deliberately reversible:
 

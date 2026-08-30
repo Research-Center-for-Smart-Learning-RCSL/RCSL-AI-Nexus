@@ -2,7 +2,7 @@
 
 [← Security Architecture and Threat Model](../security.md)
 
-Cross-referenced with [../ROADMAP.md](../../ROADMAP.md).
+Cross-referenced with [ROADMAP.md](../../ROADMAP.md).
 
 ### 13.0 What is actually implemented
 
