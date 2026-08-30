@@ -293,6 +293,20 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  docs:
+    runs-on: ubuntu-latest
+    # Seconds, no dependencies, and it guards a claim the repository makes a lot
+    # of: that a cross-reference points where it says it does. The 2026-08-30
+    # splits moved 466 links a directory deeper and left seven labels behind,
+    # rendering a path that resolved to nothing while the link beside it worked.
+    # Nothing else here can see that, because the link is not broken.
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Documentation links
+        run: python3 scripts/check-doc-links.py
+
   windows-client-tools:
     runs-on: windows-latest
     # Every other job here runs on Linux, which is right for the platform and

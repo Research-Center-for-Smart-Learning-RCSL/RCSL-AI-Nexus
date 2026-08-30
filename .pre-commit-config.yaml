@@ -61,3 +61,20 @@ repos:
         types: [python]
         files: ^backend/app/
         pass_filenames: false
+
+      # Two invariants that broke on 2026-08-30, when five oversized documents
+      # were split into directories and every relative link moved a level
+      # deeper: a link has to resolve, and a label that looks like a path has to
+      # be the path it links to. The second is the one worth a gate — seven
+      # links rendered as `../ARCHITECTURE.md` while pointing at
+      # `../../ARCHITECTURE.md`, so every one of them resolved and every page
+      # still lied to anyone reading the displayed path. Stdlib only; it also
+      # runs in CI, because a hook is skippable with --no-verify and this file's
+      # own CI header says a gate that only runs where the code was written is a
+      # gate that eventually does not run.
+      - id: doc-links
+        name: doc links resolve and labels match
+        entry: python3 scripts/check-doc-links.py
+        language: system
+        types: [markdown]
+        pass_filenames: false
