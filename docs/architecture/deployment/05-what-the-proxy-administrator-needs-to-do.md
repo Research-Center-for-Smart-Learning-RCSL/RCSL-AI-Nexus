@@ -1,6 +1,6 @@
 # 5. What the Proxy Administrator Needs to Do
 
-[← Deployment Architecture](../deployment.md)
+[← Deployment Topology](../deployment.md)
 
 Four items, none large:
 

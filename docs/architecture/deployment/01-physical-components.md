@@ -1,6 +1,6 @@
 # 1. Physical Components
 
-[← Deployment Architecture](../deployment.md)
+[← Deployment Topology](../deployment.md)
 
 | Role | Machine | Notes |
 |---|---|---|
@@ -10,7 +10,7 @@
 
 The proxy host is maintained by another administrator. This project asks only that it join the tailnet and forward two hostnames.
 
-**Model runtimes are not containers.** Ollama and MLX run natively on macOS under launchd, bound to `127.0.0.1`, because Docker on macOS cannot reach the GPU. Containers connect through `host.docker.internal:11434`. Rationale in [../ARCHITECTURE.md](../../ARCHITECTURE.md) §0.1; host-level hardening in [security.md](../security.md) §7.1(d).
+**Model runtimes are not containers.** Ollama and MLX run natively on macOS under launchd, bound to `127.0.0.1`, because Docker on macOS cannot reach the GPU. Containers connect through `host.docker.internal:11434`. Rationale in [ARCHITECTURE.md](../../ARCHITECTURE.md) §0.1; host-level hardening in [security.md](../security.md) §7.1(d).
 
 **Ollama runs as its own account, and the model store had to move for it.** Since 2026-08-18 `launchd/online.rcsl.ollama.plist` names `UserName` `_rcslollama` — uid 470, no login shell, not in `admin` — adopted by `launchd/adopt-ollama-service-account.sh`. The weights live at `/Users/Shared/ollama/models` rather than under the operator's home, and that move is what unblocked five months of the change rather than being an incidental tidy-up: `/Users/<operator>` is mode 750, so no account outside `staff` can traverse into it and no service account could have read the store where it was. The directory is `_rcslollama:staff` at 750 — group `staff` rather than the service account's own group because Docker Desktop shares the path as the operator and three backend containers bind-mount it read-only for the tokenizer, so the split is read for `staff`, write for the runtime alone. `OLLAMA_MODELS_HOST_PATH` in `.env` must name that path or exact counting silently falls back to the character estimate. MLX and the four other LaunchDaemons still run as the operator.
 

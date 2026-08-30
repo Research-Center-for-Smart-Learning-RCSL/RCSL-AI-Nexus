@@ -63,7 +63,7 @@ However, the enforcement point differs by path, and the earlier draft claimed mo
 
 **(d) Runtime hardening on the host, not in a container.**
 
-Because runtimes run natively on macOS ([../ARCHITECTURE.md](../../ARCHITECTURE.md) §0.1), container primitives such as `cap_drop`, `read_only`, and read-only mounts are unavailable. An earlier draft specified exactly those, and additionally set the model directory read-only, which would have made model downloads fail outright. Host-level equivalents:
+Because runtimes run natively on macOS ([ARCHITECTURE.md](../../ARCHITECTURE.md) §0.1), container primitives such as `cap_drop`, `read_only`, and read-only mounts are unavailable. An earlier draft specified exactly those, and additionally set the model directory read-only, which would have made model downloads fail outright. Host-level equivalents:
 
 - Run Ollama and MLX under a **dedicated non-administrator service account**, not the operator's login. **Done for Ollama on 2026-08-18**, by `launchd/adopt-ollama-service-account.sh`. `_rcslollama` (uid 470) is not in `admin`, has `/usr/bin/false` for a shell, is hidden from the login window, and holds `*` for a password: it cannot log in and it cannot `sudo`. That is the point of it — this process loads weights fetched from the internet, and the format rule on that fetch was only enforced the same day (see (c) above).
 

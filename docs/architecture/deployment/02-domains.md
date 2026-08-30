@@ -1,6 +1,6 @@
 # 2. Domains
 
-[← Deployment Architecture](../deployment.md)
+[← Deployment Topology](../deployment.md)
 
 DNS is hosted at **Gandi**, and a wildcard record already exists:
 

@@ -1,6 +1,6 @@
 # 6. What Is Lost Without a CDN, and Who Covers It
 
-[← Deployment Architecture](../deployment.md)
+[← Deployment Topology](../deployment.md)
 
 | Previously from a CDN | Now |
 |---|---|
