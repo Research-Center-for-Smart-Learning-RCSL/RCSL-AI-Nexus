@@ -16,7 +16,8 @@ def test_the_prompt_gives_codex_the_setting_that_is_wrong_by_default() -> None:
     An answer that omits it is worse than no answer: the operator follows it,
     the client refuses to launch, and nothing in the message says which line
     was missing. It is asserted with the value spelled out because the previous
-    documented value — `"chat"` — has been impossible since February 2026.
+    formerly documented value — `"chat"` — was refused by clients this project
+    measured at its February 2026 compatibility boundary.
     """
     text = prompt()
 
@@ -82,8 +83,8 @@ def test_the_prompt_says_how_to_undo_the_connection() -> None:
 def test_the_prompt_does_not_repeat_the_impossible_claim_about_the_desktop_app() -> None:
     """`/agent-setup` said Codex in the ChatGPT desktop app was impossible.
 
-    It works, and needs no separate setup: every local surface reads the same
-    `~/.codex/config.toml`. This prompt never carried the false claim — it
+    It works where the App and CLI use the same Codex home and therefore share
+    user configuration. This prompt never carried the false claim — it
     said nothing at all — so this pins the correction rather than removing an
     error, and pins the narrower thing that *is* true beside it, because a
     flat "it works" invites the same answer for the web version.

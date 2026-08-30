@@ -293,6 +293,47 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  windows-client-tools:
+    runs-on: windows-latest
+    # Every other job here runs on Linux, which is right for the platform and
+    # wrong for `scripts/windows`: that code is Windows PowerShell 5.1 under
+    # `Set-StrictMode -Version Latest`, and three of the faults it shipped with
+    # were visible only on that exact host. A mandatory `[List[string]]`
+    # parameter refuses any config.toml containing a blank line; a list returned
+    # bare arrives at the caller as a scalar or as $null, and every caller read
+    # `.Count`; an accumulator named `$matches` is replaced by the `-match`
+    # operator on its first success. All four jobs were green over all three.
+    #
+    # So this job is not "lint the scripts too". It is the first gate that
+    # executes them at all.
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Switcher tests, on Windows PowerShell 5.1
+        shell: powershell
+        # A child process rather than a dot-call, so the suite's own exit code is
+        # what decides this step.
+        run: |
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\codex-app\Invoke-CodexAppSwitcherTests.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: PSScriptAnalyzer
+        shell: powershell
+        run: |
+          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+            Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          }
+          $findings = Invoke-ScriptAnalyzer -Path .\scripts\windows -Recurse -Settings .\scripts\windows\PSScriptAnalyzerSettings.psd1
+          if ($findings) {
+            $findings | Format-Table -AutoSize -Wrap | Out-String -Width 200 | Write-Host
+            exit 1
+          }
+          Write-Host 'No findings.'
+
   audit:
     runs-on: ubuntu-latest
     # `continue-on-error` is on each scanning step below, **not on this job**,

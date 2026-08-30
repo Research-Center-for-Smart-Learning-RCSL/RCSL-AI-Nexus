@@ -20,6 +20,18 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
 
+# The Windows operator tools, so that /admin/client-tools serves the revision
+# this image was built from rather than sending operators to a GitHub branch.
+# They arrive through a named build context (`client_tools`, wired in
+# docker-compose.yml) because their home is scripts/windows/codex-app at the
+# repository root, which is outside this image's build context, and one copy of
+# them is the point.
+#
+# `docker build ./backend` on its own will not resolve that context and will
+# fail here. Build through Compose, which supplies it. The endpoint's 503 is for
+# the different case of an image whose layout has moved, not for this one.
+COPY --from=client_tools windows/codex-app ./client-tools/windows/codex-app
+
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Runs unprivileged. The image carries no shell tooling the application needs,

@@ -244,6 +244,14 @@ services:
   migrate:
     build:
       context: ./backend
+      # The Windows operator tools live at the repository root, outside the
+      # backend build context, because they are operator tools rather than
+      # backend code and one copy of them is the point. A named context reaches
+      # exactly that directory without making the whole repository the context,
+      # which would drag frontend/node_modules in with it. `/admin/client-tools`
+      # then serves the revision this image was built from.
+      additional_contexts:
+        client_tools: ./scripts
     image: rcsl-ai-nexus:latest
     logging: *logging
     command:

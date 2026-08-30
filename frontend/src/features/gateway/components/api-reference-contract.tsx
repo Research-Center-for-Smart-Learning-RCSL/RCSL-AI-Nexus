@@ -117,11 +117,21 @@ export function ToolsSection() {
         <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[10rem_1fr]">
           <dt className="font-mono text-muted-foreground">Codex</dt>
           <dd>
-            Requires <code>/v1/responses</code>. It withdrew Chat Completions
-            support in February 2026, so{' '}
+            Requires <code>/v1/responses</code>. OpenAI&apos;s current{' '}
+            <a
+              className="underline underline-offset-2"
+              href="https://learn.chatgpt.com/docs/config-file/config-reference"
+              rel="noreferrer"
+              target="_blank"
+            >
+              configuration reference
+            </a>{' '}
+            documents only the Responses wire API, so{' '}
             <code>wire_api = &quot;responses&quot;</code> is required in{' '}
             <code>~/.codex/config.toml</code>, and{' '}
-            <code>wire_api = &quot;chat&quot;</code> refuses to start.
+            <code>wire_api = &quot;chat&quot;</code> refuses to start in the
+            measured clients. February 2026 is this project&apos;s observed
+            compatibility boundary, not an OpenAI compatibility promise.
           </dd>
           <dt className="font-mono text-muted-foreground">
             Most libraries

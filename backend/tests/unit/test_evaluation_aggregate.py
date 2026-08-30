@@ -232,7 +232,12 @@ def test_the_threshold_matches_the_harness_script_it_was_copied_from() -> None:
     if not analyse.is_file():  # pragma: no cover - the harness travels with the repo
         pytest.skip("scripts/model-eval/analyse.py is not present")
 
-    match = re.search(r"\(max\(got\) - min\(got\)\) >= ([0-9.]+)", analyse.read_text())
+    match = re.search(
+        r"\(max\(got\) - min\(got\)\) >= ([0-9.]+)",
+        # Explicit encoding, same reason as test_proxy_and_body_limits.py: the
+        # locale default makes this pass or fail by machine.
+        analyse.read_text(encoding="utf-8"),
+    )
 
     assert match, "analyse.py no longer compares the spread the way this module does"
     assert float(match.group(1)) == DISCRIMINATION_THRESHOLD

@@ -17,7 +17,16 @@ documents, is where the current state is recorded.
 backend/      FastAPI, hexagonal architecture. One image, four ASGI apps
 frontend/     Next.js management UI, one instance per admin entrance
 docs/         Architecture, security, deployment
+scripts/      Acceptance, evaluation, deployment, and client-integration tools
 ```
+
+Windows operators connecting the Codex desktop App should start with
+[`docs/runbooks/windows-codex-app-switcher.md`](./docs/runbooks/windows-codex-app-switcher.md).
+It documents the experimental GUI provider switcher, automatic App installation,
+fail-closed OpenAI rollback, and the read-only connection doctor under
+[`scripts/windows/codex-app/`](./scripts/windows/codex-app/). Its source and
+evidence matrix distinguishes OpenAI documentation from runtime-checked package
+assumptions, project measurements, and Windows acceptance checks that remain open.
 
 ## Local development
 
@@ -87,6 +96,16 @@ docker compose build
 docker compose up -d
 docker compose ps             # migrate should have exited 0
 ```
+
+`docker compose build`, not `docker build ./backend`. The backend image copies
+the Windows operator tools from a *named build context* — `client_tools`, which
+`docker-compose.yml` points at `./scripts` — so that
+`GET /admin/client-tools/windows-codex-app` serves the revision the deployment is
+running rather than a GitHub branch. A bare `docker build ./backend` cannot
+resolve that context and fails at the `COPY --from=client_tools` line. It needs
+BuildKit, which is the default builder, and Compose v2.17 or newer for
+`additional_contexts`; an older Compose reports the key as unsupported rather
+than as a missing file.
 
 `migrate` provisions the three database accounts before any application starts;
 if it exits non-zero, read its log rather than the application logs, because the
