@@ -15,6 +15,79 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-30 — The deploy, and a credential helper that has now stopped one
+
+Merged at `953aee1` with all five CI jobs green, `windows-client-tools` among
+them, which is the only one that runs the switcher on the host it targets.
+
+**The reproducibility claim was tested by the merge itself, which is the only
+place it could be.** Adding `.gitattributes` does nothing to a working tree
+until git next writes to it, so the branch was developed with these files at LF
+and `main` checked them out at CRLF. The archive built from the LF tree, the
+archive built from the CRLF tree, the archive built inside the Linux image, and
+the bytes the running deployment served are all 37,742 bytes and all
+`sha256 5b0ccbe2…`. That is the property this pass added and the one that was
+false before it: the previous pass pinned the zip's metadata and left the file
+contents to whatever the checkout happened to hold.
+
+**The build failed, and it was the fault this repository has been writing down
+since 2026-08-25.** `docker compose build` died on
+`load metadata for ghcr.io/astral-sh/uv:0.5.14` with `DeadlineExceeded`. The
+diagnosis in [deployment.md](./architecture/deployment.md) §9 was followed
+rather than re-derived, and it held: `docker-credential-desktop` returned
+nothing in ten seconds and `credsStore: desktop` is still in `~/.docker/config.json`.
+The documented workaround — a throwaway `DOCKER_CONFIG` with the CLI plugins
+symlinked in beside it — built both images.
+
+Worth stating plainly, because this is the third entry to mention it and the
+first where it cost anything: on 2026-08-25 it was diagnosed, on 2026-08-28 it
+was recorded as still broken three days later, and today it stopped a deploy.
+The fix is a Docker Desktop re-login or reinstall and neither has happened. It
+also explains something from earlier the same day that had been put down to a
+slow registry: pulling `mcr.microsoft.com/powershell` to parse-check the
+PowerShell produced zero bytes in ten minutes, which is the same helper hanging
+in front of the same operation. The eventual route to a parser was the macOS
+tarball from the project's GitHub release, which needs no registry at all.
+
+**Deployed by the routine upgrade.** The running build, two days healthy, was
+tagged `rollback-20260830` before anything else — it is the last build known to
+be good, which is what that tag is for. Both pre-flight checks on the new image
+passed: the modules import, and `Settings()` constructs against the real secret
+files in production mode with `secrets_dir` set to `/run/secrets`. A third check
+was added for this change, and is the one that matters here: the image resolves
+the tools at `/app/client-tools/windows/codex-app`, holds exactly the five named
+files, and builds the same archive as the checkout.
+
+`migrate` exited 0 through all three of its steps. Four backend services came
+back healthy, all six published ports were confirmed *bound* rather than merely
+`Up`, every entrance answered as it did before the deploy, and no service logged
+an error in the twelve minutes after the restart.
+
+**The endpoint was then exercised against the running deployment.** No session
+is 401. With one it is 200, `application/zip`, the right filename, an `ETag`
+equal to the sha256 of the body, and `Cache-Control: private, must-revalidate`.
+The conditional GET was checked in all four forms the review's finding was
+about: a strong tag, the `W/`-weakened tag an intermediary is free to
+substitute, `*`, and a list containing the tag all return 304 with a zero-length
+body, while an unrelated tag gets the full 37,742. Unzipped, the archive is the
+five files with their fixed 1980 timestamps and uniform CRLF, and the suite
+inside it passes 76 of 76 run from the directory it was extracted into — which
+is also the check that the flat archive works from wherever it lands, the first
+of the review's findings.
+
+**One thing could not be verified live, and it is the one this pass changed.**
+The route now requires `api_key:write_own`, and no account on this deployment
+can exercise the refusal: seven of the eight rows in `users` have no
+`tailscale_login`, so the admin entrance's header path cannot reach them at all
+(`/admin/me` refuses them identically, which is nothing to do with this change),
+and there is no `auditor` row to refuse. Creating one on a live deployment to
+watch a 403 is not a test worth its side effects. The unit suite covers every
+role in the table, and separately asserts that some role lacks the scope —
+which is the assertion that would have caught `chat:use`, and did not exist
+until it had already shipped.
+
+---
+
 ## 2026-08-30 — Ten review findings, and the two that were about a promise rather than a line
 
 A review of the branch produced six findings; four more came out of reading it
