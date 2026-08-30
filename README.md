@@ -7,9 +7,11 @@ Design documentation lives in [`docs/`](./docs). Start with
 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md); the decisions and their
 reasoning are recorded there rather than here.
 
-[`docs/PROGRESS.md`](./docs/PROGRESS.md) is the running record of what has
-actually been built and what was learned building it. It, rather than the design
-documents, is where the current state is recorded.
+[`docs/PROGRESS.md`](./docs/PROGRESS.md) indexes the running record of what has
+actually been built and what was learned building it — one file per day under
+[`docs/progress/`](./docs/progress). It, rather than the design documents, is
+where the reasoning behind a change is recorded, and it is cited from the code
+by date.
 
 ## Layout
 
