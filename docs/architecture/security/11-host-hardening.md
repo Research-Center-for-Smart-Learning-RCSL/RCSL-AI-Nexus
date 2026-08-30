@@ -1,0 +1,11 @@
+# 11. Host Hardening (macOS)
+
+[← Security Architecture and Threat Model](../security.md)
+
+- Gatekeeper and SIP remain enabled. **FileVault is off for the first deployment** — a sequenced decision, not an oversight: §9.3 argues for it, §15.6 records why it waits for the UPS and what carries the load meanwhile. Startup Security stays at Full Security, which with FileVault off is the primary control against booting from external media rather than a second layer behind encryption.
+- **Run Docker and the runtimes under dedicated service accounts, not the operator's everyday administrator login.** **Half done, 2026-08-18.** Ollama moved to `_rcslollama` that day (§7.1(d)). Docker Desktop still runs in the operator's session and cannot easily do otherwise on macOS, and the four host LaunchDaemons still name `rcslmac1`. This bullet is a requirement rather than a report, and reading it as a report is the error that kept it unexamined for five months.
+- SSH: **Tailscale SSH, with macOS Remote Login off.** `tailscaled` serves SSH on the Tailscale interface only, so the requirement to listen nowhere else is met by not running a second SSH server rather than by an `sshd_config` edit, and there is no password or key to leak: identity comes from the tailnet and the `ssh` block in §3.4 gates it, with `action: check` forcing re-authentication every 12 hours. Enable with `sudo tailscale up --ssh --advertise-tags=tag:ai-server` (carry the tags flag, or a bare `tailscale up` can drop the tag), then turn Remote Login **off** in System Settings. macOS Remote Login binds every interface including the LAN and accepts passwords, which is the shape this bullet used to describe hardening away; with Tailscale SSH there is no reason to run it at all. Verify by confirming nothing answers on `127.0.0.1:22` while a tailnet SSH session still connects — Tailscale SSH does not bind loopback, so loopback silence is the check that the system daemon is the one that stopped.
+- Disable unused services: screen sharing, file sharing, AirDrop, printer sharing.
+- Set a firmware password to prevent booting from external media.
+- Automatic screen lock; the machine lives in an access-controlled space.
+- Security updates install automatically; major version upgrades are scheduled into maintenance windows.
