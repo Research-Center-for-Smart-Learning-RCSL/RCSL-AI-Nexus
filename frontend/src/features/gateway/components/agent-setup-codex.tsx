@@ -6,11 +6,24 @@ type CodexConfigurationSectionProps = {
   agentCapability: string;
 };
 
+/**
+ * Same-origin on purpose. `next.config.js` forwards `/admin/:path*` to the
+ * admin API keeping the prefix, so the browser's session cookie goes with it
+ * and the bytes come from the deployed image.
+ *
+ * This replaced a copy-paste `Invoke-WebRequest` of the whole repository
+ * archive from GitHub `main`, which delivered a deployment's worth of files to
+ * get four, named no version anybody could refer to, and sent an operator who
+ * trusts this platform to a different origin for a script that will hold their
+ * key. `tests/unit/test_route_prefix.py` pins the path.
+ */
+const CLIENT_TOOLS_DOWNLOAD_PATH = '/admin/client-tools/windows-codex-app';
+
 export function CodexConfigurationSection({ baseUrl, agentCapability }: CodexConfigurationSectionProps) {
   return (
 <section className="space-y-3">
         <h2 className="font-heading text-base font-semibold">
-          Codex, verified against this deployment
+          Codex setup for this deployment
         </h2>
         <p className="text-sm text-muted-foreground">
           Six steps. Two of them carry a setting whose default is unsuitable and
@@ -60,22 +73,75 @@ export function CodexConfigurationSection({ baseUrl, agentCapability }: CodexCon
             </p>
           </Step>
 
-          <Step n={2} title="Install the client">
-            <CodeBlock code={'npm install -g @openai/codex'} label="Copy" />
+          <Step n={2} title="Download the Windows switcher or install the CLI">
             <p>
-              <strong>Node.js is required.</strong> Install it from nodejs.org,
-              or with <code>winget install OpenJS.NodeJS.LTS</code> on Windows,
-              then reopen the terminal. On Windows, PowerShell may refuse to run{' '}
-              <code>npm</code> until local scripts are permitted once:{' '}
-              <code>Set-ExecutionPolicy -Scope CurrentUser RemoteSigned</code>.
-              That setting is per-user, requires no administrator, and is the
-              value Microsoft recommends for a workstation.
+              <a
+                className="inline-flex items-center rounded-md border border-border bg-muted/40 px-3 py-2 font-medium underline underline-offset-2"
+                download
+                href={CLIENT_TOOLS_DOWNLOAD_PATH}
+              >
+                Download the Windows App tools (.zip)
+              </a>
+            </p>
+            <p>
+              Served by this deployment, from the revision it is running, over
+              the session you are already signed in to. Inspect the scripts
+              before running them: they will hold your API key.
+            </p>
+            <p>
+              Extract it to the location step 4 launches from. The archive is
+              flat, so a different destination means editing that command:
+            </p>
+            <CodeBlock
+              code={
+                String.raw`$toolsRoot = Join-Path $env:LOCALAPPDATA 'RCSL-AI-Nexus\client-tools'
+$zip = Get-ChildItem "$env:USERPROFILE\Downloads\rcsl-codex-app-tools*.zip" |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+Expand-Archive -LiteralPath $zip.FullName -DestinationPath $toolsRoot -Force`
+              }
+              label="Copy (Windows, extract)"
+            />
+            <p>
+              It takes the newest matching download on purpose. A second download
+              after an update is saved as{' '}
+              <code>rcsl-codex-app-tools (1).zip</code>, and naming the plain
+              filename would quietly extract the older archive over the newer
+              one, leaving step 4 launching the previous switcher. If your
+              browser saves somewhere else — a redirected Downloads folder is
+              usual on a managed machine — point the first line at wherever the
+              file actually landed.
+            </p>
+            <CodeBlock code={'npm install -g @openai/codex'} label="Copy (CLI)" />
+            <p>
+              The switcher installs the Store App automatically when it is
+              absent. Node.js is required only for the separately installed CLI.
+              OpenAI publishes the{' '}
+              <a
+                className="underline underline-offset-2"
+                href="https://learn.chatgpt.com/docs/windows/windows-app#download-the-chatgpt-desktop-app"
+                rel="noreferrer"
+                target="_blank"
+              >
+                Windows App installation command
+              </a>
+              . Package identity and executable discovery remain guarded
+              implementation assumptions.
             </p>
           </Step>
 
-          <Step n={3} title="Write the configuration">
+          <Step n={3} title="Write the configuration (CLI only)">
+            <p className="rounded-md border border-border bg-muted/40 px-3 py-2">
+              <strong>Using the Windows App switcher? Skip this step</strong>{' '}
+              and go to step 4. The switcher writes its own provider table and
+              records what your configuration said beforehand, so that{' '}
+              <em>Switch App back to OpenAI</em> can put it back. Writing{' '}
+              <code>model_provider = &quot;rcsl&quot;</code> by hand first makes{' '}
+              <code>rcsl</code> the selection it records as your previous one,
+              and switching back then restores this platform rather than
+              OpenAI.
+            </p>
             <p>
-              <code>~/.codex/config.toml</code>, or{' '}
+              For the CLI, <code>~/.codex/config.toml</code>, or{' '}
               <code>%USERPROFILE%\.codex\config.toml</code> on Windows:
             </p>
             <CodeBlock
@@ -93,10 +159,19 @@ wire_api = "responses"`}
               <strong>
                 <code>wire_api</code> must be <code>responses</code>.
               </strong>{' '}
-              Codex withdrew support for Chat Completions in February 2026 and
-              refuses to start on <code>wire_api = &quot;chat&quot;</code>. Any
-              instructions still specifying <code>&quot;chat&quot;</code>
-              predate that change.
+              The current OpenAI{' '}
+              <a
+                className="underline underline-offset-2"
+                href="https://learn.chatgpt.com/docs/config-file/config-reference"
+                rel="noreferrer"
+                target="_blank"
+              >
+                configuration reference
+              </a>{' '}
+              documents only <code>responses</code>. This project observed the
+              client refusing <code>wire_api = &quot;chat&quot;</code> at its
+              February 2026 compatibility boundary; that date is project
+              evidence, not an OpenAI compatibility promise.
             </p>
             <p>
               <strong>
@@ -111,47 +186,72 @@ wire_api = "responses"`}
                 <code>env_key</code> is the <em>name</em> of an environment
                 variable, not the key itself.
               </strong>{' '}
-              Leave it as <code>RCSL_API_KEY</code> and place the key in that
-              variable at step 4. A key pasted here does not work, and it writes
-              a credential into a file that is copied, committed and shared.
+              Leave it as <code>RCSL_API_KEY</code>. The CLI reads that named
+              environment variable; the Windows switcher supplies it only to
+              the App process it launches. A key pasted here does not work, and
+              it writes a credential into a file that is copied, committed and
+              shared.
+            </p>
+            <p>
+              This is the manual CLI provider. The Windows App switcher writes
+              an isolated <code>rcsl_nexus_switcher</code> provider instead, so
+              it cannot overwrite this table. Treat the example as the
+              wire-level reference; do not hand-edit App configuration while
+              the App is running. The fields follow OpenAI&apos;s{' '}
+              <a
+                className="underline underline-offset-2"
+                href="https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers"
+                rel="noreferrer"
+                target="_blank"
+              >
+                custom model-provider schema
+              </a>
+              .
             </p>
           </Step>
 
-          <Step n={4} title="Export the key">
+          <Step n={4} title="Provide the key to the selected client">
             <CodeBlock
               code={'export RCSL_API_KEY=nx_live_...'}
               label="Copy (macOS, Linux)"
             />
             <CodeBlock
-              code={'setx RCSL_API_KEY "nx_live_..."'}
-              label="Copy (Windows)"
+              code={
+                String.raw`powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\RCSL-AI-Nexus\client-tools\Start-CodexAppSwitcher.ps1"`
+              }
+              label="Copy (Windows App switcher)"
             />
             <p>
-              On Windows, <code>setx</code> writes the variable for future
-              processes only.{' '}
-              <strong>Close the terminal and open a new one</strong>, or the
-              client will not see it.
+              The Windows command launches what step 2 extracted; a different
+              destination there means a different path here. On Windows, paste
+              the key into the switcher&apos;s masked field. It
+              validates the key and passes it only to the newly launched App
+              process. It does not use <code>setx</code>, write the key into
+              TOML, or change the ChatGPT sign-in. The same GUI restores the
+              prior OpenAI provider selection.
             </p>
           </Step>
 
-          <Step n={5} title="Verify the platform before involving the agent">
+          <Step n={5} title="Verify the selected client path">
             <CodeBlock
               code={`curl ${baseUrl}/v1/models -H "Authorization: Bearer $RCSL_API_KEY"`}
-              label="Copy the check"
+              label="Copy (CLI on macOS or Linux)"
             />
             <p>
-              A list naming the capability establishes that the whole path
-              works: network, perimeter, key and routing. A failure at this step
-              is a deployment fault; a failure only within the agent is a client
-              fault. Distinguishing the two is the single most economical step
-              on this page.
+              The Windows App GUI performs the same authenticated catalogue
+              check before changing configuration. Its Doctor button rechecks
+              the exact URL and capability selected in the GUI and asks for the
+              key in a masked dialog. The shell command applies only to a shell
+              where step 4 exported the variable; the App-scoped key is not
+              available to <code>curl</code> or a separately launched CLI.
             </p>
           </Step>
 
-          <Step n={6} title="Run it against a task that requires a file">
-            <CodeBlock code={'codex'} label="Copy" />
+          <Step n={6} title="Run a new task that requires a file">
+            <CodeBlock code={'codex'} label="Copy (CLI)" />
             <p>
-              Request something that requires reading a file, such as
+              In the App, create a new task after switching. In either surface,
+              request something that requires reading a file, such as
               &quot;read README.md and summarise it&quot;. A greeting
               establishes only that text flows; a tool call establishes that the
               agent loop works, which is the part with a silent failure mode.

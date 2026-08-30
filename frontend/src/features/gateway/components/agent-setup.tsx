@@ -19,8 +19,9 @@
  * called Codex in the ChatGPT desktop app impossible, which was not a finding
  * but an assumption filling the space where the CLI had been tested and the
  * app had not. An operator connected the CLI and the app followed it across on
- * its own, because both read `~/.codex/config.toml`. **What is written here as
- * a limit needs testing at least as much as what is written here as a step.**
+ * its own, because both used the same Codex home and user `config.toml`.
+ * **What is written here as a limit needs testing at least as much as what is
+ * written here as a step.**
  *
  * And on 2026-08-17 the same line cut a third way: what is written here as
  * *working* goes stale too. "Works, and needs no second setup" was true of the

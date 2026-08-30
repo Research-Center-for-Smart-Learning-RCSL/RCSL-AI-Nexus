@@ -15,6 +15,487 @@ and propagate. The reason for saying so is that they have already drifted once.
 
 ---
 
+## 2026-08-30 — Ten review findings, and the two that were about a promise rather than a line
+
+A review of the branch produced six findings; four more came out of reading it
+afterwards. All ten are closed. What is worth recording is that the two that
+mattered most were not defects in a line of code. They were places where
+something the repository had already promised turned out not to be true.
+
+**The fail-closed state was not fail-closed.** `Assert-SwitcherStateUsable`
+checked the schema version, then asked whether the mode was one of the two
+active ones. A mode it did not recognise answered "no", which the enable path
+reads as "no switch in force" — so a truncated or hand-edited state was treated
+as no state at all, and its recovery metadata, which is the entire way back to
+OpenAI, was overwritten by the next switch. Section 5 of the runbook has said
+"fails closed" about this since it was written. It now means something: three
+modes are named, every property the switcher relies on must be present, and
+anything else is a refusal with the state left where it is. Presence rather than
+value, because `OriginalModel` and `OriginalModelProvider` are legitimately
+`$null` when the operator had no such line, and a check that rejected `$null`
+would refuse every first switch.
+
+**A refusal still cost the operator a closed App.** The previous pass moved the
+document-decidable refusals in front of `Stop-CodexAppGracefully`, and stopped
+there. The *state* was still read afterwards: a recovery state belonging to
+another `CODEX_HOME` passed preflight, the App was closed for it, and only then
+was it rejected. Both readings now go through one function, with a `-ForRestore`
+switch for the stricter rule the way back needs, and the source-order test that
+pins the document check has a sibling pinning this one. Same shape of fault as
+last time, one file over, which is the argument for the test rather than for the
+fix.
+
+**The archive was reproducible in its metadata and not in its contents.**
+`create_system` had been found and pinned by building on two machines and
+comparing. The files themselves were still whatever the checkout held: CRLF in a
+Windows working tree, LF in the index, so the same commit produced a different
+archive from a Windows checkout than inside the Linux image — every entry
+differing, while the test that had caught the first problem passed. There was no
+`.gitattributes` in this repository at all. There is now, and the builder
+normalizes line endings again on the way in, because a claim about bytes should
+not rest on the build host having honoured a git attribute.
+
+**The download instructions did not describe a workflow anybody could follow.**
+Step 2 of the setup page said to unzip the archive anywhere; step 4 launched from
+`%LOCALAPPDATA%\RCSL-AI-Nexus\client-tools`, which no step created. The zip's own
+README was no help, because every command in it was written from a repository
+root — a directory an operator who downloaded the zip does not have. Step 2 now
+shows the `Expand-Archive` that installs where step 4 looks, and the shipped
+README runs from the directory it sits in.
+
+**And the six-step flow could record this platform as the rollback target.** Step
+3 tells the reader to write `model_provider = "rcsl"`. A Windows App operator
+doing that before step 4 hands the switcher `rcsl` as the selection to remember,
+so *Switch App back to OpenAI* restores this platform, with nothing reporting an
+error. Step 3 is now marked CLI-only and says so before the block anybody would
+copy; the connect runbook carries the same warning.
+
+Four more from reading the diff afterwards. `build_archive` globbed the
+directory, which is a publication rule rather than a file list: anything that
+ever lands in `scripts/windows/codex-app` reaches every member who clicks
+download. It is an explicit tuple now, pinned in both directions, so adding a
+file is a decision somebody makes. The archive was rebuilt on every request —
+five file reads and 130 KB of deflate on the event loop, to produce bytes that
+are the same every time — and is now built once and served with an ETag, which
+also gives an operator a way to tell one deployment's tools from the next. The
+route required only a session, while `gateway_info`, the endpoint it says it is
+modelled on, is held to `chat:use` through its use case; it is held to
+`api_key:write_own` now, which is narrower than `chat:use` and narrower on
+purpose. And
+`additional_contexts` needs Compose v2.17, which nothing said: an older Compose
+reports the key as unsupported rather than as a missing file, so the deploy
+runbook now checks the version where it checks the others.
+
+The generated contract also disagreed with the route it describes — FastAPI
+inferred `application/json` from the return annotation while the endpoint answers
+`application/zip`, and the 503 was absent. Declared and regenerated. The suite is
+76 cases, up from 65, with the eleven new ones covering the state rules and the
+line-ending independence — and measured rather than trusted, as the last pass
+was: the four defects above, reintroduced one at a time, fail 2, 1, 1 and 1 of
+its cases, never zero.
+
+**A review of that pass found eight more, and the first was this file being
+wrong.** The scope above was `chat:use` when it was first written down here, and
+`chat:use` refuses nobody: `_BASE_SCOPES` grants it, `_AUDITOR_SCOPES` lists it
+again deliberately, `_SERVICE_SCOPES` is barely more than it, so all seven roles
+hold it. The stated reason — that requiring only a session would hand the tools
+to a role that cannot hold a key for them to carry — was true, and pointed at a
+different scope. `auditor` is that role, and what it lacks is
+`api_key:write_own`, which `catalog.py` withholds from it in so many words: an
+auditor who can mint themselves a key can act through the gateway, which is the
+one thing the role exists not to do. So the guard was inert, its justification
+was published in four places, and the test that should have caught it asserted
+over an `Actor` the application cannot construct — a `Role.USER` carrying one
+hand-picked scope, assembled by the test rather than by `_actor_for`. The route
+requires `api_key:write_own` now; the case runs over every role in the table,
+and a second case asserts separately that some role lacks the scope at all,
+because a scope nobody lacks decides nothing and no refusal-based test can
+notice that.
+
+Seven smaller ones, each the same shape as something already fixed on this
+branch once. The half-copied-image case re-implemented the resolver's predicate
+in the test rather than calling it, so reverting the resolver to a bare
+`is_dir()` left it green; `resolve_tools_directory` takes its candidates now.
+The `If-None-Match` comparison was an exact string match, missing `*` and the
+`W/` prefix an intermediary is free to add — every weakened tag costing the full
+130 KB the ETag was added to avoid. The 503 declared a description and no body
+while returning a hand-written `{"detail": …}` matching neither this
+application's envelope nor FastAPI's, and the 403 this pass made reachable was
+not declared at all: the drift the `responses=` block exists to close, two
+status codes over. The cache was keyed on the directory, and its comment said
+the files cannot change while the process runs — true in an image, false in the
+checkout the resolver falls back to, where `uvicorn --reload` does not restart
+on a `.ps1` edit and the developer is served the pre-edit zip with an ETag
+asserting it is current; it is keyed on the mtimes now. The PowerShell case for
+a null `OriginalModelProvider` built its state in memory and never crossed the
+`ConvertTo-Json` → file → `ConvertFrom-Json` the checks actually see, which is
+the path that would lock every first-time switcher out of both directions if it
+ever dropped a null-valued key. And step 2's `Expand-Archive` named
+`Downloads\rcsl-codex-app-tools.zip` exactly, so a redirected Downloads folder
+makes the path absent and a re-download after an update lands as
+`rcsl-codex-app-tools (1).zip` — quietly extracting the older archive, with step
+4 launching the previous switcher. It takes the newest match now.
+
+Measured the same way. The five backend defects above, reintroduced one at a
+time, fail 2, 1, 3, 1 and 1 of the 28 archive cases, never zero.
+
+---
+
+## 2026-08-30 — The platform now hands over the tools it tells people to run
+
+Asked whether the scripts could be downloaded from the site, the answer turned
+out to be no, and not in a way anybody would have noticed. The management UI
+carried a copy-paste `Invoke-WebRequest` of
+`github.com/.../archive/refs/heads/main.zip`, and that was the whole of the
+distribution story: nothing under `backend/app` served a file, `frontend/public`
+held six SVGs and a logo, and no release had ever been published.
+
+The snippet worked. The repository is public, which was checked rather than
+assumed. But it fetched a deployment's worth of files to deliver five; it named
+`main`, so two operators following the same page on different days ran different
+code and neither could say which; it offered no integrity check beyond an
+instruction to read the scripts first; and it sent somebody who trusts this
+platform to a different origin for a program that would hold their API key. The
+runbook already conceded the shape of this, in a sentence recommending that an
+organization needing immutable distribution publish a signed versioned asset.
+
+`GET /admin/client-tools/windows-codex-app` now serves them as a zip, from the
+image the deployment is running, over the origin and session the operator is
+already signed in to, and it requires that session. It sits beside
+`gateway_info` in the composition because it answers the second half of the same
+question: that route says where to send a key, this one hands over the thing
+that puts the key into a client. The operator path also stops depending on the
+repository staying public.
+
+The awkward part was the build context. The scripts live at
+`scripts/windows/codex-app`, outside `./backend`, and one copy of them is the
+point: moving them under the backend would make operator tools into backend
+code, and copying them would guarantee drift. Widening the context to the
+repository root would drag `frontend/node_modules` into every image build. A
+named build context reaches exactly that directory and nothing else, so the
+Dockerfile copies from `client_tools` and Compose supplies it. `docker build
+./backend` on its own no longer works, which the Dockerfile says in the place
+somebody would hit it.
+
+The archive is built deterministically, and the reason that is worth doing is
+the reason it was worth checking. Built from a Windows checkout and inside the
+Linux image, the five files were byte-identical, the archives were the same
+length, and the hashes differed: `ZipInfo` takes `create_system` from whatever
+built it, 0 for MS-DOS and 3 for Unix, one byte per entry in the central
+directory and no change to the length at all. Pinning it makes an archive built
+from a checkout equal to the one the deployment serves, which is what lets
+anybody verify the claim. A same-process determinism test passes on either
+machine and would never have found it; the test that would have, and now does,
+asserts every field a zip takes from its host.
+
+Verified rather than described: the image was built and the files inspected
+inside it, the resolver found them at the image path, the archive hashed
+identically from the checkout and from the container, the integration test
+drove the real ASGI app against a real Postgres and got a valid zip back, and
+the platform-independence test was checked against its own defect by removing
+the fix and watching it fail.
+
+---
+
+## 2026-08-29 — A review of the day's own work found four more, and one of them was the lesson the day had already learned
+
+An adversarial pass over the branch produced nine findings. Eight were real and
+one had a wrong example attached to a right argument, which is a good ratio and
+worth recording as such: the finding that the preflight let some refusals
+through cited `[model_providers.rcsl_nexus_switcher.auth]` as an example, and
+that one is caught by the safety guard. Its actual examples were elsewhere.
+
+The most uncomfortable of the four is the one this repository had already
+written down twice. `Get-SwitcherState` read `state.json` with
+`Get-Content -Raw`, which on Windows PowerShell 5.1 decodes a file without a BOM
+in the system codepage; the state is written as UTF-8 without a BOM. A
+`ConfigPath` of `C:\Users\語言\.codex\config.toml` reads back as
+`C:\Users\隤?\.codex\config.toml`. The consequence is not cosmetic: restoration
+compares the recorded path against the live one, so an operator whose profile
+contains any non-ASCII character could switch to Nexus and then never switch
+back, being told their `CODEX_HOME` had moved. Earlier the same day this branch
+fixed exactly this defect in two Python tests, and the comment it was told to
+follow was already sitting in `test_proxy_and_body_limits.py`. Knowing the
+lesson and applying it are separate acts.
+
+The second is a claim the runbook made that the code did not keep. Both switch
+paths were changed earlier today to validate before closing the App, and the
+runbook says every refusal decidable from the document is decided there. It was
+not true. A duplicated top-level `model` key, a second managed provider table, a
+duplicated key inside it, `experimental_bearer_token` and
+`requires_openai_auth` all threw from the write, which happens after the App has
+been closed for the operator. The guard never looked for them because the guard
+was written to protect the parse, not to predict the edit. Both paths now
+rehearse the entire transformation against a copy of the lines and throw the
+copy away. Running it twice costs nothing; closing somebody's App to tell them
+about a duplicate line costs them the thing the transaction exists to protect.
+
+The third: `Test-RcslGateway` read `$response.data`, and dotting into a missing
+property is a terminating error under `Set-StrictMode -Version Latest`, not
+`$null`. A proxy or captive portal answering 200 with a body that has no `data`
+would abort the switch with "The property 'data' cannot be found on this
+object". Every other read of a parsed object in the module already used
+`PSObject.Properties`; this was the one that did not, which is the shape most of
+today's defects have had.
+
+The fourth: `Get-CodexSwitcherStatus` carries a comment explaining that a
+read-only status must not fail, and guards two of its four throwing calls. The
+projection hash and the project-config walk both call into the top-level key
+lookup, which throws on a duplicate, and neither was wrapped. A duplicate
+`model` line therefore took down the whole status, so the GUI said "unavailable"
+and the doctor reported five checks as unknown, none of them naming the line
+that would have let the operator fix it.
+
+Five lower-severity findings were fixed alongside. Cancelling the doctor's key
+dialog discarded every check already collected, because that one call sat
+outside `Invoke-Check`. Restoring re-added the managed provider table when the
+operator had deleted it, while the GUI reported it as preserved, and rewrote
+`config.toml` on what should have been a no-op without taking a backup; it now
+refreshes a table that is present and never resurrects one that is not. The
+"nothing to ask" message told the operator to use a tray icon that, in the one
+state where only the app-server remains, no longer exists. The GUI claimed the
+configuration "survived startup" from a single sample taken two seconds in,
+before the app-server that rewrites it need even have started. And
+`ConfigSha256Before` had been written into state since the beginning and never
+read by anything; the doctor now compares it against the backup on disk, which
+turns an inert field into the check that a truncated backup is not discovered at
+the moment it is needed.
+
+The suite went from 50 cases to 65 and the mutation harness from five defects to
+nine; every one is caught, and never by zero tests. Three of the new cases
+assert over the module's source rather than by calling it, because what they
+pin belongs to the call sites: that both paths validate before closing, and that
+nothing in the module reads a file with `Get-Content`. That is the same
+technique `test_refusal_identity_and_permissions.py` uses on the Python side and
+for the same reason, which is that a test driving the functions that exist today
+passes on the day a new one forgets.
+
+---
+
+## 2026-08-29 — The App task ran, and the process that ran it was one the switcher could not see
+
+The interactive gate the runbook had carried since the switcher was written was
+finally walked through, with a real `code` key against the operator's own
+`~/.codex/config.toml` rather than a copy. It passed. A new task in
+`OpenAI.Codex` `26.825.4187.0`, asked to read a file, ran `cat README.md` and
+returned a correct summary of it in five minutes seventeen seconds. The App's
+model picker showed the custom provider rather than substituting one of its own,
+which is the failure this runbook warns about most often and which did not
+happen.
+
+The evidence for *why* it worked is more useful than the fact that it did. While
+the task was in flight, no connection to the gateway could be found from any
+`ChatGPT.exe` process, which was alarming for about a minute. The App's own
+connections were all to Google and Cloudflare. The request was being made by a
+process that a search of the package directory cannot find:
+`codex.exe app-server`, running from
+`%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`, a child of the main App
+process. Its environment block, read out of its PEB, carried `RCSL_API_KEY`, and
+it held an established TLS connection to the gateway address. That is the
+component the hypothesis was always about, and it is now measured rather than
+assumed.
+
+It is also the component `Get-CodexAppProcesses` had never counted. That
+function matched processes named `ChatGPT` whose executable sat under the
+package root, and the app-server satisfies neither condition. So the question
+the whole transaction depends on -- has the App let go of `config.toml` -- was
+being answered by looking at everything except the process that holds it. On
+this build the app-server exited before the last `ChatGPT.exe` did, and polling
+at 200 ms found no interval where the switcher would have seen an idle App while
+the server was alive, so nothing was corrupted and nothing was ever going to be
+today. But that safety was a property of the App's shutdown ordering, not of any
+check the switcher performed, and shutdown ordering is not a thing this project
+gets to rely on. The app-server is now counted, matched on the `app-server`
+subcommand so that an operator's own `codex` CLI session is not mistaken for the
+App.
+
+The other correction is to yesterday's own conclusion. It had been recorded that
+the switcher cannot close the App because the App exposes no window to close.
+The first half is right and the second was too narrow, and only ran because the
+sandbox App had no profile: started against the real profile the App does show a
+window, `MainWindowHandle` is set, and `CloseMainWindow` reaches it. Forty
+seconds later all nine processes and the app-server were still running.
+`WM_CLOSE` posted directly to those windows did nothing either. So the App does
+not close on request in either state, which is a stronger statement than the one
+that was written down, arrived at by testing the case that would have refuted
+it.
+
+The switch itself behaved. `Enable` validated the key against `/v1/models`,
+which returned exactly `code` for it, took its backup, rewrote only the
+selection and the managed provider table, and launched. Restoration put
+`model = "gpt-5.6-terra"` back and removed `model_provider`, which had not been
+present before, and reported no configuration issues. The document is not
+byte-identical to its pre-switch copy and should not be: the App rewrote its own
+runtime paths, its version markers and a new `[mcp_servers.cua_repl]` table
+while it ran. All nine `[plugins.…]` tables, all eight `[projects.…]` trust
+entries and all three `[mcp_servers.…]` tables came through unchanged, which is
+the narrowed guard from earlier today doing the thing it was narrowed for. The
+relaunched App carries no `RCSL_API_KEY` in any of its processes.
+
+What is left is what was always going to be left. This is one build, one
+machine, one capability, one day, and the App updates itself. Section 7 stays in
+the runbook as a step to repeat after each App update rather than a box that has
+now been ticked.
+
+---
+
+## 2026-08-29 — Running the switcher against the real App settled two hypotheses and refuted a third
+
+The four faults fixed earlier today were found by reading and by unit-level
+measurement. What remained were the claims the runbook had always gated on an
+interactive Windows session: that launching the packaged executable directly
+starts the App at all, and that the process-scoped key reaches it. Both were
+answered by running the thing, in a redirected `CODEX_HOME` so the operator's
+own `config.toml` was not reachable by any step of the transaction.
+
+`Enable-RcslCodexApp` succeeded end to end against `OpenAI.Codex`
+`26.825.4187.0`. The App started from `WindowsApps\...\app\ChatGPT.exe` as eight
+Chromium processes, the switcher's startup confirmation observed one under the
+discovered package path, and the managed configuration survived startup. The
+nineteen `[projects.…]`, `[plugins.…]` and `[mcp_servers.…]` tables in the copied
+document were still there afterwards, which is the narrowed guard doing the job
+it was narrowed for.
+
+Key inheritance is real, and was read rather than inferred: the environment
+blocks of the running processes were read out of their PEBs, and four of the
+eight, including the main process, carried both `RCSL_API_KEY` and the
+redirected `CODEX_HOME`. The reader was itself checked first against two
+processes launched with and without a known variable, because a reader that
+cannot tell those apart proves nothing about the App. One process, a
+`storage.mojom.StorageService` utility, carried neither. That does not undo the
+result, but it is the reason the claim stays at "the key reaches the App's
+processes" rather than "the App uses it": the App does not hand every child what
+it was started with, and only a real task against a real key shows what the
+component issuing the inference request reads.
+
+The App also rewrote `config.toml` while starting, changing a hashed path inside
+its `notify` array. The runbook had asserted that behavior from older
+measurements and used it to justify re-reading the file after the App closes.
+It is now observed on the current build.
+
+The third claim did not survive. `Stop-CodexAppGracefully` cannot close this
+App, and never could have. The build sits in the notification area, and every
+one of its fourteen top-level windows is invisible, including the
+`Chrome_WidgetWin_1` window titled "ChatGPT". Windows reports a main window only
+when it is visible and unowned, so `MainWindowHandle` was zero for all eight
+processes, `CloseMainWindow` was therefore called on nothing at all, and the
+function spent its timeout waiting for an exit it had never asked for. Posting
+`WM_CLOSE` to those windows directly was then measured and did not end the App
+either, which is ordinary for a program whose window close means hide.
+
+The practical consequence was that the round trip did not work: the enable path
+succeeded only because the App happened to be closed, and the disable path
+failed immediately afterwards because the enable path had started it. The tool
+could switch to Nexus and then not switch back. That was invisible to every
+check written before today, because all of them either ran on Linux or stopped
+at the edge of the process.
+
+The fix keeps the design promise rather than trading it away. Force-terminating
+the App was never acceptable and still is not. What changed is that the switcher
+now distinguishes "asked and it did not exit" from "there was nothing to ask",
+and in the second case stops at once with the instruction that actually works,
+which is to quit the App from its tray icon. It also refreshes each process
+before reading `MainWindowHandle`, since that value is cached from before a
+just-started App has a window. Section 4.2 of the runbook now states the
+limitation, and step 1 of the connect procedure tells the operator to quit the
+App first instead of implying the switcher will.
+
+What is still unproven is exactly one thing, and it is the same thing as before:
+whether the App's internal app-server authenticates with the inherited key. That
+needs a real Nexus key and a real App task on the installed build. Every claim
+around it is now measured rather than assumed.
+
+---
+
+## 2026-08-29 — The Windows switcher had never been run, and four separate faults were each enough to prove it
+
+PR 14 added about 1,650 lines of PowerShell under `scripts/windows/codex-app`
+and reported four green CI jobs on its head commit. All four jobs run on
+`ubuntu-latest`. Nothing in the pipeline executed, linted, or parsed a single
+line of that PowerShell, and the pull request said so plainly in its own
+verification section. The green checks were true and irrelevant, which is the
+more dangerous combination.
+
+Running the module on a Windows 11 machine with Codex App installed found four
+faults, each of which on its own made the feature inoperable. Three were
+specific to the host the switcher targets, Windows PowerShell 5.1 under
+`Set-StrictMode -Version Latest`. A `Mandatory` parameter typed
+`[Collections.Generic.List[string]]` applies the not-empty check to each
+element, so every function taking `-Lines` refused any `config.toml` containing
+a blank line; the fix is `[AllowEmptyString()]` and `[AllowEmptyCollection()]`
+together, and neither alone is sufficient. A `List[int]` returned from a
+function is unrolled on the way out, arriving as an `Int32` for one element and
+as `$null` for none, and all six callers of `Find-TopLevelKeyIndices` then read
+`.Count` on it; the fix is the unary comma. An accumulator was named `$matches`,
+which the `-match` operator replaces with a `Hashtable` on its first success, so
+the next `.Add($i)` failed on an overload that does not exist. That one sat on
+the restore path, after the operator's App had already been closed, which is the
+worst place in the design for a defect to be.
+
+The fourth was not a slip. `Assert-SafeTomlForManagedEdit` rejected any quoted
+table header, demanding the operator "normalize" it first. Codex App writes
+`[projects.'c:\path with spaces']` for every trusted directory and
+`[plugins."name@source"]` for every plugin, and those keys cannot be normalized,
+because TOML requires quoting for a key containing a backslash, a colon, a
+space, or a non-ASCII character. The guard was therefore a permanent refusal
+aimed precisely at the population the tool exists for, and it was reached on a
+real machine on the first attempt. Header parsing now accepts bare, basic-string
+and literal-string segments, and the refusals are narrowed to forms a
+line-oriented edit genuinely cannot carry: multiline strings, quoted keys in the
+top-level section or inside the managed provider's own table, multi-line arrays
+in those same two places, `model_providers` written inline or dotted or as an
+array of tables, a table nested under the managed provider, and a header segment
+hiding behind a backslash escape. Everything else the App writes is now left
+alone, and the boundary is documented in the runbook rather than discovered.
+
+Two ordering faults came out with them. The enable and disable paths closed the
+App before reading the configuration they might refuse, so a refusal cost the
+operator a closed App and gave nothing back; both now run every check that can
+be decided from the document alone before the App is touched, and then repeat
+them afterwards, because the App rewrites `config.toml` as it exits and the
+document validated first is not necessarily the document about to be edited.
+The read-only status also let a single unreadable process abort the whole
+report; that refusal belongs to the switch path, which needs certainty, not to
+a diagnostic.
+
+The suite that now covers this deliberately uses no test framework. Only Pester
+3.4.0 ships with Windows PowerShell 5.1 and its assertion syntax is not the one
+Pester 5 accepts, so depending on either would have meant a suite that could not
+be run on the host where three of these faults are visible at all. Fifty cases
+call the configuration functions directly against fixtures in the shape the App
+writes, and touch no App, network, registry, `config.toml`, or recovery state.
+They were then measured rather than trusted: with each of the four faults
+reintroduced one at a time, the suite fails 11, 12, 3 and 7 cases respectively,
+and 2 more for a fifth defect found while writing it, where an empty array
+leaving an `if`-expression is enumerated away to `$null`. A suite that stays
+green on the broken code is the same kind of artifact as a CI job that never
+runs the code.
+
+The `windows-client-tools` job runs it on `windows-latest`, with PSScriptAnalyzer
+under a rule set chosen for rules that catch defects rather than preferences.
+`PSAvoidAssignmentToAutomaticVariable` earns the job on its own: it flags the
+`$matches` fault directly. Two further findings from that pass were real and are
+fixed, an unused `ConfigPath` parameter and two event-handler parameters
+shadowing automatic variables, and the analyzer's remaining twenty-odd
+complaints about plural nouns and `ShouldProcess` are excluded on purpose,
+because a gate reporting thirty things nobody intends to act on stops being
+read.
+
+What is now established is narrow and worth stating exactly. The package
+identity and executable layout are real on one machine and one build:
+`OpenAI.Codex` `26.825.4187.0`, whose `AppxManifest.xml` names
+`app/ChatGPT.exe` as its `Windows.FullTrustApplication` entry point. The doctor
+runs end to end and its online checks reach the production gateway, resolving
+`llmapi.rcsl.online` and getting HTTP 200 from `/healthz`. What is still
+unverified is unchanged by any of this work: that launching that executable
+directly activates the App the way the Store entry does, since a direct launch
+out of `WindowsApps` does not go through package activation, and that the App's
+internal app-server inherits the process-scoped key. Neither can be settled
+without an interactive Windows session driving a real App task, and the runbook
+continues to gate the claim on exactly that.
+
+---
+
 ## 2026-08-28 — The landing page deployed, and a credential helper that is still broken three days later
 
 PR 15 merged to `main` as `74b258c` and deployed on the Mac Studio. The
@@ -316,6 +797,73 @@ every layer shared — no automated test ever mounted the real curtain Canvas,
 since Vitest mocks the fiber runtime and Playwright runs reduced-motion — is
 closed by a browser spec that opts back into motion, watches the real tunnel's
 cover lift, and takes the form focus after it leaves.
+
+---
+
+## 2026-08-25 — The Windows App connection became a reversible operation instead of a remembered edit
+
+The agent runbook had reached the point where every individual fact was written
+down and the operator still had to assemble a dangerous procedure from them:
+stop an App that rewrites its own configuration, take the backup before rather
+than after the edit, add a custom provider without replacing plugins or MCP,
+put a key in an environment the new process can see, restart, avoid the model
+picker, and remember that removing the provider definition can break a
+conversation created against it. The reverse path was longer than the forward
+one and touched a ChatGPT login it never needed to touch.
+
+`scripts/windows/codex-app` makes that sequence one transaction. The Windows
+Forms launcher discovers the `OpenAI.Codex` AppX package, or installs the
+official Microsoft Store package through `winget`; validates a masked Nexus key
+against `GET /v1/models`; asks the App to close normally and refuses to
+force-kill it; copies a UTF-8 text snapshot of the pre-switch TOML; records the
+original top-level model and provider without the newly entered credential;
+updates only those fields and the dedicated `rcsl_nexus_switcher` provider
+table; and starts `ChatGPT.exe` with a key present only in the new process
+environment. Switching back restores the captured selection and launches
+without that key. It deliberately leaves the inactive provider table, because
+the runbook's 2026-08-18 evidence established that old conversations continue
+to reference it.
+
+The whole backup is a disaster-recovery artifact, not the normal undo. Restoring
+it automatically would roll back plugin, MCP, permission and App-preference
+changes made after the switch — the same class of ownership collision that made
+hand editing unreliable. Normal restoration changes only the two captured
+top-level keys. It never deletes `auth.json`, `.codex-global-state.json`,
+sessions or conversations, and never signs out of ChatGPT. A legacy key created
+with `setx` is reported and can be removed explicitly at user scope; a
+machine-scope key is reported but left for an elevated operator decision.
+
+The companion doctor separates what can be proved. It checks Windows, package
+and process state, TOML selection, provider and recovery artifacts, persistent
+key presence, DNS, TLS, `/healthz`, and an authenticated `GET /v1/models`. It
+then reports the complete App agent loop as unproven. That boundary is the
+important part: the App's plugins, hidden model slots, tool definitions and
+picker are absent from an HTTP or CLI probe. A new App task that reads a real
+file remains the final acceptance step, stated as such rather than represented
+by a green network check.
+
+No App switch, installation, authenticated request, build, or smoke check was
+performed locally. Independent review and a Windows PowerShell 5.1 AST parse
+found the original implementation syntactically valid and operationally too
+trusting. The repair uses a collision-resistant provider ID, fails closed on
+unknown state and ambiguous TOML, serialises transitions with a mutex, protects
+state/backups with a current-user ACL, reconciles App-driven selection drift,
+checks the managed projection after startup, and warns about higher-precedence
+project `model` overrides. Doctor key entry is now a masked Windows dialog and the
+main GUI performs long operations in a background runspace.
+
+That review also corrected the delivery claim. OpenAI documents the
+[Windows App and Store command](https://learn.chatgpt.com/docs/windows/windows-app#download-the-chatgpt-desktop-app)
+and the public [custom-provider schema](https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers);
+`OpenAI.Codex`, `app\ChatGPT.exe`, and direct package launch are runtime-checked
+implementation assumptions, while key inheritance into the internal app-server
+is a project hypothesis; none is an OpenAI compatibility contract. The
+implementation commit passed remote repository CI, but the integration remains
+experimental until a Windows-native App task performs a real file operation.
+WSL agent mode is outside that claim. The operator runbook now carries a dated
+[source and evidence matrix](./runbooks/windows-codex-app-switcher.md#10-source-and-evidence-matrix)
+that separates official documentation, repository implementation,
+project-observed behavior, and unverified assumptions.
 
 ---
 

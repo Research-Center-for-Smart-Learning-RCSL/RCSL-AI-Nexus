@@ -45,6 +45,7 @@ from app.interfaces.http.routers import (
     admin_chat,
     api_keys,
     assistant,
+    client_tools,
     dashboard,
     evaluations,
     gateway_info,
@@ -196,6 +197,11 @@ def mount_admin_routers(app: FastAPI) -> None:
         tenants.router,
         api_keys.router,
         gateway_info.router,
+        # Beside `gateway_info` because it answers the second half of the same
+        # question. That one says where to send a key; this one hands over the
+        # Windows tools that put the key into a client, from the deployed image
+        # rather than from a branch on GitHub.
+        client_tools.router,
         routing_policies.router,
         dashboard.router,
         usage.router,
