@@ -1,0 +1,25 @@
+# Gitleaks configuration.
+#
+# The default rule set is kept in full; this file only adds allowlist entries
+# for values that are demonstrably not credentials. Each one names what it is
+# and why, because an allowlist entry is a place a real secret could hide and
+# the only defence against that is that every entry is narrow enough to read.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+  [[rules.allowlists]]
+  description = """
+  Ollama's context-window setting, quoted in the progress log. `generic-api-key`
+  matches `<word>=<high-entropy value>` and scores `num_ctx=16384` at 3.7, which
+  is what a five-digit number after an underscore-separated word looks like to
+  an entropy test. Surfaced on 2026-08-30 when the log was split into one file
+  per day and prose that had been committed on 2026-08-14 was re-scanned as new.
+
+  Narrow on purpose: it matches this setting and a decimal value, so nothing
+  with the shape of a key can pass through it.
+  """
+  regexes = ['''num_ctx\s*=\s*\d+''']
