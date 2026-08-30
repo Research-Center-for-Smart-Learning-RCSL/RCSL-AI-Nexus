@@ -926,6 +926,11 @@ Mac Studio 沒有 out-of-band 管理（沒有 IPMI/iDRAC 那類獨立於作業�
   docker compose version
   ```
 
+  需要 **v2.17 以上**。backend image 透過具名 build context（`client_tools`，
+  指向 `./scripts`）把 Windows 操作工具複製進去，`GET /admin/client-tools/windows-codex-app`
+  才能提供這個 deployment 正在跑的版本，而不是 GitHub 上的某個分支。舊版 Compose
+  會回報 `additional_contexts` 不支援，而不是回報缺檔案。
+
 模型 runtime（Ollama）刻意**不放進 Docker**：macOS 上的容器碰不到 Apple GPU，
 容器化的 Ollama 只會退回 CPU。所以 Ollama 原生跑，容器透過 `host.docker.internal`
 連它。
@@ -1332,6 +1337,9 @@ docstring 裡，那是估算器本身所在的地方。
   docker compose up -d
   docker compose ps
   ```
+
+  必須用 `docker compose build`，不能用 `docker build ./backend`：後者解析不到具名
+  build context，會停在 `COPY --from=client_tools` 那一行。
 
 - [ ] 確認 `migrate` 顯示 `exited (0)`。它依序做三件事：`alembic upgrade head` 套用全部
   migration、`db_roles` 建立三個資料庫帳號並套用授權、`provision` 寫入單一節點那一列並把

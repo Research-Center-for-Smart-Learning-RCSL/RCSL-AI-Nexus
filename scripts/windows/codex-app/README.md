@@ -30,11 +30,16 @@ CLI needs its own process-scoped key or an OpenAI restoration first.
 
 ## Launch
 
-From Windows PowerShell:
+These files sit together, so every command below is run from the directory
+holding this README. That is the directory the management UI's step 2 extracts
+to, `%LOCALAPPDATA%\RCSL-AI-Nexus\client-tools`, or `scripts\windows\codex-app`
+in a checkout. The paths used to be written from a repository root, which is a
+directory an operator who downloaded the zip does not have.
 
 ```powershell
+cd $env:LOCALAPPDATA\RCSL-AI-Nexus\client-tools   # or the checkout's scripts\windows\codex-app
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass `
-  -File .\scripts\windows\codex-app\Start-CodexAppSwitcher.ps1
+  -File .\Start-CodexAppSwitcher.ps1
 ```
 
 The scripts do not require Node.js, Python, PowerShell 7, administrator rights,
@@ -44,15 +49,13 @@ needed only when the App must be installed.
 Run the doctor without network checks:
 
 ```powershell
-powershell.exe -NoProfile -STA -File `
-  .\scripts\windows\codex-app\Test-CodexAppConnection.ps1
+powershell.exe -NoProfile -STA -File .\Test-CodexAppConnection.ps1
 ```
 
 Add DNS, TLS, health, and authenticated model-catalogue checks:
 
 ```powershell
-powershell.exe -NoProfile -STA -File `
-  .\scripts\windows\codex-app\Test-CodexAppConnection.ps1 `
+powershell.exe -NoProfile -STA -File .\Test-CodexAppConnection.ps1 `
   -ProjectPath C:\work\the-project -Online -Authenticated
 ```
 
@@ -64,12 +67,12 @@ Run the configuration-handling suite:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
-  .\scripts\windows\codex-app\Invoke-CodexAppSwitcherTests.ps1
+  .\Invoke-CodexAppSwitcherTests.ps1
 ```
 
 It must be run on Windows PowerShell 5.1, which is the host the switcher itself
 targets and the host on which its first three faults were visible at all. See
-[the runbook, section 6.1](../../../docs/runbooks/windows-codex-app-switcher.md#61-the-suite-that-runs-without-an-app)
+the runbook, section 6.1 (`docs/runbooks/windows-codex-app-switcher.md`)
 for what the suite covers and how it was checked against the defects it exists
 to catch.
 
@@ -157,9 +160,9 @@ the verified scope.
   guarded by discovery, startup checks, and a required interactive App task.
 
 The primary runbook's
-[source and evidence matrix](../../../docs/runbooks/windows-codex-app-switcher.md#10-source-and-evidence-matrix)
+source and evidence matrix, section 10 of the runbook
 classifies every external and project-specific claim. Its official links were
 rechecked on 2026-08-25.
 
 The detailed operator workflow and recovery procedure are in
-[`docs/runbooks/windows-codex-app-switcher.md`](../../../docs/runbooks/windows-codex-app-switcher.md).
+`docs/runbooks/windows-codex-app-switcher.md` in the repository, and on the management UI's agent-setup page.

@@ -136,11 +136,19 @@ switcher from wherever it landed:
 
 ```powershell
 $toolsRoot = Join-Path $env:LOCALAPPDATA 'RCSL-AI-Nexus\client-tools'
-Expand-Archive -LiteralPath "$env:USERPROFILE\Downloads\rcsl-codex-app-tools.zip" `
-  -DestinationPath $toolsRoot -Force
+$zip = Get-ChildItem "$env:USERPROFILE\Downloads\rcsl-codex-app-tools*.zip" |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+Expand-Archive -LiteralPath $zip.FullName -DestinationPath $toolsRoot -Force
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File `
   "$toolsRoot\Start-CodexAppSwitcher.ps1"
 ```
+
+The newest matching download, rather than the plain filename. A second download
+after a deployment update is saved as `rcsl-codex-app-tools (1).zip`, so naming
+the exact file would extract the older archive over the newer one and launch the
+previous switcher, reporting nothing. A redirected Downloads folder — OneDrive
+Known Folder Move, which is usual on a managed machine — means pointing the
+second line at wherever the browser actually saved it.
 
 The download comes from the image the deployment is running, over the origin and
 session the operator is already signed in to, and the endpoint requires that
@@ -150,10 +158,16 @@ named no version anyone could refer to, and sent somebody who trusts this
 platform to a different origin for a script that will hold their API key. It
 also means the operator path no longer depends on the repository staying public.
 
-The archive is byte-for-byte reproducible: entry order, timestamps, mode and
-originating system are all fixed, so an archive built from a checkout equals the
-one the deployment serves. That was measured across a Windows checkout and the
-Linux image rather than assumed, and the first attempt was not equal.
+The archive is byte-for-byte reproducible: entry order, timestamps, mode,
+originating system and line endings are all fixed, so an archive built from a
+checkout equals the one the deployment serves. That was measured across a
+Windows checkout and the Linux image rather than assumed, and the first attempt
+was not equal — nor was the second. Pinning the zip's own metadata left the file
+*contents* still coming from whatever the checkout held: these files were CRLF in
+a Windows working tree and LF in the index, so every entry differed while the
+metadata test passed. `.gitattributes` now fixes them to CRLF in every working
+tree, and the archive builder applies the same rule again on the way in, so the
+served bytes do not depend on the build host having honoured a git attribute.
 
 Inspect the scripts before running them. They will hold an API key, and the fact
 that they arrived over an authenticated origin is provenance, not a warrant.
@@ -324,6 +338,23 @@ previous model was, does not delete a manually configured provider, and never
 restores a whole stale backup over newer App-managed plugin or MCP changes. Use
 the manual recovery procedure in section 9.
 
+**What "malformed" means, since it used not to mean much.** A state is read as
+usable only when its schema version matches, every property the switcher relies
+on is present, and its mode is one of the three it writes: `preparing-rcsl`,
+`rcsl`, `openai`. Any other mode is a refusal. The check previously asked only
+whether the mode was one of the two active ones, so a truncated or hand-edited
+state answered "not active", and the next switch to Nexus treated it as no state
+at all and overwrote the recovery metadata that was the way back. An unknown mode
+now stops the switch instead, with the state left where it is.
+
+**Both refusals are reached before the App is closed.** The state is read, and
+checked against the active `CODEX_HOME`, in the same preflight that rehearses the
+document edit. A state belonging to another profile used to pass that preflight
+and be rejected afterwards, which cost the operator a closed App for a refusal
+that was decidable by reading. The check is repeated after the close, because the
+App rewrites `config.toml` as it exits; it is the same function both times, so the
+two cannot come to disagree.
+
 After restoration, create a new task and confirm the expected OpenAI model is
 available. Do not use the continued existence of the inactive RCSL provider
 table as a mode signal; the selected top-level provider is the signal.
@@ -391,15 +422,34 @@ the nine reintroduced one at a time, it fails 14, 17, 3, 7, 2, 1, 1, 1 and 1 of
 its cases respectively, and never zero. A suite that passes on the broken code
 proves nothing, and this one was measured rather than assumed.
 
-Three of its cases assert over the module's own source rather than by calling
+The four defects closed on 2026-08-30 were measured the same way against the
+enlarged suite: removing the mode allowlist fails 2 cases, removing the
+required-property check 1, letting restoration fall back to the enable path's
+looser rule 1, and moving the restore path's state validation back behind
+`Stop-CodexAppGracefully` 1. Those figures come from PowerShell 7.6 on macOS,
+which runs all 76; the `windows-client-tools` job is what runs them on the 5.1
+host the switcher targets.
+
+One of the 76 exists because a review pointed out that the rest were arguing
+about the wrong object. The required-property check fails closed, and the state
+it sees is never the `[pscustomobject]` a test builds — it is always
+`ConvertTo-Json`, a file, and `ConvertFrom-Json` again. If that round trip ever
+dropped a key whose value is `$null`, every operator whose `config.toml` had no
+`model_provider` line, which is the ordinary first switch, would be refused both
+the switch and the restore while this suite stayed green. One case now writes
+and re-reads a real file through the two functions `Save-SwitcherState` and
+`Get-SwitcherState` use, without touching the recovery state directory.
+
+Four of its cases assert over the module's own source rather than by calling
 it, following the precedent in
 `backend/tests/unit/test_refusal_identity_and_permissions.py`. They exist
 because the properties concerned belong to the call sites and not to any
 function: that both switch paths validate the document before closing the App,
-and that nothing in the module reads a file with `Get-Content`, whose Windows
-PowerShell default decodes a BOM-less file in the system codepage. Exercising a
-helper cannot hold either, since the orchestration around them needs a real App
-to run.
+that the restore path validates the recovery state before closing it and again
+afterwards, and that nothing in the module reads a file with `Get-Content`,
+whose Windows PowerShell default decodes a BOM-less file in the system codepage.
+Exercising a helper cannot hold any of them, since the orchestration around them
+needs a real App to run.
 
 The `windows-client-tools` CI job runs it on `windows-latest`, together with
 PSScriptAnalyzer under
@@ -526,7 +576,7 @@ for OpenAI compatibility guarantees. Official pages were rechecked on
 | The App's agent loop works against Nexus. | Project measurement, 2026-08-29 | A new task on the operator's own configuration, with a real `code` key, ran `cat README.md` and returned a correct summary. Model picker showed the custom provider. Elapsed five minutes seventeen seconds. One build, one capability, one run: section 7 stays as a step to repeat, not a box that is now ticked |
 | The switcher can close a running App. | Refuted by measurement, 2026-08-29 | Measured in both states: with no visible window there is nothing to ask, and with a visible window `CloseMainWindow` reached it and all nine processes plus the app-server were still running forty seconds later. `WM_CLOSE` posted directly did not end it either. The operator quits it from the tray; the switcher says so rather than waiting (section 4.2) |
 | Counting only `ChatGPT.exe` under the package directory answers "has the App closed". | Refuted by measurement, 2026-08-29 | The process that reads `config.toml` is `codex.exe app-server`, which lives outside the package. It was invisible to that count. On this build it exited before its parent, so no unsafe window was observed at 200 ms sampling, but the ordering was not something the switcher checked. It now counts the app-server too |
-| The configuration handling accepts what the App writes and refuses only what a line-oriented edit cannot carry. | Repository implementation, under test | 65 cases in [`Invoke-CodexAppSwitcherTests.ps1`](../../scripts/windows/codex-app/Invoke-CodexAppSwitcherTests.ps1), run by the `windows-client-tools` CI job on Windows PowerShell 5.1, and measured against each reintroduced defect (section 6.1) |
+| The configuration handling accepts what the App writes and refuses only what a line-oriented edit cannot carry. | Repository implementation, under test | 76 cases in [`Invoke-CodexAppSwitcherTests.ps1`](../../scripts/windows/codex-app/Invoke-CodexAppSwitcherTests.ps1), run by the `windows-client-tools` CI job on Windows PowerShell 5.1, and measured against each reintroduced defect (section 6.1) |
 | A directly launched packaged executable passes `RCSL_API_KEY` through to the App's internal app-server. | Project hypothesis requiring interactive acceptance | Launch code in [`CodexAppSwitcher.Common.psm1`](../../scripts/windows/codex-app/CodexAppSwitcher.Common.psm1) plus section 7 of this runbook; not documented by OpenAI |
 | The App may rewrite user configuration and inject plugins, MCP servers, hidden model slots, and large tool sets. | Project-observed behavior | Historical measurements in [Connect an agent client](./connect-an-agent-client.md#32-the-same-sharing-in-the-direction-that-can-break-it); not presented as OpenAI guarantees |
 | WSL agent mode inherits a key injected into a native Windows App process. | Unknown / out of scope | No supporting OpenAI documentation or completed project acceptance test |

@@ -9,6 +9,34 @@ $script:ManagedProviderId = 'rcsl_nexus_switcher'
 $script:SwitcherMutexName = 'Local\RCSL.AI.Nexus.CodexAppSwitcher'
 $script:StateSchemaVersion = 2
 
+# Every mode a schema-2 state is allowed to be in, and the subset that means a
+# switch is still in force. An allowlist rather than a pair of `-in` tests
+# scattered over the mutating paths: those tests answered "is this active?" and
+# read a mode they did not recognise as "no", so a truncated or hand-edited
+# state was treated as no state and its recovery metadata overwritten by the
+# next enable. Unknown is now a refusal, which is what the runbook already
+# promised for a state the switcher cannot interpret.
+$script:StateModes = @('preparing-rcsl', 'rcsl', 'openai')
+$script:StateActiveModes = @('preparing-rcsl', 'rcsl')
+
+# What a schema-2 state carries. A mode alone is not enough to trust: restoring
+# from a state missing OriginalModelProvider would silently leave the managed
+# provider selected, and the check that would have caught it reads a property
+# that is not there. Presence, not a value -- OriginalModel and
+# OriginalModelProvider are legitimately $null when the keys were absent.
+$script:StateRequiredProperties = @(
+    'SchemaVersion',
+    'Mode',
+    'ConfigPath',
+    'BackupPath',
+    'ConfigSha256Before',
+    'OriginalModel',
+    'OriginalModelProvider',
+    'ProviderId',
+    'GatewayBaseUrl',
+    'Capability'
+)
+
 # A TOML key segment is a bare key, a basic string, or a literal string. The App
 # writes all three -- `[projects.'c:\path']` and `[plugins."name@source"]` are its
 # normal output -- so header parsing has to accept quoting rather than refuse it.
@@ -921,9 +949,26 @@ function Get-SwitcherState {
 }
 
 function Assert-SwitcherStateUsable {
+    <#
+        Fail closed on any state this build cannot interpret.
+
+        Checked in the order a reader can trust: the schema first, because a
+        state from another version is allowed to carry different properties and
+        deserves its own message; then that the properties exist at all, because
+        dotting into a missing one is a terminating error under
+        `Set-StrictMode`, not $null; then the mode, then the path.
+
+        `-ForRestore` holds the state to the stricter rule the way back needs.
+        Enable only has to notice a switch still active for another profile.
+        Restore is about to write what this state records into a specific file,
+        so the state must belong to that file whatever mode it claims -- and
+        that check used to live inline after the App had been closed, where a
+        refusal cost the operator their running App for nothing.
+    #>
     param(
         $State,
-        [Parameter(Mandatory = $true)][string]$ConfigPath
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [switch]$ForRestore
     )
     if ($null -eq $State) {
         return
@@ -932,7 +977,26 @@ function Assert-SwitcherStateUsable {
     if ($null -eq $schemaProperty -or [int]$schemaProperty.Value -ne $script:StateSchemaVersion) {
         throw 'Switcher recovery state is missing a supported schema version. Preserve it and recover manually; the switcher will not overwrite unknown state.'
     }
-    if ([string]$State.Mode -in @('preparing-rcsl', 'rcsl') -and [string]$State.ConfigPath -ne $ConfigPath) {
+    $missing = [Collections.Generic.List[string]]::new()
+    foreach ($name in $script:StateRequiredProperties) {
+        if ($null -eq $State.PSObject.Properties[$name]) {
+            $missing.Add($name)
+        }
+    }
+    if ($missing.Count -gt 0) {
+        throw ("Switcher recovery state claims schema {0} but is missing: {1}. Preserve it and recover manually; the switcher will not overwrite state it cannot read." -f $script:StateSchemaVersion, ($missing -join ', '))
+    }
+    $mode = [string]$State.Mode
+    if ($mode -notin $script:StateModes) {
+        throw ("Switcher recovery state records an unknown mode '{0}'. Preserve it and recover manually; the switcher will not guess whether a switch is in force." -f $mode)
+    }
+    if ($ForRestore) {
+        if ([string]$State.ConfigPath -ne $ConfigPath) {
+            throw "The recovery state belongs to '$($State.ConfigPath)', but CODEX_HOME now resolves to '$ConfigPath'. Restore the original CODEX_HOME value and retry."
+        }
+        return
+    }
+    if ($mode -in $script:StateActiveModes -and [string]$State.ConfigPath -ne $ConfigPath) {
         throw "The switcher has an active RCSL session for '$($State.ConfigPath)', but CODEX_HOME now resolves to '$ConfigPath'. Restore OpenAI with the original CODEX_HOME before switching another profile."
     }
 }
@@ -1120,7 +1184,7 @@ function Invoke-EnableRcslCodexAppCore {
     $preflight = Split-TomlLines -Text (Read-Utf8Text -Path $configPath)
     $preflightState = Get-SwitcherState
     Assert-SwitcherStateUsable -State $preflightState -ConfigPath $configPath
-    $preflightActive = ($null -ne $preflightState -and [string]$preflightState.Mode -in @('preparing-rcsl', 'rcsl'))
+    $preflightActive = ($null -ne $preflightState -and [string]$preflightState.Mode -in $script:StateActiveModes)
     Assert-DocumentCanBeSwitched -Lines $preflight.Lines -BaseUrl $BaseUrl -Capability $Capability `
         -AllowExistingManaged:($preflightActive -or (Test-StateOwnsManagedProvider -State $preflightState))
 
@@ -1135,7 +1199,7 @@ function Invoke-EnableRcslCodexAppCore {
     Assert-SafeTomlForManagedEdit -Lines $parts.Lines
     $state = Get-SwitcherState
     Assert-SwitcherStateUsable -State $state -ConfigPath $configPath
-    $activeState = ($null -ne $state -and [string]$state.Mode -in @('preparing-rcsl', 'rcsl'))
+    $activeState = ($null -ne $state -and [string]$state.Mode -in $script:StateActiveModes)
     $ownedState = ($null -ne $state -and $null -ne $state.PSObject.Properties['ProviderId'] -and [string]$state.ProviderId -eq $script:ManagedProviderId)
     $captureOriginal = -not $activeState
     $originalModel = Get-OriginalTopLevelKey -Lines $parts.Lines -Key 'model'
@@ -1208,10 +1272,16 @@ function Invoke-DisableRcslCodexAppCore {
 
     $configPath = Get-CodexConfigPath
 
-    # Same reason as the enable path: a document the switcher will not edit is a
-    # refusal, and a refusal must not cost the operator a closed App.
+    # Same reason as the enable path: a refusal decidable by reading must not
+    # cost the operator a closed App. The state is half of what is read here.
+    # `Assert-DocumentCanBeRestored` rehearses the edit but asks nothing about
+    # whose configuration the state describes, so a state belonging to another
+    # CODEX_HOME used to pass this point and be rejected below, after the App
+    # had been closed for it.
     $preflight = Split-TomlLines -Text (Read-Utf8Text -Path $configPath)
-    Assert-DocumentCanBeRestored -Lines $preflight.Lines -State (Get-SwitcherState)
+    $preflightState = Get-SwitcherState
+    Assert-SwitcherStateUsable -State $preflightState -ConfigPath $configPath -ForRestore
+    Assert-DocumentCanBeRestored -Lines $preflight.Lines -State $preflightState
 
     Stop-CodexAppGracefully -TimeoutSeconds $CloseTimeoutSeconds
 
@@ -1228,19 +1298,17 @@ function Invoke-DisableRcslCodexAppCore {
         }
     }
     else {
-        $schemaProperty = $state.PSObject.Properties['SchemaVersion']
-        if ($null -eq $schemaProperty -or [int]$schemaProperty.Value -ne $script:StateSchemaVersion) {
-            throw 'Switcher recovery state uses an unsupported schema. Preserve it and recover manually; no configuration was changed.'
-        }
-        if ([string]$state.ConfigPath -ne $configPath) {
-            throw "The recovery state belongs to '$($state.ConfigPath)', but CODEX_HOME now resolves to '$configPath'. Restore the original CODEX_HOME value and retry."
-        }
+        # The authoritative pass. Same function as the preflight rather than the
+        # checks it used to inline, so the two cannot answer differently: the App
+        # rewrites config.toml as it exits, but it does not touch switcher state,
+        # and a second reading of it must refuse everything the first did.
+        Assert-SwitcherStateUsable -State $state -ConfigPath $configPath -ForRestore
         if (Test-ShouldRefreshManagedProvider -Lines $parts.Lines -State $state) {
             $restoredBaseUrl = Get-NormalizedGatewayBaseUrl -BaseUrl ([string]$state.GatewayBaseUrl)
             Set-RcslProviderTable -Lines $parts.Lines -BaseUrl $restoredBaseUrl -AllowExistingManaged
             $configChanged = $true
         }
-        $activeState = ([string]$state.Mode -in @('preparing-rcsl', 'rcsl'))
+        $activeState = ([string]$state.Mode -in $script:StateActiveModes)
         if ($activeState -or $currentProvider -eq $script:ManagedProviderId) {
             Restore-TopLevelTomlKey -Lines $parts.Lines -Key 'model' -Original $state.OriginalModel
             Restore-TopLevelTomlKey -Lines $parts.Lines -Key 'model_provider' -Original $state.OriginalModelProvider

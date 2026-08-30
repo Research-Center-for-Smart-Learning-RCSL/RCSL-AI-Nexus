@@ -1,0 +1,19 @@
+# Line endings, fixed where a file's bytes are part of a promise.
+#
+# `GET /admin/client-tools/windows-codex-app` serves these scripts as a zip and
+# claims the archive a maintainer builds from a checkout equals the one the
+# deployment serves. That claim failed on this: the packaged files were CRLF in
+# a Windows working tree and LF in the index, so the same commit produced a
+# different archive on a Windows checkout than inside the Linux image, and every
+# entry differed. The zip's own metadata had been pinned; the file contents had
+# not.
+#
+# CRLF rather than LF because these are Windows PowerShell scripts and CRLF is
+# what the host they run on writes natively. Which one matters far less than
+# that every checkout agrees. `client_tools.py` applies the same rule again when
+# it builds the archive, so the served bytes do not depend on the build host
+# having honoured this file.
+scripts/windows/**/*.ps1  text eol=crlf
+scripts/windows/**/*.psm1 text eol=crlf
+scripts/windows/**/*.psd1 text eol=crlf
+scripts/windows/**/*.md   text eol=crlf
