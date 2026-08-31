@@ -25,7 +25,7 @@ const me: Me = {
   session_expires_at: null,
 };
 
-function renderHeader(authMode: AuthMode = 'local') {
+function renderHeader(authMode: AuthMode = 'local', meOverrides: Partial<Me> = {}) {
   const signOut = vi.fn(async () => undefined);
   const setAssistantOpen = vi.fn();
 
@@ -34,7 +34,7 @@ function renderHeader(authMode: AuthMode = 'local') {
       navButtonRef={createRef<HTMLButtonElement>()}
       navOpen={false}
       setNavOpen={vi.fn()}
-      me={{ ...me, auth_mode: authMode }}
+      me={{ ...me, auth_mode: authMode, ...meOverrides }}
       authMode={authMode}
       assistant={{ isOpen: false, setOpen: setAssistantOpen }}
       signOut={signOut}
@@ -50,22 +50,19 @@ describe('the responsive app header', () => {
     theme.set.mockClear();
   });
 
-  it('collapses identity and account controls into the compact menu', async () => {
+  it('uses one account and appearance menu at every breakpoint', async () => {
     const user = userEvent.setup();
     renderHeader();
-
-    const identity = screen.getByText('Someone').parentElement;
-    expect(identity).toHaveClass('hidden', 'sm:block');
 
     const trigger = screen.getByRole('button', {
       name: 'Open account and appearance menu',
     });
-    expect(trigger).toHaveClass('md:hidden');
-
-    const desktopTheme = screen.getByRole('button', {
-      name: 'Theme: System. Switch to light.',
-    });
-    expect(desktopTheme.parentElement).toHaveClass('hidden', 'md:flex');
+    expect(trigger).not.toHaveClass('md:hidden');
+    expect(within(trigger).getByText('Someone').parentElement).toHaveClass(
+      'hidden',
+      'md:block',
+    );
+    expect(screen.queryByRole('link', { name: 'Account' })).not.toBeInTheDocument();
 
     await user.click(trigger);
     const menu = await screen.findByRole('menu');
@@ -84,6 +81,28 @@ describe('the responsive app header', () => {
       }),
     );
     expect(theme.set).toHaveBeenCalledWith('light');
+  });
+
+  it('wraps a complete long identity inside the menu', async () => {
+    const user = userEvent.setup();
+    const displayName = 'Someone With A Deliberately Long Display Name '.repeat(2).trim();
+    const login = 'someone.with.a.deliberately.long.login@example.test';
+    renderHeader('local', { display_name: displayName, login });
+
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Open account and appearance menu',
+      }),
+    );
+    const menu = await screen.findByRole('menu');
+    const fullName = within(menu).getByText(displayName);
+    const fullLogin = within(menu).getByText(`${login} – User`);
+
+    expect(menu).toHaveClass('w-80');
+    expect(fullName).not.toHaveClass('truncate');
+    expect(fullName).toHaveClass('[overflow-wrap:anywhere]');
+    expect(fullLogin).not.toHaveClass('truncate');
+    expect(fullLogin).toHaveTextContent(`${login} – User`);
   });
 
   it('supports arrow-key navigation and runs sign out from the menu', async () => {
@@ -117,27 +136,30 @@ describe('the responsive app header', () => {
     expect(signOut).toHaveBeenCalledOnce();
   });
 
-  it('keeps local-account actions out of tailnet mode', async () => {
-    const user = userEvent.setup();
-    renderHeader('tailnet');
+  it.each<AuthMode>(['tailnet', 'dev'])(
+    'keeps local-account actions out of %s mode',
+    async (authMode) => {
+      const user = userEvent.setup();
+      renderHeader(authMode);
 
-    await user.click(
-      screen.getByRole('button', {
-        name: 'Open account and appearance menu',
-      }),
-    );
-    const menu = await screen.findByRole('menu');
+      await user.click(
+        screen.getByRole('button', {
+          name: 'Open account and appearance menu',
+        }),
+      );
+      const menu = await screen.findByRole('menu');
 
-    expect(
-      within(menu).getByRole('menuitem', {
-        name: 'Theme: System. Switch to light.',
-      }),
-    ).toBeVisible();
-    expect(
-      within(menu).queryByRole('menuitem', { name: 'Account settings' }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(menu).queryByRole('menuitem', { name: 'Sign out' }),
-    ).not.toBeInTheDocument();
-  });
+      expect(
+        within(menu).getByRole('menuitem', {
+          name: 'Theme: System. Switch to light.',
+        }),
+      ).toBeVisible();
+      expect(
+        within(menu).queryByRole('menuitem', { name: 'Account settings' }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(menu).queryByRole('menuitem', { name: 'Sign out' }),
+      ).not.toBeInTheDocument();
+    },
+  );
 });

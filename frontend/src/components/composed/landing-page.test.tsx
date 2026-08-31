@@ -100,6 +100,11 @@ describe('the public landing page action', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     expect(screen.getByText('fetch failed')).not.toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(document.querySelectorAll('[aria-live]')).toHaveLength(1);
+    expect(document.querySelector('[aria-live]')).toHaveTextContent(
+      'Management service unavailable.',
+    );
 
     await user.click(screen.getByText('Technical details'));
     expect(screen.getByText('fetch failed')).toBeVisible();
@@ -125,17 +130,33 @@ describe('the public landing page action', () => {
     const retrying = screen.getByRole('button', { name: 'Retrying…' });
     expect(retrying).toBeDisabled();
     expect(state.refresh).toHaveBeenCalledOnce();
+    expect(document.querySelector('[aria-live]')).toHaveTextContent(
+      'Retrying management service.',
+    );
 
     finishRefresh?.();
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+      expect(document.querySelector('[aria-live]')).toHaveTextContent(
+        'Management service remains unavailable.',
+      );
     });
   });
 
-  it('announces the recovered session action in the same live region', () => {
+  it('announces recovery through the dedicated live status', async () => {
+    const user = userEvent.setup();
+    let finishRefresh: (() => void) | undefined;
     state.status = 'error';
     state.error = new Error('fetch failed');
+    state.refresh = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
     const { rerender } = render(<LandingPage />);
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
 
     state.status = 'authenticated';
     state.me = {
@@ -149,8 +170,29 @@ describe('the public landing page action', () => {
     };
     rerender(<LandingPage />);
 
-    const consoleLink = screen.getByRole('link', { name: /go to the console/i });
-    expect(consoleLink.closest('[aria-live="polite"]')).not.toBeNull();
+    expect(screen.getByRole('link', { name: /go to the console/i })).toBeVisible();
+    expect(document.querySelectorAll('[aria-live]')).toHaveLength(1);
+    expect(document.querySelector('[aria-live]')).toHaveTextContent(
+      'Management service restored. Console access is available.',
+    );
+    finishRefresh?.();
+  });
+
+  it('contains a rejected retry and reports that service remains unavailable', async () => {
+    const user = userEvent.setup();
+    state.status = 'error';
+    state.error = new Error('fetch failed');
+    state.refresh = vi.fn(() => Promise.reject(new Error('still unavailable')));
+    render(<LandingPage />);
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+      expect(document.querySelector('[aria-live]')).toHaveTextContent(
+        'Management service remains unavailable.',
+      );
+    });
   });
 
   it('keeps the lost-tailnet diagnosis instead of a password login it cannot use', () => {

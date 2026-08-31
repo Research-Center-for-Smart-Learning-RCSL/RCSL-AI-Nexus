@@ -11,6 +11,13 @@ import { cn } from '@/lib/utils';
 
 type ComposerTextareaProps = ComponentProps<'textarea'>;
 
+function resizeTextarea(textarea: HTMLTextAreaElement) {
+  textarea.style.height = 'auto';
+  const height = Math.min(Math.max(textarea.scrollHeight, 32), 128);
+  textarea.style.height = `${height}px`;
+  textarea.style.overflowY = textarea.scrollHeight > 128 ? 'auto' : 'hidden';
+}
+
 /**
  * A compact message field that grows with its content to a bounded height,
  * then scrolls internally. Enter keeps the single-line composer's send behaviour;
@@ -27,12 +34,23 @@ export function ComposerTextarea({
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
-
-    textarea.style.height = 'auto';
-    const height = Math.min(Math.max(textarea.scrollHeight, 32), 128);
-    textarea.style.height = `${height}px`;
-    textarea.style.overflowY = textarea.scrollHeight > 128 ? 'auto' : 'hidden';
+    resizeTextarea(textarea);
   }, [value]);
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea || typeof ResizeObserver === 'undefined') return;
+
+    let previousWidth = textarea.getBoundingClientRect().width;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width === undefined || width === previousWidth) return;
+      previousWidth = width;
+      resizeTextarea(textarea);
+    });
+    observer.observe(textarea);
+    return () => observer.disconnect();
+  }, []);
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     onKeyDown?.(event);
@@ -40,7 +58,10 @@ export function ComposerTextarea({
       event.defaultPrevented ||
       event.key !== 'Enter' ||
       event.shiftKey ||
-      event.nativeEvent.isComposing
+      event.nativeEvent.isComposing ||
+      // Safari can report the Enter that commits an IME candidate as keyCode
+      // 229 after composition state has already flipped back to false.
+      event.keyCode === 229
     ) {
       return;
     }
