@@ -1,7 +1,7 @@
 import type { FormEvent } from 'react';
 
+import { ComposerTextarea } from '@/components/composed/composer-textarea';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
@@ -26,12 +26,10 @@ type ChatComposerProps = {
   useKnowledge: boolean;
   setUseKnowledge: (useKnowledge: boolean) => void;
   isStreaming: boolean;
-  hasTurns: boolean;
   gatewayLoading: boolean;
   servable: ReadonlySet<string>;
   onSubmit: (event: FormEvent) => void;
   onCancel: () => void;
-  onClear: () => void;
 };
 
 export function ChatComposer(props: ChatComposerProps) {
@@ -45,12 +43,10 @@ export function ChatComposer(props: ChatComposerProps) {
     useKnowledge,
     setUseKnowledge,
     isStreaming,
-    hasTurns,
     gatewayLoading,
     servable,
     onSubmit,
     onCancel,
-    onClear,
   } = props;
   return (
     <>
@@ -69,74 +65,77 @@ export function ChatComposer(props: ChatComposerProps) {
           {CAPABILITY_DESCRIPTIONS[capability]}
         </p>
       </div>
-      <form onSubmit={onSubmit} className="flex items-center gap-2">
-        <Select
-          value={capability}
-          onValueChange={(value) => setCapability(value as IssuableCapability)}
-        >
-          <SelectTrigger className="w-36" aria-label="Capability">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {issuableCapabilitySchema.options.map((option) => {
-              const routable =
-                gatewayLoading || servable.has(option) || option === capability;
-              return (
-                <SelectItem
-                  key={option}
-                  value={option}
-                  disabled={!isConversational(option) || !routable}
-                >
-                  {option}
-                  {isConversational(option) ? null : (
-                    <span className="text-xs text-muted-foreground">
-                      not a conversation
-                    </span>
-                  )}
-                  {isConversational(option) && !routable ? (
-                    <span className="text-xs text-muted-foreground">
-                      nothing serves this yet
-                    </span>
-                  ) : null}
-                </SelectItem>
-              );
-            })}
-          </SelectContent>
-        </Select>
-        <label className="flex shrink-0 items-center gap-1.5 text-sm text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={thinking}
+      <form onSubmit={onSubmit} className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Select
+            value={capability}
+            onValueChange={(value) => setCapability(value as IssuableCapability)}
+          >
+            <SelectTrigger className="min-w-36 flex-1 sm:flex-none" aria-label="Capability">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {issuableCapabilitySchema.options.map((option) => {
+                const routable =
+                  gatewayLoading || servable.has(option) || option === capability;
+                return (
+                  <SelectItem
+                    key={option}
+                    value={option}
+                    disabled={!isConversational(option) || !routable}
+                  >
+                    {option}
+                    {isConversational(option) ? null : (
+                      <span className="text-xs text-muted-foreground">
+                        not a conversation
+                      </span>
+                    )}
+                    {isConversational(option) && !routable ? (
+                      <span className="text-xs text-muted-foreground">
+                        nothing serves this yet
+                      </span>
+                    ) : null}
+                  </SelectItem>
+                );
+              })}
+            </SelectContent>
+          </Select>
+          <label className="flex shrink-0 items-center gap-1.5 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={thinking}
+              disabled={isStreaming}
+              onChange={(event) => setThinking(event.target.checked)}
+            />
+            Thinking
+          </label>
+        </div>
+        <div className="flex items-end gap-2">
+          <ComposerTextarea
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="Ask something"
             disabled={isStreaming}
-            onChange={(event) => setThinking(event.target.checked)}
+            className="flex-1"
+            aria-label="Message"
+            aria-describedby="chat-composer-keyboard-hint"
           />
-          Thinking
-        </label>
-        <Input
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          placeholder="Ask something"
-          disabled={isStreaming}
-          className="flex-1"
-          aria-label="Message"
-        />
-        {isStreaming ? (
-          <Button type="button" variant="outline" onClick={onCancel}>
-            Stop
-          </Button>
-        ) : (
-          <Button type="submit" disabled={!prompt.trim()}>
-            Send
-          </Button>
-        )}
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={onClear}
-          disabled={!hasTurns && !isStreaming}
+          {isStreaming ? (
+            <Button type="button" variant="outline" onClick={onCancel}>
+              Stop
+            </Button>
+          ) : (
+            <Button type="submit" disabled={!prompt.trim()}>
+              Send
+            </Button>
+          )}
+        </div>
+        <p
+          id="chat-composer-keyboard-hint"
+          className="text-xs text-muted-foreground"
         >
-          Clear
-        </Button>
+          Enter to send · Shift+Enter for a new line
+        </p>
       </form>
     </>
   );
