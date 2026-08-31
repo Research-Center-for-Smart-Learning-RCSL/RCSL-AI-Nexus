@@ -34,11 +34,22 @@ export function AssistantComposer({
           aria-describedby="assistant-composer-keyboard-hint"
         />
         {isStreaming ? (
-          <Button type="button" variant="outline" size="sm" onClick={onCancel}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="min-w-12"
+            onClick={onCancel}
+          >
             Stop
           </Button>
         ) : (
-          <Button type="submit" size="sm" disabled={!question.trim()}>
+          <Button
+            type="submit"
+            size="sm"
+            className="min-w-12"
+            disabled={!question.trim()}
+          >
             Ask
           </Button>
         )}

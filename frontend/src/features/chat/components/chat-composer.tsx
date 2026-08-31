@@ -66,7 +66,7 @@ export function ChatComposer(props: ChatComposerProps) {
         </p>
       </div>
       <form onSubmit={onSubmit} className="space-y-2">
-        <div className="flex flex-wrap items-center gap-2">
+        <div data-slot="chat-composer-settings" className="flex flex-wrap items-center gap-2">
           <Select
             value={capability}
             onValueChange={(value) => setCapability(value as IssuableCapability)}
@@ -110,7 +110,7 @@ export function ChatComposer(props: ChatComposerProps) {
             Thinking
           </label>
         </div>
-        <div className="flex items-end gap-2">
+        <div data-slot="chat-composer-writing" className="flex items-end gap-2">
           <ComposerTextarea
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}

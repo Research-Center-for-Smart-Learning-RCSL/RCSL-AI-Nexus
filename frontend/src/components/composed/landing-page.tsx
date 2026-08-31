@@ -23,34 +23,28 @@ function CtaLink({ href, children }: { href: string; children: ReactNode }) {
 
 function ManagementUnavailable({
   error,
+  retrying,
   onRetry,
 }: {
   error: unknown;
-  onRetry: () => Promise<void>;
+  retrying: boolean;
+  onRetry: () => void;
 }) {
-  const [retrying, setRetrying] = useState(false);
-
-  async function retry() {
-    setRetrying(true);
-    try {
-      await onRetry();
-    } finally {
-      setRetrying(false);
-    }
-  }
-
   return (
-    <div
-      role="alert"
-      className="max-w-md space-y-3 rounded-lg border border-destructive/30 bg-destructive/5 px-5 py-4"
-    >
+    <div className="max-w-md space-y-3 rounded-lg border border-destructive/30 bg-destructive/5 px-5 py-4">
       <div className="space-y-1">
         <p className="font-medium">Management service unavailable</p>
         <p className="text-sm text-muted-foreground">
           Sign-in and console access cannot be checked right now.
         </p>
       </div>
-      <Button type="button" variant="outline" size="sm" disabled={retrying} onClick={retry}>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={retrying}
+        onClick={onRetry}
+      >
         {retrying ? 'Retrying…' : 'Retry'}
       </Button>
       <details className="text-sm text-muted-foreground">
@@ -65,10 +59,28 @@ function ManagementUnavailable({
 
 function PrimaryAction() {
   const { me, status, authMode, error, refresh } = useSession();
+  const [retrying, setRetrying] = useState(false);
+  const [retryAttempted, setRetryAttempted] = useState(false);
+
+  async function retry() {
+    setRetryAttempted(true);
+    setRetrying(true);
+    try {
+      await refresh();
+    } catch {
+      // The session query owns the visible error. A failed retry must not also
+      // escape the click handler as an unhandled promise rejection.
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  let content: ReactNode;
+  let announcement = '';
 
   if (status === 'loading') {
-    return (
-      <div className="space-y-2" aria-live="polite">
+    content = (
+      <div className="space-y-2">
         <p className="text-sm text-muted-foreground">Checking your access…</p>
         <Button size="lg" disabled className="min-w-44">
           Loading
@@ -91,10 +103,9 @@ function PrimaryAction() {
         </noscript>
       </div>
     );
-  }
-
-  if (status === 'authenticated' && me) {
-    return (
+    announcement = retrying ? 'Retrying management service.' : 'Checking your access.';
+  } else if (status === 'authenticated' && me) {
+    content = (
       <div className="space-y-2">
         <p className="text-sm text-muted-foreground">
           Signed in as <span className="font-medium text-foreground">{me.display_name}</span>
@@ -102,18 +113,28 @@ function PrimaryAction() {
         <CtaLink href="/dashboard">Go to the console</CtaLink>
       </div>
     );
-  }
-
-  // The failure states keep the diagnosis the shell would have shown at the
-  // old '/' instead of falling through to Sign in: /login dead-ends both — a
-  // tailnet identity never reaches that route, and an unreachable API rejects
-  // the very login it asks for.
-  if (status === 'error') {
-    return <ManagementUnavailable error={error} onRetry={refresh} />;
-  }
-
-  if (authMode === 'tailnet') {
-    return (
+    if (retryAttempted) {
+      announcement = 'Management service restored. Console access is available.';
+    }
+  } else if (status === 'error') {
+    // Sign in would call the same unavailable API, so keep the diagnosis here
+    // rather than offering a live-looking route to a dead end.
+    content = (
+      <ManagementUnavailable
+        error={error}
+        retrying={retrying}
+        onRetry={() => void retry()}
+      />
+    );
+    announcement = retrying
+      ? 'Retrying management service.'
+      : retryAttempted
+        ? 'Management service remains unavailable.'
+        : 'Management service unavailable.';
+  } else if (authMode === 'tailnet') {
+    // A tailnet identity never reaches the password route, so preserve the
+    // connection diagnosis instead of falling through to Sign in.
+    content = (
       <ErrorState
         title="Tailscale connection lost"
         error={TAILSCALE_CONNECTION_LOST}
@@ -121,9 +142,18 @@ function PrimaryAction() {
         className="max-w-md px-5 py-6"
       />
     );
+  } else {
+    content = <CtaLink href="/login">Sign in</CtaLink>;
   }
 
-  return <CtaLink href="/login">Sign in</CtaLink>;
+  return (
+    <>
+      {content}
+      <p className="sr-only" aria-live="polite" aria-atomic="true">
+        {announcement}
+      </p>
+    </>
+  );
 }
 
 export function LandingPage() {
@@ -165,7 +195,7 @@ export function LandingPage() {
               A self-hosted LLM gateway and management platform for secure access,
               observable operations, and models that can grow with your work.
             </p>
-            <div className="mt-6" aria-live="polite" aria-atomic="true">
+            <div className="mt-6">
               <PrimaryAction />
             </div>
           </div>
