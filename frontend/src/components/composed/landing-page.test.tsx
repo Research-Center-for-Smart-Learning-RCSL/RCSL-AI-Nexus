@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { AuthMode, Me, SessionStatus } from '@/lib/session';
@@ -52,6 +53,7 @@ beforeEach(() => {
   state.status = 'loading';
   state.authMode = null;
   state.error = null;
+  state.refresh = vi.fn(() => Promise.resolve());
 });
 
 describe('the public landing page action', () => {
@@ -86,15 +88,69 @@ describe('the public landing page action', () => {
     );
   });
 
-  it('keeps the API-error diagnosis instead of a dead-end sign-in link', () => {
+  it('presents API failure as a compact unavailable state with optional details', async () => {
+    const user = userEvent.setup();
     state.status = 'error';
     state.error = new Error('fetch failed');
     render(<LandingPage />);
 
-    expect(screen.getByText('Could not reach the admin API')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+    expect(screen.getByText('Management service unavailable')).toBeInTheDocument();
+    expect(
+      screen.getByText('Sign-in and console access cannot be checked right now.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.getByText('fetch failed')).not.toBeVisible();
+
+    await user.click(screen.getByText('Technical details'));
+    expect(screen.getByText('fetch failed')).toBeVisible();
     // /login asks the same unreachable API for a login; do not offer it.
     expect(screen.queryByRole('link', { name: /sign in/i })).toBeNull();
+  });
+
+  it('announces progress and prevents duplicate retries', async () => {
+    const user = userEvent.setup();
+    let finishRefresh: (() => void) | undefined;
+    state.status = 'error';
+    state.error = new Error('fetch failed');
+    state.refresh = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+    render(<LandingPage />);
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+    const retrying = screen.getByRole('button', { name: 'Retrying…' });
+    expect(retrying).toBeDisabled();
+    expect(state.refresh).toHaveBeenCalledOnce();
+
+    finishRefresh?.();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+    });
+  });
+
+  it('announces the recovered session action in the same live region', () => {
+    state.status = 'error';
+    state.error = new Error('fetch failed');
+    const { rerender } = render(<LandingPage />);
+
+    state.status = 'authenticated';
+    state.me = {
+      id: 'u1',
+      auth_mode: 'local',
+      login: 'operator@example.test',
+      display_name: 'Nexus Operator',
+      role: 'operator',
+      scopes: [],
+      session_expires_at: null,
+    };
+    rerender(<LandingPage />);
+
+    const consoleLink = screen.getByRole('link', { name: /go to the console/i });
+    expect(consoleLink.closest('[aria-live="polite"]')).not.toBeNull();
   });
 
   it('keeps the lost-tailnet diagnosis instead of a password login it cannot use', () => {

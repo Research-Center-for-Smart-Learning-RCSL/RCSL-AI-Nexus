@@ -134,6 +134,16 @@ export function AssistantDrawer() {
             type="button"
             variant="ghost"
             size="sm"
+            onClick={clear}
+            disabled={turns.length === 0 && !isStreaming}
+            aria-label="Clear assistant conversation"
+          >
+            Clear
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
             // Hidden below `sm`, where the panel already fills the screen and
             // widening it would do nothing.
             className="hidden sm:inline-flex"
@@ -237,10 +247,8 @@ export function AssistantDrawer() {
         question={question}
         setQuestion={setQuestion}
         isStreaming={isStreaming}
-        hasTurns={turns.length > 0}
         onSubmit={submit}
         onCancel={cancel}
-        onClear={clear}
       />
     </aside>
   );

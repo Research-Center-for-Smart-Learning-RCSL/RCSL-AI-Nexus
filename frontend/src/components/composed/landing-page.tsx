@@ -1,10 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ArrowRightIcon, LockKeyholeIcon, NetworkIcon, ServerIcon } from 'lucide-react';
 
-import { ErrorState } from '@/components/composed/error-state';
+import { describeError, ErrorState } from '@/components/composed/error-state';
 import { Logo } from '@/components/composed/logo';
 import { ThemeToggle } from '@/components/composed/theme-toggle';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -18,6 +18,48 @@ function CtaLink({ href, children }: { href: string; children: ReactNode }) {
       {children}
       <ArrowRightIcon className="transition-transform group-hover:translate-x-0.5" />
     </Link>
+  );
+}
+
+function ManagementUnavailable({
+  error,
+  onRetry,
+}: {
+  error: unknown;
+  onRetry: () => Promise<void>;
+}) {
+  const [retrying, setRetrying] = useState(false);
+
+  async function retry() {
+    setRetrying(true);
+    try {
+      await onRetry();
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  return (
+    <div
+      role="alert"
+      className="max-w-md space-y-3 rounded-lg border border-destructive/30 bg-destructive/5 px-5 py-4"
+    >
+      <div className="space-y-1">
+        <p className="font-medium">Management service unavailable</p>
+        <p className="text-sm text-muted-foreground">
+          Sign-in and console access cannot be checked right now.
+        </p>
+      </div>
+      <Button type="button" variant="outline" size="sm" disabled={retrying} onClick={retry}>
+        {retrying ? 'Retrying…' : 'Retry'}
+      </Button>
+      <details className="text-sm text-muted-foreground">
+        <summary className="w-fit cursor-pointer select-none font-medium text-foreground">
+          Technical details
+        </summary>
+        <p className="mt-2 max-w-prose break-words">{describeError(error)}</p>
+      </details>
+    </div>
   );
 }
 
@@ -66,13 +108,15 @@ function PrimaryAction() {
   // old '/' instead of falling through to Sign in: /login dead-ends both — a
   // tailnet identity never reaches that route, and an unreachable API rejects
   // the very login it asks for.
-  if (status === 'error' || authMode === 'tailnet') {
+  if (status === 'error') {
+    return <ManagementUnavailable error={error} onRetry={refresh} />;
+  }
+
+  if (authMode === 'tailnet') {
     return (
       <ErrorState
-        title={
-          status === 'error' ? 'Could not reach the admin API' : 'Tailscale connection lost'
-        }
-        error={status === 'error' ? error : TAILSCALE_CONNECTION_LOST}
+        title="Tailscale connection lost"
+        error={TAILSCALE_CONNECTION_LOST}
         onRetry={() => void refresh()}
         className="max-w-md px-5 py-6"
       />
@@ -121,7 +165,7 @@ export function LandingPage() {
               A self-hosted LLM gateway and management platform for secure access,
               observable operations, and models that can grow with your work.
             </p>
-            <div className="mt-6">
+            <div className="mt-6" aria-live="polite" aria-atomic="true">
               <PrimaryAction />
             </div>
           </div>

@@ -46,6 +46,17 @@ export function ChatPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={clear}
+          disabled={!hasContent}
+        >
+          Clear transcript
+        </Button>
+      </div>
       <div className="relative min-h-0 flex-1">
         <div
           ref={containerRef}
@@ -112,12 +123,10 @@ export function ChatPanel() {
         useKnowledge={useKnowledge}
         setUseKnowledge={setUseKnowledge}
         isStreaming={isStreaming}
-        hasTurns={turns.length > 0}
         gatewayLoading={gatewayLoading}
         servable={servable}
         onSubmit={submit}
         onCancel={cancel}
-        onClear={clear}
       />
     </div>
   );
