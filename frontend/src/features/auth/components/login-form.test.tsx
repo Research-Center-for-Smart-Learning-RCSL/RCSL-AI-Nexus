@@ -137,3 +137,17 @@ describe('the second step of sign-in', () => {
     );
   });
 });
+
+describe('the password step', () => {
+  it('keeps Login focused and gives concise administrator-led recovery guidance', () => {
+    render(<LoginForm />, { wrapper: Wrapper });
+
+    expect(screen.getByLabelText('Login')).toHaveFocus();
+    expect(
+      screen.getByText(
+        'Forgot your password? Ask an administrator for a single-use reset link.',
+      ),
+    ).toBeVisible();
+    expect(screen.queryByRole('link', { name: /forgot password/i })).toBeNull();
+  });
+});

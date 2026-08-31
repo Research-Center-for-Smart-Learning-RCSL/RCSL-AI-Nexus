@@ -89,12 +89,11 @@ export function LoginForm({ redirectTo = '/dashboard' }: { redirectTo?: string }
               here pretending otherwise: a reset link is issued by an
               administrator from the Users screen and delivered out of band,
               because an unauthenticated endpoint that emails one would be an
-              account-enumeration oracle. Saying nothing left someone who had
-              forgotten their password on a screen with no visible way out. */}
+              account-enumeration oracle. The guidance says what to request
+              without asking for an identifier or implying that one exists. */}
           <p className="text-center text-xs text-muted-foreground">
-            A forgotten password is reset by an administrator, who issues a
-            single-use link; there is no self-service reset. Contact the
-            administrator who created the account.
+            Forgot your password? Ask an administrator for a single-use reset
+            link.
           </p>
         </form>
       </Form>
