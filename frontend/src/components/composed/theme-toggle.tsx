@@ -18,6 +18,7 @@ import { useTheme } from 'next-themes';
 import { MonitorIcon, MoonIcon, SunIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { MenuItem } from '@/components/ui/menu';
 
 const ORDER = ['light', 'dark', 'system'] as const;
 type Choice = (typeof ORDER)[number];
@@ -34,7 +35,7 @@ const LABEL: Record<Choice, string> = {
   system: 'System',
 };
 
-export function ThemeToggle() {
+function useThemeChoice() {
   const { theme, setTheme } = useTheme();
   // The server cannot know the stored choice, so rendering the real icon on the
   // first pass would mismatch whatever `next-themes` applies on the client.
@@ -47,6 +48,22 @@ export function ThemeToggle() {
     ? (theme as Choice)
     : 'system';
   const next = NEXT[current];
+
+  return { current, mounted, next, setTheme };
+}
+
+function ThemeIcon({ choice }: { choice: Choice }) {
+  return choice === 'light' ? (
+    <SunIcon />
+  ) : choice === 'dark' ? (
+    <MoonIcon />
+  ) : (
+    <MonitorIcon />
+  );
+}
+
+export function ThemeToggle() {
+  const { current, mounted, next, setTheme } = useThemeChoice();
 
   return (
     <Button
@@ -62,15 +79,28 @@ export function ThemeToggle() {
       }
       title={mounted ? `Theme: ${LABEL[current]}` : undefined}
     >
-      {!mounted ? (
-        <MonitorIcon />
-      ) : current === 'light' ? (
-        <SunIcon />
-      ) : current === 'dark' ? (
-        <MoonIcon />
-      ) : (
-        <MonitorIcon />
-      )}
+      <ThemeIcon choice={mounted ? current : 'system'} />
     </Button>
+  );
+}
+
+export function ThemeMenuItem() {
+  const { current, mounted, next, setTheme } = useThemeChoice();
+
+  return (
+    <MenuItem
+      onClick={() => setTheme(next)}
+      aria-label={
+        mounted
+          ? `Theme: ${LABEL[current]}. Switch to ${LABEL[next].toLowerCase()}.`
+          : 'Theme'
+      }
+    >
+      <ThemeIcon choice={mounted ? current : 'system'} />
+      <span className="flex-1">Theme</span>
+      <span className="text-xs text-muted-foreground">
+        {mounted ? LABEL[current] : LABEL.system}
+      </span>
+    </MenuItem>
   );
 }
