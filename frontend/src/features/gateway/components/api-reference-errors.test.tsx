@@ -1,8 +1,9 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
 import { elementToMarkdown } from '@/lib/markdown-export';
+import { API_ERROR_CATALOGUE } from './api-reference-error-catalogue';
 import { ErrorsSection } from './api-reference-errors';
 
 function visibleCodes(): string[] {
@@ -11,6 +12,27 @@ function visibleCodes(): string[] {
     .getAllByRole('row')
     .slice(1)
     .map((row) => within(row).getAllByRole('cell')[1]?.textContent ?? '');
+}
+
+function expectCompleteCatalogueExport(markdown: string): void {
+  const codes = API_ERROR_CATALOGUE.map((error) => error.code);
+  expect(new Set(codes).size).toBe(API_ERROR_CATALOGUE.length);
+
+  for (const error of API_ERROR_CATALOGUE) {
+    const escapedCode = error.code.replaceAll('_', '\\_');
+    const rowPrefix = `| ${error.status} | ${escapedCode} |`;
+    expect(markdown.split(rowPrefix)).toHaveLength(2);
+  }
+
+  const dataRows = markdown
+    .split('\n')
+    .filter(
+      (line) =>
+        line.startsWith('| ') &&
+        !line.startsWith('| Status |') &&
+        !line.startsWith('| --- |'),
+    );
+  expect(dataRows).toHaveLength(API_ERROR_CATALOGUE.length);
 }
 
 describe('ErrorsSection search', () => {
@@ -77,6 +99,20 @@ describe('ErrorsSection search', () => {
     expect(visibleCodes()).toEqual(['stream_interrupted']);
   });
 
+  it('matches the visible stream marker and rejects other punctuation-only queries', async () => {
+    const user = userEvent.setup();
+    render(<ErrorsSection />);
+    const search = screen.getByRole('searchbox');
+
+    await user.type(search, '—');
+    expect(visibleCodes()).toEqual(['stream_interrupted']);
+
+    await user.clear(search);
+    await user.type(search, '???');
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.getByText('0 of 17 errors shown.')).toBeInTheDocument();
+  });
+
   it('treats whitespace-only input as an unfiltered catalogue', async () => {
     const user = userEvent.setup();
     render(<ErrorsSection />);
@@ -100,10 +136,29 @@ describe('ErrorsSection search', () => {
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
     expect(screen.getByText('No matching errors')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Clear search' }));
+    const clear = screen.getByRole('button', { name: 'Clear search' });
+    clear.focus();
+    await user.keyboard('{Enter}');
 
     expect(search).toHaveValue('');
+    expect(search).toHaveFocus();
     expect(visibleCodes()).toHaveLength(17);
+  });
+
+  it('allows an unbroken no-results query to wrap inside the empty state', () => {
+    render(<ErrorsSection />);
+    const longQuery = 'x'.repeat(120);
+
+    fireEvent.change(screen.getByRole('searchbox'), {
+      target: { value: longQuery },
+    });
+
+    const description = screen.getByText(
+      `No status, error code, or remediation matches “${longQuery}”.`,
+    );
+    expect(description.closest('[data-md-skip]')).toHaveClass(
+      '[&_p]:[overflow-wrap:anywhere]',
+    );
   });
 
   it('exports every authored record even while the visible table is filtered', async () => {
@@ -114,9 +169,7 @@ describe('ErrorsSection search', () => {
     expect(visibleCodes()).toEqual(['quota_exceeded']);
 
     const markdown = elementToMarkdown(container);
-    expect(markdown).toContain('| 429 | quota\\_exceeded |');
-    expect(markdown).toContain('| 401 | not\\_authenticated |');
-    expect(markdown).toContain('| — | stream\\_interrupted |');
+    expectCompleteCatalogueExport(markdown);
     expect(markdown).not.toContain('Search errors');
   });
 
@@ -128,8 +181,7 @@ describe('ErrorsSection search', () => {
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
 
     const markdown = elementToMarkdown(container);
-    expect(markdown).toContain('| 400 | untrusted\\_proxy |');
-    expect(markdown).toContain('| 500 | internal\\_error |');
+    expectCompleteCatalogueExport(markdown);
     expect(markdown).not.toContain('No matching errors');
   });
 });

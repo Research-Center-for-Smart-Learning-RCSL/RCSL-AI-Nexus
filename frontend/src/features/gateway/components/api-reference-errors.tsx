@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
 import { CodeBlock } from '@/components/composed/code-block';
 import { EmptyState } from '@/components/composed/empty-state';
@@ -13,12 +13,21 @@ import {
 
 export function ErrorsSection() {
   const [query, setQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const matches = useMemo(
     () => API_ERROR_CATALOGUE.filter((error) => matchesApiError(error, query)),
     [query],
   );
   const matchingCodes = new Set(matches.map((error) => error.code));
   const hasResults = matches.length > 0;
+
+  function clearSearch() {
+    setQuery('');
+    // The clear button disappears with the empty state. Move focus to the
+    // surviving control so keyboard and screen-reader users do not fall back
+    // to the document body.
+    searchInputRef.current?.focus();
+  }
 
   return (
     <section className="space-y-3">
@@ -28,6 +37,7 @@ export function ErrorsSection() {
           Search errors
         </label>
         <Input
+          ref={searchInputRef}
           id="api-error-search"
           type="search"
           value={query}
@@ -103,7 +113,7 @@ export function ErrorsSection() {
       </p>
 
       {!hasResults ? (
-        <div data-md-skip>
+        <div data-md-skip className="[&_p]:[overflow-wrap:anywhere]">
           <EmptyState
             title="No matching errors"
             description={`No status, error code, or remediation matches “${query}”.`}
@@ -111,7 +121,7 @@ export function ErrorsSection() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setQuery('')}
+                onClick={clearSearch}
               >
                 Clear search
               </Button>
