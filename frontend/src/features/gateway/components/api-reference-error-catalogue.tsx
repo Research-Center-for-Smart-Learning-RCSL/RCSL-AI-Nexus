@@ -313,12 +313,25 @@ function nodeText(node: ReactNode): string {
 }
 
 function normaliseSearchText(value: string): string {
-  return value.toLowerCase().replace(/[\W_]+/g, ' ').trim();
+  return value
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
 }
 
 export function matchesApiError(error: ApiErrorRecord, query: string): boolean {
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery) return true;
+
+  // The visible status-less marker is punctuation rather than a word. Match it
+  // as a status before general punctuation becomes a search boundary; mapping
+  // every em dash to text would make ordinary remediation dashes false aliases.
+  if (trimmedQuery === '—') return error.status === '—';
+
   const needle = normaliseSearchText(query);
-  if (!needle) return true;
+  // A non-blank punctuation-only query is still a real query. Treating it as
+  // blank makes inputs such as "???" silently reset the filter.
+  if (!needle) return false;
 
   const haystack = normaliseSearchText(
     [
