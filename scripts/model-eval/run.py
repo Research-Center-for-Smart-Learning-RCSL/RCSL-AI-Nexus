@@ -2,6 +2,7 @@
 
   python3 run.py pilot            calibration against the incumbent only (4.2)
   python3 run.py full             three candidates, three interleaved rounds
+  python3 run.py qwen38           the Qwen 3.8 27B builds, plus the incumbent
   python3 run.py restore          put the deployment's model back, pinned
 
 Every sample is appended to results.jsonl as it completes, so an interrupted run
@@ -23,6 +24,36 @@ from tasks import TASKS
 
 INCUMBENT = "gemma4:31b-it-q8_0"
 CANDIDATES = [INCUMBENT, "qwen3.6:27b-q8_0", "qwen3.6:35b-a3b-q8_0"]
+
+# The 2026-09-02 candidate, in three builds, against the incumbent re-run as a
+# control rather than compared against its recorded 94.4%.
+#
+# **Re-running the incumbent is the point of the fourth entry.** Its published
+# figure was measured on Ollama 0.32.4 and this runs on 0.33.2, which the
+# throughput bench put at +1.8% to +5.4% on generation; a score is not a rate,
+# but nothing here has established that a runtime upgrade cannot move one, and
+# a control that costs 29 minutes is cheaper than an argument about it later.
+#
+# **`27b-q8_0` is here because section 5 says quantisation must be matched.**
+# The two builds a deployment would actually choose are `q4_K_M` and the MLX
+# nvfp4, and comparing either against a q8 incumbent confounds the model with
+# its quantisation -- which is exactly how 2026-08-07's "stronger than glm"
+# conclusion was invalidated, and section 5 names it as the easiest mistake to
+# repeat. The q8 build separates the two questions, and the q8-to-q4 gap it
+# exposes is the first measurement this repository has of what q4 costs in
+# capability rather than in memory, which decisions.md has carried as open
+# since 2026-08-05.
+#
+# `27b-mtp-q4_K_M` is deliberately absent. Its MTP head has nothing to
+# speculate for on the GGUF runner and it measured 10.91 gen tok/s against the
+# plain q4's 23.21, so it is the same weights run slower (PROGRESS.md
+# 2026-09-02).
+CANDIDATES_38 = [
+    INCUMBENT,
+    "qwen3.8:27b-q8_0",
+    "qwen3.8:27b-q4_K_M",
+    "qwen3.8:27b-mlx",
+]
 
 # Restored at the end: what the deployment is serving, and how.
 #
@@ -260,6 +291,16 @@ if __name__ == "__main__":
         run("pilot2", [INCUMBENT], 3)
     elif cmd == "full":
         run("full", CANDIDATES, 3)
+    elif cmd == "qwen38":
+        # A separate phase rather than more rows in `full`, because `full` was
+        # measured on Ollama 0.32.4 against three candidates two of which are
+        # retired, and `analyse.py` reads one phase at a time. It also needs no
+        # `repair`: the three prompts that carried a `def f(...): ...` stub were
+        # fixed in `tasks.py` on 2026-08-15, so this phase gets the repaired
+        # wording from its first sample. That makes it comparable with `full`
+        # overridden by `repair`, which is the published reading, and not with
+        # `full` alone.
+        run("qwen38", CANDIDATES_38, 3)
     elif cmd == "repair":
         # The three prompts that carried a `def f(...): ...` stub. qwen3.6:27b
         # copied the stub and indented a body under it in all three rounds of
