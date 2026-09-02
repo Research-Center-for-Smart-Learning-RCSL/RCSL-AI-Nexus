@@ -1,6 +1,7 @@
 # Comparing candidate models
 
-**Status: designed 2026-08-14, run 2026-08-15.** The harness is
+**Status: designed 2026-08-14, run 2026-08-15, run again 2026-09-02 against a
+fourth candidate in three builds.** The harness is
 [`scripts/model-eval/`](../scripts/model-eval/) — committed, unlike the one
 behind the previous set — and the results are in [PROGRESS.md](./PROGRESS.md)
 2026-08-15. Three candidates, three interleaved rounds, 162 samples of which 159
@@ -37,14 +38,28 @@ open decision it is meant to settle.
 **The switch this settled was made on 2026-08-16 and reversed on 2026-08-21**,
 and nothing recorded the reversal, so for twelve days this page described a
 deployment that had gone back to `gemma4:31b-it-q8_0`. It still serves `chat`
-and `code` today. **A fourth candidate now exists and has not been through this
-set**: Qwen 3.8 27B, released after these three were scored, measures 44.5 gen
-tok/s flat on its MLX build against this incumbent's 13.89 falling to 6.99 at
-the context ceiling, in half the memory, calling tools correctly
-([PROGRESS.md](./PROGRESS.md) 2026-09-02). That is a stopwatch result and this
-page exists because a stopwatch is not the question — the bar is the 94.4% and
-the ten agent-loop rungs below, and running it against them is what would settle
-anything.
+and `code` today. **A fourth candidate was put through this set on 2026-09-02
+and did not clear the bar.** Qwen 3.8 27B, released after these three were
+scored, was run in three builds with the incumbent re-run as a control — 216
+samples, three interleaved rounds, Ollama 0.33.2:
+
+| | score | s/task | gen tok/s |
+|---|---:|---:|---:|
+| `gemma4:31b-it-q8_0` *(serving)* | **93.4%** | **33.3** | 13.8 |
+| `qwen3.8:27b-q4_K_M` | 89.1% | 39.0 | 23.1 |
+| `qwen3.8:27b-q8_0` | 89.0% | 60.8 | 15.5 |
+| `qwen3.8:27b-mlx` | 84.9% | 16.5 | 65.4 |
+
+The incumbent reproduces its own figure two runtime versions later and is not
+beaten by any build. **The q8 arm was run only to satisfy section 5** and is
+what makes the result readable: the gap to the MLX build is 4.4 points of model
+and 4.1 of quantisation, so the build the stopwatch favoured is the one that
+lost the most capability. **And the stopwatch's own argument inverts on this
+set**: two of the three candidates take *longer* to reach an answer than the
+incumbent despite higher tokens per second, because Qwen 3.8 writes more per
+answer — which is the difference between measuring a rate and measuring a task,
+and the reason this page exists. The ten agent-loop rungs were not run.
+([PROGRESS.md](./PROGRESS.md) 2026-09-02.)
 
 ---
 
@@ -215,6 +230,21 @@ the same experiment.
 **Truncation is not a wrong answer.** A response that hit the length cap without
 producing an answer must return no result. Without that rule the same defect
 reappears as a zero, and a zero looks like a measurement.
+
+**That rule cuts the other way once deliberation is off, found 2026-09-02.** All
+three Qwen 3.8 builds ran out a 4,096-token budget on `spec_contradiction`
+without emitting an answer, in two rounds of three each, with `think` off and
+`thinking_chars` zero — so the budget went on prose rather than on reasoning,
+and failing to reach an answer is the model not following the output
+instruction rather than the harness measuring itself. Excluding those samples
+credits a candidate for a task it could not finish: scoring them 0 moves the
+three builds down 3.3 to 4.9 points and the incumbent, which truncated nothing,
+not at all. It also makes `analyse.py` call `spec_contradiction` **SATURATED
+high** off the one sample in three that survived. The rule was kept for that run
+because changing it after seeing which way it cuts is the worse error, and both
+readings were published side by side. What it needs is a third outcome —
+truncated-without-answer counted separately from both scored and no-result —
+rather than a choice between the two it has.
 
 **A budget several times the expected answer.** So that a model which ignores the
 deliberation flag is not silently truncated instead.

@@ -42,6 +42,7 @@ separately at the end, marked as superseded.
 - The bench, and two ways it was measuring itself before it measured anything
 - What a full-context request actually costs, and the guardrail it has already outgrown
 - Qwen 3.8 27B, measured
+- Qwen 3.8 27B through the eighteen-task set, and the arm that was added to obey a rule
 
 ### August 2026
 
