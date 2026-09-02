@@ -104,12 +104,16 @@ producing an answer at all. The setting is per capability precisely so that
 
 **On this deployment steps 1–3 are already done**, and there are measured
 numbers under step 3 rather than an argument. The `code` policy points at
-`qwen36-35b-a3b-q8` with deliberation off (`glm47-flash` until 2026-08-07,
-`gemma4-31b` until 2026-08-16, when `chat` and `code` both moved to
-`qwen36-35b-a3b-q8`). The table below was measured on `gemma4-31b` and has not
-been re-run on the model now serving; the saving it reports is a property of
-deliberation rather than of either model, which is the point the two-model
-comparison under it makes. Running the same
+`gemma4-31b-q8` with deliberation off. The chain is longer than it looks and
+this line has been wrong about the end of it: `glm47-flash` until 2026-08-07,
+`gemma4-31b` until 2026-08-16, `qwen36-35b-a3b-q8` from 2026-08-16, and
+`gemma4-31b-q8` again since **2026-08-21**, when both policies were moved back
+(`audit_log`, `routing_policy.saved`, 07:58:13 and 07:59:36). Nothing recorded
+that move at the time, so this paragraph named the wrong model for twelve days;
+see [PROGRESS.md](../PROGRESS.md) 2026-09-02. The table below was measured on
+`gemma4-31b`, the q4, and has not been re-run on the q8 now serving; the saving
+it reports is a property of deliberation rather than of either model, which is
+the point the two-model comparison under it makes. Running the same
 five-tool-call debugging task three times each way:
 
 | on `gemma4-31b` (2026-08-07) | wall clock | output tokens |
@@ -728,11 +732,13 @@ weight quantisation — **inferred from the measurement above rather than
 separately measured**. `glm47-flash` is left at 32768 for the opposite reason:
 different attention, and nobody has measured it.
 
-**None of those three models serves a capability now, so read the paragraphs
-above as the record of a fix rather than as today's numbers.** `gemma4-31b-q8`
-is still registered — at 196608 now, not the 131072 above — and routes to
-nothing; `chat` and `code` have both reached `qwen36-35b-a3b-q8` since
-2026-08-16, registered at its native **262144**. The
+**Read the paragraphs above as the record of a fix rather than as today's
+numbers.** Of the three models named in them only `gemma4-31b-q8` serves
+anything, and it is registered at its native **262144** rather than the 196608
+this sentence claimed or the 131072 above: `code` reaches it, and `chat` reaches
+`qwen7b` first and it second. `qwen36-35b-a3b-q8` held both from 2026-08-16 and
+lost them on 2026-08-21; it is registered and resident-capable but routes to
+nothing. The
 relationship that matters is the same one and it still holds with room:
 Ollama evaluates at most `num_ctx / 2` prompt tokens and silently drops the
 rest, which puts the truncation point at **131072**, above the 122880 a caller
@@ -803,13 +809,22 @@ What is still worth doing is the opposite of what this section used to ask for.
 `86400s` is a day, which is generous to the point of not being a backstop at
 all: `proxy_read_timeout` is what reclaims a connection from an upstream that
 has genuinely hung, and worker connections are finite. Lowering it to `3600s`
-— comfortably above the **173-second** worst case a full `MAX_CONTEXT_LENGTH`
-prompt costs (122880 / 711 tok/s, measured 2026-08-17 on `qwen36-35b-a3b-q8`
-from three cold session starts; this line read 556 seconds while the ceiling was
-65536 and the dense model then serving evaluated at 117.9 tok/s), and above the
-platform's own **2100-second** per-request budget (a 1200-second per-read
-timeout for the prompt, then 900 seconds of wall clock for the answer) —
-would restore that property. **It is a tidy-up with no user-visible symptom
+— above the **1,379-second** worst case a full `MAX_CONTEXT_LENGTH` prompt
+costs, and above the platform's own **2100-second** per-request budget (a
+1200-second per-read timeout for the prompt, then 900 seconds of wall clock for
+the answer) — would restore that property.
+
+**That first figure has been wrong twice and the margin is no longer
+comfortable.** It read 556 seconds while the ceiling was 65536 and the dense
+model then serving evaluated at 117.9 tok/s, then 173 seconds
+(`122880 / 711 tok/s`) measured on `qwen36-35b-a3b-q8` on 2026-08-17. Both were
+taken against a model that is not the one serving, and both assumed a rate that
+does not hold at depth. Measured directly on 2026-09-02 at the ceiling itself:
+121,892 tokens at **88.4 prompt tok/s** is 1,379 seconds. `3600s` still clears
+it, by 2.6x rather than by the twenty-fold the 173 implied — but the platform's
+own 1200-second read timeout does **not**, which is a live guardrail problem
+rather than a proxy tidy-up and is tracked in
+[decisions.md](../roadmap/decisions.md). **It is a tidy-up with no user-visible symptom
 behind it, not a fix**, and it should be described that way to whoever owns
 that machine.
 
