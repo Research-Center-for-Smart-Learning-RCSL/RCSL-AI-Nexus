@@ -40,6 +40,8 @@ separately at the end, marked as superseded.
 - The deployment had moved away from the documents, and the harness written to protect it had gone stale in exactly the way its own comment predicted
 - Upgrading the runtime, and the two gigabytes it quietly took
 - The bench, and two ways it was measuring itself before it measured anything
+- What a full-context request actually costs, and the guardrail it has already outgrown
+- Qwen 3.8 27B, measured
 
 ### August 2026
 
