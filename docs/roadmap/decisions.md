@@ -39,8 +39,16 @@ No open decisions block Phase 1.
   finding here touches it. Remaining open measurements: whether eviction occurs
   under real pressure (a decision, not a measurement — it needs a deliberate
   allocation on a serving machine), q4's quality here, and whether headroom
-  survives a full-context request. The "unexplained 3 GB" is closed: it was
-  GiB against decimal GB, and the budget's units are consistent
+  survives a full-context request. **The last two are now answered**: headroom
+  survives, measured at the ceiling on 2026-09-02 with zero evictions across a
+  1,384-second request; and q4 costs nothing this instrument can measure —
+  `qwen3.8:27b-q4_K_M` scored 89.1% against the same model at q8's 89.0% over
+  216 samples, on a different model from the one this paragraph was written
+  about and with eleven of eighteen tasks carrying no signal, so it bounds the
+  cost rather than showing there is none. A more aggressive quantisation does
+  cost: the nvfp4 build of that same model lost 4.1 points to its own q8. The
+  "unexplained 3 GB" is closed: it was GiB against decimal GB, and the budget's
+  units are consistent
 
   **Priced 2026-08-13, and the pricing reorders the question.** Extending the
   372 GB/s bandwidth model with the SSD's ~7 GB/s gives a ratio of 53x, and the
@@ -121,6 +129,27 @@ No open decisions block Phase 1.
   has been put through the eighteen-task set or the agent-loop rungs, so nothing
   here says either is a better model — the same sentence this item has had to
   write three times. See [PROGRESS.md](../PROGRESS.md) 2026-09-02.
+
+  **Answered later the same day, and the answer is no.** The eighteen-task set
+  ran against three builds with the incumbent re-run as a control, 216 samples
+  on Ollama 0.33.2: `gemma4:31b-it-q8_0` **93.4%** (94.4% recorded, so the
+  runtime upgrade did not move it), `qwen3.8:27b-q4_K_M` 89.1%,
+  `qwen3.8:27b-q8_0` 89.0%, `qwen3.8:27b-mlx` **84.9%**. The incumbent is not
+  beaten by any of them. A fourth arm was added purely to obey section 5's
+  quantisation rule and it is what makes the result readable: the 8.5 points
+  between the incumbent and the MLX build are **4.4 from the model** and **4.1
+  from the quantisation**, so the fastest build is also the weakest and the two
+  facts have the same cause. **The wall clock argument also inverts**: at 39.0
+  and 60.8 seconds per task the q4 and q8 builds are *slower to an answer* than
+  the incumbent's 33.3 despite higher tokens per second, because Qwen 3.8 writes
+  more per answer, and only `27b-mlx` (16.5 s/task) is faster end to end. So the
+  trade on offer is 8.5 points — 13.2 if the eight truncated samples are scored
+  0 rather than excluded — for twice the speed and 16 GiB of budget. That is a
+  worse exchange than the 4.6-points-for-45%-of-the-wall-clock this item
+  recorded on 2026-08-15, which was made and then reverted. **Still open** is
+  only the agent loop: the ten rungs need a routing policy and a key, and
+  2026-08-16 records that there is no authenticated path to the control plane
+  from this host. See [PROGRESS.md](../PROGRESS.md) 2026-09-02.
 
   **Answered 2026-08-15, and the answer is that the incumbent is the better
   model and should be replaced anyway.** The **eighteen**-task set in
