@@ -26,8 +26,10 @@ pytest_plugins = ("tests.unit.error_precision_fixtures",)
 @pytest.mark.parametrize(("adapter", "ref"), [(OllamaAdapter, "llama3"), (MlxAdapter, "org/model")])
 async def test_a_read_timeout_before_any_byte_is_runtime_timeout(adapter, ref, monkeypatch) -> None:
     """The prompt outran the read timeout. The code states the measured remedy:
-    an immediate retry usually succeeds, because the prompt now sits in the
-    runtime's prefix cache. `no_available_model` told this caller to back off
+    an unchanged retry is unlikely to succeed and the caller should send less,
+    because a prefill cancelled at the timeout is discarded rather than kept in
+    the runtime's prefix cache (measured 2026-08-14). This docstring said the
+    opposite until 2026-09-02. `no_available_model` told this caller to back off
     and eventually call an administrator, both wrong."""
 
     def timing_out(request: httpx.Request) -> httpx.Response:
