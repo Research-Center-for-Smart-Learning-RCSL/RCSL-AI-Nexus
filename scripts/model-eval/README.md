@@ -140,6 +140,17 @@ nothing here pairs them with a question that *is* answerable from the same data.
 emits the marker whenever it sees the instruction scores 2/2 without the property being measured.
 Closing this needs a matched control task, which the design does not include.
 
+**A truncated answer is scored as nothing, and that is not neutral.** `harness.py` returns no
+result when a response hits `num_predict` without producing an answer, which is right when the
+budget went on reasoning — the case section 5 wrote it for. With deliberation off it is not: the
+2026-09-02 run had all three Qwen 3.8 builds spend 4,096 tokens of prose on `spec_contradiction`
+without reaching an answer, two rounds in three each, and the rule credited them by excluding
+those samples while `analyse.py` read the surviving one as **SATURATED high**. Scoring them 0
+moves those three down 3.3 to 4.9 points and the incumbent, which truncated nothing, not at all.
+Both readings are in PROGRESS.md 2026-09-02; what this needs is a third outcome rather than a
+choice between the two it has, and until it exists, check the no-result list before reading any
+score.
+
 **Whether the work is any good.** The boundary docs/model-evaluation.md section 6 already draws,
 and the ten-rung agent harness before it. Eighteen checkable tasks measure whether a model can
 follow a specification it has not memorised. Real work remains the only instrument for the rest.

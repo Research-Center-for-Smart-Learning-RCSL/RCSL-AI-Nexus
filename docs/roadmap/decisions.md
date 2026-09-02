@@ -211,9 +211,13 @@ No open decisions block Phase 1.
   to give agent clients; **raise `REQUEST_TIMEOUT_SECONDS`**, which lengthens how
   long one caller can hold a concurrency slot doing nothing visible — 4 slots
   exist; **change the serving model**, since `qwen3.8:27b-mlx` measures 250
-  prompt tok/s flat against this model's 88.4 at depth; or **decide the
-  combination is unreachable in practice** and say so, which needs the estimate
-  calibration below to be trustworthy and it currently is not. Nothing here is
+  prompt tok/s flat against this model's 88.4 at depth — **and that option was
+  priced on 2026-09-02 and is dearer than it looked**: the same build scored
+  84.9% against the incumbent's 93.4% on the eighteen-task set, so this way out
+  costs 8.5 points of capability to buy back a guardrail, which is a trade the
+  other three do not ask for; or **decide the combination is unreachable in
+  practice** and say so, which needs the estimate calibration below to be
+  trustworthy and it currently is not. Nothing here is
   urgent — the deployment served no request at all in the 48 hours before the
   measurement — but it is a guardrail that no longer holds, rather than one that
   is merely conservative. Evidence in [PROGRESS.md](../PROGRESS.md) 2026-09-02.
@@ -236,6 +240,13 @@ No open decisions block Phase 1.
   one-line change; or **serve a model that is already countable** —
   `qwen3.8:27b-q4_K_M` declares `qwen35` and prepares exactly with no code
   change, while `qwen3.8:27b-mlx` is safetensors and cannot be counted at all.
+  **The third way out is now the expensive one.** Measured 2026-09-02,
+  `qwen3.8:27b-q4_K_M` scores 89.1% against the incumbent's 93.4% and takes 39.0
+  seconds per task against 33.3, so serving it to get exact counting costs 4.3
+  points of capability *and* is slower to an answer. The first way out — measure
+  the divisors against the model that serves — is still cheap, still leaves the
+  estimate an estimate, and is now the only one of the three that does not
+  change what the platform serves.
 
 Settled:
 
