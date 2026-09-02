@@ -122,9 +122,11 @@ class OllamaGenerationMixin(OllamaRuntimeBase):
         # timeout allows" surfaced as an unhandled error with no envelope, or
         # mid-stream as a connection that simply stopped without `[DONE]`.
         #
-        # 503 rather than a distinct code: the caller's remedy is to retry, and
-        # a retry usually works, because the prompt is now in the runtime's
-        # prefix cache and evaluation is nearly free the second time.
+        # 503 rather than a distinct code. This comment said the caller's
+        # remedy is to retry and that a retry usually works off the prefix
+        # cache, until 2026-09-02; it is not. A prefill cancelled at the
+        # timeout is discarded, measured 2026-08-14, so the remedy is to send
+        # less and `transport.py` carries the evidence.
         received_any = False
         try:
             async with (
