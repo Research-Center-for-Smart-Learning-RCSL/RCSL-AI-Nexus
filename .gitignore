@@ -53,6 +53,11 @@ frontend/.next-e2e/
 /logs/
 *.mmdb
 
+# Written by scripts/model-eval/run.py before a phase evicts anything, and
+# removed by `run.py restore`. A machine's residency at one moment, not a fact
+# about the repository; a stale one committed here would be worse than none.
+/scripts/model-eval/deployment-snapshot.json
+
 # Claude Code
 .claude/
 CLAUDE.md

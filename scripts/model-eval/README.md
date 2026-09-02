@@ -18,8 +18,14 @@ that cost. Anything that produces a figure this repository will later reason fro
 | `validate.py` | section 4.1: the scorer is checked in both directions before any model runs |
 | `run.py` | drives a phase; appends every sample to `results.jsonl` as it completes |
 | `analyse.py` | the tables, including the saturation verdict section 4.4 asks for |
+| `bench_throughput.py` | generation and prompt-evaluation rate for one model at a stated depth |
 
 ## Running it
+
+**`restore` puts back what was resident when the phase started, not what a literal says.**
+`run()` snapshots `/api/ps` before the first eviction and `restore()` prefers that file; the
+`DEPLOYED` literal is the fallback and has gone stale once already, naming a model the deployment
+had stopped serving five days earlier. See PROGRESS.md 2026-09-02.
 
 ```sh
 cd scripts/model-eval
@@ -41,6 +47,37 @@ re-run removed: `full` alone puts `qwen3.6:27b-q8_0` at 81.9% against its real 8
 concatenating both phases without letting the later one win puts it at 83.5%.
 
 No dependencies beyond the standard library. `OLLAMA_HOST` overrides the runtime address.
+
+## Throughput on its own
+
+`analyse.py` reports throughput as a by-product of scoring eighteen tasks, which costs ten to
+twenty minutes per model and cannot be pointed at a model the set has never been run against.
+`bench_throughput.py` asks only how fast a model is:
+
+```sh
+python3 bench_throughput.py gemma4:31b-it-q8_0 --keep-alive -1     # a model the deployment serves
+python3 bench_throughput.py qwen3.8:27b-mlx    --keep-alive 0      # a candidate
+```
+
+**`--keep-alive` is not optional and the two values are not interchangeable.** Ollama applies its
+own five-minute default to any request that omits the field, so benchmarking a resident model
+without it replaces the `-1` the platform's load asked for. Pass `-1` for anything the deployment
+is serving and `0` for a candidate, which unloads it as the last generation ends rather than
+leaving 17 GiB resident. It must reach Ollama as a JSON number: `"-1"` as a string is parsed as a
+Go duration and fails with `time: missing unit in duration "-1"`.
+
+**It has to recover a known figure before it is worth anything.** `results.jsonl` puts
+`gemma4:31b-it-q8_0` between 13.57 and 13.83 gen tok/s on every task under depth 400; the bench
+measures 13.65 at depth 500 on the same runtime. Two things it does are what make that possible: a
+distinct leading nonce per repetition, because Ollama caches the evaluated prefix and three
+repetitions of one prompt otherwise report four-digit prompt throughput; and one discarded call per
+depth, because Ollama keys a loaded instance by its options and the first call at a new `num_ctx`
+pays a reload. `--skip-depth-warm` turns the second off when a call costs ten minutes and the model
+is already resident at that `num_ctx`.
+
+`--tokens-per-word` sizes the filler. The default is measured against this filler on a `qwen35`
+vocabulary; the achieved depth is always reported, because the ratio is a property of the
+vocabulary and a wrong one silently measures a different question.
 
 `run.py` appends to `results.jsonl` and skips `(phase, model, task, round)` combinations already
 there, so an interrupted run resumes rather than starting over. Delete the file to start clean;
