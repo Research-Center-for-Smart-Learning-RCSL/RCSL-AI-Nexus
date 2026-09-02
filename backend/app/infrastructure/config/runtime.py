@@ -162,6 +162,15 @@ class RuntimeSettings(BaseSettings):
     budget whose headroom is the constraint the whole deployment is designed
     around. Eviction is least-recently-used and costs a rebuild of a quarter of
     a second, not a wrong answer.
+
+    **A model occupies a slot here only if it can be counted exactly, and since
+    2026-08-21 the main one cannot.** `gemma4:31b-it-q8_0` declares
+    `tokenizer.ggml.pre = gemma4`, which is not in `KNOWN_PRE_TOKENIZERS`, so
+    `prepare` refuses it and `chat` and `code` are estimated instead: the
+    gateway currently builds one vocabulary rather than two. Two is still the
+    right value — it is what the arrangement needs whenever a countable model
+    serves `chat`, and shrinking it to match an accident would only have to be
+    undone. Measured 2026-09-02; see `docs/roadmap/decisions.md`.
     """
 
     max_context_length: int = 122880
@@ -238,6 +247,26 @@ class RuntimeSettings(BaseSettings):
       timeout stopped being the binding constraint when the dense model was
       replaced, and nothing had gone back to check.
 
+      **It stopped being unbinding four days later, and this is now broken.**
+      On 2026-08-21 `chat` and `code` both went back to
+      `gemma4:31b-it-q8_0` and nothing revisited the ceiling that had been
+      raised for the model they left. Measured 2026-09-02 at the ceiling
+      itself rather than extrapolated from a shallow prompt:
+
+          121892 tokens at 88.4 tok/s = 1379 seconds
+
+      against the same 1200 second read timeout, crossing near 110000 tokens.
+      **Every earlier figure in this paragraph was taken shallow, and the rate
+      is not flat**: on this model prompt evaluation runs at 209 tok/s over the
+      first 10k tokens, 172 at 25k, 105 at 93k. So a request this ceiling admits
+      cannot complete, and the guardrail whose whole purpose is to refuse before
+      the transport kills is the thing letting it through. Nothing raised the
+      ceiling to cause it — the throughput underneath it was lowered — which is
+      a direction this docstring had no rule for and now does: **whichever of
+      the three moves, the other two are re-derived.** Options and what each
+      costs are in `docs/roadmap/decisions.md`; nothing is changed here yet
+      because each one gives back something a previous decision bought.
+
     This is one of the six resource guardrails security.md section 4.3 counts
     on, so raising it costs something real: context is superlinear on unified
     memory, and measured throughput already decays from 60.8 to 23.5 tok/s
@@ -252,8 +281,13 @@ class RuntimeSettings(BaseSettings):
 
     **This is what bounds prompt evaluation**, because a runtime reading a long
     prompt sends nothing at all while it does so. Sized from `max_context_length`
-    above, with room over the 932 seconds a full context costs; the two move
-    together or the larger one is unreachable.
+    above, with room over the 932 seconds a full context cost when it was set;
+    the two move together or the larger one is unreachable.
+
+    **They are not in step as of 2026-09-02 and this is the smaller half.** A
+    full `max_context_length` prompt measures 1379 seconds against this 1200,
+    so the larger one is currently unreachable — the case this docstring names
+    and had never been measured at. See `max_context_length` above.
 
     300 → 600 on 2026-08-05 with the context ceiling, and 600 → 1200 on
     2026-08-14 with it again. The cost is paid by a *hung* runtime rather than a

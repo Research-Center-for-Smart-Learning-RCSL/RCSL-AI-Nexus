@@ -34,6 +34,18 @@ band is not a better-worded version of this one; see PROGRESS.md 2026-08-15.
 This is the instrument, not a conclusion. [ROADMAP.md](./ROADMAP.md) carries the
 open decision it is meant to settle.
 
+**The switch this settled was made on 2026-08-16 and reversed on 2026-08-21**,
+and nothing recorded the reversal, so for twelve days this page described a
+deployment that had gone back to `gemma4:31b-it-q8_0`. It still serves `chat`
+and `code` today. **A fourth candidate now exists and has not been through this
+set**: Qwen 3.8 27B, released after these three were scored, measures 44.5 gen
+tok/s flat on its MLX build against this incumbent's 13.89 falling to 6.99 at
+the context ceiling, in half the memory, calling tools correctly
+([PROGRESS.md](./PROGRESS.md) 2026-09-02). That is a stopwatch result and this
+page exists because a stopwatch is not the question — the bar is the 94.4% and
+the ten agent-loop rungs below, and running it against them is what would settle
+anything.
+
 ---
 
 ## 1. Why the first set failed
