@@ -34,6 +34,13 @@ separately at the end, marked as superseded.
 
 ## The log
 
+### September 2026
+
+**[2026-09-02](./progress/2026-09-02.md)**
+- The deployment had moved away from the documents, and the harness written to protect it had gone stale in exactly the way its own comment predicted
+- Upgrading the runtime, and the two gigabytes it quietly took
+- The bench, and two ways it was measuring itself before it measured anything
+
 ### August 2026
 
 **[2026-08-30](./progress/2026-08-30.md)**
