@@ -32,6 +32,19 @@ def load(phase: str) -> list[dict]:
     return out
 
 
+def _label(model: str) -> str:
+    """A column head that separates two builds of the same model.
+
+    It was `model.split(":")[0][:11]`, the family alone, which is unreadable the
+    moment a phase carries more than one build of it: the 2026-09-02 `qwen38`
+    read printed `qwen3.8` over three different columns, and `full` before it
+    printed `qwen3.6` over two. The tag is what distinguishes them, so the tag is
+    what the head shows, keeping enough of the family to say which model it is.
+    """
+    family, _, tag = model.partition(":")
+    return (tag or family)[:12]
+
+
 def mean(xs):
     xs = [x for x in xs if x is not None]
     return statistics.mean(xs) if xs else None
@@ -94,7 +107,7 @@ def main(phase: str) -> None:
 
     # -------------------------------------------------------------- by task
     print(f"\n=== {phase}: by task (mean of samples, and the spread) ===\n")
-    print(f"{'grp':4s} {'task':24s} " + " ".join(f"{m.split(':')[0][:11]:>12s}" for m in models)
+    print(f"{'grp':4s} {'task':24s} " + " ".join(f"{_label(m):>12s}" for m in models)
           + "   verdict")
     print("-" * (30 + 13 * len(models) + 12))
     saturated_high, saturated_low, discriminating = [], [], []
