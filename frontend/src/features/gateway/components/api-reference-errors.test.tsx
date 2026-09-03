@@ -24,6 +24,12 @@ function visibleCodes(): string[] {
     .map((row) => within(row).getAllByRole('cell')[1]?.textContent ?? '');
 }
 
+function visibleCardCodes(): string[] {
+  return screen
+    .getAllByTestId('api-error-card')
+    .map((card) => card.querySelector('code')?.textContent ?? '');
+}
+
 function expectCompleteCatalogueExport(markdown: string): void {
   const codes = API_ERROR_CATALOGUE.map((error) => error.code);
   expect(new Set(codes).size).toBe(API_ERROR_CATALOGUE.length);
@@ -53,6 +59,7 @@ describe('ErrorsSection search', () => {
       '',
     );
     expect(visibleCodes()).toHaveLength(17);
+    expect(visibleCardCodes()).toEqual(API_ERROR_CATALOGUE.map((error) => error.code));
     expect(screen.getByText('17 of 17 errors shown.')).toHaveAttribute(
       'aria-live',
       'polite',
@@ -66,7 +73,24 @@ describe('ErrorsSection search', () => {
     await user.type(screen.getByRole('searchbox'), '429');
 
     expect(visibleCodes()).toEqual(['rate_limited', 'quota_exceeded']);
+    expect(visibleCardCodes()).toEqual(['rate_limited', 'quota_exceeded']);
     expect(screen.getByText('2 of 17 errors shown.')).toBeInTheDocument();
+  });
+
+  it('uses readable, export-skipped cards below the desktop breakpoint', () => {
+    renderErrors();
+
+    const cards = screen.getAllByTestId('api-error-card');
+    expect(cards).toHaveLength(API_ERROR_CATALOGUE.length);
+    expect(cards[0]).toHaveClass('rounded-lg', 'border', 'p-3');
+    expect(cards[0].parentElement).toHaveAttribute('data-md-skip');
+    expect(cards[0].parentElement).toHaveClass('md:hidden');
+    expect(screen.getByRole('table').parentElement).toHaveClass('hidden', 'md:block');
+    expect(screen.queryAllByRole('heading', { level: 4 })).toHaveLength(0);
+
+    const quotaCard = cards.find((card) => card.textContent?.includes('quota_exceeded'));
+    expect(quotaCard).toHaveTextContent('429');
+    expect(quotaCard).toHaveTextContent('token budget');
   });
 
   it('matches exact and partial error codes case-insensitively', async () => {
@@ -76,6 +100,7 @@ describe('ErrorsSection search', () => {
 
     await user.type(search, 'QuOtA_ExCeEdEd');
     expect(visibleCodes()).toEqual(['quota_exceeded']);
+    expect(visibleCardCodes()).toEqual(['quota_exceeded']);
 
     await user.clear(search);
     await user.type(search, 'QuOtA_Ex');
@@ -120,6 +145,7 @@ describe('ErrorsSection search', () => {
     await user.clear(search);
     await user.type(search, '???');
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('api-error-card')).not.toBeInTheDocument();
     expect(screen.getByText('0 of 17 errors shown.')).toBeInTheDocument();
   });
 
