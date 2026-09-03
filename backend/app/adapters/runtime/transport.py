@@ -14,9 +14,18 @@ caller's remedy differs per case (the reason the codes were split at all):
 - connect timeout → `no_available_model`: the runtime process is down or
   drowning; retrying into it changes nothing an administrator does not.
 - read timeout before any bytes → `runtime_timeout`: prompt evaluation
-  outran the read timeout. An immediate retry usually succeeds, because the
-  prompt is now in the runtime's prefix cache and evaluation is nearly free
-  the second time.
+  outran the read timeout. An unchanged retry is unlikely to succeed and the
+  remedy is to send less. **This paragraph said the opposite until
+  2026-09-02** — that an immediate retry usually succeeds off the prefix
+  cache — which was measured wrong on 2026-08-14 by aborting a cold prefill
+  part way and re-sending it: the retry evaluated 20,919 tokens in 33.5
+  seconds, the full cold rate, having kept nothing. That measurement
+  corrected `public_message`, `.env.example`, the runbook and the errors
+  table the same day and did not reach this file, so the classification the
+  wire carries and the docstring explaining it disagreed for nineteen days.
+  The prefix cache is real and does make an agent's *next* turn nearly free;
+  it just does not survive a cancellation, and a cancellation is the only way
+  this code is reached.
 - read timeout after bytes flowed → `stream_interrupted`: the generation
   stalled mid-answer. The caller may hold a partial result, and whether to
   retry is their idempotence judgement, not ours.

@@ -2,6 +2,7 @@
 
   python3 run.py pilot            calibration against the incumbent only (4.2)
   python3 run.py full             three candidates, three interleaved rounds
+  python3 run.py qwen38           the Qwen 3.8 27B builds, plus the incumbent
   python3 run.py restore          put the deployment's model back, pinned
 
 Every sample is appended to results.jsonl as it completes, so an interrupted run
@@ -15,6 +16,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 
 from harness import OLLAMA, sample
@@ -23,25 +25,64 @@ from tasks import TASKS
 INCUMBENT = "gemma4:31b-it-q8_0"
 CANDIDATES = [INCUMBENT, "qwen3.6:27b-q8_0", "qwen3.6:35b-a3b-q8_0"]
 
+# The 2026-09-02 candidate, in three builds, against the incumbent re-run as a
+# control rather than compared against its recorded 94.4%.
+#
+# **Re-running the incumbent is the point of the fourth entry.** Its published
+# figure was measured on Ollama 0.32.4 and this runs on 0.33.2, which the
+# throughput bench put at +1.8% to +5.4% on generation; a score is not a rate,
+# but nothing here has established that a runtime upgrade cannot move one, and
+# a control that costs 29 minutes is cheaper than an argument about it later.
+#
+# **`27b-q8_0` is here because section 5 says quantisation must be matched.**
+# The two builds a deployment would actually choose are `q4_K_M` and the MLX
+# nvfp4, and comparing either against a q8 incumbent confounds the model with
+# its quantisation -- which is exactly how 2026-08-07's "stronger than glm"
+# conclusion was invalidated, and section 5 names it as the easiest mistake to
+# repeat. The q8 build separates the two questions, and the q8-to-q4 gap it
+# exposes is the first measurement this repository has of what q4 costs in
+# capability rather than in memory, which decisions.md has carried as open
+# since 2026-08-05.
+#
+# `27b-mtp-q4_K_M` is deliberately absent. Its MTP head has nothing to
+# speculate for on the GGUF runner and it measured 10.91 gen tok/s against the
+# plain q4's 23.21, so it is the same weights run slower (PROGRESS.md
+# 2026-09-02).
+CANDIDATES_38 = [
+    INCUMBENT,
+    "qwen3.8:27b-q8_0",
+    "qwen3.8:27b-q4_K_M",
+    "qwen3.8:27b-mlx",
+]
+
 # Restored at the end: what the deployment is serving, and how.
 #
 # The num_ctx matters as much as the model does. Ollama keys a loaded instance by
 # its options, so restoring at a different context length leaves a model that is
 # resident but wrong, and the first real request pays a reload to correct it.
-# 196608 is what `qwen36-35b-a3b-q8` is registered with (deployment.md section 10,
-# MAX_CONTEXT_LENGTH; and PROGRESS.md 2026-08-17, where num_ctx / 2 = 98304).
+# These are the `context_length` column of the `models` table, which is what
+# `ManageModels` sends; Ollama clamps each to the model's own maximum, which is
+# why `/api/ps` reads 32768 and 2048 back for the two smaller ones.
 #
-# **This is not INCUMBENT, and the difference is the point.** `chat` and `code`
-# both moved to this model on 2026-08-16, acting on the very run this harness
-# produced -- so the model the evaluation retired is the one INCUMBENT still
-# names, and a `restore` written against INCUMBENT would evict what is serving
-# and reload what is not. Whoever runs this next has to check the line still
-# describes the deployment before trusting it; nothing here can detect that it
-# has gone stale.
-DEPLOYED = [("qwen3.6:35b-a3b-q8_0", -1, 196608)]
+# **This literal went stale once and nothing here noticed, which is why it is now
+# the fallback rather than the source.** It named `qwen3.6:35b-a3b-q8_0` alone,
+# correct on 2026-08-16 and wrong from 2026-08-21, when the deployment moved back
+# to `gemma4:31b-it-q8_0` (audit_log 07:58:13 and 07:59:36). A `restore` run in
+# that window would have evicted what was serving and loaded what was not --
+# exactly what the comment standing here warned about and could not detect. It
+# was also never complete: the deployment holds three models and this held one,
+# so `assist` and `embedding` stayed down after every restore, and the embedding
+# model would have 400ed on the generate path in any case. `snapshot()` now
+# records residency before a phase evicts anything, and `restore()` prefers it.
+DEPLOYED = [
+    ("gemma4:31b-it-q8_0", -1, 262144),
+    ("qwen2.5:7b", -1, 262144),
+    ("nomic-embed-text", -1, 8192),
+]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results.jsonl")
+SNAPSHOT = os.path.join(HERE, "deployment-snapshot.json")
 
 
 def _post(path: str, payload: dict, timeout: int = 900) -> dict:
@@ -56,6 +97,66 @@ def _post(path: str, payload: dict, timeout: int = 900) -> dict:
 def resident() -> list[str]:
     with urllib.request.urlopen(f"{OLLAMA}/api/ps", timeout=30) as resp:
         return [m["name"] for m in json.load(resp).get("models", [])]
+
+
+def snapshot() -> None:
+    """Record residency before this run evicts anything.
+
+    Written once and only once: a phase that is interrupted and resumed would
+    otherwise overwrite the deployment's state with the harness's own model,
+    which is the failure the file it writes exists to prevent. `restore()`
+    removes it on success, so the next run takes a fresh one.
+    """
+    if os.path.exists(SNAPSHOT):
+        print(f"  keeping the existing snapshot ({SNAPSHOT})")
+        return
+    try:
+        with urllib.request.urlopen(f"{OLLAMA}/api/ps", timeout=30) as resp:
+            models = json.load(resp).get("models", [])
+    except Exception as exc:  # noqa: BLE001 - a snapshot that cannot be taken is a run fact
+        print(f"  could not snapshot residency: {exc}")
+        return
+    if not models:
+        print("  nothing resident to snapshot; restore will fall back to DEPLOYED")
+        return
+    # `context_length` here is what Ollama clamped to, not what the registry
+    # sent. Restoring the clamped value reproduces the same runner, and asking
+    # for more than the model supports is what the clamp exists to absorb.
+    #
+    # **Sorted largest first, and the first version of this was not.** `/api/ps`
+    # returns residency in no useful order, and restoring in that order put the
+    # 36 GB model last on 2026-09-02: it was loaded, found the two small ones in
+    # its way, and evicted both. The restore reported success with one model
+    # resident out of three. The `DEPLOYED` literal had carried this ordering by
+    # hand since it was written; the snapshot has to carry it too, which is why
+    # `size` is recorded rather than just the name.
+    models.sort(key=lambda m: m.get("size") or 0, reverse=True)
+    state = [{"model": m["name"], "keep_alive": -1,
+              "num_ctx": m.get("context_length") or 0, "size": m.get("size") or 0}
+             for m in models]
+    with open(SNAPSHOT, "w") as fh:
+        json.dump(state, fh, indent=2)
+    print(f"  snapshot: {', '.join(m['model'] for m in state)}")
+
+
+def load_pinned(model: str, keep_alive: int | str, num_ctx: int) -> None:
+    """Warm one model, answering an embedding model's refusal of `/api/generate`.
+
+    `backend/.../ollama_adapter/lifecycle.py` does the same thing for the same
+    reason: an embedding model answers 400 `does not support generate`, and
+    `/api/embed` with an empty input moves the same weights and honours the same
+    `keep_alive`. `restore` sent every model down the generate path until this
+    existed, so a deployment holding `nomic-embed-text` came back one model short.
+    """
+    body = {"model": model, "keep_alive": keep_alive}
+    if num_ctx > 0:
+        body["options"] = {"num_ctx": num_ctx}
+    try:
+        _post("/api/generate", body)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 400:
+            raise
+        _post("/api/embed", {**body, "input": []})
 
 
 def unload(model: str) -> None:
@@ -117,6 +218,10 @@ def run(phase: str, models: list[str], rounds: int, only: list[str] | None = Non
     print(f"{phase}: {len(models)} models x {rounds} rounds x {len(TASKS)} tasks "
           f"= {total} samples, {left} to go\n")
 
+    # Before `ensure_only` evicts anything. A phase that dies half way leaves the
+    # file behind, so a later `restore` still knows what the deployment was.
+    snapshot()
+
     started = time.time()
     n = 0
     for rnd in range(rounds):
@@ -146,19 +251,33 @@ def run(phase: str, models: list[str], rounds: int, only: list[str] | None = Non
 
 
 def restore() -> None:
-    print("restoring the deployment, largest model first (5)")
+    """Put back what was resident before the run, largest model first (5)."""
+    if os.path.exists(SNAPSHOT):
+        with open(SNAPSHOT) as fh:
+            recorded = json.load(fh)
+        # Sorted here as well as when written, so a snapshot from an older run
+        # is put back in the right order rather than in the order it was saved.
+        recorded.sort(key=lambda m: m.get("size") or 0, reverse=True)
+        wanted = [(m["model"], m.get("keep_alive", -1), m.get("num_ctx", 0))
+                  for m in recorded]
+        print(f"restoring from {os.path.basename(SNAPSHOT)}")
+    else:
+        wanted = list(DEPLOYED)
+        print("NO SNAPSHOT -- falling back to the DEPLOYED literal, which has gone "
+              "stale before. Check it against the deployment before trusting this.")
+
     for other in resident():
-        if other not in [m for m, _, _ in DEPLOYED]:
+        if other not in [m for m, _, _ in wanted]:
             print(f"  evicting {other}")
             unload(other)
-    for model, ka, ctx in DEPLOYED:
+    for model, ka, ctx in wanted:
         print(f"  loading {model} (keep_alive={ka}, num_ctx={ctx}) ...", flush=True)
         t0 = time.time()
-        _post("/api/generate", {"model": model, "prompt": "ok", "stream": False,
-                                "think": False, "keep_alive": ka,
-                                "options": {"num_predict": 8, "num_ctx": ctx}})
+        load_pinned(model, ka, ctx)
         print(f"  {model} resident in {time.time()-t0:.1f}s")
     print("resident now:", resident())
+    if os.path.exists(SNAPSHOT):
+        os.remove(SNAPSHOT)
 
 
 if __name__ == "__main__":
@@ -172,6 +291,16 @@ if __name__ == "__main__":
         run("pilot2", [INCUMBENT], 3)
     elif cmd == "full":
         run("full", CANDIDATES, 3)
+    elif cmd == "qwen38":
+        # A separate phase rather than more rows in `full`, because `full` was
+        # measured on Ollama 0.32.4 against three candidates two of which are
+        # retired, and `analyse.py` reads one phase at a time. It also needs no
+        # `repair`: the three prompts that carried a `def f(...): ...` stub were
+        # fixed in `tasks.py` on 2026-08-15, so this phase gets the repaired
+        # wording from its first sample. That makes it comparable with `full`
+        # overridden by `repair`, which is the published reading, and not with
+        # `full` alone.
+        run("qwen38", CANDIDATES_38, 3)
     elif cmd == "repair":
         # The three prompts that carried a `def f(...): ...` stub. qwen3.6:27b
         # copied the stub and indented a body under it in all three rounds of

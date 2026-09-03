@@ -28,6 +28,10 @@ select = ["E", "F", "I", "UP", "B", "S"]
 "scripts/model-eval/harness_parts/code_scoring.py" = ["S603"]
 "run.py" = ["S310"]
 
+# bench_throughput.py asks the same runtime the same way, and reports what it
+# answers. Same loopback address, same reason.
+"bench_throughput.py" = ["S310"]
+
 # The agent-loop probe uses the configured Nexus gateway URL. It is the same
 # explicit network behavior as the evaluation harness above.
 "scripts/agent_loop/client.py" = ["S310"]
