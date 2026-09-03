@@ -134,10 +134,36 @@ export function ErrorsSection({ section }: ApiReferenceSectionProps) {
         </div>
       ) : null}
 
+      {/* Cards keep each mobile result readable without making the reference
+          choose between a narrow viewport and a horizontally-scrolling table.
+          They are deliberately excluded from Markdown: the desktop table below
+          remains the single complete export source at every breakpoint. */}
+      <div
+        data-md-skip
+        className="grid gap-3 md:hidden"
+        hidden={!hasResults}
+      >
+        {matches.map((error) => (
+          <article
+            key={error.code}
+            data-testid="api-error-card"
+            className="space-y-2 rounded-lg border p-3 text-sm"
+          >
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-medium">
+              <span>{error.status}</span>
+              <code className="font-mono text-xs text-muted-foreground">
+                {error.code}
+              </code>
+            </div>
+            <div className="text-muted-foreground">{error.remediation}</div>
+          </article>
+        ))}
+      </div>
+
       {/* Hidden rows remain in the DOM deliberately: Markdown export walks the
           authored table rather than its visual state, so a filtered screen can
           never produce incomplete reference documentation. */}
-      <div className="overflow-x-auto" hidden={!hasResults}>
+      <div className="hidden overflow-x-auto md:block" hidden={!hasResults}>
         <table className="w-full text-left text-sm">
           <thead className="text-muted-foreground">
             <tr className="border-b">
