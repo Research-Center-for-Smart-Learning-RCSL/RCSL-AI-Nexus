@@ -3,6 +3,8 @@
   python3 run.py pilot            calibration against the incumbent only (4.2)
   python3 run.py full             three candidates, three interleaved rounds
   python3 run.py qwen38           the Qwen 3.8 27B builds, plus the incumbent
+  python3 run.py hard-pilot       the 2026-09-03 set, calibration against the incumbent
+  python3 run.py hard-full        the 2026-09-03 set, the four qwen38 candidates
   python3 run.py restore          put the deployment's model back, pinned
 
 Every sample is appended to results.jsonl as it completes, so an interrupted run
@@ -80,9 +82,46 @@ DEPLOYED = [
     ("nomic-embed-text", -1, 8192),
 ]
 
+# The 2026-09-03 set. Groups J through Q are the new tasks; the three ids are
+# carried from the eighteen-task set unchanged.
+#
+# **The carried three are the bridge the first two sets could not have.** Both
+# earlier sets recorded the same regret: the twelve-task harness was never
+# committed, so its two discriminating tasks had to be *reconstructed* from
+# prose for the eighteen-task set and stopped being a bridge the moment they
+# were rewritten. This harness is committed, so these three are the same code,
+# the same prompts and the same checks that produced the `qwen38` figures --
+# a real carry rather than a reconstruction, and the reason a score here can be
+# compared with a score there at all.
+#
+# Each is carried for a different job. `ini_parse` (0.62 mean, 0.62 spread) and
+# `search_last_rotated` (0.79 mean, 0.43 spread) were the only two tasks in the
+# whole eighteen that separated the four `qwen38` candidates, so they measure
+# whether the new set is harder than the old one's hardest. `count_inversions`
+# is carried precisely because it is saturated -- 1.00 for every model in every
+# round -- which makes it the control on the harness rather than on the model:
+# this phase raises `EVAL_NUM_PREDICT`, and a task with a known ceiling is what
+# says a changed budget did not break the scorer underneath everything else.
+HARD_GROUPS = {"J", "K", "L", "M", "N", "P", "Q"}
+ANCHOR_BRIDGE = ["ini_parse", "search_last_rotated", "count_inversions"]
+
+# The education-agent set, which is multi-turn and measures something no other
+# group here does: whether the model keeps obeying a system prompt it was given
+# once, across a conversation in which a student is actively working against it.
+# It carries no anchors, because nothing in either earlier set is comparable.
+TUTOR_GROUP = "T"
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results.jsonl")
 SNAPSHOT = os.path.join(HERE, "deployment-snapshot.json")
+
+
+def hard_set() -> list[str]:
+    return [t["id"] for t in TASKS if t["group"] in HARD_GROUPS] + ANCHOR_BRIDGE
+
+
+def tutor_set() -> list[str]:
+    return [t["id"] for t in TASKS if t["group"] == TUTOR_GROUP]
 
 
 def _post(path: str, payload: dict, timeout: int = 900) -> dict:
@@ -309,6 +348,26 @@ if __name__ == "__main__":
         # stub is gone from all three; these re-runs replace their `full` figures.
         run("repair", CANDIDATES, 3,
             only=["retry_deadline", "rate_limiter", "range_sum_updates"])
+    elif cmd == "hard-pilot":
+        # Section 4.2: calibrate against the incumbent alone before any
+        # comparison. The eighteen-task set reached 93.4% here and 16 of its 18
+        # tasks were never missed once, so this phase exists to find out whether
+        # the replacement lands in the 40-70% band -- and a pilot is the cheap
+        # place to find out it does not.
+        run("hard-pilot", [INCUMBENT], 3, only=hard_set())
+    elif cmd == "hard-full":
+        run("hard-full", CANDIDATES_38, 3, only=hard_set())
+    elif cmd == "tutor-pilot":
+        # Group T is a separate phase rather than more tasks in `hard-pilot`,
+        # because the 40-70% band is read off one overall percentage and these
+        # two sets measure different things. Blending "can it hold a lesson
+        # protocol across eight turns" into "can it implement a spec" produces a
+        # number that calibrates neither, and the band would then be satisfied by
+        # a model that is strong at one and hopeless at the other -- which is the
+        # precise failure the band exists to catch.
+        run("tutor-pilot", [INCUMBENT], 3, only=tutor_set())
+    elif cmd == "tutor-full":
+        run("tutor-full", CANDIDATES_38, 3, only=tutor_set())
     elif cmd == "restore":
         restore()
     else:

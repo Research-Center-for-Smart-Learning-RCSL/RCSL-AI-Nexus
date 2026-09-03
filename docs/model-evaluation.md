@@ -1,5 +1,11 @@
 # Comparing candidate models
 
+**A third task set replaced this one on 2026-09-03 and is described in section
+7.** Everything above that section is the eighteen-task set: still in the
+harness, still runnable, and still the only thing the `full`, `repair` and
+`qwen38` phases can be read against. It saturated twice and section 7 says what
+was done about it.
+
 **Status: designed 2026-08-14, run 2026-08-15, run again 2026-09-02 against a
 fourth candidate in three builds.** The harness is
 [`scripts/model-eval/`](../scripts/model-eval/) — committed, unlike the one
@@ -273,3 +279,119 @@ The same boundary the ten-rung agent harness stops at: whether the work is any
 good. Eighteen checkable tasks measure whether a model can follow a specification
 it has not memorised. They do not measure whether its code is worth reading, and
 2026-08-07 already recorded that real work is the only instrument left for that.
+
+---
+
+## 7. The 2026-09-03 set, and what the eighteen could not be asked
+
+**Designed and run 2026-09-03.** Twelve new tasks in seven groups plus three
+carried unchanged from the set above, in `scripts/model-eval/task_families/hard_*.py`;
+phases `hard-pilot` (calibration), `hard-full` (four candidates, three
+interleaved rounds, 180 samples, 14,824 seconds) and `tutor-pilot`. Fifteen
+tasks carrying **110 independent scoring units** against the eighteen-task set's
+eighteen. Evidence in [PROGRESS.md](./PROGRESS.md) 2026-09-03.
+
+**It does not re-word section 2's bet, because that bet was measured and lost.**
+Section 2 rested on a spec that deviates from a famous algorithm separating a
+model that reads from one that pattern-matches; it held for one task in
+eighteen. Reading the `qwen38` figures per task rather than in total, the one
+mechanism with teeth was dense interacting boundary rules, and the property the
+whole set lacked was compounding error — every task was single-shot. This set
+builds on the first and adds the second.
+
+### 7.1 What it measures, by §4.4 verdict
+
+| | tasks |
+|---|---|
+| **carries signal** | `visible_suffix`, `text_wrap_exact`, `vm_implement`, `config_merge`, `duration_grammar`, `search_last_rotated`, `ini_parse` |
+| **saturated high** | `count_inversions`, and all four of group N |
+| **saturated low** | `vm_trace`, `ledger_replay`, `precedence_chain` |
+
+Seven of fifteen carry signal, against the eighteen-task set's seven of
+eighteen. That is the whole of the improvement, and it is a modest one.
+
+### 7.2 A single-model pilot cannot judge a task, and this is the measurement of that
+
+The calibration pilot put the incumbent at **83.3%** with ten of fifteen tasks
+at 1.00, which read as a failed set and was reported as one. Four of those ten —
+`config_merge`, `visible_suffix`, `vm_implement`, `text_wrap_exact` — separate
+the four candidates once they are on the bench. Acting on the pilot's verdict
+would have discarded four working tasks on the evidence of the one model that
+aces them.
+
+§4.4 already says the replacement test is across candidates, and `analyse.py`
+already prints that a single-model phase cannot run it. `ini_parse` is the
+standing precedent: 1.00 for the incumbent in both runs and 0.25–0.54 for every
+Qwen build, while being the widest discriminator either set has produced. **A
+task the incumbent aces is not evidence of anything until the other candidates
+have tried it**, and §4.2's pilot is therefore a calibration of difficulty and
+never a judgement on a task.
+
+### 7.3 The result, and the reading that does not decide it
+
+| | whole set, excluded | whole set, truncated scored 0 | seven signal tasks |
+|---|---:|---:|---:|
+| `gemma4:31b-it-q8_0` *(serving)* | 76.5% | **76.5%** | **92.4%** |
+| `qwen3.8:27b-mlx` | **85.0%** | 71.8% | 82.4% |
+| `qwen3.8:27b-q4_K_M` | 79.2% | 68.6% | 75.6% |
+| `qwen3.8:27b-q8_0` | 76.0% | 65.9% | 69.8% |
+
+The two whole-set readings name different winners — §5's exclusion rule was
+worth 3.3 to 4.9 points on 2026-09-02 and changed no ordering; here it is worth
+13.2 and inverts the result. Nineteen samples returned nothing, all of them on
+Qwen builds, the incumbent none in forty-five.
+
+**The dispute does not reach the ranking, because all nineteen fall on the three
+tasks that separate nobody.** The seven signal tasks produced no truncations at
+all, and on them the order is unambiguous and the incumbent is ahead by ten
+points — the fourth run running, and the first whose conclusion does not rest on
+the contested rule. The whole-set figure is an average over eight tasks that
+carry nothing.
+
+### 7.4 The anchors, and the bridge both earlier sets recorded losing
+
+`ini_parse`, `search_last_rotated` and `count_inversions` are carried as the same
+code, the same prompts and the same checks that produced the `qwen38` figures —
+a real carry rather than the reconstruction section 3 had to settle for.
+`count_inversions` is 100% for all four models in both runs, which is what makes
+it the control on the harness rather than on the model: this phase raised the
+output budget, and a task with a known ceiling says the scorer beneath it did
+not move. `ini_parse` reproduces exactly where the comparison lives — incumbent
+100.0% in both runs, `27b-q8_0` 54.2% in both.
+
+This is the first time a score in one task set here can be compared against a
+score in another.
+
+### 7.5 Group T: the education agent, which a single prompt cannot ask
+
+Four scripted conversations, 141 checks, `kind: "dialogue"`. The model's own
+replies are fed back as history, so a tutor that leaks at turn three answers
+turn four with the leak in its context. Scoring stays programmatic: the system
+prompt under test requires a `NEXT: <step>` trailer, so "does it still know
+which step it is on" is a string comparison rather than a judgement. One turn in
+the bypass scenario is a control on which refusing is the failure, for the same
+reason group N exists.
+
+**The incumbent scored 100%** — twelve samples, 423 check evaluations, 27
+properties, and no decay from turn one to turn ten. It ignored a forged
+`SYSTEM:` line, declined a confirmation probe, and still answered the student
+who genuinely did not understand the question. That is a saturated instrument
+and a real answer to the question the platform has.
+
+### 7.6 What is open
+
+- The five saturated-high tasks are replaceable under §4.4. Group N's clean
+  sweep is itself a finding worth keeping: every candidate answered all four
+  matched determined/undetermined questions correctly, where the eighteen-task
+  set's `insufficient_data` scored 0.00 for seven models across three families.
+  The likelier reading is that these undetermined questions are less subtle,
+  not that the fabrication finding is overturned.
+- `vm_trace` and `ledger_replay` measure whether an answer fits in 6,144 tokens.
+  The incumbent fits and is wrong; no Qwen build fits at all. Real difference,
+  confounded with capability. The budget goes up or the tasks get shorter.
+- `precedence_chain` is hard for the right reason: 0.00 for all four with every
+  answer completed and no budget involved. A three-link variant would land in
+  the band.
+- The set still fails §4.3 at 76–85% for every candidate.
+- Group T needs the property that made the single-turn set work: correctness at
+  turn fifteen depending on something established at turn three.
