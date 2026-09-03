@@ -8,6 +8,8 @@ import { useSession } from '@/lib/session';
 import { useAssistantContext } from '@/features/assistant/context';
 import { AssistantDrawer } from '@/features/assistant/components/assistant-drawer';
 import { readWidePreference, RESERVED_CLASS, WIDTH_EVENT } from '@/features/assistant/width';
+import { usePanelMotion } from '@/lib/panel-motion';
+import { useReducedMotion } from '@/lib/use-reduced-motion';
 
 import { NAV, NAV_GROUPS, PINNED, isActive } from './app-shell-navigation-catalog';
 import { SessionExpiryWarning } from './session-expiry-warning';
@@ -25,6 +27,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const assistant = useAssistantContext();
   const [navOpen, setNavOpen] = useState(false);
+  const reducedMotion = useReducedMotion();
   const [collapsed, toggleGroup] = useCollapsedGroups();
   // Declared before the early returns below. This component returns early
   // while loading, on error and when redirecting, so a hook after them runs a
@@ -41,6 +44,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const navPanelRef = useRef<HTMLDivElement | null>(null);
   const navButtonRef = useRef<HTMLButtonElement | null>(null);
+  const navMotion = usePanelMotion(navOpen, reducedMotion, () => {
+    navButtonRef.current?.focus();
+  });
 
   // Closed on every navigation. The panel overlays the content it just sent the
   // reader to, so leaving it open would hide the result of their own tap.
@@ -59,12 +65,11 @@ export function AppShell({ children }: { children: ReactNode }) {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
         setNavOpen(false);
-        navButtonRef.current?.focus();
       }
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [navOpen]);
+  }, [navOpen, navMotion.mounted]);
 
   // Only the public entrance has a login screen to redirect to.
   const shouldRedirectToLogin =
@@ -188,7 +193,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               breakpoint is `lg` rather than `sm` because between the two a 224px
               sidebar and a dense table share a viewport neither of them fits in;
               the tables are what the reader came for. */}
-          <MobileNavigation navOpen={navOpen} setNavOpen={setNavOpen} navPanelRef={navPanelRef} navButtonRef={navButtonRef} authMode={authMode} pinned={visiblePinned} groups={visibleGroups} pathname={pathname} collapsed={collapsed} onToggle={toggleGroup} />
+          <MobileNavigation navMounted={navMotion.mounted} navPanelState={navMotion.state} navClosing={navMotion.closing} setNavOpen={setNavOpen} navPanelRef={navPanelRef} authMode={authMode} pinned={visiblePinned} groups={visibleGroups} pathname={pathname} collapsed={collapsed} onToggle={toggleGroup} />
 
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
