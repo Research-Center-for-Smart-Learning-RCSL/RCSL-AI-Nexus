@@ -119,6 +119,19 @@ task(
         "integer with no thousands separator, no decimal point and no currency symbol."
         + EXACT_SUFFIX
     ),
+    # 2026-09-03 measured the budget here rather than the model: every Qwen
+    # sample stopped at exactly 6,144 tokens without reaching a FINAL line while
+    # the incumbent finished in 3,467-5,069 and was wrong, so the only thing the
+    # task separated was answer length. Twice the budget, against a 16,384-token
+    # context and a prompt of ~1,860 tokens, leaves the ceiling well clear of
+    # anything either family produced -- and if a build still truncates at
+    # 12,288, that is a finding about the model instead of an artefact of the
+    # harness, which is what this task was supposed to be asking all along.
+    #
+    # The budget moves rather than the task, because shortening the event table is
+    # what makes it stop compounding, and compounding error is the one property
+    # section 7 says the eighteen-task set lacked.
+    num_predict=12288,
     expected="246769",
     reference="FINAL: 246769",
     # Computed, not invented: the same simulation with rule 4 changed so that a
@@ -133,11 +146,31 @@ task(
 # --------------------------------------------------------------------------
 
 # The chain is 4.3 (three reviewers) -> 9.2 (one reviewer, for incident-driven
-# changes) -> 12.5 (that relief reaches single-service changes only) -> 6.7
+# changes) -> 12.5 (that relief reaches single-service changes only, and a change
+# reaching two or more is approved as 4.3 provides). Three links, sitting in
+# sections 4, 9 and 12, and no clause is placed next to the clause it bears on.
+#
+# **It was five links until 2026-09-03, and five was outside the band in the
+# direction that teaches nothing.** The scenario continued 12.5 -> 6.7
 # (single-service schema changes take 4.3's number again) -> 2.6 (6.7 and 9.2
-# name each other not at all, so the lower-numbered section governs). Every link
-# is worded like the clause beside it, and no clause is placed next to the clause
-# it bears on: the five sit in sections 4, 9, 12, 6 and 2 respectively.
+# name each other not at all, so the lower-numbered section governs), and scored
+# 0.00 for all four candidates. That is a §4.4 replacement on the letter of the
+# rule, but the reason to replace it is what the samples showed rather than the
+# rule: the incumbent stopped at 9.2 in every round, one link in, so eleven of
+# the twelve samples never reached the last two links at all and the task
+# measured nothing about them. A set of tasks nobody can start does not say where
+# the ceiling is -- it says only that the ceiling is somewhere below the floor.
+#
+# Three links keeps the mechanism and moves the difficulty to where the failure
+# was actually observed: 9.2 is exactly the clause every candidate stopped at, so
+# the question is now whether a model that finds the relief goes on to check
+# whether the relief reaches it. §7.6 predicted the 40-70% band for this; the
+# prediction is on the record and the run will settle it.
+#
+# The scenario changes in one respect only, so that the shorter chain is the sole
+# variable: the change reaches two services rather than one. Everything else --
+# the hour, the open severity 1, the release window, the register, the author --
+# stands as it did.
 _POLICY_SECTIONS: list[tuple[int, str, list[str]]] = [
     (1, "Purpose and application", [
         "This standard governs every change applied to a service the platform operates in "
@@ -359,8 +392,18 @@ def _render_policy() -> str:
 
 _POLICY = _render_policy()
 
+# The id changes with the question, which is the rule this set now follows
+# without exception. `vm_trace` kept its id through a difficulty change on the
+# same day and was right to: one integer moved in the program it traces, and its
+# two scores are two measurements of one question. Nothing that small happened
+# here. The scenario's facts changed, the governing clause changed from 6.7 to
+# 4.3, and the answer changed from five people to four -- so a table putting
+# `precedence_chain` 0.00 next to a later figure under that id would be reading
+# two different questions as one series, which is the precise error the stored
+# task definitions in `evaluation_task_definitions` were added to make visible
+# and which an id is cheaper than a lookup at preventing.
 task(
-    id="precedence_chain",
+    id="precedence_relief",
     group="P",
     kind="exact",
     prompt=(
@@ -368,21 +411,33 @@ task(
         "-----\n" + _POLICY + "\n-----\n\n"
         "Scenario. At 02:10 on a Tuesday, while an incident of severity 1 is open, a change is "
         "raised for the purpose of ending that incident. The change alters the code of the "
-        "ledger-api service and the configuration of the sidecar process deployed alongside "
-        "ledger-api, and reaches nothing else. It adds a column to a persisted data schema that "
-        "ledger-api owns, rewriting no existing rows. It is applied at 02:40 the same day, which "
-        "falls outside every scheduled release window. The incident's severity has not been "
-        "altered, the change's author is not a reviewer, the register is reachable, and the "
-        "change was entered in it before review.\n\n"
+        "ledger-api service and the configuration of the billing-api service, and reaches "
+        "nothing else. It alters no persisted data schema and no infrastructure definition. It "
+        "is applied at 02:40 the same day, which falls outside every scheduled release window. "
+        "The incident's severity has not been altered, the change's author is not a reviewer, "
+        "the register is reachable, and the change was entered in it before review.\n\n"
         "How many people must approve this change before it may be applied, and which single "
         "clause fixes the number of reviewers required under section 4?\n\n"
+        # The example's count must not be the answer's count. It was `4, 3.2`
+        # against a five-link answer of 5; the three-link answer is 4, so the
+        # example moves rather than quietly handing half the answer to a model
+        # that copies its shape.
         "Answer with the total count of people, then the clause number, separated by a comma and "
-        "a space — for example `4, 3.2`." + EXACT_SUFFIX
+        "a space — for example `6, 3.2`." + EXACT_SUFFIX
     ),
-    expected="5, 6.7",
-    # Stops one link early: it takes 9.2's relief at face value (one reviewer)
-    # without reaching 6.7, so it never gets as far as the tie 2.6 decides. The
-    # two additional approvals, under 6.2 and 8.6, are the same on either walk.
-    wrong="FINAL: 3, 9.2",
-    reference="FINAL: 5, 6.7",
+    # Three under 4.3, which 12.5 restores by name once the relief in 9.2 is
+    # found not to reach a change touching two services, plus one from the
+    # operations rota under 8.6 because the change is applied outside a window --
+    # 8.6 requires that reviewer "in addition to the approvals any other clause
+    # requires" and bars counting a person another clause already counts, so the
+    # two do not overlap. Nothing adds an approval under section 6: the scenario
+    # alters no schema, which is the clause that stopped being reachable when the
+    # chain came down to three links.
+    expected="4, 4.3",
+    # The failure the five-link version actually produced, carried over because
+    # it is the walk that stops at the relief without asking what the relief
+    # reaches: one reviewer under 9.2 plus 8.6's one. The 8.6 approval is the
+    # same on either walk, so the two answers differ only in the link at issue.
+    wrong="FINAL: 2, 9.2",
+    reference="FINAL: 4, 4.3",
 )

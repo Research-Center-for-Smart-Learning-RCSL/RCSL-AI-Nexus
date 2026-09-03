@@ -71,15 +71,28 @@ def chat(model: str, messages: list[dict]) -> dict:
     }
 
 
-def generate(model: str, prompt: str) -> dict:
+def generate(model: str, prompt: str, num_predict: int | None = None) -> dict:
     """One /api/generate call with deliberation off. Never raises for a model
-    error; returns a dict carrying `error` instead."""
+    error; returns a dict carrying `error` instead.
+
+    `num_predict` overrides the phase-wide budget for one task. The lever exists
+    because on 2026-09-03 two tasks measured the budget rather than the model:
+    `vm_trace` and `ledger_replay` truncated every Qwen sample at exactly 6,144
+    tokens while the incumbent finished inside it and was wrong, so "the
+    incumbent is ahead here" and "the incumbent is more concise here" could not
+    be told apart. Raising the phase budget instead would have re-based the
+    thirteen tasks that were not budget-bound, and section 5 requires a figure to
+    say what it was generated under -- so the override is per task, and the
+    recorded `num_predict` on each row is the value that sample actually ran at
+    rather than the phase default it no longer shares.
+    """
+    budget = NUM_PREDICT if num_predict is None else num_predict
     body = json.dumps({
         "model": model,
         "prompt": prompt,
         "stream": False,
         "think": False,
-        "options": {"num_ctx": NUM_CTX, "num_predict": NUM_PREDICT},
+        "options": {"num_ctx": NUM_CTX, "num_predict": budget},
     }).encode()
     req = urllib.request.Request(
         f"{OLLAMA}/api/generate", data=body, headers={"Content-Type": "application/json"}
@@ -90,9 +103,10 @@ def generate(model: str, prompt: str) -> dict:
             data = json.load(resp)
     except urllib.error.HTTPError as exc:
         return {"error": f"HTTP {exc.code}: {exc.read()[:400].decode('utf-8', 'replace')}",
-                "wall_s": time.time() - t0}
+                "wall_s": time.time() - t0, "num_ctx": NUM_CTX, "num_predict": budget}
     except Exception as exc:  # noqa: BLE001 - a transport failure is a run fact
-        return {"error": f"{type(exc).__name__}: {exc}", "wall_s": time.time() - t0}
+        return {"error": f"{type(exc).__name__}: {exc}", "wall_s": time.time() - t0,
+                "num_ctx": NUM_CTX, "num_predict": budget}
 
     gen_ns = data.get("eval_duration") or 0
     pe_ns = data.get("prompt_eval_duration") or 0
@@ -106,5 +120,5 @@ def generate(model: str, prompt: str) -> dict:
         "prompt_tok_s": (data.get("prompt_eval_count") or 0) / (pe_ns / 1e9) if pe_ns else None,
         "wall_s": time.time() - t0,
         "num_ctx": NUM_CTX,
-        "num_predict": NUM_PREDICT,
+        "num_predict": budget,
     }

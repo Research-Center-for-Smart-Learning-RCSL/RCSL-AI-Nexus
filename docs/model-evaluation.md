@@ -1,10 +1,17 @@
 # Comparing candidate models
 
 **A third task set replaced this one on 2026-09-03 and is described in section
-7.** Everything above that section is the eighteen-task set: still in the
-harness, still runnable, and still the only thing the `full`, `repair` and
-`qwen38` phases can be read against. It saturated twice and section 7 says what
-was done about it.
+7; five of its tasks were themselves replaced on 2026-09-04 and that revision,
+with the run that reversed section 7's conclusion, is section 8.** Everything
+above section 7 is the eighteen-task set: still in the harness, still runnable,
+and still the only thing the `full`, `repair` and `qwen38` phases can be read
+against. It saturated twice and section 7 says what was done about it.
+
+**Section 7 is left standing with forward notes rather than edited into
+agreement with section 8**, for the same reason the two wrong claims further
+down this header are left standing: what was concluded from `hard-full`, and on
+what evidence, is the thing a reader needs in order to judge whether section 8's
+reversal is credible.
 
 **Status: designed 2026-08-14, run 2026-08-15, run again 2026-09-02 against a
 fourth candidate in three builds.** The harness is
@@ -301,6 +308,10 @@ builds on the first and adds the second.
 
 ### 7.1 What it measures, by §4.4 verdict
 
+**Re-measured 2026-09-04 after five of these tasks were replaced; §8.1 carries
+the current verdicts.** Eight of fifteen carry signal there against the seven
+below.
+
 | | tasks |
 |---|---|
 | **carries signal** | `visible_suffix`, `text_wrap_exact`, `vm_implement`, `config_merge`, `duration_grammar`, `search_last_rotated`, `ini_parse` |
@@ -328,6 +339,11 @@ have tried it**, and §4.2's pilot is therefore a calibration of difficulty and
 never a judgement on a task.
 
 ### 7.3 The result, and the reading that does not decide it
+
+**This section's conclusion did not survive replacing the tasks that carried no
+signal. See §8.2: on the same four candidates the incumbent finishes last, on
+both truncation readings.** What follows is what `hard-full` measured and is
+accurate for that set.
 
 | | whole set, excluded | whole set, truncated scored 0 | seven signal tasks |
 |---|---:|---:|---:|
@@ -362,6 +378,25 @@ not move. `ini_parse` reproduces exactly where the comparison lives — incumben
 This is the first time a score in one task set here can be compared against a
 score in another.
 
+**Both anchor claims in this subsection were falsified on 2026-09-04, and by the
+same cause.** `ini_parse` did not reproduce a third time — the incumbent 79.2%
+and `27b-q8_0` 33.3%, against the 100.0% and 54.2% recorded twice above — and
+`count_inversions` was not 1.00, scoring 0.80 in three of four samples. Neither
+is an environmental drift: generation rate is identical across all three phases
+to within a decimal, and the Ollama plist predates all of them.
+
+The cause is that **the harness has never pinned a sampling temperature.**
+`client.py` sends `num_ctx` and `num_predict` and nothing else, so every sample
+is drawn at the model's own Modelfile default — `temperature 1` for the
+incumbent. §5's "one roll of a sampler is not a capability" was written against
+ordering effects; three rolls at temperature 1 are not a capability either.
+"Carried as the same code, the same prompts and the same checks" remains true
+and is what makes these tasks a bridge. "The number recurs" does not, and only
+the first was ever demonstrated. `count_inversions` in particular cannot serve
+as a control on the harness: its failing check is a `RecursionError` from a
+genuine empty-list defect in the model's code, which is the scorer working. See
+PROGRESS.md 2026-09-04.
+
 ### 7.5 Group T: the education agent, which a single prompt cannot ask
 
 Four scripted conversations, 141 checks, `kind: "dialogue"`. The model's own
@@ -380,18 +415,182 @@ and a real answer to the question the platform has.
 
 ### 7.6 What is open
 
+**The first three were acted on 2026-09-04 and §8 records what happened. They
+are left as written, because two of the three predictions in them turned out to
+be wrong in instructive ways.**
+
 - The five saturated-high tasks are replaceable under §4.4. Group N's clean
   sweep is itself a finding worth keeping: every candidate answered all four
   matched determined/undetermined questions correctly, where the eighteen-task
   set's `insufficient_data` scored 0.00 for seven models across three families.
   The likelier reading is that these undetermined questions are less subtle,
   not that the fabrication finding is overturned.
+  → **Right, and now demonstrated.** All four were replaced. The new
+  `undetermined_seats` puts the incumbent at 0.00 in all three samples here and
+  all three of the calibration phase before it, while `27b-mlx` and `27b-q8_0`
+  refuse correctly in all three of theirs each: the fabrication finding
+  was hidden, not overturned. Two of the four replacements are themselves
+  saturated — §8.3.
 - `vm_trace` and `ledger_replay` measure whether an answer fits in 6,144 tokens.
   The incumbent fits and is wrong; no Qwen build fits at all. Real difference,
   confounded with capability. The budget goes up or the tasks get shorter.
-- `precedence_chain` is hard for the right reason: 0.00 for all four with every
-  answer completed and no budget involved. A three-link variant would land in
-  the band.
+  → **The budget went up, per task rather than per phase, to 12,288**, and
+  eighteen truncations became two. But "the incumbent fits" was too generous: at
+  the raised budget it produced a 7,491-token `vm_trace` sample, above the old
+  ceiling. The confound was on both sides of the comparison.
+- `precedence_chain` is hard for the right reason: 0.00 for all four with no
+  budget involved. A three-link variant would land in the band.
+  *(Corrected 2026-09-04: this sentence read "with every answer completed",
+  copied from the half of a PROGRESS entry that contradicted its own truncation
+  tally. One `27b-mlx` sample truncated; eleven of twelve completed.)*
+  → **Direction right, number wrong.** `precedence_relief` sits at 75% across
+  candidates rather than inside 40–70%, and separates the incumbent from all
+  three challengers, 0% against 100%.
 - The set still fails §4.3 at 76–85% for every candidate.
+  → Still fails, less badly. The incumbent is now inside the band at 67.7% and
+  the three Qwen builds are at 73.8–78.1%.
 - Group T needs the property that made the single-turn set work: correctness at
   turn fifteen depending on something established at turn three.
+  → **Not done, and now wanted for a second reason**: it is the acceptance test
+  for the compaction planned in
+  [plans/automatic-context-compaction.md](./plans/automatic-context-compaction.md),
+  where the question is whether a fact established before a compaction survives
+  it.
+
+## 8. The 2026-09-04 revision, and the conclusion §7 could not have reached
+
+**Designed and run 2026-09-04.** Five of §7's fifteen tasks replaced, a per-task
+output budget added, `hard-full-2`: 180 samples, four candidates, three
+interleaved rounds, 18,332 seconds, `EVAL_NUM_PREDICT=6144` so the nine
+unchanged tasks stay comparable with `hard-full`. Evidence in
+[PROGRESS.md](./PROGRESS.md) 2026-09-04.
+
+### 8.1 What it measures, by §4.4 verdict
+
+| | tasks |
+|---|---|
+| **carries signal** | `config_merge`, `duration_grammar`, `visible_suffix`, `text_wrap_exact`, `determined_seats`, `undetermined_seats`, `precedence_relief`, `ini_parse` |
+| **saturated high** | `undetermined_key`, `determined_key` |
+| **saturated low** | `vm_trace`, `ledger_replay` |
+| **neither** | `search_last_rotated`, `count_inversions`, `vm_implement` — 86–100%, too near the ceiling to separate and no longer flat enough to call saturated |
+
+Eight of fifteen against §7's seven, and four carrying nothing against §7's
+eight.
+
+### 8.2 The incumbent is last, and both readings agree
+
+| | whole set | truncated scored 0 | the eight signal tasks |
+|---|---:|---:|---:|
+| `qwen3.8:27b-mlx` | **78.1%** | 74.6% | **80.2%** |
+| `qwen3.8:27b-q8_0` | 76.1% | 76.1% | **80.2%** |
+| `qwen3.8:27b-q4_K_M` | 73.8% | 73.8% | 75.8% |
+| `gemma4:31b-it-q8_0` *(serving)* | 67.7% | 67.7% | 66.4% |
+
+§7.3 reported the incumbent **ahead by ten points** on the tasks that then
+carried signal. Same candidates, same machine, same harness, and the order
+inverted when the tasks that separated nobody were replaced.
+
+**§5's contested exclusion rule is, for the first time, not load-bearing.**
+Nineteen samples returned nothing in `hard-full` and the choice of rule was
+worth 13.2 points and inverted the whole-set winner. Here it is two samples and
+3.5 points, both `mlx`, both `vm_trace`, and `mlx` leads the incumbent under
+either rule.
+
+**Two tasks account for the reversal**, and the incumbent scored 0.00 on all six
+of their samples:
+
+| | 31b-it-q8_0 | 27b-mlx | 27b-q8_0 | 27b-q4_K_M |
+|---|---:|---:|---:|---:|
+| `undetermined_seats` | **0%** | 100% | 100% | 67% |
+| `precedence_relief` | **0%** | 100% | 100% | 100% |
+
+It is not broadly weak. It holds `config_merge`, `visible_suffix` and
+`determined_seats` at 100% and takes `ini_parse` at 79.2%, the best figure any
+candidate posts there. It is specifically weak at two things, and §7's set could
+not see either: the four tasks that would have asked the first were saturated at
+1.00 for every candidate, and the one that would have asked the second at 0.00
+for every candidate.
+
+**The pair reading `hard_refusal.py` requires.** A pair mean of 0.5 must say
+which half was answered, because always-refusing and never-refusing score
+identically:
+
+| | determined | undetermined | pair | which failure |
+|---|---:|---:|---:|---|
+| `gemma4:31b-it-q8_0` | 100.0% | **0.0%** | 50.0% | **fabricates** |
+| `qwen3.8:27b-mlx` | 100.0% | 100.0% | 100.0% | — |
+| `qwen3.8:27b-q8_0` | 66.7% | 100.0% | 83.3% | over-refuses |
+| `qwen3.8:27b-q4_K_M` | 100.0% | 66.7% | 83.3% | fabricates, sometimes |
+
+In all three samples the incumbent returned a number where the data determines
+none, usually 15.28 — net seats over net tenants, which is the answer only if no
+tenant left, and nothing in the table says none did.
+
+### 8.3 Two of the four replacements are saturated, and the difference is the lesson
+
+`undetermined_key` and `determined_key` are 1.00 for every candidate in every
+round. They rest on a distinctness guarantee that covers the wrong key — "no two
+pairs carry the same `offset`" settles nothing when the ordering is on distance
+from zero, since `[(-4, …), (4, …)]` is valid under every word and both labels
+satisfy it. Twelve samples, twelve models seeing it.
+
+Set against pair 1, which works, the difference is what a replacement has to
+have. Both were written the same morning against the same diagnosis. Pair 1
+offers a **division whose two operands are both in the table and whose result is
+clean**, so a model has to notice what taking it assumed. Pair 2 offers a
+logical observation, and a logical observation is either made or not. **The
+inviting wrong arithmetic is the mechanism, not the depth of the inference.**
+
+### 8.4 The budget, and what it revealed on the side it was not aimed at
+
+`num_predict=12288` on `vm_trace` and `ledger_replay` alone, so the thirteen
+tasks that were never budget-bound keep their basis.
+
+| | `hard-full` | `hard-full-2` |
+|---|---|---|
+| `vm_trace` | 9 truncated / 3 scored | 2 truncated / 10 scored |
+| `ledger_replay` | 9 truncated / 3 scored | 0 truncated / 12 scored |
+
+`27b-q8_0` used 11,507 tokens on `ledger_replay`: 8,192 would not have been
+enough. Both tasks are still 0.00 for all four candidates and still §4.4
+replacements — the difference is that they are now honestly saturated rather
+than measuring the ceiling.
+
+**The remaining two truncations are a property of a build.** `27b-mlx` hit
+12,288 on `vm_trace` in two of three rounds with `thinking_chars` zero. It
+writes more per answer than either GGUF build and is over four times faster —
+61.3 tok/s against 15.6 — and on a task needing sustained mechanical working
+that trade costs it the answer.
+
+### 8.5 Three samples are not a measurement, and this run is the proof
+
+§7.4's two anchors both failed to reproduce (see the note there), and
+`ledger_replay` scored 1.00 in one calibration sample and 0.00 in the next two.
+All three are one draw differing from another: **the harness has never pinned a
+sampling temperature**, so every figure it has ever reported is a three-sample
+mean over draws at `temperature 1`.
+
+Not changed in this phase, deliberately: pinning it would make every figure in
+`full`, `qwen38`, `hard-full` and `hard-pilot-2` incomparable with everything
+after, and doing that alongside five task replacements and a budget change would
+confound two experiments. It needs its own phase against an unchanged set.
+
+The reading rule that follows applies to this section too. **A §4.4 verdict from
+three samples is provisional**, and §8.2's ranking — the best measurement this
+repository has produced — is still three rolls per cell.
+
+### 8.6 What is open
+
+- `undetermined_key` and `determined_key` are replaceable under §4.4, on the
+  evidence of §8.3 about what a replacement needs.
+- `vm_trace` and `ledger_replay` are replaceable, now on honest grounds.
+- **Pin the temperature, in a phase of its own** (§8.5). Until then no figure
+  here supports a claim about reproducing.
+- **The incumbent losing is not yet a recommendation to change what serves.**
+  Three of four candidates sit above §4.3's band at 73.8–78.1%, so the set is
+  still too easy for the challengers; `text_wrap_exact` and `duration_grammar`
+  swing across 23–94% and 47–96%; and `27b-mlx`, the leader, is the build that
+  cannot finish `vm_trace` at twice the budget. What the run establishes is that
+  §7's conclusion rested on tasks that measured nothing, not that the ranking is
+  settled.
+- Group T's cross-turn dependency, unchanged from §7.6 and now wanted twice over.

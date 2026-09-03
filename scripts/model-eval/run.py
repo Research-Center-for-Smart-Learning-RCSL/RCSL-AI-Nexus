@@ -5,6 +5,8 @@
   python3 run.py qwen38           the Qwen 3.8 27B builds, plus the incumbent
   python3 run.py hard-pilot       the 2026-09-03 set, calibration against the incumbent
   python3 run.py hard-full        the 2026-09-03 set, the four qwen38 candidates
+  python3 run.py hard-pilot-2     the set as revised later that day, incumbent only
+  python3 run.py hard-full-2      the revised set, the four qwen38 candidates
   python3 run.py restore          put the deployment's model back, pinned
 
 Every sample is appended to results.jsonl as it completes, so an interrupted run
@@ -14,6 +16,7 @@ round (5: "One roll of a sampler is not a capability").
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import sys
@@ -79,7 +82,15 @@ CANDIDATES_38 = [
 DEPLOYED = [
     ("gemma4:31b-it-q8_0", -1, 262144),
     ("qwen2.5:7b", -1, 262144),
-    ("nomic-embed-text", -1, 8192),
+    # `:latest` is not decoration. `resident()` reports what `/api/ps` calls the
+    # model, which carries the tag, and `restore()` decides what to evict by
+    # comparing those names against these. Written without the tag, the
+    # embedder never matched itself: every fallback restore evicted
+    # `nomic-embed-text:latest` and then loaded `nomic-embed-text` back,
+    # which is the same model taking a round trip for a string comparison.
+    # Observed 2026-09-03. The snapshot path was never affected -- it records
+    # the name the runtime gave it.
+    ("nomic-embed-text:latest", -1, 8192),
 ]
 
 # The 2026-09-03 set. Groups J through Q are the new tasks; the three ids are
@@ -274,7 +285,26 @@ def run(phase: str, models: list[str], rounds: int, only: list[str] | None = Non
             for t in todo:
                 t0 = time.time()
                 rec = sample(model, t)
-                rec.update(phase=phase, round=rnd)
+                # The instant the sample *started*, in UTC. `wall_s` gives the
+                # duration, so a row now says both when it happened and how long
+                # it took, and start + wall_s recovers the end.
+                #
+                # Added 2026-09-03, and the gap it closes is not a small one: a
+                # row could not be placed in time at all, so a harness phase
+                # could not be correlated with anything else the deployment
+                # recorded. The specific question that could not be answered was
+                # whether a gateway request had ever arrived while a phase held
+                # the runtime -- `usage_records` has timestamps, this had none,
+                # and the two could not be joined. Section 5 asks every figure to
+                # carry the conditions it was generated under; when it was
+                # generated is one of those conditions.
+                rec.update(
+                    phase=phase,
+                    round=rnd,
+                    at=datetime.datetime.fromtimestamp(
+                        t0, tz=datetime.UTC
+                    ).isoformat(),
+                )
                 append(rec)
                 n += 1
                 s = rec["score"]
@@ -357,6 +387,30 @@ if __name__ == "__main__":
         run("hard-pilot", [INCUMBENT], 3, only=hard_set())
     elif cmd == "hard-full":
         run("hard-full", CANDIDATES_38, 3, only=hard_set())
+    elif cmd == "hard-pilot-2":
+        # Calibration for the set as revised on 2026-09-03: four replacement
+        # tasks in group N, `precedence_relief` in place of the five-link
+        # `precedence_chain`, and a raised output
+        # budget on `vm_trace` and `ledger_replay`. Run against the incumbent
+        # alone, which costs no downtime because it is already resident.
+        #
+        # **This pilot calibrates difficulty and settles nothing about a task**,
+        # which is section 7.2's finding and the reason it is worth running
+        # anyway: the previous pilot read the set as failed at 83.3% and four of
+        # the ten tasks it would have discarded turned out to separate the
+        # candidates. What it can still do is catch a prompt that no model
+        # answers in the requested form before four candidates spend four hours
+        # on it, and say whether the budget raise did what it was raised for.
+        run("hard-pilot-2", [INCUMBENT], 3, only=hard_set())
+    elif cmd == "hard-full-2":
+        # A separate phase from `hard-full` rather than more rows in it, because
+        # the two are not the same set. Five task ids are new -- four in group N,
+        # plus `precedence_relief` where `hard-full` ran `precedence_chain` -- so
+        # the tasks that changed do not silently line up against the tasks they
+        # replaced, and the nine that did not change are directly comparable
+        # across the two phases. `analyse.py` reads one phase at a time, which is
+        # what makes the separation worth keeping rather than merging.
+        run("hard-full-2", CANDIDATES_38, 3, only=hard_set())
     elif cmd == "tutor-pilot":
         # Group T is a separate phase rather than more tasks in `hard-pilot`,
         # because the 40-70% band is read off one overall percentage and these

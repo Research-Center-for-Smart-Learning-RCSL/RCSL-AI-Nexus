@@ -58,7 +58,9 @@ def sample(model: str, task: dict) -> dict:
     no result, which is never the same thing as a zero."""
     if task["kind"] == "dialogue":
         return sample_dialogue(model, task)
-    r = generate(model, task["prompt"])
+    # A task may carry its own output budget; see `generate`. `None` is the
+    # phase default, and the great majority of tasks say nothing here.
+    r = generate(model, task["prompt"], num_predict=task.get("num_predict"))
     rec = {
         "model": model,
         "task": task["id"],

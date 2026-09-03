@@ -126,6 +126,22 @@ task(
         "on a final line of exactly this form:\n"
         "FINAL: r0=<n> r1=<n> r2=<n> r3=<n>" + EXACT_SUFFIX
     ),
+    # 2026-09-03 measured the budget here rather than the model: every Qwen
+    # sample stopped at exactly 6,144 tokens without reaching a FINAL line while
+    # the incumbent finished in 3,467-5,069 and was wrong, so the only thing the
+    # task separated was answer length. Twice the budget, against a 16,384-token
+    # context and a prompt of ~1,135 tokens, leaves the ceiling well clear of
+    # anything either family produced -- and if a build still truncates at
+    # 12,288, that is a finding about the model instead of an artefact of the
+    # harness, which is what this task was supposed to be asking all along.
+    #
+    # The budget moves rather than the task, and here that is not a preference
+    # but the second attempt: the note above records the loop bound already
+    # coming down from 10 to 4 for this exact reason, and at 4 every Qwen sample
+    # still hit the ceiling. Shortening it again would keep trading away the
+    # property being measured -- compounding error, the one section 7 says the
+    # eighteen-task set lacked -- to buy budget that can simply be granted.
+    num_predict=12288,
     expected="r0=105 r1=645664597830827404 r2=10180095378053601381 r3=4",
     reference="FINAL: r0=105 r1=645664597830827404 r2=10180095378053601381 r3=4",
     # One extra trip round the loop, computed with the same simulator that

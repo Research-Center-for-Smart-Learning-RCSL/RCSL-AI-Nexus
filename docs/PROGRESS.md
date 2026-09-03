@@ -36,6 +36,15 @@ separately at the end, marked as superseded.
 
 ### September 2026
 
+**[2026-09-04](./progress/2026-09-04.md)**
+- The five tasks yesterday's set could not measure with, and the conclusion that reversed when they were replaced
+- The two tasks that measured the output budget now measure the model
+- Corrections to yesterday's entry
+- The harness has never pinned a sampling temperature, and that is what all three of those corrections are
+- The revision itself, and the id rule it settled
+- Three harness defects found by using it
+- Context ceilings, measured, and a plan for compaction
+
 **[2026-09-03](./progress/2026-09-03.md)**
 - Yesterday's run reached four documents and never reached the screen
 - The run picker showed a UUID, and the cause was a component default nobody chose
