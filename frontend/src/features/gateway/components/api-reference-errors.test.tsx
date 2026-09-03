@@ -5,6 +5,16 @@ import { describe, expect, it } from 'vitest';
 import { elementToMarkdown } from '@/lib/markdown-export';
 import { API_ERROR_CATALOGUE } from './api-reference-error-catalogue';
 import { ErrorsSection } from './api-reference-errors';
+import { API_REFERENCE_SECTION_CATALOGUE } from './api-reference-section-catalogue';
+
+const ERRORS_SECTION = API_REFERENCE_SECTION_CATALOGUE.find(
+  (section) => section.renderKey === 'errors',
+);
+if (!ERRORS_SECTION) throw new Error('Errors section is missing from the catalogue.');
+
+function renderErrors() {
+  return render(<ErrorsSection section={ERRORS_SECTION} />);
+}
 
 function visibleCodes(): string[] {
   const table = screen.getByRole('table');
@@ -37,7 +47,7 @@ function expectCompleteCatalogueExport(markdown: string): void {
 
 describe('ErrorsSection search', () => {
   it('starts with the complete labelled catalogue and announces its count', () => {
-    render(<ErrorsSection />);
+    renderErrors();
 
     expect(screen.getByRole('searchbox', { name: 'Search errors' })).toHaveValue(
       '',
@@ -51,7 +61,7 @@ describe('ErrorsSection search', () => {
 
   it('matches every record with a status code', async () => {
     const user = userEvent.setup();
-    render(<ErrorsSection />);
+    renderErrors();
 
     await user.type(screen.getByRole('searchbox'), '429');
 
@@ -61,7 +71,7 @@ describe('ErrorsSection search', () => {
 
   it('matches exact and partial error codes case-insensitively', async () => {
     const user = userEvent.setup();
-    render(<ErrorsSection />);
+    renderErrors();
     const search = screen.getByRole('searchbox');
 
     await user.type(search, 'QuOtA_ExCeEdEd');
@@ -74,7 +84,7 @@ describe('ErrorsSection search', () => {
 
   it('matches visible remediation text', async () => {
     const user = userEvent.setup();
-    render(<ErrorsSection />);
+    renderErrors();
 
     await user.type(screen.getByRole('searchbox'), 'token budget');
 
@@ -83,7 +93,7 @@ describe('ErrorsSection search', () => {
 
   it('normalises punctuation in visible remediation text', async () => {
     const user = userEvent.setup();
-    render(<ErrorsSection />);
+    renderErrors();
 
     await user.type(screen.getByRole('searchbox'), 'request id');
 
@@ -92,7 +102,7 @@ describe('ErrorsSection search', () => {
 
   it('supports a catalogue alias for the status-less stream marker', async () => {
     const user = userEvent.setup();
-    render(<ErrorsSection />);
+    renderErrors();
 
     await user.type(screen.getByRole('searchbox'), 'stream marker');
 
@@ -101,7 +111,7 @@ describe('ErrorsSection search', () => {
 
   it('matches the visible stream marker and rejects other punctuation-only queries', async () => {
     const user = userEvent.setup();
-    render(<ErrorsSection />);
+    renderErrors();
     const search = screen.getByRole('searchbox');
 
     await user.type(search, '—');
@@ -115,7 +125,7 @@ describe('ErrorsSection search', () => {
 
   it('treats whitespace-only input as an unfiltered catalogue', async () => {
     const user = userEvent.setup();
-    render(<ErrorsSection />);
+    renderErrors();
 
     await user.type(screen.getByRole('searchbox'), '   ');
 
@@ -125,7 +135,7 @@ describe('ErrorsSection search', () => {
 
   it('keeps recovery controls available when no record matches', async () => {
     const user = userEvent.setup();
-    render(<ErrorsSection />);
+    renderErrors();
     const search = screen.getByRole('searchbox');
 
     await user.type(search, 'definitely-not-an-api-error');
@@ -146,7 +156,7 @@ describe('ErrorsSection search', () => {
   });
 
   it('allows an unbroken no-results query to wrap inside the empty state', () => {
-    render(<ErrorsSection />);
+    renderErrors();
     const longQuery = 'x'.repeat(120);
 
     fireEvent.change(screen.getByRole('searchbox'), {
@@ -163,7 +173,7 @@ describe('ErrorsSection search', () => {
 
   it('exports every authored record even while the visible table is filtered', async () => {
     const user = userEvent.setup();
-    const { container } = render(<ErrorsSection />);
+    const { container } = renderErrors();
 
     await user.type(screen.getByRole('searchbox'), 'quota_exceeded');
     expect(visibleCodes()).toEqual(['quota_exceeded']);
@@ -175,7 +185,7 @@ describe('ErrorsSection search', () => {
 
   it('keeps the complete export when the visual state has no results', async () => {
     const user = userEvent.setup();
-    const { container } = render(<ErrorsSection />);
+    const { container } = renderErrors();
 
     await user.type(screen.getByRole('searchbox'), 'no-such-error');
     expect(screen.queryByRole('table')).not.toBeInTheDocument();

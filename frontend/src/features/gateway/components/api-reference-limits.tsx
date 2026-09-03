@@ -1,9 +1,13 @@
 import Link from 'next/link';
 
-export function LimitsSection() {
+import {
+  ApiReferenceSectionLayout,
+  type ApiReferenceSectionProps,
+} from './api-reference-section';
+
+export function LimitsSection({ section }: ApiReferenceSectionProps) {
   return (
-<section className="space-y-3">
-        <h2 className="font-heading text-base font-semibold">Limits</h2>
+      <ApiReferenceSectionLayout section={section}>
         <p className="text-sm text-muted-foreground">
           Each key carries its own requests-per-minute limit and daily token
           quota, and optionally a list of source addresses it may be used from.
@@ -51,6 +55,6 @@ export function LimitsSection() {
           budget indistinguishable from a broken connection. Every other check
           continues to apply to it.
         </p>
-      </section>
+      </ApiReferenceSectionLayout>
   );
 }
