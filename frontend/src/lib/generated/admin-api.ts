@@ -1799,6 +1799,8 @@ export interface components {
             /** Models */
             models: components["schemas"]["EvaluationModelScoreResponse"][];
             run: components["schemas"]["EvaluationRunResponse"];
+            /** Task Definitions */
+            task_definitions: components["schemas"]["EvaluationTaskDefinitionResponse"][];
             /** Tasks */
             tasks: components["schemas"]["EvaluationTaskScoreResponse"][];
             /** Verdicts */
@@ -1859,6 +1861,28 @@ export interface components {
             task: string;
             /** Wall Seconds */
             wall_seconds?: number | null;
+        };
+        /**
+         * EvaluationTaskDefinitionResponse
+         * @description The text of one task, as the run that stored it asked it.
+         *
+         *     Sent from the stored run rather than fetched by the screen from the
+         *     harness, because the two disagree: `vm_trace`'s prompt was shortened
+         *     between the `hard-pilot` and `hard-full` phases on 2026-09-03, so a client
+         *     reading today's file would caption an older run with a question it never
+         *     asked.
+         */
+        EvaluationTaskDefinitionResponse: {
+            /** Checks */
+            checks: number;
+            /** Group */
+            group: string;
+            /** Kind */
+            kind: string;
+            /** Prompt */
+            prompt: string;
+            /** Task */
+            task: string;
         };
         /** EvaluationTaskScoreResponse */
         EvaluationTaskScoreResponse: {

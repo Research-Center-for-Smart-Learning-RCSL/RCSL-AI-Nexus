@@ -1,9 +1,14 @@
+'use client';
+
+import { Fragment, useState } from 'react';
+
 import { cn } from '@/lib/utils';
 import {
   VERDICT_DESCRIPTIONS,
   VERDICT_LABELS,
   countVerdicts,
   formatScore,
+  indexTaskDefinitions,
   indexTaskScores,
   taskKey,
   taskOrder,
@@ -22,11 +27,58 @@ function Cell({ children }: { children: React.ReactNode }) {
   return <td className="py-2 pr-4 tabular-nums">{children}</td>;
 }
 
+/**
+ * The question one task asked, opened underneath its own row.
+ *
+ * A score means very little without it. "This model got 0.42 on
+ * `text_wrap_exact`" is not a fact anybody can act on until they can see that
+ * the task states eleven interacting formatting rules and scores sixteen
+ * independent assertions against them — and the run that produced the score is
+ * the only place the exact wording still exists.
+ *
+ * Capped in height and scrolled rather than rendered whole: one of these
+ * prompts is a 13,565-character policy document, and a table row that pushes
+ * every other task off the screen makes the table unusable to reach it.
+ */
+function TaskPrompt({
+  kind,
+  checks,
+  prompt,
+  columns,
+  id,
+}: {
+  kind: string;
+  checks: number;
+  prompt: string;
+  columns: number;
+  id: string;
+}) {
+  return (
+    <tr>
+      <td colSpan={columns} className="bg-muted/40 px-4 py-3">
+        <div id={id} className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            {kind} · {checks} scoring unit{checks === 1 ? '' : 's'} ·{' '}
+            {prompt.length.toLocaleString()} characters
+          </p>
+          <pre className="max-h-96 overflow-auto rounded-md bg-background p-3 text-xs leading-relaxed whitespace-pre-wrap">
+            {prompt}
+          </pre>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 export function TaskScoreTable({ report }: { report: EvaluationReport }) {
   const order = taskOrder(report);
   const scores = indexTaskScores(report);
   const counts = countVerdicts(report);
   const carrying = counts.discriminates;
+  const definitions = indexTaskDefinitions(report);
+  const [open, setOpen] = useState<string | null>(null);
+  // Group, task, one per model, verdict.
+  const columnCount = 3 + report.models.length;
   return (
     <section className="space-y-3">
       <h3 className="font-heading text-sm font-semibold">By task</h3>
@@ -41,6 +93,14 @@ export function TaskScoreTable({ report }: { report: EvaluationReport }) {
         tasks a run contains. The denominator is every task the run named,
         including any it could not score, which carry no verdict at all.
       </p>
+      {definitions.size > 0 ? (
+        <p className="max-w-prose text-sm text-muted-foreground">
+          Select a task name to read the question exactly as this run asked it.
+          The wording is stored with the run rather than looked up, because a
+          task gets rewritten and a score belongs to the version that produced
+          it.
+        </p>
+      ) : null}
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead className="text-muted-foreground">
@@ -60,10 +120,28 @@ export function TaskScoreTable({ report }: { report: EvaluationReport }) {
           <tbody className="[&_tr]:border-b">
             {order.map(({ task, group }) => {
               const verdict = report.verdicts[task];
+              const definition = definitions.get(task);
+              const isOpen = open === task;
+              const panelId = `task-prompt-${task}`;
               return (
-                <tr key={task}>
+                <Fragment key={task}>
+                <tr>
                   <td className="py-2 pr-4 text-muted-foreground">{group}</td>
-                  <td className="py-2 pr-4 font-mono text-xs">{task}</td>
+                  <td className="py-2 pr-4 font-mono text-xs">
+                    {definition ? (
+                      <button
+                        type="button"
+                        onClick={() => setOpen(isOpen ? null : task)}
+                        aria-expanded={isOpen}
+                        aria-controls={panelId}
+                        className="cursor-pointer rounded-sm text-left underline decoration-dotted underline-offset-4 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                      >
+                        {task}
+                      </button>
+                    ) : (
+                      task
+                    )}
+                  </td>
                   {report.models.map((model) => {
                     const entry = scores.get(taskKey(task, model.model_ref));
                     return (
@@ -87,6 +165,16 @@ export function TaskScoreTable({ report }: { report: EvaluationReport }) {
                     )}
                   </td>
                 </tr>
+                {isOpen && definition ? (
+                  <TaskPrompt
+                    id={panelId}
+                    kind={definition.kind}
+                    checks={definition.checks}
+                    prompt={definition.prompt}
+                    columns={columnCount}
+                  />
+                ) : null}
+                </Fragment>
               );
             })}
           </tbody>

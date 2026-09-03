@@ -6,6 +6,7 @@ from .base import (
 from .evaluations import (
     EvaluationModelScoreRow,
     EvaluationRunRow,
+    EvaluationTaskDefinitionRow,
     EvaluationTaskScoreRow,
 )
 from .identity import (
@@ -54,4 +55,5 @@ __all__ = [
     "EvaluationRunRow",
     "EvaluationModelScoreRow",
     "EvaluationTaskScoreRow",
+    "EvaluationTaskDefinitionRow",
 ]

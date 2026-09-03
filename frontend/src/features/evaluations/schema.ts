@@ -90,10 +90,37 @@ export const evaluationTaskScoreSchema = z.object({
 });
 export type EvaluationTaskScore = z.infer<typeof evaluationTaskScoreSchema>;
 
+/**
+ * The text of one task, as the run asked it.
+ *
+ * Stored with the run rather than read from the harness, because a task's
+ * wording changes: `vm_trace` was shortened between two phases on 2026-09-03
+ * when its original length was found to be measuring the output budget rather
+ * than the model. Pairing a stored score with today's wording would show a
+ * question that run never asked.
+ */
+export const evaluationTaskDefinitionSchema = z.object({
+  task: z.string(),
+  group: z.string(),
+  kind: z.string(),
+  prompt: z.string(),
+  /** Independent scoring units. A code task's checks, a dialogue's per-turn
+   * assertions, or 1 for a single exact answer — which is what makes a 0.62
+   * on one task and a 0.62 on another mean different amounts of evidence. */
+  checks: z.number(),
+});
+export type EvaluationTaskDefinition = z.infer<typeof evaluationTaskDefinitionSchema>;
+
 export const evaluationReportSchema = z.object({
   run: evaluationRunSchema,
   models: z.array(evaluationModelScoreSchema),
   tasks: z.array(evaluationTaskScoreSchema),
+  /**
+   * Defaulted, and that is not defensive coding. Runs imported before the text
+   * was stored are still on the screen and still correct; they simply cannot
+   * show their questions, and the table has to render them rather than fail.
+   */
+  task_definitions: z.array(evaluationTaskDefinitionSchema).default([]),
   /**
    * Task name to verdict, computed by the backend over the whole field of
    * models. Deliberately not derived in the browser: a screen computing it from
@@ -159,6 +186,14 @@ export function indexTaskScores(
   return new Map(
     report.tasks.map((entry) => [taskKey(entry.task, entry.model_ref), entry]),
   );
+}
+
+/** The task text of a run, indexed by task id. Empty for a run imported before
+ * the text was stored, which the table renders as a row with nothing to open. */
+export function indexTaskDefinitions(
+  report: EvaluationReport,
+): Map<string, EvaluationTaskDefinition> {
+  return new Map(report.task_definitions.map((entry) => [entry.task, entry]));
 }
 
 /** The tasks of a run, in the order the harness emitted them. */

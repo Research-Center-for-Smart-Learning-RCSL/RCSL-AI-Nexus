@@ -16,7 +16,11 @@ import pytest
 from app.adapters.authz.role_authorization import RoleAuthorization
 from app.application.use_cases.manage_evaluations import ManageEvaluations
 from app.domain.entities.actor import Actor, Role, Scope
-from app.domain.entities.evaluation import EvaluationReport, EvaluationSample
+from app.domain.entities.evaluation import (
+    EvaluationReport,
+    EvaluationSample,
+    EvaluationTaskDefinition,
+)
 from app.domain.exceptions import EvaluationRunNotFoundError, NotAuthorizedError
 from tests.unit.fakes import FakeAudit
 
@@ -154,6 +158,44 @@ async def test_the_importer_is_recorded_from_the_actor_not_from_the_payload() ->
     # report returned by an import then always said the run had never been
     # loaded, however the row read afterwards.
     assert stored.run.imported_at == IMPORTED_AT
+
+
+@pytest.mark.asyncio
+async def test_task_text_is_stored_with_the_run_and_needs_no_further_scope() -> None:
+    """`model:write` covers it. Storing the question a model is already known to
+    have been asked discloses nothing its score did not, and a scope minted for
+    it would be a name with no decision behind it."""
+    use_case, store, audit = build()
+
+    stored = await use_case.import_run(
+        actor(Scope.MODEL_WRITE),
+        SAMPLES,
+        label="with text",
+        phase="full",
+        ran_at=RAN_AT,
+        harness_ref="h",
+        definitions=[
+            EvaluationTaskDefinition(
+                task="t1", group="A", kind="exact", prompt="what is 2 + 2?", checks=1
+            )
+        ],
+    )
+
+    assert [d.prompt for d in stored.task_definitions] == ["what is 2 + 2?"]
+    assert store.by_label["with text"].task_definitions == stored.task_definitions
+    # The same audit row as any other import, rather than a second one.
+    assert audit.actions() == ["evaluation.imported"]
+
+
+@pytest.mark.asyncio
+async def test_an_import_without_task_text_still_stores_the_run() -> None:
+    """Two runs are stored without definitions and must keep rendering, so the
+    argument defaults to empty rather than being required."""
+    use_case, _, _ = build()
+
+    stored = await do_import(use_case, actor(Scope.MODEL_WRITE))
+
+    assert stored.task_definitions == ()
 
 
 @pytest.mark.asyncio

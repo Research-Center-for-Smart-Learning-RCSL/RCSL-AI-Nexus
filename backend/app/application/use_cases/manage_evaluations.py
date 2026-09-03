@@ -39,6 +39,7 @@ from app.domain.entities.evaluation import (
     EvaluationReport,
     EvaluationRun,
     EvaluationSample,
+    EvaluationTaskDefinition,
     aggregate,
 )
 from app.domain.exceptions import EvaluationRunNotFoundError
@@ -93,6 +94,7 @@ class ManageEvaluations:
         harness_ref: str,
         caveats: Sequence[str] = (),
         note: str = "",
+        definitions: Sequence[EvaluationTaskDefinition] = (),
     ) -> EvaluationReport:
         """Reduce a run's samples to scores and store it, replacing its label.
 
@@ -107,6 +109,16 @@ class ManageEvaluations:
         default, so the report this returns carries the same timestamp the row
         does. Left to the default, the `201` from an import always said the run
         had never been loaded.
+
+        `definitions` is the text of the tasks this run asked, and it stays a
+        keyword with an empty default rather than becoming a required argument:
+        two runs are stored without it, and the harness's own file is not
+        reachable from the admin container, so an import that cannot supply the
+        text must still be able to store the scores. It carries **no new
+        scope**. Storing the question a model was already known to have been
+        asked discloses nothing the scores did not, and minting a scope for it
+        would be a name without a decision behind it -- the objection this
+        module's docstring raises against `evaluation:read`.
         """
         self._authz.require(actor, Scope.MODEL_WRITE)
 
@@ -131,6 +143,10 @@ class ManageEvaluations:
             ),
             models=report.models,
             tasks=report.tasks,
+            # Taken from the caller rather than derived from the samples, which
+            # is the whole point: the samples record what a model answered, and
+            # nothing in them says what it was asked.
+            task_definitions=tuple(definitions),
         )
         await self._evaluations.save_report(stored)
         await self._audit.record(

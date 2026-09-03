@@ -7,7 +7,7 @@ import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from app.domain.entities.evaluation import EvaluationSample
+from app.domain.entities.evaluation import EvaluationSample, EvaluationTaskDefinition
 
 logger = logging.getLogger("app.infrastructure.import_evaluation")
 
@@ -110,6 +110,55 @@ def parse_samples(lines: Sequence[str], *, phases: Sequence[str] = ()) -> list[E
     return [sample for block in reversed(kept) for sample in block]
 
 
+def parse_task_definitions(
+    text: str, *, samples: Sequence[EvaluationSample]
+) -> list[EvaluationTaskDefinition]:
+    """Read `tasks.py --json` and keep only the tasks this run actually asked.
+
+    **The filter is the reason this function exists rather than a list
+    comprehension at the call site.** The file carries the whole harness — 34
+    tasks — and a run uses the subset its phase selected; the 2026-09-03
+    `hard-full` run is 15 of them. Storing all 34 would put nineteen questions
+    on the screen beside scores that do not exist, which reads as a run that
+    failed those tasks rather than as a run that never asked them. Storing text
+    nobody measured is worse than storing none.
+
+    Unlike `parse_samples`, a malformed entry here is fatal rather than skipped.
+    A partial line in the JSONL is a run interrupted mid-write, which costs one
+    sample out of hundreds; this file is generated whole by one command, so a
+    shape it does not have is a harness that changed its output, and it should
+    stop the import rather than quietly caption half the run. Same reasoning as
+    `_optional_float`.
+    """
+    try:
+        rows = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"task definitions are not JSON: {error}") from error
+    if not isinstance(rows, list):
+        raise ValueError(f"expected a list of task definitions, got {type(rows).__name__}")
+
+    asked = {sample.task for sample in samples}
+    definitions: list[EvaluationTaskDefinition] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError(f"expected a task definition object, got {row!r}")
+        missing = {"task", "group", "kind", "prompt", "checks"} - set(row)
+        if missing:
+            raise ValueError(f"task definition is missing {', '.join(sorted(missing))}: {row!r}")
+        if str(row["task"]) not in asked:
+            continue
+        definitions.append(
+            EvaluationTaskDefinition(
+                task=str(row["task"]),
+                group=str(row["group"]),
+                kind=str(row["kind"]),
+                prompt=str(row["prompt"]),
+                checks=_required_int(row["checks"]),
+            )
+        )
+    return definitions
+
+
 def _optional_float(value: object) -> float | None:
     """`json.loads` hands back `Any` as `object` here, so the numeric shape
     is asserted rather than assumed: a string where a rate was expected is a
@@ -125,6 +174,15 @@ def _optional_float(value: object) -> float | None:
 def _optional_int(value: object) -> int | None:
     if value is None:
         return None
+    if not isinstance(value, int | float):
+        raise ValueError(f"expected a number, got {value!r}")
+    return int(value)
+
+
+def _required_int(value: object) -> int:
+    """The check count is not optional and a missing one is not zero: a task
+    the screen says has no checks is a task the reader would take to have been
+    scored on nothing at all."""
     if not isinstance(value, int | float):
         raise ValueError(f"expected a number, got {value!r}")
     return int(value)

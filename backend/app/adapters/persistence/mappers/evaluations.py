@@ -5,11 +5,13 @@ from __future__ import annotations
 from app.adapters.persistence.sqlalchemy_models import (
     EvaluationModelScoreRow,
     EvaluationRunRow,
+    EvaluationTaskDefinitionRow,
     EvaluationTaskScoreRow,
 )
 from app.domain.entities.evaluation import (
     EvaluationModelScore,
     EvaluationRun,
+    EvaluationTaskDefinition,
     EvaluationTaskScore,
 )
 
@@ -51,4 +53,16 @@ def evaluation_task_score_to_domain(row: EvaluationTaskScoreRow) -> EvaluationTa
         group=row.task_group,
         score=row.score,
         samples=row.samples,
+    )
+
+
+def evaluation_task_definition_to_domain(
+    row: EvaluationTaskDefinitionRow,
+) -> EvaluationTaskDefinition:
+    return EvaluationTaskDefinition(
+        task=row.task,
+        group=row.task_group,
+        kind=row.kind,
+        prompt=row.prompt,
+        checks=row.checks,
     )
