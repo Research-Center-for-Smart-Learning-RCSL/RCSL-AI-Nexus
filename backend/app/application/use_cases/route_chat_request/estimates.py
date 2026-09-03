@@ -37,10 +37,15 @@ conversation by 2.9x, which is why a Codex session on 2026-08-14 was admitted
 at roughly 115,000 tokens against a ceiling of 65,536 and would have been
 silently truncated by the runtime a few turns later.
 
-**That table describes a model this deployment no longer routes to.** gemma4-31b-q8
-is registered but serves no capability; `chat` and `code` both reach
-qwen36-35b-a3b-q8, whose tokenizer is a different one. Re-measured against it on
-2026-08-17, the same way:
+**That table was superseded on 2026-08-17 and came back into force on
+2026-08-21, which nothing noticed until 2026-09-02.** It was measured on
+`gemma4-31b`, and `gemma4-31b-q8` — which has served `chat` and `code` since
+2026-08-21 — carries the same 262,144-entry vocabulary, so it is this table
+rather than the one below that describes what the estimator is now applied to.
+(Inferred from the vocabulary rather than re-measured: the two builds are the
+same model at two quantisations and their headers disagree only in which key
+carries the pre-tokeniser name.) The table below was measured against
+qwen36-35b-a3b-q8, which held both capabilities for five days:
 
 | content              | chars/token | estimate runs |
 |----------------------|-------------|---------------|
@@ -102,16 +107,30 @@ and the two errors happen to cancel in it. The first says the tool definitions
 that fill an agent's window are over-counted like everything else, so the client
 that could not send an empty conversation had more room than it was told.
 
-**Everything above describes the fallback now, not the ceiling.** Since
-2026-08-17 a request is counted with the vocabulary and chat template of the
-model that will read it, taken out of that model's own weights file
-(`adapters/tokenizer/gguf_token_counter.py`), and measured against the runtime
-it agrees to within a constant of about a dozen tokens. The tables here are
-kept because they are what the estimator still does on the paths where no
-vocabulary can be resolved — an MLX target, a model registered but not pulled,
-a host without the model store mounted — and because they are the record of why
-no retuned constant was an acceptable answer. What is also fixed is a ceiling
-that knows which model it is protecting; see
+**Everything above describes the fallback now, not the ceiling** — except that
+for `chat` and `code` the fallback *is* the ceiling, and has been since
+2026-08-21. Since 2026-08-17 a request is counted with the vocabulary and chat
+template of the model that will read it, taken out of that model's own weights
+file (`adapters/tokenizer/gguf_token_counter.py`), and measured against the
+runtime it agrees to within a constant of about a dozen tokens. The tables here
+are kept because they are what the estimator still does on the paths where no
+vocabulary can be resolved, and because they are the record of why no retuned
+constant was an acceptable answer.
+
+**That list of paths was written as a list of edge cases and one of them is now
+the main road.** It read "an MLX target, a model registered but not pulled, a
+host without the model store mounted". The fourth, unlisted because it had not
+happened yet: **a model whose pre-tokenizer is not in `KNOWN_PRE_TOKENIZERS`**.
+`gemma4:31b-it-q8_0` declares `tokenizer.ggml.pre = gemma4`, the allowlist holds
+`qwen2` and `qwen35`, so `GgufTokenCounter.prepare` refuses it and every `chat`
+and `code` request has been estimated rather than counted since the day that
+model came back. Measured 2026-09-02 against the live blob store: gemma4 false,
+qwen2.5:7b true, qwen3.6:35b-a3b-q8_0 true, qwen3.8:27b-q4_K_M true. So the
+exactness this section says supersedes the tables currently applies to `assist`
+and to the `chat` fallback and to nothing else. Tracked in
+`docs/roadmap/decisions.md`; measurement in `docs/PROGRESS.md` 2026-09-02.
+
+What is also fixed is a ceiling that knows which model it is protecting; see
 `RouteChatRequest._refuse_what_this_target_would_truncate`.
 
 **Two characters per token is not a safe floor either, and no single number

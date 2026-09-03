@@ -354,6 +354,15 @@ LaunchDaemon 放在一起——它要跑得起來，得先有 repo、有 `secret
 的 token 數，取代原本用字元寬度估的做法。只讀 metadata header（`qwen3.6:35b-a3b-q8_0`
 是 38.7 GB 權重前面的 11.9 MiB），每個模型每個 process 一次。
 
+**掛好了也不保證每個模型都能精確計數，這一節的標題只講了兩個失敗原因裡的一個。**
+字彙表只會為 pre-tokenizer 在 `KNOWN_PRE_TOKENIZERS` 裡的模型建起來（目前是 `qwen2`
+和 `qwen35`）；不在清單裡的，`prepare` 會拒絕，那個模型就退回字元估算，倉庫掛得再對也一樣。
+2026-09-02 對實機量測：`gemma4:31b-it-q8_0` 宣告 `gemma4`，**不在清單裡**，而它從
+2026-08-21 起就是 `chat` 和 `code` 的模型——所以這台目前這兩個 capability 都是估算的；
+`qwen2.5:7b`、`qwen3.6:35b-a3b-q8_0`、`qwen3.8:27b-q4_K_M` 都可以。MLX 格式的模型
+（safetensors，manifest 沒有 `image.model` 層）一樣不行。要判斷實際狀況，看回應裡的
+`tokenizer` / `estimate` / `lower_bound` 標記，不要看這一步有沒有打勾。
+
 - [ ] 確認 Ollama 的模型倉庫位置。**這台是 `/Users/Shared/ollama/models`，不是任何人的
   家目錄底下**——2026-08-18 把 runtime 移到專用服務帳號 `_rcslollama` 時一起搬的，因為
   `/Users/rcslmac1` 是 750，服務帳號連進都進不去（見上面 §3 的服務帳號那一步）。全新安裝

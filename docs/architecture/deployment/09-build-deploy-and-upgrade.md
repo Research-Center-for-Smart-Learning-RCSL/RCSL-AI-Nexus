@@ -76,6 +76,35 @@ This is anonymous pulling, which is correct for the three public base images thi
 
 After any `up -d` that recreates containers, also confirm the published ports are actually bound — see the startup-ordering note below for why `docker compose ps` does not show this.
 
+**Upgrading the Ollama runtime is not part of any of the above, and it has a step no container upgrade has.** The runtime is a Homebrew formula behind a LaunchDaemon, not a container: `online.rcsl.ollama.plist` runs `/opt/homebrew/opt/ollama/bin/ollama serve`, where `opt/ollama` is the symlink Homebrew repoints on upgrade. So `brew upgrade ollama` changes what the *next* launch will run and nothing about the process currently running.
+
+```bash
+HOMEBREW_NO_AUTO_UPDATE=1 brew upgrade ollama
+sudo launchctl kickstart -k system/online.rcsl.ollama    # the daemon runs as _rcslollama
+```
+
+**The window between those two commands is the part worth knowing about.** Homebrew's automatic cleanup removes the previous version's Cellar as part of the upgrade, and the running server loads its inference workers from a path inside it — `Cellar/<version>/libexec/lib/ollama/llama-server`. The already-running workers hold open inodes and keep serving, so `/api/ps` still answers and resident models still generate; a model that has to be *loaded* has nowhere to load from. The failure is therefore invisible to a health check that asks whether the runtime answers, and it lasts until the daemon is restarted. Do the two commands together.
+
+**That same cleanup is why this is the one upgrade on this host with no local rollback.** §9's rollback is a git checkout and a rebuild; here the previous binary is deleted from the machine by the upgrade itself, so going back means recovering an old formula from `homebrew-core`'s history and building it. Measured 2026-09-02: after `0.32.4 → 0.33.2` the Cellar held `0.33.2` alone. Nothing warns about this, and `brew services` is not the manager here — `brew services list` reports `ollama` as `none`, because the daemon is this repository's plist rather than the formula's.
+
+**A restart unloads every resident model and nothing brings them back.** The registry's `state` column still says `loaded`, which is what an operator asked for and remains true as an intent; `observed_state` follows the heartbeat within its 30-second interval and reports the truth on its own. What no component does is re-warm them. They have to be loaded by hand, largest first, at the `context_length` the `models` row carries — Ollama keys a runner by its options, so a model warmed at a different context is resident and wrong, and the first real request pays a reload to correct it:
+
+```bash
+# Registry context_length, which is what ManageModels sends. Ollama clamps each
+# to the model's own maximum; that is why /api/ps reads smaller numbers back.
+for spec in "gemma4:31b-it-q8_0 262144" "qwen2.5:7b 262144" "nomic-embed-text 8192"; do
+  set -- $spec
+  curl -s http://127.0.0.1:11434/api/generate \
+    -d "{\"model\":\"$1\",\"keep_alive\":-1,\"options\":{\"num_ctx\":$2}}" >/dev/null
+done
+```
+
+An embedding model answers that call `400 does not support generate` and needs `/api/embed` with an empty input instead, which `backend/.../ollama_adapter/lifecycle.py` and `scripts/model-eval/run.py` both do for the same reason.
+
+**Check four things afterwards, and the second is a security control rather than a smoke test.** The version (`/api/version`); that the runtime answers on `127.0.0.1:11434` and **refuses on both the LAN address and the tailnet address**, which is [security.md](../security.md) §7.1's loopback bind and is carried by `OLLAMA_HOST` in the plist rather than by anything that survives on its own; that `ollama list` still shows the store, which is `OLLAMA_MODELS` and `HOME` in the plist both still pointing at `/Users/Shared/ollama`; and that the three models are resident at the right contexts. `check-platform-health.sh` covers the first two on its five-minute interval.
+
+**Budget the memory, because a version bump moves it.** 0.33.2 sizes `gemma4:31b-it-q8_0` at **33.55 GiB** resident against 0.32.4's 31.58, at the same 262144 context and the same quantisation — 1.97 GiB, taken off the static budget's headroom for nothing the operator asked for, moving it from 13.95 to 11.99 GiB. The heartbeat writes the new figure into `observed_memory_gb` and `MemoryBudgetService` uses it immediately, so the guardrail is correct without intervention; what changes is how much room is left for a model that is not yet loaded. Re-read the headroom after any runtime upgrade before planning one.
+
 **Deploy from a commit, not from a working tree.** The rollback path below is a git one, so an image built from uncommitted changes corresponds to nothing and can only be rolled back to whatever image tag happens to survive.
 
 **Rollback.** Check out the previous tag and rebuild. Alembic downgrades are written only where a migration is genuinely reversible; otherwise recovery is a database restore, which is why §9.4 of [security.md](../security.md) insists restores are rehearsed.

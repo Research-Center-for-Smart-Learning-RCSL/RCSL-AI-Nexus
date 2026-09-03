@@ -39,8 +39,16 @@ No open decisions block Phase 1.
   finding here touches it. Remaining open measurements: whether eviction occurs
   under real pressure (a decision, not a measurement — it needs a deliberate
   allocation on a serving machine), q4's quality here, and whether headroom
-  survives a full-context request. The "unexplained 3 GB" is closed: it was
-  GiB against decimal GB, and the budget's units are consistent
+  survives a full-context request. **The last two are now answered**: headroom
+  survives, measured at the ceiling on 2026-09-02 with zero evictions across a
+  1,384-second request; and q4 costs nothing this instrument can measure —
+  `qwen3.8:27b-q4_K_M` scored 89.1% against the same model at q8's 89.0% over
+  216 samples, on a different model from the one this paragraph was written
+  about and with eleven of eighteen tasks carrying no signal, so it bounds the
+  cost rather than showing there is none. A more aggressive quantisation does
+  cost: the nvfp4 build of that same model lost 4.1 points to its own q8. The
+  "unexplained 3 GB" is closed: it was GiB against decimal GB, and the budget's
+  units are consistent
 
   **Priced 2026-08-13, and the pricing reorders the question.** Extending the
   372 GB/s bandwidth model with the SSD's ~7 GB/s gives a ratio of 53x, and the
@@ -106,6 +114,43 @@ No open decisions block Phase 1.
   wall clock alone -- identical scores in a third of the time -- but it should
   not be made on a claim of being smarter, because nothing here demonstrates one.
 
+  **The replacement was made on 2026-08-16 and reversed on 2026-08-21, and
+  nothing recorded the reversal.** `code` and `chat` both point at
+  `gemma4-31b-q8` again — `audit_log`, `routing_policy.saved`, 07:58:13 and
+  07:59:36 — so the paragraph below describes a switch that has not been in
+  force for twelve days, and the reason for undoing it is not recorded anywhere.
+  **Whether to make it again is therefore open, and it is no longer the same
+  question**: measured 2026-09-02 on Ollama 0.33.2,
+  `qwen3.8:27b-mlx` generates at **44.5 tok/s flat to depth 4558** against this
+  incumbent's 13.89 falling to 6.99 at the context ceiling, fits in 17.22 GiB
+  against 33.55, calls tools correctly, and would free 16 GiB of budget rather
+  than spend any. What it costs is exact token counting, which the incumbent
+  does not have either; `qwen3.8:27b-q4_K_M` keeps that at 23.2 tok/s. Neither
+  has been put through the eighteen-task set or the agent-loop rungs, so nothing
+  here says either is a better model — the same sentence this item has had to
+  write three times. See [PROGRESS.md](../PROGRESS.md) 2026-09-02.
+
+  **Answered later the same day, and the answer is no.** The eighteen-task set
+  ran against three builds with the incumbent re-run as a control, 216 samples
+  on Ollama 0.33.2: `gemma4:31b-it-q8_0` **93.4%** (94.4% recorded, so the
+  runtime upgrade did not move it), `qwen3.8:27b-q4_K_M` 89.1%,
+  `qwen3.8:27b-q8_0` 89.0%, `qwen3.8:27b-mlx` **84.9%**. The incumbent is not
+  beaten by any of them. A fourth arm was added purely to obey section 5's
+  quantisation rule and it is what makes the result readable: the 8.5 points
+  between the incumbent and the MLX build are **4.4 from the model** and **4.1
+  from the quantisation**, so the fastest build is also the weakest and the two
+  facts have the same cause. **The wall clock argument also inverts**: at 39.0
+  and 60.8 seconds per task the q4 and q8 builds are *slower to an answer* than
+  the incumbent's 33.3 despite higher tokens per second, because Qwen 3.8 writes
+  more per answer, and only `27b-mlx` (16.5 s/task) is faster end to end. So the
+  trade on offer is 8.5 points — 13.2 if the eight truncated samples are scored
+  0 rather than excluded — for twice the speed and 16 GiB of budget. That is a
+  worse exchange than the 4.6-points-for-45%-of-the-wall-clock this item
+  recorded on 2026-08-15, which was made and then reverted. **Still open** is
+  only the agent loop: the ten rungs need a routing policy and a key, and
+  2026-08-16 records that there is no authenticated path to the control plane
+  from this host. See [PROGRESS.md](../PROGRESS.md) 2026-09-02.
+
   **Answered 2026-08-15, and the answer is that the incumbent is the better
   model and should be replaced anyway.** The **eighteen**-task set in
   [model-evaluation.md](../model-evaluation.md) — this line said sixteen until
@@ -149,6 +194,59 @@ No open decisions block Phase 1.
   answer is "the data does not determine this". That belongs to what the
   platform tells a caller, not to which model serves them ([PROGRESS.md](../PROGRESS.md)
   2026-08-15).
+
+- **The context ceiling now costs more time than the transport allows, and
+  nothing raised the ceiling to do it.** Raised 2026-09-02 by measuring the
+  worst case for the first time. `MAX_CONTEXT_LENGTH` is 122880 and
+  `REQUEST_TIMEOUT_SECONDS` is 1200, which reaches the adapter as
+  `httpx.Timeout(read=1200)`; prompt evaluation sends no bytes, so the read
+  timeout is what bounds it. Measured on the model actually serving:
+  **121,892 tokens at 88.4 prompt tok/s is 1,379 seconds**, and the crossing is
+  near 110,000 tokens. The ceiling was set on 2026-08-17 against
+  `qwen36-35b-a3b-q8`'s 711 tok/s (`122880 / 711 = 173 s`); on 2026-08-21 both
+  policies went back to a dense model without the ceiling being revisited, which
+  is the same unrecorded move the item below now carries. Four ways out and they
+  are not equivalent: **lower the ceiling** to what the serving model can
+  evaluate in 1200 s, which takes back the room three separate raises were made
+  to give agent clients; **raise `REQUEST_TIMEOUT_SECONDS`**, which lengthens how
+  long one caller can hold a concurrency slot doing nothing visible — 4 slots
+  exist; **change the serving model**, since `qwen3.8:27b-mlx` measures 250
+  prompt tok/s flat against this model's 88.4 at depth — **and that option was
+  priced on 2026-09-02 and is dearer than it looked**: the same build scored
+  84.9% against the incumbent's 93.4% on the eighteen-task set, so this way out
+  costs 8.5 points of capability to buy back a guardrail, which is a trade the
+  other three do not ask for; or **decide the combination is unreachable in
+  practice** and say so, which needs the estimate calibration below to be
+  trustworthy and it currently is not. Nothing here is
+  urgent — the deployment served no request at all in the 48 hours before the
+  measurement — but it is a guardrail that no longer holds, rather than one that
+  is merely conservative. Evidence in [PROGRESS.md](../PROGRESS.md) 2026-09-02.
+
+- **The estimate that decides the refusal is calibrated against a model that
+  stopped serving.** Raised 2026-09-02, and it is why the item above cannot be
+  closed by arithmetic. `MAX_CONTEXT_LENGTH` is enforced against an estimate
+  from character widths, and `gemma4:31b-it-q8_0` cannot be counted exactly —
+  it declares `tokenizer.ggml.pre = gemma4`, which is not in
+  `KNOWN_PRE_TOKENIZERS`, so `GgufTokenCounter.prepare` refuses it and the
+  gateway has been estimating for `chat` and `code` since 2026-08-21. The
+  divisors in use (4.40 English, 1.49 Traditional Chinese) were measured against
+  `qwen36-35b-a3b-q8`. So where the refusal boundary falls in real tokens is
+  unknown in both directions, and the 2026-08-18 exact-counting work applies to
+  `assist` and to the `chat` fallback but not to the capability it was built for.
+  Three ways out: **measure the divisors** against the model that serves, which
+  is cheap and leaves the estimate an estimate; **add `gemma4` to
+  `KNOWN_PRE_TOKENIZERS`** after checking its pre-tokeniser against the
+  platform's pattern, which is what the allowlist exists to gate and is not a
+  one-line change; or **serve a model that is already countable** —
+  `qwen3.8:27b-q4_K_M` declares `qwen35` and prepares exactly with no code
+  change, while `qwen3.8:27b-mlx` is safetensors and cannot be counted at all.
+  **The third way out is now the expensive one.** Measured 2026-09-02,
+  `qwen3.8:27b-q4_K_M` scores 89.1% against the incumbent's 93.4% and takes 39.0
+  seconds per task against 33.3, so serving it to get exact counting costs 4.3
+  points of capability *and* is slower to an answer. The first way out — measure
+  the divisors against the model that serves — is still cheap, still leaves the
+  estimate an estimate, and is now the only one of the three that does not
+  change what the platform serves.
 
 Settled:
 
