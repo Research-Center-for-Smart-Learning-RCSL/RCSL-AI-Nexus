@@ -10,8 +10,12 @@ import {
   API_ERROR_CATALOGUE,
   matchesApiError,
 } from './api-reference-error-catalogue';
+import {
+  ApiReferenceSectionLayout,
+  type ApiReferenceSectionProps,
+} from './api-reference-section';
 
-export function ErrorsSection() {
+export function ErrorsSection({ section }: ApiReferenceSectionProps) {
   const [query, setQuery] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
   const matches = useMemo(
@@ -30,8 +34,7 @@ export function ErrorsSection() {
   }
 
   return (
-    <section className="space-y-3">
-      <h2 className="font-heading text-base font-semibold">Errors</h2>
+    <ApiReferenceSectionLayout section={section}>
       <div className="max-w-xl space-y-1.5" data-md-skip>
         <label htmlFor="api-error-search" className="text-sm font-medium">
           Search errors
@@ -154,6 +157,6 @@ export function ErrorsSection() {
           </tbody>
         </table>
       </div>
-    </section>
+    </ApiReferenceSectionLayout>
   );
 }

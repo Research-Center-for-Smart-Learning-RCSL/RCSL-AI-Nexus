@@ -1,11 +1,13 @@
 import { CodeBlock } from '@/components/composed/code-block';
 
-export function TimeoutSection() {
+import {
+  ApiReferenceSectionLayout,
+  type ApiReferenceSectionProps,
+} from './api-reference-section';
+
+export function TimeoutSection({ section }: ApiReferenceSectionProps) {
   return (
-<section className="space-y-3">
-        <h2 className="font-heading text-base font-semibold">
-          What comes back
-        </h2>
+      <ApiReferenceSectionLayout section={section}>
         <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[10rem_1fr]">
           <dt className="font-mono text-muted-foreground">finish_reason</dt>
           <dd>
@@ -69,7 +71,7 @@ data: {"choices":[], "usage":{...}}                            <- only with incl
 data: [DONE]`}
           label="Copy the frame sequence"
         />
-      </section>
+      </ApiReferenceSectionLayout>
   );
 }
 
@@ -78,12 +80,12 @@ type ExtensionsSectionProps = {
   baseUrl: string;
 };
 
-export function ExtensionsSection({ baseUrl }: ExtensionsSectionProps) {
+export function ExtensionsSection({
+  baseUrl,
+  section,
+}: ExtensionsSectionProps & ApiReferenceSectionProps) {
   return (
-<section className="space-y-3">
-        <h2 className="font-heading text-base font-semibold">
-          Timeouts, and client timeout sizing
-        </h2>
+      <ApiReferenceSectionLayout section={section}>
         <p className="text-sm text-muted-foreground">
           <strong>
             The first token of a large request can legitimately take close to
@@ -119,6 +121,6 @@ export function ExtensionsSection({ baseUrl }: ExtensionsSectionProps) {
           below states why an unchanged retry of that condition does not
           succeed.
         </p>
-      </section>
+      </ApiReferenceSectionLayout>
   );
 }
