@@ -9,6 +9,12 @@ from task_families.family_e import TASKS as FAMILY_E_TASKS
 from task_families.family_f import TASKS as FAMILY_F_TASKS
 from task_families.family_g import TASKS as FAMILY_G_TASKS
 from task_families.family_h import TASKS as FAMILY_H_TASKS
+from task_families.hard_chain import TASKS as HARD_CHAIN_TASKS
+from task_families.hard_derive import TASKS as HARD_DERIVE_TASKS
+from task_families.hard_refusal import TASKS as HARD_REFUSAL_TASKS
+from task_families.hard_spec import TASKS as HARD_SPEC_TASKS
+from task_families.hard_tutor import TASKS as HARD_TUTOR_TASKS
+from task_families.hard_vm import TASKS as HARD_VM_TASKS
 from task_registry import CODE_SUFFIX, EXACT_SUFFIX
 
 TASKS: list[dict] = [
@@ -20,6 +26,12 @@ TASKS: list[dict] = [
     *FAMILY_F_TASKS,
     *FAMILY_G_TASKS,
     *FAMILY_H_TASKS,
+    *HARD_VM_TASKS,
+    *HARD_SPEC_TASKS,
+    *HARD_DERIVE_TASKS,
+    *HARD_REFUSAL_TASKS,
+    *HARD_CHAIN_TASKS,
+    *HARD_TUTOR_TASKS,
     *ANCHORS_TASKS,
 ]
 BY_ID = {task["id"]: task for task in TASKS}

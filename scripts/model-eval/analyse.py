@@ -50,6 +50,29 @@ def mean(xs):
     return statistics.mean(xs) if xs else None
 
 
+def outcome(r: dict) -> str:
+    """The sample's third-outcome label, derived for rows written before it existed.
+
+    `sample.py` records `outcome` directly from 2026-09-03. Phases recorded
+    before that carry only the `no_result` sentence, so the label is recovered
+    from it here rather than leaving every earlier phase unreadable by the
+    reports below -- which would defeat the point of separating the outcome at
+    all, since the reading it exists to settle is a 2026-09-02 one.
+    """
+    if r.get("outcome"):
+        return r["outcome"]
+    if r.get("score") is not None:
+        return "scored"
+    note = r.get("no_result") or ""
+    if note.startswith("truncated"):
+        return "truncated_no_answer"
+    if note.startswith("empty"):
+        return "empty"
+    if note.startswith("transport"):
+        return "transport_error"
+    return "no_result"
+
+
 def main(phase: str) -> None:
     rows = load(phase)
     if not rows:
@@ -81,6 +104,45 @@ def main(phase: str) -> None:
         walls = [r["wall_s"] for r in rs if r.get("wall_s")]
         print(f"{m:26s} {pct*100:7.1f}% {len(scored):7d} {len(rs)-len(scored):10d} "
               f"{mean(gens) or 0:10.1f} {int(mean(depths) or 0):7d} {mean(walls) or 0:8.1f}")
+
+    # ------------------------------------------------- the two truncation reads
+    # Section 5's rule excludes a truncated-without-answer sample from the mean.
+    # On 2026-09-02 that rule was found to cut the other way with deliberation
+    # off, and both readings had to be published by hand because choosing one
+    # after seeing which way it cut is the worse error. Printing them together
+    # is what stops that being a hand computation: the left column is the
+    # recorded rule, the right column is the same samples scored 0, and the gap
+    # between them is exactly how much of a model's figure rests on the choice.
+    trunc_rows = [r for r in rows if outcome(r) == "truncated_no_answer"]
+    if trunc_rows:
+        print(f"\n=== {phase}: truncated without an answer, both readings ===\n")
+        print(f"{'model':26s} {'excluded':>10s} {'scored 0':>10s} {'delta':>8s} "
+              f"{'samples':>8s}")
+        print("-" * 66)
+        for m in models:
+            rs = [r for r in rows if r["model"] == m]
+            kept = [r["score"] for r in rs if r["score"] is not None]
+            n_tr = sum(1 for r in rs if outcome(r) == "truncated_no_answer")
+            excl = mean(kept)
+            zeroed = mean(kept + [0.0] * n_tr)
+            if excl is None:
+                continue
+            print(f"{m:26s} {excl*100:9.1f}% {zeroed*100:9.1f}% "
+                  f"{(zeroed-excl)*100:7.1f} {n_tr:8d}")
+        worst = defaultdict(int)
+        for r in trunc_rows:
+            worst[r["task"]] += 1
+        ranked = ", ".join(f"{t} ({n})" for t, n in
+                           sorted(worst.items(), key=lambda kv: -kv[1]))
+        print(f"\nby task: {ranked}")
+        # Deliberation off means the budget went on prose rather than on
+        # reasoning, which is the model not following the output instruction.
+        # With it on, the same rows would be the case section 5 wrote the rule
+        # for. The distinction is in the data, so it is reported rather than
+        # argued.
+        with_think = sum(1 for r in trunc_rows if (r.get("thinking_chars") or 0) > 0)
+        print(f"of those, {with_think} had any thinking output and "
+              f"{len(trunc_rows)-with_think} had none")
 
     # ------------------------------------------------------- per round wall
     print(f"\n=== {phase}: wall clock per round (inference only) ===\n")
@@ -158,6 +220,43 @@ def main(phase: str) -> None:
     else:
         print(f"\n{n_sat} of {len(tasks)} tasks were never missed by this model. That is the 4.3 "
               f"band read;\nthe 4.4 replacement test needs the other candidates on the bench.")
+
+    # ------------------------------------------------ what a dialogue lost, and where
+    # A single percentage over a conversation cannot be acted on. "Held its system
+    # prompt but drifted on formatting" and "was talked into the answer" are
+    # different findings with different consequences for a deployment, and they
+    # average to the same number. The check names carry the property, so they are
+    # aggregated by name across every turn and every round.
+    #
+    # The turn breakdown beside it is the one that answers whether adherence
+    # decays: the same checks are applied at turn 8 as at turn 1, so a falling
+    # column is instruction-following wearing off over a conversation rather than
+    # a model that never had the rule.
+    dialogue_rows = [r for r in rows if r.get("kind") == "dialogue"]
+    if dialogue_rows:
+        print(f"\n=== {phase}: dialogue, by property (all turns, all rounds) ===\n")
+        for m in models:
+            per_prop = defaultdict(lambda: [0, 0])
+            per_turn = defaultdict(lambda: [0, 0])
+            for r in dialogue_rows:
+                if r["model"] != m:
+                    continue
+                for label, ok, _ in r.get("detail", []):
+                    turn, _, name = str(label).partition(":")
+                    per_prop[name][1] += 1
+                    per_turn[turn][1] += 1
+                    if ok:
+                        per_prop[name][0] += 1
+                        per_turn[turn][0] += 1
+            if not per_prop:
+                continue
+            print(f"{m}")
+            for name, (ok, n) in sorted(per_prop.items(), key=lambda kv: kv[1][0] / kv[1][1]):
+                bar = "#" * int(round(20 * ok / n))
+                print(f"    {name:34s} {ok:3d}/{n:3d} {100*ok/n:5.1f}%  {bar}")
+            order = sorted(per_turn.items(), key=lambda kv: int(kv[0][1:] or 0))
+            shown = "  ".join(f"{t}:{100*ok/n:3.0f}%" for t, (ok, n) in order)
+            print(f"    by turn -> {shown}\n")
 
     # --------------------------------------------------- code that never ran
     # A candidate whose file does not import scores zero on every check, which
