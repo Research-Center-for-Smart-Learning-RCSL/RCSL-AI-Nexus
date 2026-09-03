@@ -87,6 +87,7 @@ export function EvaluationView() {
             Run
           </label>
           <Select
+            items={Object.fromEntries(options.map((run) => [run.id, run.label]))}
             value={chosen ?? latest.data.run.id}
             onValueChange={(value) => setChosen(value)}
           >
