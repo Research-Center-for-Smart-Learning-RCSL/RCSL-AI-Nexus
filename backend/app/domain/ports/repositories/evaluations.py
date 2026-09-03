@@ -43,6 +43,11 @@ class EvaluationRepositoryPort(Protocol):
         Replacement rather than a second row, because a corrected re-import is
         the expected case: the published 2026-08-15 figures are themselves a
         correction of that day's first reading.
+
+        The report's task definitions are stored with it, and an empty tuple
+        stores nothing rather than raising: two runs predate the field, and an
+        implementation that treated their absence as a defect would refuse to
+        round-trip what is already in the table.
         """
         ...
 

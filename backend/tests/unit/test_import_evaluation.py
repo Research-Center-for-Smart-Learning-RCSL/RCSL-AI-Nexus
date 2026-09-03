@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.domain.entities.evaluation import aggregate
-from app.infrastructure.import_evaluation import parse_samples
+from app.infrastructure.import_evaluation import parse_samples, parse_task_definitions
 
 RAN_AT_ARGS = {
     "run_id": "r1",
@@ -165,3 +165,70 @@ def test_a_null_score_survives_as_a_null_rather_than_a_zero() -> None:
     report = aggregate(samples, ran_at=datetime(2026, 8, 15, tzinfo=UTC), caveats=(), **RAN_AT_ARGS)
     assert report.models[0].no_result_samples == 1
     assert report.models[0].score is None
+
+
+def definition(task: str, *, kind: str = "exact", checks: int = 1) -> dict:
+    return {
+        "task": task,
+        "group": "A",
+        "kind": kind,
+        "prompt": f"the text of {task}",
+        "checks": checks,
+    }
+
+
+def test_only_the_tasks_the_run_asked_are_stored() -> None:
+    """The shape of the real file, in miniature.
+
+    `tasks.py --json` emits the whole harness — 34 tasks on 2026-09-03 — and a
+    run asks the subset its phases selected, 15 of them for `hard-full`. Keeping
+    the other nineteen would caption the screen with questions beside scores
+    that do not exist, which a reader takes for tasks the run failed rather than
+    tasks it never asked.
+    """
+    samples = parse_samples(
+        [
+            line(model="m1", task="asked", phase="full"),
+            line(model="m2", task="asked", phase="full"),
+            line(model="m1", task="also_asked", phase="full"),
+        ]
+    )
+
+    definitions = parse_task_definitions(
+        json.dumps([definition("asked"), definition("never_asked"), definition("also_asked")]),
+        samples=samples,
+    )
+
+    assert [d.task for d in definitions] == ["asked", "also_asked"]
+    assert definitions[0].prompt == "the text of asked"
+
+
+def test_a_task_the_file_does_not_cover_is_simply_absent() -> None:
+    """Not an error. A run may be imported against a file that predates one of
+    its tasks, and refusing the whole import would cost the fourteen questions
+    the file does describe to withhold the fifteenth."""
+    samples = parse_samples([line(model="m1", task="uncovered", phase="full")])
+
+    assert parse_task_definitions(json.dumps([definition("other")]), samples=samples) == []
+
+
+def test_a_malformed_definition_stops_the_import() -> None:
+    """Fatal where a partial JSONL line is not, and the asymmetry is deliberate:
+    that file is appended to across rounds, this one is generated whole by a
+    single command, so a shape it does not have is a harness that changed its
+    output."""
+    samples = parse_samples([line(model="m1", task="t", phase="full")])
+
+    with pytest.raises(ValueError, match="missing checks"):
+        parse_task_definitions(
+            json.dumps([{"task": "t", "group": "A", "kind": "exact", "prompt": "p"}]),
+            samples=samples,
+        )
+    with pytest.raises(ValueError, match="expected a number"):
+        parse_task_definitions(
+            json.dumps([definition("t") | {"checks": "eleven"}]), samples=samples
+        )
+    with pytest.raises(ValueError, match="not JSON"):
+        parse_task_definitions("[{", samples=samples)
+    with pytest.raises(ValueError, match="expected a list"):
+        parse_task_definitions(json.dumps({"task": "t"}), samples=samples)

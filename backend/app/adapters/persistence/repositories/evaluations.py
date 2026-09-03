@@ -10,6 +10,7 @@ from app.adapters.persistence import mappers as m
 from app.adapters.persistence.sqlalchemy_models import (
     EvaluationModelScoreRow,
     EvaluationRunRow,
+    EvaluationTaskDefinitionRow,
     EvaluationTaskScoreRow,
 )
 from app.domain.entities.evaluation import (
@@ -56,6 +57,11 @@ class PostgresEvaluationRepository(_Base):
             .where(EvaluationTaskScoreRow.run_id == run.id)
             .order_by(EvaluationTaskScoreRow.id)
         )
+        definitions = await self._session.scalars(
+            select(EvaluationTaskDefinitionRow)
+            .where(EvaluationTaskDefinitionRow.run_id == run.id)
+            .order_by(EvaluationTaskDefinitionRow.id)
+        )
         return EvaluationReport(
             run=m.evaluation_run_to_domain(run),
             models=tuple(m.evaluation_model_score_to_domain(row) for row in models),
@@ -64,6 +70,12 @@ class PostgresEvaluationRepository(_Base):
             # be read, and the groups mean something in that order. Sorting
             # alphabetically here would silently reorder the screen's rows.
             tasks=tuple(m.evaluation_task_score_to_domain(row) for row in tasks),
+            # Empty for the two runs stored before the importer could carry
+            # them, which is a state the report is defined to tolerate rather
+            # than a read that failed.
+            task_definitions=tuple(
+                m.evaluation_task_definition_to_domain(row) for row in definitions
+            ),
         )
 
     async def save_report(self, report: EvaluationReport) -> None:
@@ -132,6 +144,18 @@ class PostgresEvaluationRepository(_Base):
                     task_group=task.group,
                     score=task.score,
                     samples=task.samples,
+                )
+            )
+        for index, definition in enumerate(report.task_definitions):
+            self._session.add(
+                EvaluationTaskDefinitionRow(
+                    id=f"{report.run.id}:d{index:04d}",
+                    run_id=report.run.id,
+                    task=definition.task,
+                    task_group=definition.group,
+                    kind=definition.kind,
+                    prompt=definition.prompt,
+                    checks=definition.checks,
                 )
             )
         await self._session.flush()

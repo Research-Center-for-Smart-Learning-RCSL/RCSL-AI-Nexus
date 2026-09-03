@@ -58,6 +58,7 @@ import type {
   EvaluationModelScore,
   EvaluationReport,
   EvaluationRun,
+  EvaluationTaskDefinition,
   EvaluationTaskScore,
 } from '@/features/evaluations/schema';
 import type { GatewayInfo } from '@/features/gateway/schema';
@@ -197,6 +198,14 @@ const _evaluationModel: Agrees<
   Api['EvaluationModelScoreResponse']
 > = true;
 const _evaluationTask: Agrees<EvaluationTaskScore, Api['EvaluationTaskScoreResponse']> = true;
+// The task text as well as the score, because the two are read together and a
+// prompt that stopped arriving would leave every score on the screen with
+// nothing to justify it — the failure being that the row still renders, just
+// with no question behind it.
+const _evaluationDefinition: Agrees<
+  EvaluationTaskDefinition,
+  Api['EvaluationTaskDefinitionResponse']
+> = true;
 // The envelope as well as its members, for the reason the knowledge search is
 // checked that way: `verdicts` is computed by the backend over the whole field
 // of models, and a rename of it would leave every member type correct while

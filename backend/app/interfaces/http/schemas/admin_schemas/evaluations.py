@@ -10,6 +10,7 @@ from app.domain.entities.evaluation import (
     EvaluationModelScore,
     EvaluationReport,
     EvaluationRun,
+    EvaluationTaskDefinition,
     EvaluationTaskScore,
 )
 
@@ -101,6 +102,33 @@ class EvaluationTaskScoreResponse(BaseModel):
         )
 
 
+class EvaluationTaskDefinitionResponse(BaseModel):
+    """The text of one task, as the run that stored it asked it.
+
+    Sent from the stored run rather than fetched by the screen from the
+    harness, because the two disagree: `vm_trace`'s prompt was shortened
+    between the `hard-pilot` and `hard-full` phases on 2026-09-03, so a client
+    reading today's file would caption an older run with a question it never
+    asked.
+    """
+
+    task: str
+    group: str
+    kind: str
+    prompt: str
+    checks: int
+
+    @classmethod
+    def of(cls, definition: EvaluationTaskDefinition) -> EvaluationTaskDefinitionResponse:
+        return cls(
+            task=definition.task,
+            group=definition.group,
+            kind=definition.kind,
+            prompt=definition.prompt,
+            checks=definition.checks,
+        )
+
+
 class EvaluationReportResponse(BaseModel):
     """A run and everything derived from its samples.
 
@@ -115,6 +143,10 @@ class EvaluationReportResponse(BaseModel):
     models: list[EvaluationModelScoreResponse]
     tasks: list[EvaluationTaskScoreResponse]
     verdicts: dict[str, str]
+    task_definitions: list[EvaluationTaskDefinitionResponse]
+    """Empty for the two runs stored before the importer carried task text, and
+    a client must render those as it always did. An empty list here is a run
+    imported without definitions, never a run whose tasks had no prompts."""
 
     @classmethod
     def of(cls, report: EvaluationReport) -> EvaluationReportResponse:
@@ -123,6 +155,9 @@ class EvaluationReportResponse(BaseModel):
             models=[EvaluationModelScoreResponse.of(s) for s in report.models],
             tasks=[EvaluationTaskScoreResponse.of(s) for s in report.tasks],
             verdicts={task: verdict.value for task, verdict in report.verdicts().items()},
+            task_definitions=[
+                EvaluationTaskDefinitionResponse.of(d) for d in report.task_definitions
+            ],
         )
 
 
