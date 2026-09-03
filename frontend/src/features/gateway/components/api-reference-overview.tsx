@@ -37,12 +37,14 @@ type CapabilitiesSectionProps = {
   capabilities: string[];
   sample: string;
   isLoading: boolean;
+  isUnavailable: boolean;
 };
 
 export function CapabilitiesSection({
   capabilities,
   sample,
   isLoading,
+  isUnavailable,
   section,
 }: CapabilitiesSectionProps & ApiReferenceSectionProps) {
   return (
@@ -58,6 +60,10 @@ export function CapabilitiesSection({
           {isLoading ? (
             <span className="text-sm text-muted-foreground">
               Loading capabilities…
+            </span>
+          ) : isUnavailable ? (
+            <span className="text-sm text-muted-foreground" data-md-skip>
+              Live capabilities are unavailable.
             </span>
           ) : capabilities.length ? (
             capabilities.map((capability) => (

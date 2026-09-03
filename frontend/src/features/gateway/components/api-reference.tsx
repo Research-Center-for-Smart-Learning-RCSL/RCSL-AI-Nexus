@@ -136,16 +136,29 @@ export function ApiReference() {
   // browser's default document-fragment restoration cannot know that the
   // document itself is fixed while this nested region owns all scrolling.
   useEffect(() => {
-    // Catalogue ids are deliberately ASCII. Comparing the raw fragment also
-    // means a malformed percent escape is ignored instead of throwing from an
-    // effect and replacing otherwise usable documentation with an error page.
-    const id = window.location.hash.slice(1);
-    if (!isApiReferenceSectionId(id)) return;
+    let frame: number | undefined;
+    const jumpToCurrentHash = () => {
+      // Catalogue ids are deliberately ASCII. Comparing the raw fragment also
+      // means a malformed percent escape is ignored instead of throwing from an
+      // effect and replacing otherwise usable documentation with an error page.
+      const id = window.location.hash.slice(1);
+      if (!isApiReferenceSectionId(id)) return;
 
-    const frame = window.requestAnimationFrame(() =>
-      jumpToSection(id, { smooth: false }),
-    );
-    return () => window.cancelAnimationFrame(frame);
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        frame = undefined;
+        jumpToSection(id, { smooth: false });
+      });
+    };
+
+    jumpToCurrentHash();
+    window.addEventListener('hashchange', jumpToCurrentHash);
+    window.addEventListener('popstate', jumpToCurrentHash);
+    return () => {
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+      window.removeEventListener('hashchange', jumpToCurrentHash);
+      window.removeEventListener('popstate', jumpToCurrentHash);
+    };
   }, [jumpToSection]);
 
   useEffect(() => {
@@ -233,6 +246,7 @@ export function ApiReference() {
             capabilities={capabilities}
             sample={sample}
             isLoading={isLoading}
+            isUnavailable={Boolean(error)}
           />
         );
       case 'request':
@@ -307,7 +321,7 @@ export function ApiReference() {
           className="hidden @4xl:block"
           data-md-skip
         >
-          <div className="sticky top-4 max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain pr-2">
+          <div className="sticky top-4 max-h-[calc(100dvh-6rem)] overflow-y-auto overscroll-contain pr-2">
             <p className="mb-3 text-sm font-semibold">On this page</p>
             <ol className="space-y-1 border-l pl-3">
               {API_REFERENCE_SECTION_CATALOGUE.map((section) => {
@@ -343,7 +357,10 @@ export function ApiReference() {
               contract itself, and §4.4 traded `/openapi.json` away for them. They
               must not disappear because one call failed. */}
           {error ? (
-            <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+            <div
+              role="alert"
+              className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4"
+            >
               <p className="text-sm">
                 The live endpoint and capability list could not be loaded, so the
                 origin below is a placeholder. Everything else on this page is

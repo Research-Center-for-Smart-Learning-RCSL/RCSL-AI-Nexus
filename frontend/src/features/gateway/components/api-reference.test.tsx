@@ -179,6 +179,10 @@ describe('API Reference section catalogue', () => {
     const jump = screen.getByRole('combobox', { name: 'Jump to section' });
 
     expect(navigation).toHaveAttribute('data-md-skip');
+    expect(navigation.firstElementChild).toHaveClass(
+      'max-h-[calc(100dvh-6rem)]',
+      'overflow-y-auto',
+    );
     const compactNavigation = jump.closest('[data-md-skip]');
     expect(compactNavigation).toHaveClass('@4xl:hidden');
     expect(navigation).toHaveClass('hidden', '@4xl:block');
@@ -229,6 +233,26 @@ describe('API Reference section navigation', () => {
     window.history.replaceState({}, '', '/api-docs#errors');
     renderReference();
     act(() => animationFrameCallback?.(0));
+
+    expect(scrollTo).toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: 'auto' }),
+    );
+    expect(scrollTo.mock.contexts.at(-1)).toBe(
+      document.getElementById('main-content'),
+    );
+    expect(screen.getByRole('combobox', { name: 'Jump to section' })).toHaveValue(
+      'errors',
+    );
+  });
+
+  it('handles native fragment navigation after the reference has mounted', () => {
+    renderReference();
+    window.history.replaceState({}, '', '/api-docs#errors');
+
+    act(() => {
+      window.dispatchEvent(new Event('hashchange'));
+      animationFrameCallback?.(0);
+    });
 
     expect(scrollTo).toHaveBeenCalledWith(
       expect.objectContaining({ behavior: 'auto' }),
@@ -402,9 +426,11 @@ describe('API Reference preservation', () => {
 
     renderReference();
 
-    expect(
-      screen.getByText(/live endpoint and capability list could not be loaded/i),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /live endpoint and capability list could not be loaded/i,
+    );
+    expect(screen.getByText('Live capabilities are unavailable.')).toBeInTheDocument();
+    expect(screen.queryByText(/nothing is routable/i)).not.toBeInTheDocument();
     expect(
       screen.getByRole('navigation', { name: 'API Reference sections' }),
     ).toBeInTheDocument();
@@ -416,5 +442,13 @@ describe('API Reference preservation', () => {
     );
     expect(screen.getByText('https://<gateway>/v1')).toBeInTheDocument();
     expect(screen.getByRole('searchbox', { name: 'Search errors' })).toBeEnabled();
+
+    const content = document.querySelector<HTMLElement>(
+      '[data-api-reference-content]',
+    );
+    if (!content) throw new Error('API Reference export root was not rendered.');
+    expect(elementToMarkdown(content)).not.toContain(
+      'Live capabilities are unavailable.',
+    );
   });
 });
