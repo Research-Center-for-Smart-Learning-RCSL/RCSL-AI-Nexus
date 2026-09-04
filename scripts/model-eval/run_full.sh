@@ -53,6 +53,15 @@ echo "--- hard-full-3 analysis ---"
 python3 analyse.py hard-full-3
 echo ""
 
+if ! gated "tutor-pilot"; then
+    echo "=== tutor-pilot (education calibration) ==="
+    python3 run.py tutor-pilot
+    gate "tutor-pilot"
+fi
+echo "--- tutor-pilot analysis ---"
+python3 analyse.py tutor-pilot
+echo ""
+
 if ! gated "tutor-full"; then
     echo "=== tutor-full (education agent) ==="
     python3 run.py tutor-full
