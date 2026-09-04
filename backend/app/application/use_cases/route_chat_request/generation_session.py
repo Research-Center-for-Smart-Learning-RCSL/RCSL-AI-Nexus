@@ -52,6 +52,9 @@ class GenerationSessionMixin(RouteChatDependencies):
         counted_prompt_tokens: int = 0,
         counted_basis: str = COUNT_BY_ESTIMATE,
         requested_capability: str | None = None,
+        compaction_tier: int | None = None,
+        tokens_before_compaction: int | None = None,
+        tokens_after_compaction: int | None = None,
     ) -> AsyncGenerator[CompletionChunk, None]:
         # The caller's request is honoured only where it is stricter than ours.
         # An unbounded generation is a hardware problem, not a client choice.
@@ -258,4 +261,7 @@ class GenerationSessionMixin(RouteChatDependencies):
                 completed=completed,
                 transcript=transcript,
                 finish_reason=finish_reason,
+                compaction_tier=compaction_tier,
+                tokens_before_compaction=tokens_before_compaction,
+                tokens_after_compaction=tokens_after_compaction,
             )

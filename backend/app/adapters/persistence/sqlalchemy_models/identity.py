@@ -6,6 +6,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -125,6 +127,10 @@ class ApiKeyRow(Base):
     would mean the gateway writing to this table on every request, and the
     account split in security.md section 6 exists so that it cannot. The same
     fact is derived from `usage_records`, which the gateway does write."""
+
+    compaction_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
 
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     debug_logging_until: Mapped[datetime | None] = mapped_column(
