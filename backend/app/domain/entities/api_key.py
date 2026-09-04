@@ -70,6 +70,13 @@ class ApiKey:
     to what the key may already reach and can never add to it.
     """
 
+    compaction_enabled: bool = True
+    """Whether oversized requests through this key are compacted before they
+    are refused. Default on: the plan says so, and the migration sets every
+    existing key to True. The switch controls whether compaction is *attempted*;
+    it does not control the disclosure, which is always present when compaction
+    fires (automatic-context-compaction.md §3)."""
+
     created_at: datetime | None = None
     """Assigned by the database on first write. `None` means "not persisted
     yet", which is why it is not required at construction.

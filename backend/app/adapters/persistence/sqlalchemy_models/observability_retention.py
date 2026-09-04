@@ -64,6 +64,10 @@ class UsageRecordRow(Base):
     completed: Mapped[bool] = mapped_column(Boolean)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
+    compaction_tier: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tokens_before_compaction: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tokens_after_compaction: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     __table_args__ = (
         # The quota reads by key over a time window, so the composite is what
         # that query actually needs.
