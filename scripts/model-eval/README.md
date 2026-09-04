@@ -1,23 +1,22 @@
 # Model evaluation harness
 
-The instrument for [docs/model-evaluation.md](../../docs/model-evaluation.md), which designed
-sixteen tasks plus two anchors and was never run until 2026-08-15.
-
-**This exists because the previous one did not.** The twelve-task harness behind the
-[PROGRESS.md](../../docs/PROGRESS.md) 2026-08-14 table was never committed, so its numbers cannot
-be reproduced and its two anchor tasks cannot be carried forward — see *Anchors* below for what
-that cost. Anything that produces a figure this repository will later reason from belongs here.
+The instrument for [docs/model-evaluation.md](../../docs/model-evaluation.md). The original
+eighteen-task set was designed 2026-08-14 and is still in the harness; the **hard set** — fifteen
+tasks across groups J–Q plus two anchors — is the current measurement set, and `hard-full-3` is
+the phase that runs it with pinned sampling parameters.
 
 ## Layout
 
 | file | what it holds |
 |---|---|
-| `tasks.py` | the eighteen tasks: prompt, checks, a reference answer, a deliberately wrong answer |
+| `tasks.py` | all registered tasks (34 as of the hard set revision): prompt, checks, reference, wrong answer |
+| `task_families/` | task source by group: `family_a.py`–`family_h.py` (18-task set), `hard_*.py` + `anchors.py` (hard set) |
 | `specdoc.py` | the ~4,500-token policy document group E reads, generated deterministically |
 | `harness.py` | the Ollama call, answer extraction, and the subprocess scorer — not a sandbox, see below |
+| `harness_parts/` | `client.py` (generation with pinned temperature/top_k/top_p/seed), `sample.py`, `scoring.py`, etc. |
 | `validate.py` | section 4.1: the scorer is checked in both directions before any model runs |
 | `run.py` | drives a phase; appends every sample to `results.jsonl` as it completes |
-| `analyse.py` | the tables, including the saturation verdict section 4.4 asks for |
+| `analyse.py` | tables with bootstrap 95% CI, saturation verdicts, cross-phase comparison, JSON export |
 | `bench_throughput.py` | generation and prompt-evaluation rate for one model at a stated depth |
 
 ## Running it
@@ -29,15 +28,28 @@ had stopped serving five days earlier. See PROGRESS.md 2026-09-02.
 
 ```sh
 cd scripts/model-eval
-python3 validate.py        # must print 18/18 before anything else is worth doing
-python3 run.py pilot2      # calibration against the incumbent only (section 4.2)
-python3 analyse.py pilot2  # reports whether the incumbent is inside the 40-70% band
-python3 run.py full        # three candidates, three interleaved rounds
-python3 analyse.py full
-python3 run.py repair      # re-run named tasks whose prompt, not the model, was measured
-python3 run.py qwen38      # the three Qwen 3.8 27B builds, plus the incumbent as a control
-python3 run.py restore     # put the deployment's model back, pinned
+python3 validate.py            # must print 34/34 before anything else is worth doing
+python3 run.py hard-pilot-3    # calibration against the incumbent only (section 4.2)
+python3 analyse.py hard-pilot-3
+python3 run.py hard-full-3     # four candidates, five interleaved rounds
+python3 analyse.py hard-full-3
+python3 run.py tutor-full      # the four education-agent tasks, all candidates
+python3 analyse.py tutor-full
+python3 run.py restore         # put the deployment's model back, pinned
 ```
+
+### Environment variables
+
+| variable | default | what it controls |
+|---|---|---|
+| `EVAL_TEMPERATURE` | `0.3` | Sampling temperature — pinned for reproducibility |
+| `EVAL_TOP_K` | `40` | Top-k sampling |
+| `EVAL_TOP_P` | `0.9` | Nucleus sampling |
+| `EVAL_SEED` | `42` | Random seed for deterministic sampling |
+| `EVAL_NUM_CTX` | `16384` | Context window sent to Ollama |
+| `EVAL_NUM_PREDICT` | `4096` | Default output budget (tasks may override) |
+| `EVAL_ROUNDS` | `5` | Number of interleaved rounds per phase |
+| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama runtime address |
 
 **A `repair` phase supersedes `full` task by task, and nothing here merges them for you.**
 `analyse.py` reads one phase, so its `full` tables still carry the figures the re-run replaced;
@@ -128,29 +140,17 @@ without flagging which one is load-bearing.
 
 ## What this still does not measure
 
-**The anchors are reconstructed, not carried over.** `ini_parse` and `logic_order` exist to make
-this set comparable with the twelve-task set rather than merely sequential. That is not what they
-do here: the original harness was never committed, so both were rebuilt from the prose
-description in PROGRESS.md. They are two more tasks. The bridge between the two sets is gone and
-this one cannot rebuild it.
-
 **Group F can be passed by a model that always refuses.** `insufficient_data` and
 `ambiguous_requirement` are the only two tasks whose right answer is a refusal marker, and
-nothing here pairs them with a question that *is* answerable from the same data. A model that
-emits the marker whenever it sees the instruction scores 2/2 without the property being measured.
-Closing this needs a matched control task, which the design does not include.
+nothing here pairs them with a question that *is* answerable from the same data. **Group N
+addresses this for the hard set** — its four tasks are two matched pairs, each pairing a
+determined half with an undetermined half — but group F in the eighteen-task set remains open.
 
-**A truncated answer is scored as nothing, and that is not neutral.** `harness.py` returns no
-result when a response hits `num_predict` without producing an answer, which is right when the
-budget went on reasoning — the case section 5 wrote it for. With deliberation off it is not: the
-2026-09-02 run had all three Qwen 3.8 builds spend 4,096 tokens of prose on `spec_contradiction`
-without reaching an answer, two rounds in three each, and the rule credited them by excluding
-those samples while `analyse.py` read the surviving one as **SATURATED high**. Scoring them 0
-moves those three down 3.3 to 4.9 points and the incumbent, which truncated nothing, not at all.
-Both readings are in PROGRESS.md 2026-09-02; what this needs is a third outcome rather than a
-choice between the two it has, and until it exists, check the no-result list before reading any
-score.
+**A truncated answer is scored as nothing, and that is not neutral.** `sample.py` labels
+truncated-without-answer samples as a third outcome (`truncated_no_answer`), and `analyse.py`
+prints both readings — excluded and scored-0 — side by side. The third outcome was added
+2026-09-03 and the reading rule applies: check the no-result list before reading any score.
 
 **Whether the work is any good.** The boundary docs/model-evaluation.md section 6 already draws,
-and the ten-rung agent harness before it. Eighteen checkable tasks measure whether a model can
-follow a specification it has not memorised. Real work remains the only instrument for the rest.
+and the ten-rung agent harness before it. Checkable tasks measure whether a model can follow a
+specification it has not memorised. Real work remains the only instrument for the rest.

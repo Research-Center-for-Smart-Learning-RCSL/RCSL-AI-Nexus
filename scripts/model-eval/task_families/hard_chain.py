@@ -1,12 +1,18 @@
 """Rebuilds of the two mechanisms the first set saturated at 1.00 for every model.
 
-Group L replaces the six-step arithmetic chain: the state carried across events
-(month, running balance, fee total, transaction count) means a slip at any one
-event moves the answer, so the score is no longer a floor of "did the model
-manage six steps". Group P replaces "find the two clauses that contradict",
-which every model solved by search: the governing rule here is only reachable by
-walking four clauses that sit in four different sections and then applying a
-fifth that decides between the last two.
+Group L: the original `ledger_replay` applied 36 events under 11 rules and
+scored 0.00 for all four candidates even at a 12,288-token budget — honestly
+saturated rather than budget-bound, but saturated all the same. This
+replacement keeps the compounding-error property (every event depends on the
+running balance from the previous one) and the two traps that separated models
+in the original (rejected debits, first-of-month fee exemption carry-over),
+but the ledger is ten events under five rules and the answer is a single
+integer.
+
+Group P replaces "find the two clauses that contradict", which every model
+solved by search: the governing rule here is only reachable by walking four
+clauses that sit in four different sections and then applying a fifth that
+decides between the last two.
 """
 
 from task_registry import EXACT_SUFFIX
@@ -18,126 +24,64 @@ def task(**kw):
 
 
 # --------------------------------------------------------------------------
-# L - long-horizon state replay
+# L - state replay with compounding balance
 # --------------------------------------------------------------------------
 
-# The rules are deliberately not grouped by how much work they do: the two that
-# separate models (an event passed over under rule 4 consumes nothing, and the
-# rule 8 cap is applied at each fee rather than to the month's total) sit among
-# the ordinary ones rather than last, so the prompt does not mark its own traps.
-_LEDGER_RULES = """\
-1. The events are applied strictly in the order listed. The balance is carried in whole US
-   cents throughout and is never rounded.
-2. An amount whose currency is EUR is converted before the event is applied, at 1.1750 US
-   cents to the EUR cent, the converted amount rounded up to the next whole cent where it is
-   not already whole. An amount whose currency is USD is used as it stands.
-3. A DEBIT reduces the balance by its US cent amount. A CREDIT increases the balance by its
-   US cent amount.
-4. A DEBIT whose US cent amount is greater than the balance standing immediately before it
-   would be applied is not applied. The event is passed over, and it is a transaction for no
-   purpose of these rules.
-5. Every applied DEBIT and every applied CREDIT is a transaction and carries a service fee.
-   The fee is a percentage of that transaction's US cent amount, at the rate selected by the
-   balance standing immediately before the amount is applied: 400000 cents or more, 0.35 per
-   cent; 150000 to 399999 cents, 0.80 per cent; below 150000 cents, 1.75 per cent. Each fee
-   is rounded up to the next whole cent as it is computed.
-6. A fee is taken from the balance immediately after the transaction's own amount has been
-   applied.
-7. The first transaction applied in a calendar month carries no fee. It is a transaction for
-   every other purpose of these rules.
-8. The fees taken in a calendar month may not exceed 6000 cents in total. The running total
-   for a month begins at zero at the first event applied in that month. Where a fee would
-   carry the month's total above 6000 cents, only the part of it that brings the total to
-   6000 cents is taken.
-9. Every fifth transaction, counted from the first transaction of the ledger and continuing
-   across month boundaries without interruption, carries a handling charge of 250 cents,
-   taken from the balance after that transaction's fee. A handling charge is not a fee and
-   does not enter the total in rule 8.
-10. An ADJUST event names an earlier transaction and gives a corrected US cent amount for it.
-   The named transaction is treated as though it had carried the corrected amount: the
-   difference between the original amount and the corrected amount is returned to the balance
-   (added, where the named transaction was a DEBIT; taken, where it was a CREDIT), and the
-   fee taken for that transaction is recomputed on the corrected amount at the rate that
-   transaction's fee was computed at, the difference being returned to the balance. The
-   month's total under rule 8 for the month the named transaction falls in is not revisited.
-   An ADJUST event is not a transaction: it carries no fee and no handling charge, it does
-   not fall under rule 7, and it does not advance the count in rule 9.
-11. Every amount in the table is a whole number of minor units of the currency named beside
-   it, and the opening balance is a balance for the purposes of rules 4 and 5."""
+# Five rules, ten events. The two traps that separated models in the 36-event
+# version are both here: a rejected debit that is not a transaction (rule 3),
+# and the first-of-month fee exemption carrying over to the next applied event
+# when the first event of the month is rejected (rule 5 interacting with rule
+# 3). The compounding is unchanged: every event's fee-or-no-fee decision
+# depends on the balance left by every event before it.
+_SHORT_LEDGER_RULES = """\
+1. The events are applied strictly in the order listed. The balance is carried in whole US \
+cents throughout.
+2. A DEBIT reduces the balance by its amount. A CREDIT increases the balance by its amount.
+3. A DEBIT whose amount is greater than the balance standing immediately before it would be \
+applied is not applied. The event is passed over, and it is not a transaction for any \
+purpose of these rules.
+4. Every applied DEBIT and every applied CREDIT is a transaction and carries a flat service \
+fee of 150 cents, taken from the balance immediately after the transaction's own amount has \
+been applied.
+5. The first applied transaction of each calendar month carries no fee. It is a transaction \
+for every other purpose of these rules."""
 
-_LEDGER_TABLE = """\
-date        event  type    amount   currency  corrects
-2026-01-04  E01    DEBIT   118400   USD
-2026-01-07  E02    CREDIT   96500   USD
-2026-01-09  E03    DEBIT    74250   EUR
-2026-01-13  E04    CREDIT  145900   USD
-2026-01-16  E05    DEBIT    62700   USD
-2026-01-20  E06    DEBIT   138500   USD
-2026-01-23  E07    CREDIT   84300   EUR
-2026-01-27  E08    DEBIT    91800   USD
-2026-01-30  E09    CREDIT  127400   USD
-2026-02-02  E10    CREDIT  158600   USD
-2026-02-05  E11    DEBIT   213700   USD
-2026-02-09  E12    DEBIT    68950   EUR
-2026-02-12  E13    DEBIT    96400   USD
-2026-02-16  E14    CREDIT   42300   USD
-2026-02-19  E15    DEBIT    57600   USD
-2026-02-23  E16    CREDIT  189500   USD
-2026-02-25  E17    DEBIT    45900   EUR
-2026-02-27  E18    CREDIT   33700   USD
-2026-03-02  E19    DEBIT   288400   USD
-2026-03-05  E20    CREDIT  174200   USD
-2026-03-09  E21    DEBIT    96300   USD
-2026-03-12  E22    DEBIT   132750   USD
-2026-03-16  E23    CREDIT   78400   EUR
-2026-03-19  E24    ADJUST   41900   USD       E13
-2026-03-23  E25    DEBIT    64800   USD
-2026-03-26  E26    CREDIT  112500   USD
-2026-03-30  E27    DEBIT    87650   EUR
-2026-04-02  E28    CREDIT  156900   USD
-2026-04-06  E29    DEBIT    74300   USD
-2026-04-09  E30    DEBIT   119600   USD
-2026-04-13  E31    CREDIT   63850   EUR
-2026-04-16  E32    DEBIT    48700   USD
-2026-04-20  E33    CREDIT  201400   USD
-2026-04-23  E34    DEBIT   165300   USD
-2026-04-27  E35    CREDIT   57200   EUR
-2026-04-30  E36    DEBIT    92450   USD"""
+_SHORT_LEDGER_TABLE = """\
+date        event  type    amount
+2026-01-05  E01    CREDIT  8000
+2026-01-12  E02    DEBIT   4500
+2026-01-18  E03    DEBIT   3200
+2026-02-03  E04    CREDIT  6000
+2026-02-10  E05    DEBIT   7500
+2026-02-15  E06    CREDIT  3500
+2026-02-22  E07    DEBIT   2800
+2026-03-01  E08    DEBIT   4000
+2026-03-08  E09    DEBIT   500
+2026-03-15  E10    CREDIT  2000"""
 
 task(
-    id="ledger_replay",
+    id="ledger_short",
     group="L",
     kind="exact",
     prompt=(
-        "A settlement account opens on 2026-01-01 with a balance of 342000 US cents. The events "
+        "A settlement account opens on 2026-01-01 with a balance of 2000 US cents. The events "
         "below are then applied to it under the rules that follow.\n\n"
-        "Rules\n\n" + _LEDGER_RULES + "\n\n"
-        "Events. The amount column of an ADJUST row is the corrected amount, and the corrects "
-        "column names the transaction it corrects.\n\n"
-        "```\n" + _LEDGER_TABLE + "\n```\n\n"
+        "Rules\n\n" + _SHORT_LEDGER_RULES + "\n\n"
+        "Events\n\n"
+        "```\n" + _SHORT_LEDGER_TABLE + "\n```\n\n"
         "Give the balance after the last event has been applied, in whole US cents, as an "
         "integer with no thousands separator, no decimal point and no currency symbol."
         + EXACT_SUFFIX
     ),
-    # 2026-09-03 measured the budget here rather than the model: every Qwen
-    # sample stopped at exactly 6,144 tokens without reaching a FINAL line while
-    # the incumbent finished in 3,467-5,069 and was wrong, so the only thing the
-    # task separated was answer length. Twice the budget, against a 16,384-token
-    # context and a prompt of ~1,860 tokens, leaves the ceiling well clear of
-    # anything either family produced -- and if a build still truncates at
-    # 12,288, that is a finding about the model instead of an artefact of the
-    # harness, which is what this task was supposed to be asking all along.
-    #
-    # The budget moves rather than the task, because shortening the event table is
-    # what makes it stop compounding, and compounding error is the one property
-    # section 7 says the eighteen-task set lacked.
-    num_predict=12288,
-    expected="246769",
-    reference="FINAL: 246769",
-    # Computed, not invented: the same simulation with rule 4 changed so that a
-    # passed-over DEBIT consumes the month's exemption under rule 7. That makes
-    # E20 pay a fee it does not owe, and every later rate lookup shifts with it.
-    wrong="FINAL: 245582",
+    expected="2100",
+    reference="FINAL: 2100",
+    # The wrong answer from the designed near-miss: E08 is correctly rejected
+    # (4000 > 750), but the model counts the rejected E08 as consuming the
+    # first-of-month exemption for March, so E09 pays a fee it does not owe.
+    # That one extra 150-cent fee propagates: E09 balance becomes 100 instead of
+    # 250, which makes E10's balance 2100 vs 2250 after the credit, and after
+    # E10's fee 1950 vs 2100.
+    wrong="FINAL: 1950",
 )
 
 

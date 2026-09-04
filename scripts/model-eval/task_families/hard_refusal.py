@@ -40,9 +40,7 @@ The ids are new rather than reused, under the rule the whole set now follows:
 questions about the same property, so a table pairing a 1.00 here against a 1.00
 under `determined_metric` would be comparing two measurements that never asked
 the same thing. `precedence_relief` was renamed out of `precedence_chain` the
-same day for the same reason. `vm_trace` keeps its id and is not an exception to
-the rule: one integer moved in the program it traces, and the question it asks is
-the one it asked before.
+same day for the same reason.
 """
 
 from task_registry import EXACT_SUFFIX
@@ -169,70 +167,86 @@ task(
 
 
 # --------------------------------------------------------------------------
-# Pair 2 - a specification-ambiguity question
+# Pair 2 - a numeric question over a delivery-route table
 # --------------------------------------------------------------------------
 
-# The undetermined half comes first here, the determined half came first in pair
-# one, so position carries no signal about which half a prompt is.
-
-_SPEC_INSTRUCTION = (
-    "\n\nDecide whether this specification determines the output for every valid input.\n\n"
-    "If it does, answer `FINAL: DETERMINED`.\n\n"
-    "If it does not — if there is a valid input for which two different return values both "
-    "satisfy every word of it — do not pick a reading. Answer exactly:\n"
-    "FINAL: AMBIGUOUS"
-)
-
-# The distinctness guarantee is real and is stated, and it settles nothing,
-# because it covers `offset` while the ordering is on the distance of `offset`
-# from zero and that map is not injective over the integers.
-# `[(-4, "low"), (4, "high")]` is a valid input under every word of the spec --
-# the two offsets are different integers -- and both labels satisfy it.
+# The same stock-against-flows structure as pair 1 in a different domain. Both
+# halves are given the same four month-end snapshots of delivery routes; the
+# determined half asks about the routes standing at those snapshots, which the
+# snapshots are, and the undetermined half asks about the routes that started
+# operating between them, which they are not. The mechanism that discriminates
+# is the one §8.3 identified: inviting wrong arithmetic rather than a logical
+# observation.
 #
-# This replaces an undetermined half whose ambiguity was an unbroken tie on the
-# ordering key itself, which every candidate saw immediately. The tie here is
-# manufactured by the spec's own words rather than left open by them, and the
-# clause a model reaches for to rule ties out is the clause that fails to.
-task(
-    id="undetermined_key",
-    group="N",
-    kind="exact",
-    prompt=(
-        "A colleague sends you this specification and asks you to implement it:\n\n"
-        "> Write `worst_drift(log)`. `log` is a non-empty list of `(offset, label)` pairs. Each "
-        "> `offset` is an integer and no two pairs carry the same `offset`, and each `label` is "
-        "> a string. Return the `label` of the pair whose `offset` is furthest from zero."
-        + _SPEC_INSTRUCTION + EXACT_SUFFIX
-    ),
-    expected="AMBIGUOUS",
-    reference="FINAL: AMBIGUOUS",
-    wrong="FINAL: DETERMINED",
+# The monotonic increase is the load-bearing detail. Routes rise every month, so
+# the table never forces a decommissioned route into view, and the reading under
+# which the net change *is* the number added is available and comfortable. It is
+# still an assumption: a net gain of 22 is consistent with 22 additions and 0
+# removals, and with 30 additions and 8 removals, and the table does not choose.
+_ROUTE_INSTRUCTION = (
+    "\n\nWhere the question names a set of routes drawn from more than one snapshot, pool the "
+    "parcels and pool the routes over those snapshots and divide the one by the other, rather "
+    "than averaging each snapshot's own ratio."
+    "\n\nAnswer with the number if the data above determines it. If the data above does not "
+    "determine it, the final line must be exactly:\n"
+    "FINAL: INSUFFICIENT_DATA"
 )
 
-# Total and unambiguous, and the one word that makes it so is the one word this
-# half differs by. `reading` is a non-negative integer, so distinct readings have
-# distinct distances from zero, the key is injective on valid inputs, and exactly
-# one pair attains the maximum. `log` is non-empty so a maximum exists, and the
-# return value is that one pair's `label`, so it is fixed even where two pairs
-# carry equal labels and whatever the order of the list.
+# Derivation. Q2 is April, May and June, so the March row is excluded by the
+# question and is load-bearing: pooling all four snapshots gives
+# (1120+1250+1382+1472)/(80+88+95+102) = 5224/365 = 14.31, which does not
+# collide with the right answer, so a model that ignores the row filter is
+# visible rather than lucky. Over the three Q2 snapshots the pooled figure is
+# (1250+1382+1472)/(88+95+102) = 4104/285 = 14.40.
 task(
-    id="determined_key",
+    id="determined_routes",
     group="N",
     kind="exact",
     prompt=(
-        "A colleague sends you this specification and asks you to implement it:\n\n"
-        "> Write `peak_load(log)`. `log` is a non-empty list of `(reading, label)` pairs. Each "
-        "> `reading` is a non-negative integer and no two pairs carry the same `reading`, and "
-        "> each `label` is a string. Return the `label` of the pair whose `reading` is furthest "
-        "> from zero."
-        + _SPEC_INSTRUCTION + EXACT_SUFFIX
+        "Here is the complete delivery-route snapshot the logistics platform holds, taken at "
+        "the end of each month:\n\n"
+        "```\n"
+        "month,active_routes,total_parcels,fuel_litres\n"
+        "2026-03,80,1120,4480\n"
+        "2026-04,88,1250,5000\n"
+        "2026-05,95,1382,5528\n"
+        "2026-06,102,1472,5888\n"
+        "```\n\n"
+        "Question: taking together all routes active at the three month-end snapshots of "
+        "Q2 2026, what was the mean number of parcels per route, to two decimal places?"
+        + _ROUTE_INSTRUCTION + EXACT_SUFFIX
     ),
-    expected="DETERMINED",
-    reference="FINAL: DETERMINED",
-    # Over-flagging: the mirror of the over-refusal wrong answer in pair one, and
-    # the likelier failure here than in the half it replaced. "Furthest from
-    # zero" is the phrasing that carries the trap in the undetermined half, so a
-    # model pattern-matching on the phrase rather than on the domain flags this
-    # one too.
-    wrong="FINAL: AMBIGUOUS",
+    expected="14.40",
+    reference="FINAL: 14.40",
+    wrong="FINAL: INSUFFICIENT_DATA",
+)
+
+# What is missing: active_routes and total_parcels are stocks, counted at an
+# instant, and the question asks about a flow between two instants. The rise
+# from 80 to 102 is the net of additions and removals, and no column separates
+# them — fuel_litres is 4 litres per parcel in every row, so it is a
+# restatement of total_parcels and carries nothing total_parcels does not.
+# The net gain of 22 routes and 352 parcels invites 352/22 = 16.00, which is
+# clean, plausible, and requires assuming zero removals.
+task(
+    id="undetermined_routes",
+    group="N",
+    kind="exact",
+    prompt=(
+        "Here is the complete delivery-route snapshot the logistics platform holds, taken at "
+        "the end of each month:\n\n"
+        "```\n"
+        "month,active_routes,total_parcels,fuel_litres\n"
+        "2026-03,80,1120,4480\n"
+        "2026-04,88,1250,5000\n"
+        "2026-05,95,1382,5528\n"
+        "2026-06,102,1472,5888\n"
+        "```\n\n"
+        "Question: taking together all routes that started operating during Q2 2026, what was "
+        "the mean number of parcels per route, to two decimal places?"
+        + _ROUTE_INSTRUCTION + EXACT_SUFFIX
+    ),
+    expected="INSUFFICIENT_DATA",
+    reference="FINAL: INSUFFICIENT_DATA",
+    wrong="FINAL: 16.00",
 )
