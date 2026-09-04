@@ -40,7 +40,7 @@ _TAX_RULES = """\
    Each bracket's result is rounded to the nearest cent, where a half cent
    rounds away from zero.
 3. The subtotal is the sum of the three bracket amounts.
-4. A small-business credit applies when the base is below 20000000 cents.
+4. A small-business credit applies when the base is below 200000000 cents.
    The credit is 5.00 per cent of the subtotal, rounded to the nearest cent
    (half away from zero), capped at 800000 cents. It is subtracted from the
    subtotal to give the adjusted amount.

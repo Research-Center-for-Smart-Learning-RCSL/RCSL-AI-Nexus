@@ -134,6 +134,27 @@ export type EvaluationReport = z.infer<typeof evaluationReportSchema>;
 /** `null` on a deployment that has never run the task set, which is normal. */
 export const latestEvaluationSchema = evaluationReportSchema.nullable();
 
+/** A short label for a model: the tag after the colon, or the family if none. */
+export function shortModelLabel(modelRef: string): string {
+  const colon = modelRef.indexOf(':');
+  return colon >= 0 ? modelRef.slice(colon + 1) : modelRef;
+}
+
+/** Tasks grouped by their group letter, in the order they appear. */
+export function tasksByGroup(report: EvaluationReport): { group: string; tasks: { task: string; group: string }[] }[] {
+  const order = taskOrder(report);
+  const groups: { group: string; tasks: { task: string; group: string }[] }[] = [];
+  let current: typeof groups[0] | null = null;
+  for (const entry of order) {
+    if (!current || current.group !== entry.group) {
+      current = { group: entry.group, tasks: [] };
+      groups.push(current);
+    }
+    current.tasks.push(entry);
+  }
+  return groups;
+}
+
 /** A percentage, or an em dash where there is no score to show. */
 export function formatScore(score: number | null): string {
   return score === null ? '—' : `${(score * 100).toFixed(1)}%`;
