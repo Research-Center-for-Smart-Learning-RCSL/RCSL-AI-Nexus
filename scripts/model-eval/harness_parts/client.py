@@ -20,6 +20,10 @@ OLLAMA = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 # a phase meets it without moving the floor under the phases already recorded.
 NUM_CTX = int(os.environ.get("EVAL_NUM_CTX", "16384"))
 NUM_PREDICT = int(os.environ.get("EVAL_NUM_PREDICT", "4096"))
+TEMPERATURE = float(os.environ.get("EVAL_TEMPERATURE", "0.3"))
+TOP_K = int(os.environ.get("EVAL_TOP_K", "40"))
+TOP_P = float(os.environ.get("EVAL_TOP_P", "0.9"))
+SEED = int(os.environ.get("EVAL_SEED", "42"))
 HTTP_TIMEOUT = 1800
 
 def chat(model: str, messages: list[dict]) -> dict:
@@ -39,7 +43,11 @@ def chat(model: str, messages: list[dict]) -> dict:
         "messages": messages,
         "stream": False,
         "think": False,
-        "options": {"num_ctx": NUM_CTX, "num_predict": NUM_PREDICT},
+        "options": {
+            "num_ctx": NUM_CTX, "num_predict": NUM_PREDICT,
+            "temperature": TEMPERATURE, "top_k": TOP_K, "top_p": TOP_P,
+            "seed": SEED,
+        },
     }).encode()
     req = urllib.request.Request(
         f"{OLLAMA}/api/chat", data=body, headers={"Content-Type": "application/json"}
@@ -68,6 +76,10 @@ def chat(model: str, messages: list[dict]) -> dict:
         "wall_s": time.time() - t0,
         "num_ctx": NUM_CTX,
         "num_predict": NUM_PREDICT,
+        "temperature": TEMPERATURE,
+        "top_k": TOP_K,
+        "top_p": TOP_P,
+        "seed": SEED,
     }
 
 
@@ -92,7 +104,11 @@ def generate(model: str, prompt: str, num_predict: int | None = None) -> dict:
         "prompt": prompt,
         "stream": False,
         "think": False,
-        "options": {"num_ctx": NUM_CTX, "num_predict": budget},
+        "options": {
+            "num_ctx": NUM_CTX, "num_predict": budget,
+            "temperature": TEMPERATURE, "top_k": TOP_K, "top_p": TOP_P,
+            "seed": SEED,
+        },
     }).encode()
     req = urllib.request.Request(
         f"{OLLAMA}/api/generate", data=body, headers={"Content-Type": "application/json"}
@@ -121,4 +137,8 @@ def generate(model: str, prompt: str, num_predict: int | None = None) -> dict:
         "wall_s": time.time() - t0,
         "num_ctx": NUM_CTX,
         "num_predict": budget,
+        "temperature": TEMPERATURE,
+        "top_k": TOP_K,
+        "top_p": TOP_P,
+        "seed": SEED,
     }

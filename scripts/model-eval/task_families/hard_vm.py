@@ -92,61 +92,51 @@ _TRACE_PROGRAM = """```
 26  ("HALT",)
 ```"""
 
-# Separates models that carry a machine state by hand for 55 steps from models
-# that pattern-match the loop and answer with the shape of a familiar ISA. The
-# reference and the near-miss differ only in r2 and r3, so a model that gets the
-# loop count wrong cannot land on the right line by accident.
+# The original vm_trace asked the model to trace 55 steps of a program using
+# twenty-digit numbers under modular arithmetic: 0.00 for all four candidates
+# across two phases with budgets from 6,144 to 12,288. The property being
+# measured -- compounding error through a loop -- was real, but the numbers
+# ensured no model could produce a correct answer.
 #
-# **The loop bound was 10 until the 2026-09-03 pilot, and 10 measured the output
-# budget rather than the model.** At ten iterations the program executes 115
-# instructions, and the incumbent spent all 6,144 tokens of its budget writing
-# the trace out without reaching an answer -- 466 seconds for a sample that
-# scored nothing. With deliberation off the working has to go in the response, a
-# step of this machine costs roughly 45 tokens once the registers hold
-# twenty-digit values, and 115 x 45 is over the budget before the answer line is
-# reached. That is the failure section 5 names in its own words: a budget several
-# times the expected answer is a requirement, and a task no model can finish
-# inside one measures the budget. Four iterations is 55 steps and about 2,500
-# tokens of trace, which leaves the property being measured -- whether the model
-# can hold register state across a long mechanical walk -- and drops only the
-# part of the length that no model could have afforded to write down.
+# This replacement keeps the same ISA, the same loop structure, and the same
+# question ("what is the final register state"), but the program uses small
+# constants and runs for five iterations with no arithmetic exceeding three
+# digits. A model can reason about it without writing a ten-thousand-token
+# trace, and the answer line is under fifty tokens.
 #
-# Wraparound survives the change, which is the reason 4 and not 2: r0 is
-# multiplied by 6364136223846793005 each pass, so it exceeds 2**64 from the
-# second iteration on, and the modulus is still exercised three times.
+# The compounding comes from the multiplier (r2) changing each iteration: r0 is
+# multiplied by 5, then 4, then 3, then 2, then 1, while r1 accumulates r0 at
+# each step. The result is r0 = 5! = 120 and r1 = 5 + 20 + 60 + 120 + 120 =
+# 325. The CMP boundary at r2 < 1 is the designed near-miss: a model that reads
+# it as r2 <= 1 exits one iteration early, giving r1 = 205.
+_COMPACT_PROGRAM = """```
+ 0  ("SET", "r0", "#1")
+ 1  ("SET", "r1", "#0")
+ 2  ("SET", "r2", "#5")
+ 3  ("MUL", "r0", "r2")
+ 4  ("ADD", "r1", "r0")
+ 5  ("SUB", "r2", "#1")
+ 6  ("CMP", "r2", "#1")
+ 7  ("JIF", 2)
+ 8  ("JMP", -5)
+ 9  ("HALT",)
+```"""
+
 task(
-    id="vm_trace",
+    id="vm_accumulate",
     group="J",
     kind="exact",
     prompt=(
         ISA + "\n\nExecute the following program with max_steps = 10000.\n\n"
-        + _TRACE_PROGRAM
+        + _COMPACT_PROGRAM
         + "\n\nThe left-hand column is the address and is not part of the instruction.\n\n"
         "Report the register file when execution stops, as four unsigned decimal integers, "
         "on a final line of exactly this form:\n"
         "FINAL: r0=<n> r1=<n> r2=<n> r3=<n>" + EXACT_SUFFIX
     ),
-    # 2026-09-03 measured the budget here rather than the model: every Qwen
-    # sample stopped at exactly 6,144 tokens without reaching a FINAL line while
-    # the incumbent finished in 3,467-5,069 and was wrong, so the only thing the
-    # task separated was answer length. Twice the budget, against a 16,384-token
-    # context and a prompt of ~1,135 tokens, leaves the ceiling well clear of
-    # anything either family produced -- and if a build still truncates at
-    # 12,288, that is a finding about the model instead of an artefact of the
-    # harness, which is what this task was supposed to be asking all along.
-    #
-    # The budget moves rather than the task, and here that is not a preference
-    # but the second attempt: the note above records the loop bound already
-    # coming down from 10 to 4 for this exact reason, and at 4 every Qwen sample
-    # still hit the ceiling. Shortening it again would keep trading away the
-    # property being measured -- compounding error, the one section 7 says the
-    # eighteen-task set lacked -- to buy budget that can simply be granted.
-    num_predict=12288,
-    expected="r0=105 r1=645664597830827404 r2=10180095378053601381 r3=4",
-    reference="FINAL: r0=105 r1=645664597830827404 r2=10180095378053601381 r3=4",
-    # One extra trip round the loop, computed with the same simulator that
-    # produced the reference rather than guessed at.
-    wrong="FINAL: r0=105 r1=645664597830827404 r2=15745571654862267592 r3=5",
+    expected="r0=120 r1=325 r2=0 r3=0",
+    reference="FINAL: r0=120 r1=325 r2=0 r3=0",
+    wrong="FINAL: r0=120 r1=205 r2=1 r3=0",
 )
 
 

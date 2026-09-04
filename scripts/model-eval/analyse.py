@@ -1,7 +1,9 @@
 """Read results.jsonl and print the tables.
 
-  python3 analyse.py pilot     the calibration read: overall band, saturation
-  python3 analyse.py full      the comparison read
+  python3 analyse.py pilot              the calibration read: overall band, saturation
+  python3 analyse.py full               the comparison read
+  python3 analyse.py full --json        the comparison read, as a JSON object
+  python3 analyse.py compare p1 p2      per-task delta between two phases
 
 Every figure carries its num_ctx and its measured prompt depth (5), because a
 generation rate without a depth cannot be compared with another one.
@@ -11,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import statistics
 import sys
 from collections import defaultdict
@@ -50,6 +53,22 @@ def mean(xs):
     return statistics.mean(xs) if xs else None
 
 
+def ci95(xs):
+    """Bootstrap 95% CI for the mean of xs."""
+    xs = [x for x in xs if x is not None]
+    if len(xs) < 2:
+        return None, None
+    rng = random.Random(0)
+    means = sorted(statistics.mean(rng.choices(xs, k=len(xs))) for _ in range(2000))
+    return means[49], means[1949]
+
+
+def _ci_str(lo, hi):
+    if lo is None:
+        return ""
+    return f"[{lo*100:2.0f}-{hi*100:2.0f}]"
+
+
 def outcome(r: dict) -> str:
     """The sample's third-outcome label, derived for rows written before it existed.
 
@@ -73,7 +92,23 @@ def outcome(r: dict) -> str:
     return "no_result"
 
 
-def main(phase: str) -> None:
+def _sampling_conditions(rows: list[dict]) -> str:
+    """One-line summary of the sampling parameters found in the phase's rows."""
+    keys = ["temperature", "top_k", "top_p", "seed", "num_ctx", "num_predict"]
+    for r in rows:
+        parts = []
+        for k in keys:
+            if k in r and r[k] is not None:
+                v = r[k]
+                if isinstance(v, float) and v == int(v) and k not in ("temperature", "top_p"):
+                    v = int(v)
+                parts.append(f"{k}={v}")
+        if parts:
+            return "conditions: " + "  ".join(parts)
+    return ""
+
+
+def main(phase: str, as_json: bool = False) -> None:
     rows = load(phase)
     if not rows:
         print(f"no {phase} samples yet")
@@ -90,8 +125,16 @@ def main(phase: str) -> None:
     for r in rows:
         by[(r["model"], r["task"])].append(r)
 
+    if as_json:
+        _print_json(phase, rows, models, tasks, groups, by)
+        return
+
     # ------------------------------------------------------------- headline
     print(f"=== {phase}: overall ===\n")
+    cond = _sampling_conditions(rows)
+    if cond:
+        print(cond)
+        print()
     print(f"{'model':26s} {'score':>8s} {'scored':>7s} {'no result':>10s} "
           f"{'gen tok/s':>10s} {'depth':>7s} {'s/task':>8s}")
     print("-" * 82)
@@ -106,13 +149,6 @@ def main(phase: str) -> None:
               f"{mean(gens) or 0:10.1f} {int(mean(depths) or 0):7d} {mean(walls) or 0:8.1f}")
 
     # ------------------------------------------------- the two truncation reads
-    # Section 5's rule excludes a truncated-without-answer sample from the mean.
-    # On 2026-09-02 that rule was found to cut the other way with deliberation
-    # off, and both readings had to be published by hand because choosing one
-    # after seeing which way it cut is the worse error. Printing them together
-    # is what stops that being a hand computation: the left column is the
-    # recorded rule, the right column is the same samples scored 0, and the gap
-    # between them is exactly how much of a model's figure rests on the choice.
     trunc_rows = [r for r in rows if outcome(r) == "truncated_no_answer"]
     if trunc_rows:
         print(f"\n=== {phase}: truncated without an answer, both readings ===\n")
@@ -135,11 +171,6 @@ def main(phase: str) -> None:
         ranked = ", ".join(f"{t} ({n})" for t, n in
                            sorted(worst.items(), key=lambda kv: -kv[1]))
         print(f"\nby task: {ranked}")
-        # Deliberation off means the budget went on prose rather than on
-        # reasoning, which is the model not following the output instruction.
-        # With it on, the same rows would be the case section 5 wrote the rule
-        # for. The distinction is in the data, so it is reported rather than
-        # argued.
         with_think = sum(1 for r in trunc_rows if (r.get("thinking_chars") or 0) > 0)
         print(f"of those, {with_think} had any thinking output and "
               f"{len(trunc_rows)-with_think} had none")
@@ -168,10 +199,11 @@ def main(phase: str) -> None:
         print(f"{m:26s} " + " ".join(cells))
 
     # -------------------------------------------------------------- by task
-    print(f"\n=== {phase}: by task (mean of samples, and the spread) ===\n")
-    print(f"{'grp':4s} {'task':24s} " + " ".join(f"{_label(m):>12s}" for m in models)
+    print(f"\n=== {phase}: by task (mean of samples, 95% CI, and the spread) ===\n")
+    col_w = 20
+    print(f"{'grp':4s} {'task':24s} " + " ".join(f"{_label(m):>{col_w}s}" for m in models)
           + "   verdict")
-    print("-" * (30 + 13 * len(models) + 12))
+    print("-" * (30 + (col_w + 1) * len(models) + 12))
     saturated_high, saturated_low, discriminating = [], [], []
     for t in tasks:
         cells, means = [], []
@@ -179,11 +211,15 @@ def main(phase: str) -> None:
             rs = by[(m, t)]
             vals = [r["score"] for r in rs if r["score"] is not None]
             if not vals:
-                cells.append("          --")
+                cells.append(" " * (col_w - 2) + "--")
                 means.append(None)
                 continue
-            means.append(mean(vals))
-            cells.append(f"{mean(vals)*100:6.0f}% ({len(vals)})")
+            m_val = mean(vals)
+            means.append(m_val)
+            lo, hi = ci95(vals)
+            ci_s = _ci_str(lo, hi)
+            cell = f"{m_val*100:3.0f}% {ci_s:>7s} ({len(vals)})"
+            cells.append(f"{cell:>{col_w}s}")
         got = [x for x in means if x is not None]
         if got and all(x == 1.0 for x in got):
             verdict = "SATURATED high"
@@ -207,9 +243,6 @@ def main(phase: str) -> None:
             "ABOVE the band - the set will saturate again" if pct > 70
             else "BELOW the band - differences drown in the failure rate")
         print(f"{m:26s} {pct:5.1f}%  {band}")
-    # 4.4 replaces a task that carries no signal *across the candidates*. With one
-    # model on the bench that test cannot be run, and calling the result saturation
-    # would be the same overreach as reading one model's score as a comparison.
     scope = "every candidate" if len(models) > 1 else f"the one model here ({models[0]})"
     print(f"\nalways 1.00 for {scope}: {', '.join(saturated_high) or 'none'}")
     print(f"always 0.00 for {scope}: {', '.join(saturated_low) or 'none'}")
@@ -222,16 +255,6 @@ def main(phase: str) -> None:
               f"band read;\nthe 4.4 replacement test needs the other candidates on the bench.")
 
     # ------------------------------------------------ what a dialogue lost, and where
-    # A single percentage over a conversation cannot be acted on. "Held its system
-    # prompt but drifted on formatting" and "was talked into the answer" are
-    # different findings with different consequences for a deployment, and they
-    # average to the same number. The check names carry the property, so they are
-    # aggregated by name across every turn and every round.
-    #
-    # The turn breakdown beside it is the one that answers whether adherence
-    # decays: the same checks are applied at turn 8 as at turn 1, so a falling
-    # column is instruction-following wearing off over a conversation rather than
-    # a model that never had the rule.
     dialogue_rows = [r for r in rows if r.get("kind") == "dialogue"]
     if dialogue_rows:
         print(f"\n=== {phase}: dialogue, by property (all turns, all rounds) ===\n")
@@ -259,9 +282,6 @@ def main(phase: str) -> None:
             print(f"    by turn -> {shown}\n")
 
     # --------------------------------------------------- code that never ran
-    # A candidate whose file does not import scores zero on every check, which
-    # looks identical to a candidate that answered badly. Counted separately so
-    # a syntax slip is not read as an inability to do the task.
     loadfail = defaultdict(list)
     for r in rows:
         for _, passed, msg in r.get("detail", []):
@@ -289,5 +309,124 @@ def main(phase: str) -> None:
             print(f"  {r['model']:26s} {r['task']:24s} r{r['round']}  score={r['score']}")
 
 
+def _print_json(phase, rows, models, tasks, groups, by):
+    overall = {}
+    for m in models:
+        rs = [r for r in rows if r["model"] == m]
+        scored = [r for r in rs if r["score"] is not None]
+        scores = [r["score"] for r in scored]
+        m_val = mean(scores)
+        lo, hi = ci95(scores)
+        gens = [r["gen_tok_s"] for r in rs if r.get("gen_tok_s")]
+        walls = [r["wall_s"] for r in rs if r.get("wall_s")]
+        overall[m] = {
+            "mean": round(m_val, 4) if m_val is not None else None,
+            "ci_lo": round(lo, 4) if lo is not None else None,
+            "ci_hi": round(hi, 4) if hi is not None else None,
+            "scored": len(scored),
+            "no_result": len(rs) - len(scored),
+            "gen_tok_s": round(mean(gens), 1) if gens else None,
+            "wall_s_per_task": round(mean(walls), 1) if walls else None,
+        }
+
+    task_list = []
+    for t in tasks:
+        scores_by_model = {}
+        for m in models:
+            rs = by[(m, t)]
+            vals = [r["score"] for r in rs if r["score"] is not None]
+            m_val = mean(vals) if vals else None
+            lo, hi = ci95(vals)
+            scores_by_model[m] = {
+                "mean": round(m_val, 4) if m_val is not None else None,
+                "ci_lo": round(lo, 4) if lo is not None else None,
+                "ci_hi": round(hi, 4) if hi is not None else None,
+                "n": len(vals),
+            }
+        task_list.append({"id": t, "group": groups[t], "scores": scores_by_model})
+
+    cond_keys = ["temperature", "top_k", "top_p", "seed", "num_ctx", "num_predict"]
+    conditions = {}
+    for r in rows:
+        for k in cond_keys:
+            if k in r and r[k] is not None and k not in conditions:
+                conditions[k] = r[k]
+
+    obj = {
+        "phase": phase,
+        "models": models,
+        "conditions": conditions,
+        "overall": overall,
+        "tasks": task_list,
+    }
+    print(json.dumps(obj, indent=2))
+
+
+def compare(phase1: str, phase2: str) -> None:
+    rows1 = load(phase1)
+    rows2 = load(phase2)
+    if not rows1:
+        print(f"no {phase1} samples")
+        return
+    if not rows2:
+        print(f"no {phase2} samples")
+        return
+
+    models1 = sorted({r["model"] for r in rows1})
+    models2 = sorted({r["model"] for r in rows2})
+    models = sorted(set(models1) & set(models2))
+    if not models:
+        print("no models in common")
+        return
+
+    tasks1 = {r["task"] for r in rows1}
+    tasks2 = {r["task"] for r in rows2}
+    common = sorted(tasks1 & tasks2)
+    if not common:
+        print("no task ids in common")
+        return
+
+    by1 = defaultdict(list)
+    for r in rows1:
+        by1[(r["model"], r["task"])].append(r)
+    by2 = defaultdict(list)
+    for r in rows2:
+        by2[(r["model"], r["task"])].append(r)
+
+    cond1 = _sampling_conditions(rows1)
+    cond2 = _sampling_conditions(rows2)
+
+    print(f"=== compare {phase1} vs {phase2} ===")
+    print(f"  {phase1:20s} {cond1}")
+    print(f"  {phase2:20s} {cond2}")
+    print(f"  shared tasks: {len(common)}, shared models: {len(models)}\n")
+    print(f"{'task':24s} {'model':26s} {phase1:>10s} {phase2:>10s} {'delta':>8s}")
+    print("-" * 74)
+    for t in common:
+        for mi, m in enumerate(models):
+            v1 = [r["score"] for r in by1[(m, t)] if r["score"] is not None]
+            v2 = [r["score"] for r in by2[(m, t)] if r["score"] is not None]
+            m1 = mean(v1)
+            m2 = mean(v2)
+            s1 = f"{m1*100:5.1f}%" if m1 is not None else "    --"
+            s2 = f"{m2*100:5.1f}%" if m2 is not None else "    --"
+            d = ""
+            if m1 is not None and m2 is not None:
+                d = f"{(m2 - m1)*100:+6.1f}"
+            task_label = t if mi == 0 else ""
+            print(f"{task_label:24s} {m:26s} {s1:>10s} {s2:>10s} {d:>8s}")
+        if len(models) > 1:
+            print()
+
+
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "pilot")
+    args = sys.argv[1:]
+    if not args:
+        main("pilot")
+    elif args[0] == "compare" and len(args) >= 3:
+        compare(args[1], args[2])
+    elif "--json" in args:
+        positional = [a for a in args if a != "--json"]
+        main(positional[0] if positional else "pilot", as_json=True)
+    else:
+        main(args[0])

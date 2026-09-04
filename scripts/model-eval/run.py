@@ -24,8 +24,10 @@ import time
 import urllib.error
 import urllib.request
 
-from harness import OLLAMA, sample
+from harness import OLLAMA, SEED, TEMPERATURE, TOP_K, TOP_P, sample
 from tasks import TASKS
+
+ROUNDS = int(os.environ.get("EVAL_ROUNDS", "5"))
 
 INCUMBENT = "gemma4:31b-it-q8_0"
 CANDIDATES = [INCUMBENT, "qwen3.6:27b-q8_0", "qwen3.6:35b-a3b-q8_0"]
@@ -93,28 +95,23 @@ DEPLOYED = [
     ("nomic-embed-text:latest", -1, 8192),
 ]
 
-# The 2026-09-03 set. Groups J through Q are the new tasks; the three ids are
-# carried from the eighteen-task set unchanged.
+# The hard set. Groups J through Q are the tasks designed for this set; the
+# anchor bridge carries tasks from the eighteen-task set to make scores
+# comparable across sets — which no longer has the weight it carried when it
+# was first written, since pinning the temperature means every figure before
+# this phase was measured under conditions that cannot recur.
 #
-# **The carried three are the bridge the first two sets could not have.** Both
-# earlier sets recorded the same regret: the twelve-task harness was never
-# committed, so its two discriminating tasks had to be *reconstructed* from
-# prose for the eighteen-task set and stopped being a bridge the moment they
-# were rewritten. This harness is committed, so these three are the same code,
-# the same prompts and the same checks that produced the `qwen38` figures --
-# a real carry rather than a reconstruction, and the reason a score here can be
-# compared with a score there at all.
-#
-# Each is carried for a different job. `ini_parse` (0.62 mean, 0.62 spread) and
-# `search_last_rotated` (0.79 mean, 0.43 spread) were the only two tasks in the
-# whole eighteen that separated the four `qwen38` candidates, so they measure
-# whether the new set is harder than the old one's hardest. `count_inversions`
-# is carried precisely because it is saturated -- 1.00 for every model in every
-# round -- which makes it the control on the harness rather than on the model:
-# this phase raises `EVAL_NUM_PREDICT`, and a task with a known ceiling is what
-# says a changed budget did not break the scorer underneath everything else.
-HARD_GROUPS = {"J", "K", "L", "M", "N", "P", "Q"}
-ANCHOR_BRIDGE = ["ini_parse", "search_last_rotated", "count_inversions"]
+# **`count_inversions` is removed from the bridge.** Its role as a harness
+# control — 1.00 everywhere, proving the scorer did not move — was falsified
+# on 2026-09-04 when it scored 0.80 in three of four samples
+# (`RecursionError` from a genuine edge-case defect). And its role as an
+# anchor — linking this set's figures to the eighteen-task set — has no
+# remaining value now that every earlier figure was measured without a pinned
+# temperature. `range_sum_updates` takes its slot: a complexity task that
+# requires a Fenwick tree or segment tree, harder than merge-sort inversions
+# and less likely to saturate.
+HARD_GROUPS = {"J", "K", "L", "M", "N", "P", "Q", "R", "S"}
+ANCHOR_BRIDGE = ["ini_parse", "search_last_rotated", "range_sum_updates"]
 
 # The education-agent set, which is multi-turn and measures something no other
 # group here does: whether the model keeps obeying a system prompt it was given
@@ -266,7 +263,8 @@ def run(phase: str, models: list[str], rounds: int, only: list[str] | None = Non
     total = len(models) * rounds * len(TASKS)
     left = total - sum(1 for k in already if k[0] == phase)
     print(f"{phase}: {len(models)} models x {rounds} rounds x {len(TASKS)} tasks "
-          f"= {total} samples, {left} to go\n")
+          f"= {total} samples, {left} to go")
+    print(f"  temperature={TEMPERATURE}  top_k={TOP_K}  top_p={TOP_P}  seed={SEED}\n")
 
     # Before `ensure_only` evicts anything. A phase that dies half way leaves the
     # file behind, so a later `restore` still knows what the deployment was.
@@ -352,14 +350,14 @@ def restore() -> None:
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "pilot"
     if cmd == "pilot":
-        run("pilot", [INCUMBENT], 3)
+        run("pilot", [INCUMBENT], ROUNDS)
     elif cmd == "pilot2":
         # The same calibration against the task set rewritten to stop signposting
         # its own traps, after the first set came in at 100% against the 40-70%
         # band. Kept as a separate phase so the first read stays on the record.
-        run("pilot2", [INCUMBENT], 3)
+        run("pilot2", [INCUMBENT], ROUNDS)
     elif cmd == "full":
-        run("full", CANDIDATES, 3)
+        run("full", CANDIDATES, ROUNDS)
     elif cmd == "qwen38":
         # A separate phase rather than more rows in `full`, because `full` was
         # measured on Ollama 0.32.4 against three candidates two of which are
@@ -369,14 +367,14 @@ if __name__ == "__main__":
         # wording from its first sample. That makes it comparable with `full`
         # overridden by `repair`, which is the published reading, and not with
         # `full` alone.
-        run("qwen38", CANDIDATES_38, 3)
+        run("qwen38", CANDIDATES_38, ROUNDS)
     elif cmd == "repair":
         # The three prompts that carried a `def f(...): ...` stub. qwen3.6:27b
         # copied the stub and indented a body under it in all three rounds of
         # retry_deadline, scoring 0.00 on an IndentationError -- a measurement of
         # the prompt's formatting, not of the retrying it was asked about. The
         # stub is gone from all three; these re-runs replace their `full` figures.
-        run("repair", CANDIDATES, 3,
+        run("repair", CANDIDATES, ROUNDS,
             only=["retry_deadline", "rate_limiter", "range_sum_updates"])
     elif cmd == "hard-pilot":
         # Section 4.2: calibrate against the incumbent alone before any
@@ -384,9 +382,9 @@ if __name__ == "__main__":
         # tasks were never missed once, so this phase exists to find out whether
         # the replacement lands in the 40-70% band -- and a pilot is the cheap
         # place to find out it does not.
-        run("hard-pilot", [INCUMBENT], 3, only=hard_set())
+        run("hard-pilot", [INCUMBENT], ROUNDS, only=hard_set())
     elif cmd == "hard-full":
-        run("hard-full", CANDIDATES_38, 3, only=hard_set())
+        run("hard-full", CANDIDATES_38, ROUNDS, only=hard_set())
     elif cmd == "hard-pilot-2":
         # Calibration for the set as revised on 2026-09-03: four replacement
         # tasks in group N, `precedence_relief` in place of the five-link
@@ -401,7 +399,7 @@ if __name__ == "__main__":
         # candidates. What it can still do is catch a prompt that no model
         # answers in the requested form before four candidates spend four hours
         # on it, and say whether the budget raise did what it was raised for.
-        run("hard-pilot-2", [INCUMBENT], 3, only=hard_set())
+        run("hard-pilot-2", [INCUMBENT], ROUNDS, only=hard_set())
     elif cmd == "hard-full-2":
         # A separate phase from `hard-full` rather than more rows in it, because
         # the two are not the same set. Five task ids are new -- four in group N,
@@ -410,7 +408,11 @@ if __name__ == "__main__":
         # replaced, and the nine that did not change are directly comparable
         # across the two phases. `analyse.py` reads one phase at a time, which is
         # what makes the separation worth keeping rather than merging.
-        run("hard-full-2", CANDIDATES_38, 3, only=hard_set())
+        run("hard-full-2", CANDIDATES_38, ROUNDS, only=hard_set())
+    elif cmd == "hard-pilot-3":
+        run("hard-pilot-3", [INCUMBENT], ROUNDS, only=hard_set())
+    elif cmd == "hard-full-3":
+        run("hard-full-3", CANDIDATES_38, ROUNDS, only=hard_set())
     elif cmd == "tutor-pilot":
         # Group T is a separate phase rather than more tasks in `hard-pilot`,
         # because the 40-70% band is read off one overall percentage and these
@@ -419,9 +421,9 @@ if __name__ == "__main__":
         # number that calibrates neither, and the band would then be satisfied by
         # a model that is strong at one and hopeless at the other -- which is the
         # precise failure the band exists to catch.
-        run("tutor-pilot", [INCUMBENT], 3, only=tutor_set())
+        run("tutor-pilot", [INCUMBENT], ROUNDS, only=tutor_set())
     elif cmd == "tutor-full":
-        run("tutor-full", CANDIDATES_38, 3, only=tutor_set())
+        run("tutor-full", CANDIDATES_38, ROUNDS, only=tutor_set())
     elif cmd == "restore":
         restore()
     else:
