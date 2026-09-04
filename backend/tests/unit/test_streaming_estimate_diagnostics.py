@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+from contextlib import aclosing
 
 import pytest
 
 from app.application.use_cases.route_chat_request import _estimated_tokens
+from app.domain.entities.actor import Actor
 from app.domain.entities.chat import (
     Message,
     MessageRole,
@@ -13,6 +15,7 @@ from app.domain.entities.chat import (
 )
 from app.domain.exceptions import ContextTooLongError
 from tests.unit.streaming_contract_fixtures import (
+    ACTOR,
     FakeRuntime,
     _cjk,
     _run,
@@ -147,19 +150,32 @@ async def test_the_refusal_counts_tool_definitions_as_their_own_share() -> None:
     runtime = FakeRuntime(chunks=1)
     use_case, _, _ = build(runtime, max_context_tokens=1000)
 
+    no_compact = Actor(
+        id=ACTOR.id,
+        display=ACTOR.display,
+        role=ACTOR.role,
+        source=ACTOR.source,
+        scopes=ACTOR.scopes,
+        compaction_enabled=False,
+    )
     with pytest.raises(ContextTooLongError) as caught:
-        await _run(
-            use_case,
-            messages=[Message(role=MessageRole.USER, content="hello")],
-            tools=[
-                ToolDefinition(
-                    name=f"tool_{i}",
-                    description="d" * 400,
-                    parameters={"type": "object", "properties": {}},
-                )
-                for i in range(10)
-            ],
-        )
+        async with aclosing(
+            use_case.execute(
+                no_compact,
+                "chat",
+                [Message(role=MessageRole.USER, content="hello")],
+                tools=[
+                    ToolDefinition(
+                        name=f"tool_{i}",
+                        description="d" * 400,
+                        parameters={"type": "object", "properties": {}},
+                    )
+                    for i in range(10)
+                ],
+            )
+        ) as stream:
+            async for _ in stream:
+                pass
 
     assert "10 tool definitions" in (caught.value.detail or "")
 
