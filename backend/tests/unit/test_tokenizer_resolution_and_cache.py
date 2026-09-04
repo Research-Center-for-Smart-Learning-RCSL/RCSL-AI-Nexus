@@ -118,16 +118,24 @@ async def test_an_unmeasured_pre_tokeniser_falls_back_rather_than_splitting_by_g
     assert await GgufTokenCounter(tmp_path).prepare("primary:latest") is False
 
 
-async def test_a_model_with_no_chat_template_is_not_counted_by_content_alone(
+async def test_a_model_with_no_chat_template_uses_the_chatml_fallback(
     tmp_path: Path,
 ) -> None:
-    """Counting content without the framing under-counts, which is the
-    direction that ends in a silent truncation. The estimate over-counts, so
-    falling back to it is the safe half of a bad choice."""
+    """A model without an embedded chat template falls back to ChatML, which
+    is the template Ollama applies via ``--chat-template chatml`` for models
+    like gemma4. The fallback means the framing overhead IS counted, so the
+    previous concern about under-counting without framing no longer applies."""
     (tmp_path / "blobs").mkdir(parents=True)
     write_store(tmp_path, template=None)
 
-    assert await GgufTokenCounter(tmp_path).prepare("primary:latest") is False
+    counter = GgufTokenCounter(tmp_path)
+    assert await counter.prepare("primary:latest") is True
+    count = await counter.count_prompt(
+        "primary:latest",
+        [Message(role=MessageRole.USER, content="hello")],
+        [],
+    )
+    assert count is not None and count > 0
 
 
 async def test_a_failed_resolution_is_remembered_rather_than_retried(store: Path) -> None:

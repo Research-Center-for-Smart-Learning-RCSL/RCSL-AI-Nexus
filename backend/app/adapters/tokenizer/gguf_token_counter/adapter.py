@@ -16,15 +16,24 @@ from app.domain.exceptions import InvalidModelReferenceError, RuntimeCapabilityE
 
 from .constants import (
     BPE_MODEL,
+    BPE_REQUIRED_KEYS,
     CHAT_TEMPLATE_KEY,
+    KNOWN_MODELS,
     KNOWN_PRE_TOKENIZERS,
-    REQUIRED_KEYS,
+    UNIGRAM_REQUIRED_KEYS,
     WANTED_KEYS,
 )
-from .construction import _build_tokenizer, _Vocabulary
+from .construction import _Vocabulary, build_tokenizer_for_model
 from .templates import _build_template
 
 logger = logging.getLogger("app.adapters.tokenizer.gguf_token_counter")
+
+_CHATML_FALLBACK = (
+    "{% for message in messages %}"
+    "<|im_start|>{{ message.role }}\n{{ message.content }}<|im_end|>\n"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}"
+)
 
 
 class GgufTokenCounter:
@@ -150,10 +159,6 @@ class GgufTokenCounter:
             )
             return None
 
-        missing = [key for key in REQUIRED_KEYS if key not in metadata]
-        if missing:
-            logger.warning("%s carries no %s; counting %s by estimate", blob.name, missing, ref)
-            return None
         scheme = str(metadata.get("tokenizer.ggml.pre", ""))
         if scheme not in KNOWN_PRE_TOKENIZERS:
             logger.warning(
@@ -165,29 +170,29 @@ class GgufTokenCounter:
             )
             return None
         family = str(metadata.get("tokenizer.ggml.model", ""))
-        if family != BPE_MODEL:
+        if family not in KNOWN_MODELS:
             logger.warning(
-                "%s declares the %r tokeniser model rather than %r; counting %s by estimate",
+                "%s declares the %r tokeniser model, which is not one of %s; "
+                "counting %s by estimate",
                 blob.name,
                 family,
-                BPE_MODEL,
+                ", ".join(sorted(KNOWN_MODELS)),
                 ref,
             )
+            return None
+        required = BPE_REQUIRED_KEYS if family == BPE_MODEL else UNIGRAM_REQUIRED_KEYS
+        missing = [key for key in required if key not in metadata]
+        if missing:
+            logger.warning("%s carries no %s; counting %s by estimate", blob.name, missing, ref)
             return None
         try:
-            tokenizer = _build_tokenizer(metadata)
+            tokenizer = build_tokenizer_for_model(metadata)
             source = metadata.get(CHAT_TEMPLATE_KEY)
-            template = _build_template(source) if isinstance(source, str) else None
+            if not isinstance(source, str):
+                source = _CHATML_FALLBACK
+            template = _build_template(source)
         except Exception as exc:  # noqa: BLE001
             logger.warning("could not build a tokeniser for %s from %s: %s", ref, blob.name, exc)
-            return None
-        if template is None:
-            logger.warning(
-                "%s carries no chat template, so the framing the runtime adds cannot be "
-                "counted for %s; counting it by estimate instead",
-                blob.name,
-                ref,
-            )
             return None
         logger.info(
             "counting %s with its own vocabulary: %s entries from %s, pre-tokeniser %r",
