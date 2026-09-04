@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import logging
 from contextlib import aclosing
+from dataclasses import replace
 
 import pytest
 
 from app.application.use_cases.route_chat_request import _estimated_tokens
-from app.domain.entities.actor import Actor
 from app.domain.entities.chat import (
     Message,
     MessageRole,
@@ -150,14 +150,7 @@ async def test_the_refusal_counts_tool_definitions_as_their_own_share() -> None:
     runtime = FakeRuntime(chunks=1)
     use_case, _, _ = build(runtime, max_context_tokens=1000)
 
-    no_compact = Actor(
-        id=ACTOR.id,
-        display=ACTOR.display,
-        role=ACTOR.role,
-        source=ACTOR.source,
-        scopes=ACTOR.scopes,
-        compaction_enabled=False,
-    )
+    no_compact = replace(ACTOR, compaction_enabled=False)
     with pytest.raises(ContextTooLongError) as caught:
         async with aclosing(
             use_case.execute(
