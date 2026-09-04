@@ -98,8 +98,11 @@ export function TaskScoreTable({ report }: { report: EvaluationReport }) {
   const allTasks = groups.flatMap((g) => g.tasks);
   const signalTasks = allTasks.filter((t) => {
     const v = report.verdicts[t.task];
-    return v === 'discriminates' || v === 'undecided' || v === undefined;
+    return v === 'discriminates' || v === 'undecided';
   });
+  const unscoredTasks = allTasks.filter(
+    (t) => !(t.task in report.verdicts),
+  );
   const saturatedTasks = allTasks.filter((t) => {
     const v = report.verdicts[t.task];
     return v === 'saturated_high' || v === 'saturated_low';
@@ -179,12 +182,8 @@ export function TaskScoreTable({ report }: { report: EvaluationReport }) {
         <h3 className="font-heading text-sm font-semibold">By task</h3>
         <p className="max-w-prose text-sm text-muted-foreground">
           <strong>
-            {counts.discriminates} of{' '}
-            {counts.discriminates +
-              counts.saturated_high +
-              counts.saturated_low +
-              counts.undecided}{' '}
-            tasks separated the models.
+            {counts.discriminates} of {allTasks.length} tasks separated the
+            models.
           </strong>{' '}
           Tasks that every model passed or every model failed contribute nothing
           to the ranking.
@@ -198,7 +197,7 @@ export function TaskScoreTable({ report }: { report: EvaluationReport }) {
         <table className="w-full text-left text-sm">
           <thead className="text-muted-foreground">
             <tr className="border-b">
-              <th className="py-2 pr-4 font-medium">Grp</th>
+              <th className="py-2 pr-4 font-medium">Group</th>
               <th className="py-2 pr-4 font-medium">Task</th>
               {report.models.map((model) => (
                 <th key={model.model_ref} className="py-2 pr-4 font-medium">
@@ -225,6 +224,18 @@ export function TaskScoreTable({ report }: { report: EvaluationReport }) {
               </tr>
             )}
             {signalTasks.map((t) => renderTaskRow(t))}
+
+            {unscoredTasks.length > 0 && (
+              <tr>
+                <td
+                  colSpan={columnCount}
+                  className="py-1.5 pl-3 text-xs text-muted-foreground"
+                >
+                  Not scored ({unscoredTasks.length})
+                </td>
+              </tr>
+            )}
+            {unscoredTasks.map((t) => renderTaskRow(t))}
 
             {saturatedTasks.length > 0 && (
               <tr>

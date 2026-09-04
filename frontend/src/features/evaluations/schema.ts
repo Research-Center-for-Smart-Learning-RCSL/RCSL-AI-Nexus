@@ -30,7 +30,7 @@ export type TaskVerdict = z.infer<typeof taskVerdictSchema>;
  *
  * The distinction the evaluation rests on: a task every model passes and a task
  * every model fails both produce a tidy column and neither separates anybody.
- * Without these sentences a reader counts eighteen tasks and believes eighteen
+ * Without these sentences a reader counts all the tasks and believes all
  * of them contributed to the ranking.
  */
 export const VERDICT_LABELS: Record<TaskVerdict, string> = {

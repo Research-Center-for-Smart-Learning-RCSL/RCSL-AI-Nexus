@@ -95,7 +95,7 @@ export function ModelScoreTable({ report }: { report: EvaluationReport }) {
                 <th className="py-2 pr-4 font-medium">Scored</th>
                 <th className="py-2 pr-4 font-medium">No result</th>
                 <th className="py-2 pr-4 font-medium">Generation</th>
-                <th className="py-2 pr-4 font-medium">Depth</th>
+                <th className="py-2 pr-4 font-medium">Prompt depth</th>
                 <th className="py-2 font-medium">Per round</th>
               </tr>
             </thead>
