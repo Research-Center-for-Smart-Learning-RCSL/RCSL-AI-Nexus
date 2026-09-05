@@ -59,7 +59,7 @@ fi
 DOCKER_UP=1
 if ! run_timeout 15 docker info >/dev/null 2>&1; then
   DOCKER_UP=0
-  fail "docker" "The docker daemon does not answer. Docker Desktop needs the logged-in session that automatic login provides, so this is also where a broken automatic login surfaces."
+  fail "docker" "The docker daemon does not answer. Colima must be running (online.rcsl.colima.plist); check \`colima status\`."
 fi
 
 # --- 4. every expected service is running -----------------------------------
@@ -70,12 +70,12 @@ fi
 # `--status running` is load-bearing. `docker compose ps` without it excludes
 # only *stopped* containers — `--all` is documented as adding those — so paused,
 # restarting and created ones are listed, and this check would have counted them
-# as running. Not hypothetical on this machine: Docker Desktop's Resource Saver
-# pauses containers, and the 2026-07-26 19:04 shutdown path issued an `/unpause`,
-# so it had done it. `postgres`, `redis` and `prometheus` have no probe in check
-# 6, which makes this their only coverage: paused, they would have been silent
-# here and silent everywhere. The reconciler already asked the question this way;
-# the two now agree.
+# as running. Not hypothetical: Docker Desktop's Resource Saver paused containers
+# on this machine before the Colima migration (2026-07-26), and the 19:04
+# shutdown path issued an `/unpause`, so it had done it. `postgres`, `redis` and
+# `prometheus` have no probe in check 6, which makes this their only coverage:
+# paused, they would have been silent here and silent everywhere. The reconciler
+# already asked the question this way; the two now agree.
 
 RUNNING=""
 if [ "$DOCKER_UP" -eq 1 ]; then

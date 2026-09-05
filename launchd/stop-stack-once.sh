@@ -60,7 +60,7 @@
 set -uo pipefail
 
 REPO="/Users/<operator>/dev/RCSL-AI-Nexus"
-export DOCKER_HOST="unix:///Users/<operator>/.docker/run/docker.sock"
+export DOCKER_HOST="unix:///Users/<operator>/.colima/default/docker.sock"
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 RECONCILE_LOG="/opt/homebrew/var/log/nexus-reconcile.log"

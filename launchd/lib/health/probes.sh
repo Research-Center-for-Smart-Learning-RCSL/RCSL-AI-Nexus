@@ -106,8 +106,8 @@ fi
 
 # --- 9. the disk the containers actually write to ---------------------------
 #
-# Not the same volume as check 8 and not derivable from it. Docker Desktop keeps
-# a virtual disk with its own size, and Postgres filling that VM disk while the
+# Not the same volume as check 8 and not derivable from it. Colima keeps a
+# virtual disk with its own size, and Postgres filling that VM disk while the
 # Mac has terabytes free is a real and unremarkable way for this to fail.
 
 if [ "$DOCKER_UP" -eq 1 ] && running_p postgres; then
