@@ -117,7 +117,7 @@ export function ErrorsSection({ section }: ApiReferenceSectionProps) {
 
       {!hasResults ? (
         <div
-          key={query}
+          key={`empty-${query}`}
           data-md-skip
           className="nexus-filtered-results [&_p]:[overflow-wrap:anywhere]"
         >
@@ -143,7 +143,7 @@ export function ErrorsSection({ section }: ApiReferenceSectionProps) {
           They are deliberately excluded from Markdown: the desktop table below
           remains the single complete export source at every breakpoint. */}
       <div
-        key={query}
+        key={`cards-${query}`}
         data-md-skip
         className="nexus-filtered-results grid gap-3 md:hidden"
         hidden={!hasResults}
@@ -169,7 +169,7 @@ export function ErrorsSection({ section }: ApiReferenceSectionProps) {
           authored table rather than its visual state, so a filtered screen can
           never produce incomplete reference documentation. */}
       <div
-        key={query}
+        key={`table-${query}`}
         className="nexus-filtered-results hidden overflow-x-auto md:block"
         hidden={!hasResults}
       >
