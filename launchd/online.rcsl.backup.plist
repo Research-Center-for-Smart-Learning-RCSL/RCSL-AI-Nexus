@@ -15,8 +15,8 @@
 	</array>
 
 	<!-- Same identity as the health daemon and the reconciler, and for the same
-	     reason: the docker socket is the user's (~/.docker/run/docker.sock) and
-	     Docker Desktop runs in the user's session, so root would be the wrong
+	     reason: the docker socket is the user's (~/.colima/default/docker.sock)
+	     and Colima runs in the user's context, so root would be the wrong
 	     identity even though this is a daemon. It also needs to read secrets/,
 	     which it reads twice over — once for the repository password and once
 	     as the thing being backed up. -->
@@ -31,7 +31,7 @@
 	     Not RunAtLoad, and the difference from online.rcsl.health-check.plist is
 	     the point. That job wants a run at load because its state file's mtime
 	     is a liveness record that has to be fresh right after a boot. This one
-	     would fire while Docker Desktop is still coming up, fail its preflight,
+	     would fire while Colima is still coming up, fail its preflight,
 	     write `failed:preflight`, and put a warning in the digest after every
 	     single reboot — training the reader to ignore the one line that says
 	     the backup is broken.

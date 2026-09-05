@@ -376,5 +376,5 @@ defaulting（`a4c1e07f2b9d`，目前的 head）。降到 `d4e8f1a2b6c9` 會把�
 - Parser 對壞 PDF 回 422、未知類型回 415、不提供 `/openapi.json`
 
 **沒有**、也只能在 Mac Studio 上驗的：真實的 GPU embedding、檢索品質、以及
-`parser` 與 `qdrant` 在 macOS 版 Docker Desktop 上的行為（Linux 容器語意相同，
-但 Docker Desktop 的網路實作不同）。第 5 部分的每一項就是為了在那台上補齊這些。
+`parser` 與 `qdrant` 在 Colima（macOS 上的 Docker 容器 runtime）上的行為。第 5
+部分的每一項就是為了在那台上補齊這些。

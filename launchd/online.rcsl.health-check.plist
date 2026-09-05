@@ -15,14 +15,14 @@
 	</array>
 
 	<!-- Same identity as the reconciler and for the same reason: the docker
-	     socket is the user's (~/.docker/run/docker.sock) and Docker Desktop runs
-	     in the user's session, so root would be the wrong identity even though
+	     socket is the user's (~/.colima/default/docker.sock) and Colima runs
+	     in the user's context, so root would be the wrong identity even though
 	     this is a daemon. It also needs to read secrets/. -->
 	<key>UserName</key>
 	<string>rcslmac1</string>
 
 	<!-- Every five minutes, and also once at load. The load-time run does not
-	     check anything: launchd starts this before Docker Desktop, tailscaled or
+	     check anything: launchd starts this before Colima, tailscaled or
 	     any container exists, so it would find everything down and mail about a
 	     platform that is still coming up. The script's boot grace (240s, below
 	     the interval on purpose) suppresses it and the run rewrites the state

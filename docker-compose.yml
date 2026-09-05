@@ -3,11 +3,21 @@
 # Two rules govern every port mapping here, and both are easy to break by
 # "tidying up" (see docs/architecture/security.md sections 3.2, 3.3):
 #
-#  1. Nothing is published on 0.0.0.0. On Docker Desktop a bare "5432:5432"
-#     binds to every host interface, which puts the database on the LAN.
-#     Host-side binds are either 127.0.0.1 or the tailnet address.
+#  1. Nothing is published on 0.0.0.0. A bare "5432:5432" binds to every
+#     host interface, which puts the database on the LAN. Host-side binds
+#     are all 127.0.0.1; the three that the proxy reaches (gateway :8000,
+#     admin-public :8002, frontend-public :3001) are forwarded from the
+#     tailnet address by socat (launchd/socat-tailnet-forwards.sh).
 #  2. Inside a container uvicorn still binds 0.0.0.0, otherwise the published
 #     port forwards to nothing. Rule 1 is about the left of the colon only.
+#
+# The container runtime is Colima (launchd/online.rcsl.colima.plist), not
+# Docker Desktop. Colima's Docker daemon runs inside a Linux VM that has no
+# host interfaces, so containers cannot bind to the tailnet address directly.
+# TAILNET_IP in .env is 127.0.0.1 and socat bridges the last hop; this also
+# eliminates the boot race between Docker and tailscaled that the reconciler
+# was written for (deployment.md §9). Docker Desktop's AutoStart is off and
+# its credsStore: desktop — which hung three times blocking builds — is gone.
 #
 # Secrets are files, not environment variables (security.md sections 6, 8): a
 # value in `environment` or an `env_file` shows up in `docker inspect` and in
