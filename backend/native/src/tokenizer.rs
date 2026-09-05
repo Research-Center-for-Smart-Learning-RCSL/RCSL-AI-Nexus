@@ -29,6 +29,10 @@ pub struct Vocabulary {
 }
 
 impl Vocabulary {
+    pub fn from_tokenizer(tokenizer: Tokenizer) -> Self {
+        Self { tokenizer }
+    }
+
     pub fn encode(&self, text: &str) -> Option<usize> {
         self.tokenizer
             .encode(text, false)
@@ -37,20 +41,27 @@ impl Vocabulary {
     }
 }
 
-fn add_special_tokens(tokenizer: &mut Tokenizer, tokens: &[String], types: &[u32]) {
+fn add_special_tokens(
+    tokenizer: &mut Tokenizer,
+    tokens: &[String],
+    types: &[u32],
+) -> Result<(), GgufError> {
     let special: Vec<AddedToken> = tokens
         .iter()
         .zip(types.iter())
         .filter(|(_, t)| **t == CONTROL_TOKEN_TYPE)
         .map(|(token, _)| {
-            let mut at = AddedToken::from(token.clone(), true);
-            at = at.normalized(false);
-            at
+            AddedToken::from(token.clone(), true)
+                .normalized(false)
+                .single_word(false)
         })
         .collect();
     if !special.is_empty() {
-        let _ = tokenizer.add_special_tokens(special);
+        tokenizer
+            .add_special_tokens(special)
+            .map_err(|e| GgufError(format!("failed to add special tokens: {e}")))?;
     }
+    Ok(())
 }
 
 fn build_bpe_tokenizer(metadata: &HashMap<String, GgufValue>) -> Result<Tokenizer, GgufError> {
@@ -113,7 +124,7 @@ fn build_bpe_tokenizer(metadata: &HashMap<String, GgufValue>) -> Result<Tokenize
         false, false, false,
     ))));
 
-    add_special_tokens(&mut tokenizer, tokens, &types);
+    add_special_tokens(&mut tokenizer, tokens, &types)?;
 
     Ok(tokenizer)
 }
@@ -163,7 +174,7 @@ fn build_unigram_tokenizer(metadata: &HashMap<String, GgufValue>) -> Result<Toke
     tokenizer.with_pre_tokenizer(Some(PreTokenizerWrapper::Metaspace(metaspace.clone())));
     tokenizer.with_decoder(Some(DecoderWrapper::Metaspace(metaspace)));
 
-    add_special_tokens(&mut tokenizer, tokens, &types);
+    add_special_tokens(&mut tokenizer, tokens, &types)?;
 
     Ok(tokenizer)
 }
