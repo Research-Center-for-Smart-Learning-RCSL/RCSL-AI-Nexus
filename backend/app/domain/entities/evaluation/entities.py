@@ -101,6 +101,39 @@ class EvaluationTaskScore:
 
 
 @dataclass(frozen=True, slots=True)
+class EvaluationTaskDefinition:
+    """The text of one task, as the run actually asked it.
+
+    Stored with the run rather than read back out of the harness, and the
+    distinction is not pedantry: task prompts are revised between phases --
+    `vm_trace`'s was shortened between `hard-pilot` and `hard-full` on
+    2026-09-03 -- so a screen that paired a stored run with today's
+    `scripts/model-eval/` would put a question beside a score that was never
+    the answer to it. The admin container does not carry `scripts/` either, so
+    the alternative is not merely wrong, it is unavailable.
+    """
+
+    task: str
+    group: str
+    kind: str
+    """`code`, `exact` or `dialogue`. Carried because it is what tells a reader
+    why a task has eleven checks and its neighbour has one, and a percentage
+    without that is a number the screen cannot explain."""
+
+    prompt: str
+    """The full text the model was given. For a dialogue task that is the
+    system prompt and the whole student script: rendering only the system half
+    would show the rules while hiding every attempt to break them, which is the
+    half the score is about."""
+
+    checks: int
+    """How many independent scoring units the task's score is a mean over. A
+    0.5 on a two-check task and a 0.5 on a twelve-check one are different
+    findings, and the screen can only say so if the count travels with the
+    text."""
+
+
+@dataclass(frozen=True, slots=True)
 class EvaluationRun:
     """One execution of the task set: what ran, when, and against what."""
 
@@ -144,6 +177,16 @@ class EvaluationReport:
     run: EvaluationRun
     models: tuple[EvaluationModelScore, ...]
     tasks: tuple[EvaluationTaskScore, ...]
+
+    task_definitions: tuple[EvaluationTaskDefinition, ...] = ()
+    """The text of the tasks this run asked, where the importer was given it.
+
+    Defaulted to empty rather than required, because two runs are already
+    stored without definitions and a field that broke their rendering would be
+    a schema change presented as a feature. A screen with no definitions shows
+    the scores it has always shown; one with them shows the question beside
+    them. Neither case is an error, and nothing here treats an empty tuple as
+    one."""
 
     @property
     def model_refs(self) -> tuple[str, ...]:

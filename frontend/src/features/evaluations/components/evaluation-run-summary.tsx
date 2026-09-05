@@ -40,22 +40,21 @@ export function EvaluationRunSummary({ report }: { report: EvaluationReport }) {
 }
 
 export function EvaluationCaveats({ report }: { report: EvaluationReport }) {
+  if (!report.run.caveats.length) return null;
   return (
-    <section className="max-w-prose space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
-      <h3 className="font-heading text-sm font-semibold">
+    <details className="max-w-prose rounded-lg border border-amber-500/40 bg-amber-500/5">
+      <summary className="cursor-pointer px-4 py-3 text-sm font-medium hover:text-foreground">
         What this run does not establish
-      </h3>
-      <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-        {report.run.caveats.length ? (
-          report.run.caveats.map((caveat) => <li key={caveat}>{caveat}</li>)
-        ) : (
-          <li>
-            No limits were recorded against this run at import. That is an
-            omission at import rather than a statement that the run has none.
-            Read the per-task verdicts below before relying on the ranking.
-          </li>
-        )}
+        <span className="ml-2 text-xs text-muted-foreground">
+          ({report.run.caveats.length} caveat
+          {report.run.caveats.length === 1 ? '' : 's'})
+        </span>
+      </summary>
+      <ul className="list-disc space-y-1 px-4 pb-3 pl-9 text-sm text-muted-foreground">
+        {report.run.caveats.map((caveat) => (
+          <li key={caveat}>{caveat}</li>
+        ))}
       </ul>
-    </section>
+    </details>
   );
 }

@@ -72,6 +72,15 @@ class Actor:
     row is written by some other hand.
     """
 
+    compaction_enabled: bool = True
+    """Whether this credential's requests are compacted when oversized.
+
+    From `api_keys.compaction_enabled`. True by default, matching the column
+    default: a person on an admin entrance and any actor built before the
+    field existed gets compaction, and a key that sets it to False gets
+    refusal on the original path.
+    """
+
     debug_logging_until: datetime | None = None
     """When this credential's debug window closes, or None when it is shut.
 

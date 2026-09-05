@@ -36,6 +36,25 @@ separately at the end, marked as superseded.
 
 ### September 2026
 
+**[2026-09-04](./progress/2026-09-04.md)**
+- The five tasks yesterday's set could not measure with, and the conclusion that reversed when they were replaced
+- The two tasks that measured the output budget now measure the model
+- Corrections to yesterday's entry
+- The harness has never pinned a sampling temperature, and that is what all three of those corrections are
+- The revision itself, and the id rule it settled
+- Three harness defects found by using it
+- Context ceilings, measured, and a plan for compaction
+
+**[2026-09-03](./progress/2026-09-03.md)**
+- Yesterday's run reached four documents and never reached the screen
+- The run picker showed a UUID, and the cause was a component default nobody chose
+- A third task set, and the bet the second one made that this one dropped
+- The pilot said the set had failed, and the full run said the pilot could not have known
+- The truncation reading decides the ranking, and then turns out not to
+- Five things a single prompt cannot ask an education agent
+- Two things I did to the deployment while measuring it
+- What this leaves open
+
 **[2026-09-02](./progress/2026-09-02.md)**
 - The deployment had moved away from the documents, and the harness written to protect it had gone stale in exactly the way its own comment predicted
 - Upgrading the runtime, and the two gigabytes it quietly took

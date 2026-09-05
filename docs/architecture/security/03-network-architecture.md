@@ -63,16 +63,18 @@ networks:
 
 | Service | Networks | Host publish |
 |---|---|---|
-| gateway | gateway-egress, gateway-data, metrics-gateway | `100.x.x.x:8000` (tailnet only) |
+| gateway | gateway-egress, gateway-data, metrics-gateway | `127.0.0.1:8000` → socat → `100.x.x.x:8000` (tailnet only) |
 | admin-tailnet | control-tailnet, admin-data, metrics-admin, parser-net | `127.0.0.1:8001` |
-| admin-public | control-public, admin-data, metrics-admin, parser-net | `100.x.x.x:8002` (tailnet only) |
+| admin-public | control-public, admin-data, metrics-admin, parser-net | `127.0.0.1:8002` → socat → `100.x.x.x:8002` (tailnet only) |
 | frontend-tailnet | control-tailnet | `127.0.0.1:3000` |
-| frontend-public | control-public | `100.x.x.x:3001` (tailnet only) |
+| frontend-public | control-public | `127.0.0.1:3001` → socat → `100.x.x.x:3001` (tailnet only) |
 | parser | parser-net | none |
 | postgres, redis, qdrant | gateway-data, admin-data | none |
 | prometheus | metrics-gateway, metrics-admin, metrics-viz | none |
 | grafana | metrics-viz, viz-ingress | `127.0.0.1:3002` |
 | migrate (one-shot) | admin-data | none |
+
+**[Updated 2026-09-05]** Under Colima the Docker daemon runs inside a VM that has no host interfaces. All containers bind to `127.0.0.1`. The three proxy-facing services (gateway, admin-public, frontend-public) are forwarded to the tailnet address by a socat LaunchDaemon (`online.rcsl.socat-forwards`), which waits for `tailscaled` to bring the address up before binding. The security property is unchanged: nothing is published on `0.0.0.0`, and the three proxy-facing ports are reachable only on the tailnet address.
 
 **This table listed five networks and eight services until 2026-08-18**, having
 been written when that was the whole of `docker-compose.yml` and never revisited
@@ -120,7 +122,7 @@ least privilege.
 
 ### 3.3 Rule: No Port May Be Published on `0.0.0.0`
 
-The most common and most damaging mistake in practice. **On Docker Desktop, `ports: - "5432:5432"` binds Postgres to every host interface**, so any device on the LAN (a guest phone, a compromised printer, another lab machine) can reach the database.
+The most common and most damaging mistake in practice. **A bare `ports: - "5432:5432"` binds Postgres to every host interface**, so any device on the LAN (a guest phone, a compromised printer, another lab machine) can reach the database.
 
 ```yaml
 # Wrong: exposed to the entire LAN
@@ -129,7 +131,8 @@ ports:
 
 # Right: internal services publish nothing; containers reach each other by service name
 
-# Right: reachable only from the proxy, over the tailnet
+# Right: bind to loopback; socat forwards from the tailnet address
+# (.env sets TAILNET_IP=127.0.0.1 under Colima; socat bridges to 100.x.x.x)
 ports:
   - "${TAILNET_IP}:8000:8000"
 

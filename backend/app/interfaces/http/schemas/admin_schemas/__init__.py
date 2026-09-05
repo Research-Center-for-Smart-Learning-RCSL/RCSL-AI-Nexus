@@ -27,6 +27,7 @@ from .evaluations import (
     EvaluationReportResponse,
     EvaluationRunResponse,
     EvaluationSampleRequest,
+    EvaluationTaskDefinitionResponse,
     EvaluationTaskScoreResponse,
     ImportEvaluationRequest,
 )
@@ -174,6 +175,7 @@ __all__ = [
     "UpdatePromptTemplateRequest",
     "EvaluationRunResponse",
     "EvaluationModelScoreResponse",
+    "EvaluationTaskDefinitionResponse",
     "EvaluationTaskScoreResponse",
     "EvaluationReportResponse",
     "EvaluationSampleRequest",

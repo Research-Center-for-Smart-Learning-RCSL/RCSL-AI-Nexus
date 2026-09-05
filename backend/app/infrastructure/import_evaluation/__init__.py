@@ -5,6 +5,7 @@ from .cli import (
 )
 from .parsing import (
     parse_samples,
+    parse_task_definitions,
 )
 from .service import (
     run,
@@ -13,5 +14,6 @@ from .service import (
 __all__ = [
     "main",
     "parse_samples",
+    "parse_task_definitions",
     "run",
 ]

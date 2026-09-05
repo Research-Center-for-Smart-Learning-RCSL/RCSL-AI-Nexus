@@ -116,3 +116,40 @@ class EvaluationTaskScoreRow(Base):
         # grid, so the run is the filter and the pair below is the sort.
         Index("ix_evaluation_task_scores_run_task", "run_id", "task", "model_ref"),
     )
+
+
+class EvaluationTaskDefinitionRow(Base):
+    """The text of one task, as the run that stored it asked it.
+
+    Per run rather than per task in a table of its own, and that duplication is
+    deliberate. Prompts are revised between phases -- `vm_trace`'s was shortened
+    between `hard-pilot` and `hard-full` on 2026-09-03 -- so a shared row would
+    make every earlier run silently claim to have asked the current question.
+    The harness's file cannot stand in for it either: the admin image does not
+    carry `scripts/`.
+    """
+
+    __tablename__ = "evaluation_task_definitions"
+
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    """`<run id>:d<index>`, zero-padded, for the reason above."""
+    run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("evaluation_runs.id", ondelete="CASCADE"), index=True
+    )
+    """Cascading like the score rows, and for the same reason: the text is
+    derived from the run and means nothing without it, so a deleted run must not
+    leave prompts behind that no screen can reach and no query will find."""
+
+    task: Mapped[str] = mapped_column(String(64))
+    task_group: Mapped[str] = mapped_column(String(8))
+    """`task_group`, not `group`, for the reason `EvaluationTaskScoreRow` gives:
+    the bare word is reserved in SQL and only stays harmless while every reader
+    quotes it."""
+
+    kind: Mapped[str] = mapped_column(String(16))
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    """`Text` rather than a bounded `String`, because the bound would have to be
+    guessed: the dialogue tasks carry a system prompt plus a whole student
+    script, and a truncated question beside a score is worse than none."""
+
+    checks: Mapped[int] = mapped_column(Integer, default=0)

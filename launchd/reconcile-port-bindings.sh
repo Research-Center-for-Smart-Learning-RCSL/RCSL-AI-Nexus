@@ -1,33 +1,27 @@
 #!/bin/bash
 # Make the platform be running and reachable after a boot.
 #
-# Two different things go wrong at boot, and this handles both. They are not
-# variants of each other: one leaves the containers up and unreachable, the
-# other leaves no containers at all.
+# Under Colima (2026-09-05+) the port binding race is gone — containers bind
+# to 127.0.0.1, so binding never fails. The remaining job is the second
+# failure below: Docker sometimes does not restore containers at all.
 #
-# Why this exists. Docker Desktop restores containers before `tailscaled` has
-# put the tailnet address on utun0, so the port forwards that name that address
-# fail with `bind: can't assign requested address`. The backend logs one warning
-# and does not retry. The containers stay up and healthy, `restart:
-# unless-stopped` never fires because nothing exited, and the platform is
-# unreachable from the tailnet with nothing anywhere saying so. Observed on the
-# 2026-07-26 reboot: gateway, admin-public and frontend-public all lost their
-# bindings 21 seconds after boot, while SSH and the `tailscale serve` entrance
-# kept working, so every way an operator would casually check looked healthy.
+# History (Docker Desktop, pre-2026-09-05). Two different things went wrong at
+# boot. The first — port binding race — is structurally eliminated by Colima.
+# The second — unrestored containers — can still happen under any Docker daemon.
 #
-# The second failure. Docker Desktop does not always restore the containers at
-# all. On the 2026-07-26 19:10 boot — the macOS 26.5.2 update reboot — it
-# restored nothing: all nine had stopped cleanly at the 19:04 shutdown, the
-# engine was running again at 19:10:37, and no container was ever started.
-# `restart: unless-stopped` is a promise the Docker daemon makes, and it was kept
-# on the two boots before that one and broken on this one; nothing else on this
-# machine ever ran `docker compose up`, so there was no second line of defence.
-# Precondition 3 below is now that line.
+# First failure (historical). Docker Desktop restored containers before
+# `tailscaled` had put the tailnet address on utun0, so the port forwards that
+# named that address failed. Observed on 2026-07-26. Eliminated by moving all
+# containers to 127.0.0.1 and using socat for the tailnet IP forwarding.
 #
-# Whether the update reboot is what made the difference is unproven — the two
-# boots that restored were plain reboots, which is one correlation — so nothing
-# here is conditioned on it. This runs at every boot and asks only whether the
-# services are running.
+# Second failure (still relevant). The Docker daemon does not always restore
+# containers. On the 2026-07-26 19:10 boot — the macOS 26.5.2 update reboot —
+# it restored nothing: all nine had stopped cleanly at shutdown, the engine was
+# running again, and no container was ever started. `restart: unless-stopped` is
+# a promise the Docker daemon makes, and it was broken on that boot. Precondition
+# 3 below is the second line of defence.
+#
+# This runs at every boot and asks only whether the services are running.
 #
 # Why it recreates rather than restarts. The forward is created when the
 # container is created, not when it starts. `docker compose up -d` is a no-op
@@ -43,11 +37,11 @@
 set -uo pipefail
 
 REPO="/Users/rcslmac1/dev/RCSL-AI-Nexus"
-export DOCKER_HOST="unix:///Users/rcslmac1/.docker/run/docker.sock"
+export DOCKER_HOST="unix:///Users/rcslmac1/.colima/default/docker.sock"
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-# Bounded: Docker Desktop's own startup is the slow part. Give up rather than
-# hang forever, so a failure appears in the log as a failure.
+# Bounded: Colima's VM startup is the slow part. Give up rather than hang
+# forever, so a failure appears in the log as a failure.
 DEADLINE=$((SECONDS + 600))
 
 # The long-lived services: every compose service except `migrate`, which is a

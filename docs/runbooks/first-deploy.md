@@ -50,24 +50,23 @@ secrets 設定見 [secrets/README.md](../../secrets/README.md)。
   「插電就回到服務中」的必要環節。完整的鏈路是：
 
   ```
-  通電/重開 → 自動登入 → LaunchDaemon（Tailscale、Ollama、reconcile-port-bindings、
+  通電/重開 → 自動登入 → LaunchDaemon（Tailscale、Ollama、Colima、
+                                       reconcile-port-bindings、socat-forwards、
                                        health-check、host-metrics）
-           → Docker Desktop 自啟 → 11 個容器 restart: unless-stopped 回來
+           → Colima VM 起來 → 11 個容器 restart: unless-stopped 回來
            → reconcile 等 utun0 有位址、docker 有回應、容器數穩定
-           → 補上開機時綁失敗的 port forward
-           → health-check 每 5 分鐘複驗，狀態變了寄信（第六環，它不修東西，
-             它的工作是讓前面五環的失敗不再是無聲的）
+           → socat 等位址上線後從 tailnet IP forward 到 127.0.0.1
+           → health-check 每 5 分鐘複驗，狀態變了寄信（它不修東西，
+             它的工作是讓前面幾環的失敗不再是無聲的）
   ```
 
   這條鏈**每一環都要成立**，少一環機器就回不到服務中，而且是無聲的——你只會發現「服務
   沒了」，不會知道斷在哪。所以下面有驗收測試。
 
-  **最後那一環是 2026-07-26 第一次重開機測試打出來的，不是原本設計的。** 容器回來
-  ≠ 服務回來：Docker Desktop 還原容器的時間點早於 `tailscaled` 把位址掛上 `utun0`，
-  那些指名 tailnet 位址的 port forward 綁失敗，而 Docker **只記一行 warning、不重試**。
-  沒有東西退出，所以 `restart: unless-stopped` 永遠不會觸發。九個容器全部 running、
-  gateway 標著 healthy、而平台從 tailnet 完全打不到。第 7 部分裝的那個 LaunchDaemon
-  就是補這一環，它的安裝步驟在那裡。
+  **2026-09-05 從 Docker Desktop 遷移到 Colima 之後，開機時的 port binding 競態不再
+  存在。** 容器全部綁在 `127.0.0.1`（Docker daemon 在 VM 裡看不到 host 的 tailnet
+  interface），socat LaunchDaemon 等 tailnet 位址上線後才開始轉發。reconciler 仍然安裝
+  著：它的另一條路徑——「Docker 沒有還原容器」——在 Colima 下同樣可能發生。
 
 ### 1.1 無人復原驗收（等第 7 部分整套跑起來之後再做）
 
@@ -98,20 +97,47 @@ secrets 設定見 [secrets/README.md](../../secrets/README.md)。
 
   ```sh
   brew install git tailscale ollama
-  brew install --cask docker      # Docker Desktop，內含 docker compose
+  brew install colima docker docker-compose socat
   ```
 
-- [ ] 啟動 Docker Desktop（第一次要打開 App 並同意授權），然後在
-  Docker Desktop > Settings > General 勾選「登入時自動啟動」。驗證：
+  Colima 是 Docker Desktop 的替代品：一個跑在 Lima VM 上的 Docker engine，不需要
+  授權、不需要 GUI session、credential helper 不會掛死。
+
+- [ ] 解決 Homebrew docker 與 Docker Desktop 的可能衝突（如果機器上有裝過 Docker
+  Desktop）：
 
   ```sh
-  docker compose version
+  brew link --overwrite docker
   ```
 
-  需要 **v2.17 以上**。backend image 透過具名 build context（`client_tools`，
+- [ ] 啟動 Colima：
+
+  ```sh
+  colima start --cpu 4 --memory 6 --disk 60 --vm-type vz --mount-type virtiofs --network-address
+  ```
+
+  `--vm-type vz` 用 Apple Virtualization Framework，`--mount-type virtiofs` 用 VirtioFS
+  掛載家目錄。`--network-address` 給 VM 一個可路由的 IP。驗證：
+
+  ```sh
+  docker compose version   # 需要 v2.17 以上
+  docker info | grep 'Total Memory'
+  ```
+
+  需要 **Compose v2.17 以上**。backend image 透過具名 build context（`client_tools`，
   指向 `./scripts`）把 Windows 操作工具複製進去，`GET /admin/client-tools/windows-codex-app`
   才能提供這個 deployment 正在跑的版本，而不是 GitHub 上的某個分支。舊版 Compose
   會回報 `additional_contexts` 不支援，而不是回報缺檔案。
+
+- [ ] 確認 `~/.docker/config.json` 包含 Homebrew compose plugin 的路徑。Colima 啟動時
+  通常會自動設定好，確認：
+
+  ```sh
+  cat ~/.docker/config.json
+  ```
+
+  應包含 `"cliPluginsExtraDirs": ["/opt/homebrew/lib/docker/cli-plugins"]`。若缺，手動加。
+  `credsStore` 應該是 `osxkeychain` 或不存在（**不是** `desktop`）。
 
 模型 runtime（Ollama）刻意**不放進 Docker**：macOS 上的容器碰不到 Apple GPU，
 容器化的 Ollama 只會退回 CPU。所以 Ollama 原生跑，容器透過 `host.docker.internal`
@@ -191,8 +217,8 @@ Ollama 預設會聽所有介面 (`0.0.0.0:11434`)。要把它綁回本機，只�
   `staff` 的帳號無法 traverse，所以權重只要還留在家目錄裡，任何服務帳號都讀不到。這一
   個八進位數字就是這件事擱置數月的全部原因。`/Users/Shared` 和家目錄在同一個 volume，
   所以那 214 GB 是 rename 不是複製，中斷只有兩秒。群組給 `staff` 而不是服務帳號自己的
-  群組，是因為 Docker Desktop 以操作者身分分享該路徑，而三個後端容器要唯讀掛載它來讀
-  tokenizer——寫的權限歸 runtime 一個帳號，讀的權限給 `staff`。
+  群組，是因為容器 runtime（Colima）以操作者身分分享該路徑，而三個後端容器要唯讀掛載
+  它來讀 tokenizer——寫的權限歸 runtime 一個帳號，讀的權限給 `staff`。
 
   **這一步不能延後。** 腳本看到 `/Users/Shared/ollama` 已經存在就會
   `REFUSING: /Users/Shared/ollama already exists` 而什麼都不做；而 §5.1 會叫你把
@@ -454,7 +480,8 @@ docstring 裡，那是估算器本身所在的地方。
   |---|---|
   | `ENV` | `production` |
   | `AUTH_MODE` | `tailnet`（見下方註）|
-  | `TAILNET_IP` | 第 4 步取得的 `100.x.y.z` |
+  | `TAILNET_IP` | `127.0.0.1`（Colima 下容器只綁 loopback，socat 從 tailnet IP forward）|
+  | `TAILNET_REAL_IP` | 第 4 步取得的 `100.x.y.z`（socat 腳本讀這個或寫死在腳本裡）|
   | `PROXY_HOSTNAME` | `llmapi.rcsl.online` |
   | `ADMIN_BASE_URL` | `https://llm.rcsl.online` |
   | `GATEWAY_BASE_URL` | 留空（見下方註）|
@@ -552,27 +579,47 @@ docstring 裡，那是估算器本身所在的地方。
   done
   ```
 
-  應該看到 gateway `TAILNET_IP:8000`、admin-public `:8002`、frontend-public `:3001`、
-  admin-tailnet `127.0.0.1:8001`、frontend-tailnet `127.0.0.1:3000`、grafana
-  `127.0.0.1:3002`。postgres／redis／prometheus／qdrant／parser 顯示 `null` 是對的，
+  Colima 下所有六個都是 `127.0.0.1`：gateway `:8000`、admin-public `:8002`、
+  frontend-public `:3001`、admin-tailnet `:8001`、frontend-tailnet `:3000`、grafana
+  `:3002`。tailnet IP 的到達由 socat（下面安裝）負責，不在 Docker 層面。
+  postgres／redis／prometheus／qdrant／parser 顯示 `null` 是對的，
   它們本來就不發布——`null`（沒要求）和 `[]`（要求了、沒拿到）是兩件事，掉的是後者。
 
-- [ ] **裝開機對帳的 LaunchDaemon。** Docker Desktop 開機時會在 `tailscaled` 把位址掛上
-  `utun0` 之前就還原容器，那些指名 tailnet 位址的 port forward 於是綁失敗，而它
-  **只記一行 warning、不重試**。容器照樣 running、healthy，`restart: unless-stopped`
-  因為沒有東西退出所以永遠不觸發——服務從 tailnet 消失，沒有任何東西會說。
+- [ ] **裝 Colima 開機自啟的 LaunchDaemon。** Colima 的 Docker daemon 跑在 VM 裡，VM
+  必須在容器之前起來。這個 daemon 用 `--foreground` 讓 launchd 管理它的生命週期。
+
+  ```sh
+  sudo install -o root -g wheel -m 644 \
+    launchd/online.rcsl.colima.plist /Library/LaunchDaemons/
+  sudo launchctl load -w /Library/LaunchDaemons/online.rcsl.colima.plist
+  ```
+
+- [ ] **裝 socat tailnet IP 轉發的 LaunchDaemon。** 容器全部綁在 `127.0.0.1`，而
+  proxy 打的是 tailnet IP。這支腳本等 tailnet 位址上介面後，用 socat 把三個
+  proxy-facing 的 port 從 tailnet IP forward 到 localhost。
+
+  ```sh
+  sudo install -o root -g wheel -m 644 \
+    launchd/online.rcsl.socat-forwards.plist /Library/LaunchDaemons/
+  sudo launchctl load -w /Library/LaunchDaemons/online.rcsl.socat-forwards.plist
+  ```
+
+  **確認 tailnet IP 入口真的通：**
+
+  ```sh
+  curl -s -o /dev/null -w '%{http_code}\n' http://$(tailscale ip -4):8000/healthz   # 200
+  ```
+
+- [ ] **裝開機對帳的 LaunchDaemon。** Colima 下 port binding 競態已不存在（容器只綁
+  loopback），但 reconciler 的另一條路徑仍然需要：Docker daemon 有時開機不還原容器
+  （2026-07-26 的 macOS 26.5.2 更新重開觀測到過一次）。reconciler 等 docker 有回應，
+  確認預期的服務全部在跑，缺的就 `docker compose up -d` 拉起來。
 
   ```sh
   sudo install -o root -g wheel -m 644 \
     launchd/online.rcsl.reconcile-port-bindings.plist /Library/LaunchDaemons/
   sudo launchctl load -w /Library/LaunchDaemons/online.rcsl.reconcile-port-bindings.plist
   ```
-
-  它等 `utun0` 有位址、docker 有回應（最多十分鐘），然後只對「要求了 binding 卻沒拿到」
-  的容器跑 `--force-recreate`，跑完再驗一次。**一定要 `--force-recreate`：** forward 是
-  容器*建立*時產生的，`docker compose up -d` 對已在跑且設定相符的容器是 no-op，
-  `docker compose restart` 沿用同一個容器、不會動到後端的轉發表。這兩個在這台機器上都
-  試過，都沒有恢復任何一個 binding。
 
   對帳結果看這裡（它刻意不無限重試，修不好的東西要人看，不是一直重建）：
 
@@ -687,8 +734,9 @@ docstring 裡，那是估算器本身所在的地方。
 
   **改 plist 之後一定要重裝＋重載，改腳本不用。** plist 上的 `ProgramArguments` 指向工作樹
   裡的 `.sh`，所以腳本一存檔下次執行就是新的；但 `/Library/LaunchDaemons/` 裡那份 plist 是
-  **複本**，repo 裡改了不會自動生效。這五個 daemon 都一樣（ollama、reconcile-port-bindings、
-  health-check、refresh-geolite2、host-metrics）。確認的方式是比對，不是相信：
+  **複本**，repo 裡改了不會自動生效。這八個 daemon 都一樣（colima、socat-forwards、ollama、
+  reconcile-port-bindings、health-check、refresh-geolite2、host-metrics、backup）。
+  確認的方式是比對，不是相信：
 
   ```sh
   diff <(plutil -p /Library/LaunchDaemons/online.rcsl.health-check.plist) \
@@ -968,6 +1016,10 @@ wildcard 多層合成才解得出來，任何人在 zone 裡新增一個 `nexus`
 
 ### `docker pull` / `docker compose build` 完全沒有輸出就卡住
 
+> **2026-09-05 之後不再適用。** 遷移到 Colima 後 `credsStore` 是 `osxkeychain`（或不存
+> 在），不再經過 `docker-credential-desktop`，這個問題不會發生。下面保留是因為根因
+> （macOS 無頭運作時鑰匙圈需要 GUI session）影響的不只是 Docker。
+
 **症狀**：`docker pull hello-world` 連 `Pulling from` 都印不出來，`docker compose build`
 以 `DeadlineExceeded: context deadline exceeded` 失敗在 `load metadata`。但 `docker ps`
 正常、容器都在跑，容器內 `wget https://ghcr.io/v2/` 也通。
@@ -982,12 +1034,9 @@ security: ... User interaction is not allowed.
 ```
 
 沒有人能按那個對話框，所以 helper 永遠等下去。buildkit 的憑證也是由 CLI 端經 session
-提供的，所以 build 會用同樣的方式卡住。**重啟 Docker Desktop 沒有用**，壞的不是 Docker。
+提供的，所以 build 會用同樣的方式卡住。
 
-**處理**：把 `credsStore` 從 `~/.docker/config.json` 拿掉。這個專案用到的映像全部是公開
-的，`auths` 本來就是空的，那個 helper 是在為了取得沒有東西而卡死。代價是：日後若
-`docker login` 到私有 registry，憑證會以 base64 存在該檔案而非鑰匙圈——但在這台機器上
-鑰匙圈那條路本來就不能用。
+**處理**：把 `credsStore` 從 `~/.docker/config.json` 拿掉，或遷移到 Colima（已完成）。
 
 **這是一類問題而不是單一問題。** 任何在這台機器上從非 GUI 情境碰鑰匙圈的工具，都會用
 同樣的方式卡住。遇到「某個指令莫名沒有輸出就停住」時，先想到這一條。
@@ -998,29 +1047,21 @@ security: ... User interaction is not allowed.
 - **`docker compose up` 起不來、抱怨 secret 檔不存在**：`./secrets` 底下每個檔都要建好
   （第 6 部分）。這是刻意的，缺就不啟動。
 - **服務起不來、log 提到 GeoLite2**：`data/GeoLite2-Country.mmdb` 沒放好（第 5 部分）。
-- **Docker Desktop 沒在跑**：macOS 上 `docker compose` 需要 Docker Desktop 開著（設成
-  登入自動啟動）。
-- **重開機後服務沒回來**：先分清楚是「容器沒回來」還是「容器回來了但 port 沒綁」，
-  這兩者的症狀完全不同，而後者比較常見也比較難認。
-
-  容器沒回來 → 確認自動登入、Docker Desktop 自動啟動、Ollama 的 launchd 服務有起、
+- **Colima 沒在跑**：`colima status` 確認 VM 是 running。若不是，`colima start` 或確認
+  LaunchDaemon 有載入（`sudo launchctl list | grep colima`）。
+- **重開機後服務沒回來**：確認 Colima LaunchDaemon 有起、Ollama 的 launchd 服務有起、
   容器是 `restart: unless-stopped`（已預設）。
-
-  **容器回來了但打不到** → 這是 2026-07-26 實際發生的那一種。`docker compose ps` 顯示
-  容器全部 running、gateway 標 healthy，而 `curl http://<TAILNET_IP>:8000/readyz` 沒有回應。
-  `restart: unless-stopped` 對這種情況**完全無效**——綁定失敗不會讓容器退出，沒有東西
-  退出就沒有東西重啟。查法：
 
   ```sh
   tail -30 /opt/homebrew/var/log/nexus-reconcile.log   # 對帳 daemon 說了什麼
   sudo launchctl list | grep reconcile                 # 它有沒有註冊、上次結束狀態
-  docker inspect <容器> --format '{{json .NetworkSettings.Ports}}'   # [] 就是掉了
+  colima status                                        # VM 跑了沒
   ```
 
-  手動補救(注意**一定要 `--force-recreate`**，`up -d` 和 `restart` 都無效，原因見
-  第 7 部分)：
+  手動補救：
 
   ```sh
-  docker compose up -d --force-recreate gateway admin-public frontend-public
+  colima start    # 若 VM 沒起來
+  docker compose up -d
   ```
 - **Mac 上容器碰不到 GPU**：所以 Ollama 一定要原生跑，別想放進 Docker。

@@ -38,9 +38,9 @@ while ! ifconfig 2>/dev/null | grep -qw "$TAILNET_IP"; do
 done
 log "tailnet address present"
 
-# Precondition 2: the docker daemon answers. Docker Desktop needs the logged-in
-# session that automatic login provides; if that link of the chain broke, this
-# is where it surfaces, instead of failing obscurely further on.
+# Precondition 2: the docker daemon answers. Colima must be running (started by
+# online.rcsl.colima.plist); if it has not come up yet, this is where it
+# surfaces, instead of failing obscurely further on.
 while ! docker info >/dev/null 2>&1; do
   if [ "$SECONDS" -ge "$DEADLINE" ]; then
     log "FATAL: timed out waiting for the docker daemon"

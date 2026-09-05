@@ -11,6 +11,12 @@
 只做一次的安裝步驟。它們排在 §1 底下卻要在 §7 之後執行，這個矛盾在單一檔案裡看不出
 來；而它們佔了那份 runbook 的一半篇幅，讓一份該從頭讀到尾的操作手冊變成讀不完的東西。
 
+> **[2026-09-05 更新]** 以下的測試歷程與分析記錄的是 Docker Desktop 時期的行為。
+> 2026-09-05 遷移到 Colima 後，port binding 競態已結構性消除（容器綁 127.0.0.1，
+> socat 等位址上線後才 forward），Docker Desktop 的 Resource Saver / restore 問題不再
+> 適用。reconciler 的「容器沒被還原」修復路徑仍然有效且必要——Colima 的 VM 重啟後容器
+> 是否自動回來仍需驗證。**改動了開機路徑之後需要重跑這些驗收。**
+
 ### 1.1 無人復原驗收（等第 7 部分整套跑起來之後再做）
 
 這是整份 runbook 裡唯一**必須人在機器旁邊**做的測試，而且必須做。在它通過之前，你沒有
@@ -33,19 +39,24 @@ ssh <你的帳號>@<伺服器的 100.x.y.z>
 ```sh
 tailscale status | head -2
 ollama ps
+colima status                                                           # Colima VM 在跑
 cd ~/dev/RCSL-AI-Nexus && docker compose ps
 tail -20 /opt/homebrew/var/log/nexus-reconcile.log
-curl -s -o /dev/null -w 'gateway readyz: %{http_code}\n' http://<TAILNET_IP>:8000/readyz
+pgrep -fl socat                                                        # 三個 socat forward 在跑
+curl -s -o /dev/null -w 'gateway readyz (tailnet IP): %{http_code}\n' http://$(tailscale ip -4):8000/readyz
+curl -s -o /dev/null -w 'gateway readyz (loopback):   %{http_code}\n' http://127.0.0.1:8000/readyz
 ls -l /opt/homebrew/var/nexus-health.state
 ```
 
-通過的條件：tailnet 在線、Ollama 有回應、11 個容器 running（`migrate` 是 `Exited (0)`，
-它是一次性工作，不該重啟；權威的清單是 `docker compose config --services` 減掉 `migrate`，
-reconciler 和 health-check 都是這樣推出來的，數字寫在這裡只是為了讓你一眼看出對不對——
-2026-07-26 那幾次測試時是九個，`qdrant` 和 `parser` 是後來加的）、對帳 log 最後一行是
-`all bindings restored` 或
-`all published bindings intact`、readyz 200、**health state 檔的 mtime 距離「你看的當下」
-不超過五分鐘**（監測 daemon 自己也要撐過重開，它跟其他環一樣會無聲地不見）。
+通過的條件：tailnet 在線、Ollama 有回應、Colima VM running、11 個容器 running
+（`migrate` 是 `Exited (0)`，它是一次性工作，不該重啟；權威的清單是
+`docker compose config --services` 減掉 `migrate`，reconciler 和 health-check 都是這樣
+推出來的，數字寫在這裡只是為了讓你一眼看出對不對——2026-07-26 那幾次測試時是九個，
+`qdrant` 和 `parser` 是後來加的）、socat 有三個 process 在跑、**兩個** readyz 都是 200
+（loopback 測的是容器，tailnet IP 測的是 socat forward——後者是最終使用者走的路徑）、
+對帳 log 最後一行是 `all expected services running` 或 `all published bindings intact`、
+**health state 檔的 mtime 距離「你看的當下」不超過五分鐘**（監測 daemon 自己也要撐過
+重開，它跟其他環一樣會無聲地不見）。
 
 最後那一項的判準原本寫成「mtime 在開機後十分鐘內」，那是錯的：這個檔案每五分鐘被重寫
 一次，永遠如此，所以你開機三十五分鐘後去看，mtime 就是三十五分鐘後——照字面讀會判成
@@ -469,8 +480,11 @@ macOS 更新重置這兩項是有前例的，而它們正好是無人復原鏈�
 ### 1.1a 故障注入：把 binding 修復路徑逼出來（人一定要在機器旁邊）
 
 > **這一節跑過了，2026-07-26 21:02，通過。** 下面前半段是當時的動機與做法，寫在還沒跑
-> 之前，語氣維持原樣；結果與實測數字在本節末的「實測記錄」。要重跑（改過 reconciler、
-> 換過 Docker Desktop 版本）就照原步驟，它是可以重複跑的。
+> 之前，語氣維持原樣；結果與實測數字在本節末的「實測記錄」。
+>
+> **[2026-09-05 更新]** 遷移到 Colima 後，容器綁 127.0.0.1 而非 tailnet IP，port binding
+> 競態不再存在，這個注入在 Colima 下不會產生有意義的結果。如果回到一個 Docker daemon
+> 直接綁 host interface 的 runtime，這個測試才需要重跑。
 
 七次開機之後，六種結果裡最有價值的 `OK: all bindings restored` 還是空白，而 §1.1 已經
 算出來它**不會**靠重開機出現：沒有快取的開機位址一律 9 秒、Docker 最快 10.3 秒，餘裕的
@@ -612,7 +626,10 @@ ls -l /Library/LaunchDaemons/online.rcsl.delay-tailscaled-once.plist   # 要是 
 
 > **這一節跑過了，2026-07-26 21:51，一次就通過。** 下面前半段是當時的動機與做法，寫在還沒
 > 跑之前，語氣維持原樣；結果與實測數字在本節末的「實測記錄」。要重跑（改過 reconciler、換過
-> Docker Desktop 版本）就照原步驟，它是可以重複跑的，而且比 §1.1a 便宜得多。
+> container runtime）就照原步驟，它是可以重複跑的，而且比 §1.1a 便宜得多。
+>
+> **[2026-09-05 更新]** 這個注入在 Colima 下同樣有效且仍然是必要的驗收——它測的是
+> 「容器沒有被還原」這條路徑，跟具體是 Docker Desktop 還是 Colima 無關。
 
 §1.1a 填掉了第二種結果，第三種還是空白：`docker did not restore the stack; bringing it up`
 → `stack up: all expected services running`。這一格只有 19:09 那次開機產生過，而**那次是人
@@ -624,9 +641,9 @@ ls -l /Library/LaunchDaemons/online.rcsl.delay-tailscaled-once.plist   # 要是 
 **做法**：把整個 stack 停掉，然後重開機。機制就寫在 `docker-compose.yml` 裡——十一個長期
 服務都是 `restart: unless-stopped`（`migrate` 是 `restart: no`，它本來就不該回來），
 而 **`unless` 就是全部的重點：被明確 stop 的容器，在 daemon
-回來時不會被拉起來。** 所以下一次開機時 Docker Desktop 面對十一個它刻意不還原的容器，而
-reconciler 遇到的狀態和 19:09 那次留給它的一模一樣：`docker compose ps --services --status
-running` 是空的、東西都在、沒有一個在跑。
+回來時不會被拉起來。** 所以下一次開機時 Docker daemon（Colima 下同理）面對十一個它刻意
+不還原的容器，而 reconciler 遇到的狀態和 19:09 那次留給它的一模一樣：
+`docker compose ps --services --status running` 是空的、東西都在、沒有一個在跑。
 
 **風險比 §1.1a 小一個數量級，這是它的主要優點：**
 

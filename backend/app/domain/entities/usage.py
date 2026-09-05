@@ -64,6 +64,13 @@ class UsageRecord:
     else, and what?" is a query rather than an investigation.
     """
 
+    compaction_tier: int | None = None
+    """Which tier of compaction was applied, or None when no compaction
+    happened. 0 = tool definitions, 1 = old tool results, 2 = summarisation."""
+
+    tokens_before_compaction: int | None = None
+    tokens_after_compaction: int | None = None
+
     prompt_tokens: int = 0
     """Tokens read. Zero on every row written before 2026-08-04, and on any
     runtime that does not report the figure.

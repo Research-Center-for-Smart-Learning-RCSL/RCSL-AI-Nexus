@@ -39,6 +39,9 @@ async def finalize_generation(
     completed: bool,
     transcript: TranscriptBuffer | None,
     finish_reason: str | None,
+    compaction_tier: int | None = None,
+    tokens_before_compaction: int | None = None,
+    tokens_after_compaction: int | None = None,
 ) -> None:
     """Finalize both records without allowing either failure to hide the other."""
     _warn_if_prompt_was_truncated(
@@ -65,6 +68,9 @@ async def finalize_generation(
                 completed=completed,
                 at=clock.now(),
                 tenant_id=actor.tenant_id,
+                compaction_tier=compaction_tier,
+                tokens_before_compaction=tokens_before_compaction,
+                tokens_after_compaction=tokens_after_compaction,
             )
         )
     except Exception:  # noqa: BLE001

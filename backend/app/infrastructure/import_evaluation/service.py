@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from app.adapters.audit.postgres_audit import PostgresAudit
 from app.adapters.authz.role_authorization import RoleAuthorization
@@ -23,7 +24,7 @@ from app.infrastructure.db import (
 )
 from app.shared.clock import SystemClock
 
-from .parsing import _parse_ran_at, parse_samples
+from .parsing import _parse_ran_at, parse_samples, parse_task_definitions
 
 logger = logging.getLogger("app.infrastructure.import_evaluation")
 
@@ -66,6 +67,15 @@ async def run(args: argparse.Namespace) -> int:
         if not samples:
             raise SystemExit("no samples on stdin")
 
+        # Read after the samples, because the samples decide which of the
+        # file's tasks belong to this run: `tasks.py --json` emits the whole
+        # harness, and a run asks the subset its phases selected.
+        definitions = (
+            parse_task_definitions(Path(args.tasks).read_text(encoding="utf-8"), samples=samples)
+            if args.tasks
+            else []
+        )
+
         actor = await _resolve_actor(args.actor)
         async with session_scope() as session:
             use_case = ManageEvaluations(
@@ -85,6 +95,7 @@ async def run(args: argparse.Namespace) -> int:
                 harness_ref=args.harness_ref,
                 caveats=args.caveat,
                 note=args.note,
+                definitions=definitions,
             )
 
         logger.info(
@@ -94,6 +105,18 @@ async def run(args: argparse.Namespace) -> int:
             len(stored.models),
             actor.display,
         )
+        if args.tasks:
+            # Logged as a pair, because the number that matters is the gap. The
+            # file holds every task in the harness and the run asked a subset,
+            # so a count on its own cannot be checked; against the number of
+            # tasks the samples name, a shortfall says the file and the run
+            # came from different revisions of the set and some scores will
+            # appear with no question beside them.
+            logger.info(
+                "  stored %s task definition(s) for %s task(s) in the run",
+                len(stored.task_definitions),
+                len({sample.task for sample in samples}),
+            )
         for model in stored.models:
             logger.info(
                 "  %-28s %s scored, %s no result",

@@ -65,6 +65,7 @@ def _actor_for_key(key: ApiKey) -> Actor:
         # re-checks it against the set above and a value outside it therefore
         # decides nothing. The one rule, in the one place that reads it.
         default_capability=key.default_capability,
+        compaction_enabled=key.compaction_enabled,
         # The key-side debug window, carried onto the actor so the application
         # layer can read it. `grant_debug_detail` above sets the same value
         # into a contextvar for the error envelope; `RouteChatRequest` decides
