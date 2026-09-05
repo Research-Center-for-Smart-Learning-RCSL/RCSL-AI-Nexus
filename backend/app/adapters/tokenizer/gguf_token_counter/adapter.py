@@ -1,13 +1,19 @@
-"""Cached TokenCounterPort adapter over GGUF metadata."""
+"""Cached TokenCounterPort adapter over GGUF metadata.
+
+When nexus_native is available, the adapter uses Rust for GGUF header
+parsing, tokenizer construction and token encoding (the CPU-bound parts),
+while keeping template rendering in Python Jinja2 (which handles every
+chat template including those using `namespace()` and `macro`).
+"""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections import OrderedDict
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from app.adapters.runtime.ollama_adapter import message_payload, tool_payload
 from app.adapters.tokenizer.gguf import read_metadata
@@ -45,50 +51,57 @@ except ImportError:
     _HAS_NATIVE = False
 
 
+class _NativeVocabulary:
+    """Wraps a Rust-side tokenizer with a Python-side Jinja2 template."""
+
+    __slots__ = ("_blob_path", "_cache_key", "_template")
+
+    def __init__(self, blob_path: str, cache_key: str, template: Any) -> None:
+        self._blob_path = blob_path
+        self._cache_key = cache_key
+        self._template = template
+
+    @property
+    def has_template(self) -> bool:
+        return self._template is not None
+
+    def encode(self, text: str) -> int:
+        result: int | None = _nexus_native.encode_text(self._blob_path, self._cache_key, text)
+        if result is None:
+            return 0
+        return result
+
+    def count_prompt(
+        self, messages: Sequence[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> int | None:
+        rendered = self._template.render(
+            messages=list(messages),
+            tools=tools or None,
+            add_generation_prompt=True,
+        )
+        result: int | None = _nexus_native.encode_text(self._blob_path, self._cache_key, rendered)
+        return result
+
+    def count_parts(self, texts: Sequence[str]) -> Sequence[int] | None:
+        result: list[int] | None = _nexus_native.encode_texts(
+            self._blob_path, self._cache_key, list(texts)
+        )
+        return result
+
+
 class GgufTokenCounter:
     """`TokenCounterPort` over the GGUF files an Ollama host already holds."""
 
     def __init__(self, root: Path, *, cache_size: int = 2) -> None:
         self._root = root
         self._cache_size = max(1, cache_size)
-        self._cache: OrderedDict[str, _Vocabulary | None] = OrderedDict()
+        self._cache: OrderedDict[str, _Vocabulary | _NativeVocabulary | None] = OrderedDict()
         self._lock = asyncio.Lock()
         self._use_native = _HAS_NATIVE
-        self._native_prefix = str(root) + ":"
-        self._native_negative: set[str] = set()
         if self._use_native:
             logger.info("nexus_native available; using Rust tokenizer backend")
 
-    def _resolve_blob(self, ref: str) -> str | None:
-        """Resolve a model ref to its GGUF blob path, or None."""
-        try:
-            return str(weights_path(self._root, ref))
-        except (BlobNotFound, InvalidModelReferenceError) as exc:
-            logger.info("no vocabulary for %s, counting by estimate instead: %s", ref, exc)
-            return None
-
-    def _native_key(self, ref: str) -> str:
-        return self._native_prefix + ref
-
     async def prepare(self, ref: str) -> bool:
-        if self._use_native:
-            self._native_negative.discard(ref)
-            blob_path = self._resolve_blob(ref)
-            if blob_path is None:
-                self._native_negative.add(ref)
-                return False
-            key = self._native_key(ref)
-            result: tuple[bool, str | None] = await asyncio.to_thread(
-                _nexus_native.prepare, blob_path, key
-            )
-            success, error = result
-            if not success:
-                logger.warning("could not build a native tokeniser for %s: %s", ref, error)
-                self._native_negative.add(ref)
-            else:
-                logger.info("counting %s with Rust tokenizer backend", ref)
-            return success
-
         async with self._lock:
             self._cache.pop(ref, None)
         return await self._vocabulary(ref) is not None
@@ -96,29 +109,6 @@ class GgufTokenCounter:
     async def count_prompt(
         self, ref: str, messages: Sequence[Message], tools: Sequence[ToolDefinition]
     ) -> int | None:
-        if self._use_native:
-            if ref in self._native_negative:
-                return None
-            blob_path = self._resolve_blob(ref)
-            if blob_path is None:
-                return None
-            try:
-                payload = [message_payload(m) for m in messages]
-            except RuntimeCapabilityError:
-                return None
-            key = self._native_key(ref)
-            messages_json = json.dumps(payload, ensure_ascii=False)
-            tools_json = json.dumps(tool_payload(tools), ensure_ascii=False)
-            try:
-                return await asyncio.to_thread(
-                    _nexus_native.count_prompt, blob_path, key, messages_json, tools_json
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.info(
-                    "native count_prompt failed for %s, falling back to estimate: %s", ref, exc
-                )
-                return None
-
         vocabulary = await self._vocabulary(ref)
         if vocabulary is None or not vocabulary.has_template:
             return None
@@ -137,32 +127,21 @@ class GgufTokenCounter:
             return None
 
     async def count_parts(self, ref: str, texts: Sequence[str]) -> Sequence[int] | None:
-        if self._use_native:
-            if ref in self._native_negative:
-                return None
-            blob_path = self._resolve_blob(ref)
-            if blob_path is None:
-                return None
-            key = self._native_key(ref)
+        vocabulary = await self._vocabulary(ref)
+        if vocabulary is None:
+            return None
+        if isinstance(vocabulary, _NativeVocabulary):
             try:
-                return await asyncio.to_thread(
-                    _nexus_native.count_parts, blob_path, key, list(texts)
-                )
+                return await asyncio.to_thread(vocabulary.count_parts, texts)
             except Exception as exc:  # noqa: BLE001
                 logger.info(
                     "native count_parts failed for %s, falling back to estimate: %s", ref, exc
                 )
                 return None
-
-        vocabulary = await self._vocabulary(ref)
-        if vocabulary is None:
-            return None
         parts = tuple(texts)
         return await asyncio.to_thread(lambda: [vocabulary.encode(text) for text in parts])
 
-    # --- Python-only fallback path below (unchanged) ---
-
-    async def _vocabulary(self, ref: str) -> _Vocabulary | None:
+    async def _vocabulary(self, ref: str) -> _Vocabulary | _NativeVocabulary | None:
         cached = self._cache.get(ref, ...)
         if cached is not ...:
             self._cache.move_to_end(ref)
@@ -180,12 +159,46 @@ class GgufTokenCounter:
                 )
             return built
 
-    def _build(self, ref: str) -> _Vocabulary | None:
+    def _build(self, ref: str) -> _Vocabulary | _NativeVocabulary | None:
         try:
             blob = weights_path(self._root, ref)
         except (BlobNotFound, InvalidModelReferenceError) as exc:
             logger.info("no vocabulary for %s, counting by estimate instead: %s", ref, exc)
             return None
+
+        if self._use_native:
+            return self._build_native(ref, blob)
+        return self._build_python(ref, blob)
+
+    def _build_native(self, ref: str, blob: Path) -> _NativeVocabulary | None:
+        """Build using Python for tokenizer construction + template, Rust for encoding.
+
+        The tokenizer is built in Python (identical to the pure-Python path) and
+        serialized to JSON, then loaded into the Rust side. This guarantees that
+        special tokens, pre-tokenizer patterns and merge tables are interpreted
+        identically — the JSON is a lossless representation of the constructed
+        tokenizer object.
+        """
+        python_vocab = self._build_python(ref, blob)
+        if python_vocab is None:
+            return None
+
+        cache_key = str(blob) + ":" + ref
+        tokenizer_json: str = python_vocab._tokenizer.to_str()
+        result: tuple[bool, str | None] = _nexus_native.prepare_from_json(tokenizer_json, cache_key)
+        success, error = result
+        if not success:
+            logger.warning(
+                "could not load tokeniser into Rust for %s: %s; using Python path", ref, error
+            )
+            return None
+
+        logger.info("counting %s with Rust encoder + Python template from %s", ref, blob.name)
+        return _NativeVocabulary(
+            blob_path=str(blob), cache_key=cache_key, template=python_vocab._template
+        )
+
+    def _build_python(self, ref: str, blob: Path) -> _Vocabulary | None:
         try:
             metadata = read_metadata(
                 blob, lambda key: key in WANTED_KEYS or key == CHAT_TEMPLATE_KEY

@@ -163,6 +163,31 @@ fn prepare(blob_path: String, cache_key: String) -> PyResult<(bool, Option<Strin
     Ok((success, error))
 }
 
+/// Prepare the tokenizer from a serialized JSON string (produced by
+/// `tokenizers.Tokenizer.to_str()` in Python). This guarantees identical
+/// tokenization since the same constructed tokenizer object is shared.
+#[pyfunction]
+fn prepare_from_json(tokenizer_json: String, cache_key: String) -> PyResult<(bool, Option<String>)> {
+    let mut cache = CACHE
+        .lock()
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    cache.remove(&cache_key);
+
+    let result = tokenizers::Tokenizer::from_bytes(tokenizer_json.as_bytes())
+        .map(|t| CachedModel {
+            vocabulary: tokenizer::Vocabulary::from_tokenizer(t),
+            template: template::ChatTemplate::new(None).unwrap(),
+        })
+        .map_err(|e| format!("failed to load tokenizer from JSON: {e}"));
+
+    let (success, error) = match &result {
+        Ok(_) => (true, None),
+        Err(msg) => (false, Some(msg.clone())),
+    };
+    cache.insert(cache_key, result.ok());
+    Ok((success, error))
+}
+
 /// Count the tokens in a rendered prompt. Returns None if the vocabulary is
 /// not available or the template cannot render the messages.
 #[pyfunction]
@@ -195,6 +220,34 @@ fn count_parts(
         let model = model?;
         let counts: Option<Vec<usize>> = texts.iter().map(|t| model.vocabulary.encode(t)).collect();
         counts
+    })
+}
+
+/// Encode pre-rendered text and return token count. The caller is responsible
+/// for template rendering (in Python Jinja2, which handles all templates);
+/// this function only tokenizes.
+#[pyfunction]
+fn encode_text(
+    blob_path: String,
+    cache_key: String,
+    text: String,
+) -> PyResult<Option<usize>> {
+    with_cached_model(&blob_path, &cache_key, |model| {
+        let model = model?;
+        model.vocabulary.encode(&text)
+    })
+}
+
+/// Encode each text individually and return counts.
+#[pyfunction]
+fn encode_texts(
+    blob_path: String,
+    cache_key: String,
+    texts: Vec<String>,
+) -> PyResult<Option<Vec<usize>>> {
+    with_cached_model(&blob_path, &cache_key, |model| {
+        let model = model?;
+        texts.iter().map(|t| model.vocabulary.encode(t)).collect()
     })
 }
 
@@ -258,6 +311,9 @@ fn nexus_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(prepare, m)?)?;
     m.add_function(wrap_pyfunction!(count_prompt, m)?)?;
     m.add_function(wrap_pyfunction!(count_parts, m)?)?;
+    m.add_function(wrap_pyfunction!(prepare_from_json, m)?)?;
+    m.add_function(wrap_pyfunction!(encode_text, m)?)?;
+    m.add_function(wrap_pyfunction!(encode_texts, m)?)?;
     m.add_function(wrap_pyfunction!(evict, m)?)?;
     m.add_function(wrap_pyfunction!(read_gguf_metadata, m)?)?;
     Ok(())
