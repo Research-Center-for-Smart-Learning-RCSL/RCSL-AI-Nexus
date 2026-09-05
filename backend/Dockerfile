@@ -1,6 +1,24 @@
 # Built on the Mac Studio itself (arm64). The development machine is Windows
 # on x86, so there is no cross-platform build or registry in the loop for a
 # single-node deployment. See docs/architecture/deployment.md section 9.
+
+# --- Stage 1: Build the Rust extension ---
+FROM python:3.12-slim AS rust-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl build-essential pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:$PATH"
+
+RUN pip install --no-cache-dir maturin
+
+WORKDIR /build
+COPY native/ ./native/
+RUN cd native && maturin build --release --out /wheels
+
+# --- Stage 2: Application ---
 FROM python:3.12-slim AS base
 
 COPY --from=ghcr.io/astral-sh/uv:0.5.14 /uv /usr/local/bin/uv
@@ -15,6 +33,10 @@ WORKDIR /app
 # Dependencies first so that application edits do not invalidate this layer.
 COPY pyproject.toml uv.lock* ./
 RUN uv sync --frozen --no-dev --no-install-project 2>/dev/null || uv sync --no-dev --no-install-project
+
+# Install the Rust extension wheel built in stage 1.
+COPY --from=rust-builder /wheels/*.whl /tmp/wheels/
+RUN uv pip install /tmp/wheels/*.whl && rm -rf /tmp/wheels
 
 COPY alembic.ini ./
 COPY alembic ./alembic
