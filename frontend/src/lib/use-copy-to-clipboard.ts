@@ -29,30 +29,52 @@ export function useCopyToClipboard(resetAfterMs = 2000) {
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mounted = useRef(false);
+  const latestRequest = useRef(0);
 
   useEffect(() => {
+    mounted.current = true;
     return () => {
+      mounted.current = false;
+      // Invalidate an in-flight clipboard write before it can resolve and
+      // create a timer or update state after this component has unmounted.
+      latestRequest.current += 1;
       if (timer.current) clearTimeout(timer.current);
+      timer.current = null;
     };
   }, []);
 
   const copy = useCallback(
     async (text: string): Promise<boolean> => {
+      const request = latestRequest.current + 1;
+      latestRequest.current = request;
+      if (!mounted.current) return false;
+
+      // A new attempt supersedes the previous success window even while its
+      // clipboard promise is pending, so an older timer cannot clear newer UI.
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = null;
       setFailed(false);
       try {
         await navigator.clipboard.writeText(text);
+        if (!mounted.current || request !== latestRequest.current) return true;
         setCopied(true);
         // Cleared first, so each copy gets the whole window rather than
         // whatever was left of the previous one.
-        if (timer.current) clearTimeout(timer.current);
-        timer.current = setTimeout(() => setCopied(false), resetAfterMs);
+        timer.current = setTimeout(() => {
+          if (!mounted.current || request !== latestRequest.current) return;
+          timer.current = null;
+          setCopied(false);
+        }, resetAfterMs);
         return true;
       } catch {
         // Permission refused, or an insecure origin. Never thrown onward: a
         // clipboard that will not open is not an error the page can act on,
         // and every caller has the text on screen already.
-        setCopied(false);
-        setFailed(true);
+        if (mounted.current && request === latestRequest.current) {
+          setCopied(false);
+          setFailed(true);
+        }
         return false;
       }
     },

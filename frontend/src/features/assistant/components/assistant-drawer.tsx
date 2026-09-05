@@ -34,6 +34,8 @@ import {
 } from '@/features/assistant/width';
 import { useAssistant } from '@/features/assistant/hooks/use-assistant';
 import { useStickToBottom } from '@/lib/use-stick-to-bottom';
+import { usePanelMotion } from '@/lib/panel-motion';
+import { useReducedMotion } from '@/lib/use-reduced-motion';
 import { proposalToFormPatch } from '@/features/assistant/components/proposal-card';
 import type { Proposal } from '@/features/assistant/schema';
 
@@ -53,6 +55,8 @@ export function AssistantDrawer() {
   const [question, setQuestion] = useState('');
   const context = useAssistantContext();
   const { isOpen: open, setOpen } = context;
+  const reducedMotion = useReducedMotion();
+  const motion = usePanelMotion(open, reducedMotion);
   const { turns, isStreaming, store, send, cancel, clear } = useAssistant();
 
   // The same defect the chat panel had: the answer arrives on a store that does
@@ -96,11 +100,10 @@ export function AssistantDrawer() {
     context.applyPatch(proposalToFormPatch(proposal.fields));
   }
 
-  // Nothing to render when closed: the button that opens it lives in the shell
-  // header. It used to float at the bottom-right corner, which is exactly where
-  // the chat composer puts its own Stop and Clear buttons, so on the one screen
-  // where both are in reach they sat on top of each other.
-  if (!open) return null;
+  // The button that opens this lives in the shell header. A close keeps the
+  // drawer mounted only for its short visual exit; it is inert immediately, so
+  // the outgoing panel cannot receive focus or obscure the logical state.
+  if (!motion.mounted) return null;
 
   return (
     <aside
@@ -113,13 +116,18 @@ export function AssistantDrawer() {
       // there is no room to reserve and it does cover the page, which is why the
       // header button stays visible underneath to close it again.
       aria-label="Management assistant"
+      aria-hidden={motion.closing || undefined}
+      inert={motion.closing || undefined}
+      data-panel-state={motion.state}
       className={cn(
-        'bg-background fixed inset-y-0 right-0 z-40 flex w-full flex-col border-l shadow-lg',
+        'nexus-assistant-drawer nexus-panel-from-inline-end nexus-panel-motion bg-background fixed inset-y-0 z-40 flex w-full flex-col border-l shadow-lg',
         // Two widths rather than a drag handle. The need is "this is too narrow
         // to read", which a second size answers; a handle would add pointer
         // capture, touch targets and a keyboard story for a preference with two
         // useful values.
-        wide ? 'max-w-2xl' : 'max-w-sm',
+        // Below the desktop sidebar breakpoint it is an edge-to-edge mobile
+        // surface; max widths only apply once the shell can reserve them.
+        wide ? 'max-w-none lg:max-w-2xl' : 'max-w-none lg:max-w-sm',
       )}
     >
       <header className="flex items-center justify-between gap-2 border-b px-4 py-3">
@@ -130,6 +138,16 @@ export function AssistantDrawer() {
           </p>
         </div>
         <div className="flex shrink-0 items-center">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={clear}
+            disabled={turns.length === 0 && !isStreaming}
+            aria-label="Clear assistant conversation"
+          >
+            Clear
+          </Button>
           <Button
             type="button"
             variant="ghost"
@@ -237,10 +255,8 @@ export function AssistantDrawer() {
         question={question}
         setQuestion={setQuestion}
         isStreaming={isStreaming}
-        hasTurns={turns.length > 0}
         onSubmit={submit}
         onCancel={cancel}
-        onClear={clear}
       />
     </aside>
   );

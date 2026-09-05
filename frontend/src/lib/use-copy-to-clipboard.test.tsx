@@ -74,6 +74,67 @@ describe('useCopyToClipboard', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('ignores a clipboard result that settles after unmount', async () => {
+    vi.useFakeTimers();
+    let resolveWrite: (() => void) | undefined;
+    const pendingWrite = new Promise<void>((resolve) => {
+      resolveWrite = resolve;
+    });
+    withClipboard(() => pendingWrite);
+    const { result, unmount } = renderHook(() => useCopyToClipboard(2000));
+
+    let copyPromise: Promise<boolean> | undefined;
+    act(() => {
+      copyPromise = result.current.copy('hello');
+    });
+    unmount();
+
+    await act(async () => {
+      resolveWrite?.();
+      await copyPromise;
+    });
+
+    expect(await copyPromise).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not let an earlier result overwrite a later copy state', async () => {
+    let rejectFirst: ((reason?: unknown) => void) | undefined;
+    let resolveSecond: (() => void) | undefined;
+    const first = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const second = new Promise<void>((resolve) => {
+      resolveSecond = resolve;
+    });
+    const writeText = vi
+      .fn<(text: string) => Promise<void>>()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second);
+    withClipboard(writeText);
+    const { result } = renderHook(() => useCopyToClipboard(2000));
+
+    let firstCopy: Promise<boolean> | undefined;
+    let secondCopy: Promise<boolean> | undefined;
+    act(() => {
+      firstCopy = result.current.copy('first');
+      secondCopy = result.current.copy('second');
+    });
+    await act(async () => {
+      resolveSecond?.();
+      await secondCopy;
+    });
+    expect(result.current.copied).toBe(true);
+    expect(result.current.failed).toBe(false);
+
+    await act(async () => {
+      rejectFirst?.(new Error('denied'));
+      await firstCopy;
+    });
+    expect(result.current.copied).toBe(true);
+    expect(result.current.failed).toBe(false);
+  });
+
   it('reports a refused clipboard instead of pretending it worked', async () => {
     // A browser can deny it, and on the one-time-secret screen a silent
     // failure is somebody closing a dialog holding nothing.

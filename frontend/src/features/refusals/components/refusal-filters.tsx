@@ -1,8 +1,7 @@
 'use client';
 
-import { CheckIcon, CopyIcon } from 'lucide-react';
-
 import { Button } from '@/components/ui/button';
+import { CopySuccessIcon } from '@/components/composed/copy-success-icon';
 import { Input } from '@/components/ui/input';
 import type { AccountOption, AccountQuery } from '@/features/refusals/account';
 
@@ -95,7 +94,7 @@ export function RefusalFilters(props: RefusalFiltersProps) {
         disabled={copyingCount === 0}
         onClick={onCopy}
       >
-        {copied ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}
+        <CopySuccessIcon copied={copied} className="size-4" />
         {copied
           ? 'Copied'
           : pickedCount > 0

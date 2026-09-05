@@ -43,9 +43,14 @@ vi.mock('@/features/assistant/components/assistant-drawer', () => ({
   AssistantDrawer: () => null,
 }));
 
+export const assistantState = {
+  isOpen: false,
+  setOpen: vi.fn(),
+};
+
 vi.mock('@/features/assistant/context', () => ({
   AssistantContextProvider: ({ children }: { children: ReactNode }) => children,
-  useAssistantContext: () => ({ isOpen: false, setOpen: vi.fn() }),
+  useAssistantContext: () => assistantState,
 }));
 
 // Entry timing has its own suite. Navigation tests should observe the shell
@@ -117,6 +122,8 @@ beforeEach(() => {
   // `user` is exactly `_BASE_SCOPES` on the backend, which is what this
   // default stood for when it was written by hand.
   signedInWith(SCOPES.user);
+  assistantState.isOpen = false;
+  assistantState.setOpen.mockClear();
 });
 
 export function TestAppShell({ children }: { children: ReactNode }) {

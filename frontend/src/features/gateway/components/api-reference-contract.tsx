@@ -1,15 +1,19 @@
 import { CodeBlock } from '@/components/composed/code-block';
+import {
+  ApiReferenceSectionLayout,
+  type ApiReferenceSectionProps,
+} from './api-reference-section';
 
 type ResponseSectionProps = {
   sample: string;
 };
 
-export function ResponseSection({ sample }: ResponseSectionProps) {
+export function ResponseSection({
+  sample,
+  section,
+}: ResponseSectionProps & ApiReferenceSectionProps) {
   return (
-<section className="space-y-3">
-        <h2 className="font-heading text-base font-semibold">
-          Tool calling, and agent clients
-        </h2>
+      <ApiReferenceSectionLayout section={section}>
         <p className="text-sm text-muted-foreground">
           Where <code>tools</code> is sent, the model may answer with a call
           rather than with prose. <strong>The platform never runs a tool.</strong>{' '}
@@ -89,18 +93,15 @@ export function ResponseSection({ sample }: ResponseSectionProps) {
           it contains. The setting is per capability, on the routing policy,
           rather than per request, so an administrator applies it.
         </p>
-      </section>
+      </ApiReferenceSectionLayout>
   );
 }
 
 
 
-export function ToolsSection() {
+export function ToolsSection({ section }: ApiReferenceSectionProps) {
   return (
-<section className="space-y-3">
-        <h2 className="font-heading text-base font-semibold">
-          Two wire protocols
-        </h2>
+      <ApiReferenceSectionLayout section={section}>
         <p className="text-sm text-muted-foreground">
           The material above describes{' '}
           <code>POST /v1/chat/completions</code>, which is the documented
@@ -190,17 +191,14 @@ export function ToolsSection() {
           that ran. Read that header before concluding that the{' '}
           <code>model</code> line is the one in use.
         </p>
-      </section>
+      </ApiReferenceSectionLayout>
   );
 }
 
 
-export function GroundingSection() {
+export function GroundingSection({ section }: ApiReferenceSectionProps) {
   return (
-<section className="space-y-3">
-        <h2 className="font-heading text-base font-semibold">
-          Grounding on the knowledge base
-        </h2>
+      <ApiReferenceSectionLayout section={section}>
         <p className="text-sm text-muted-foreground">
           With <code>use_knowledge: true</code> the platform embeds the most
           recent question, retrieves passages from the tenant&apos;s documents,
@@ -243,18 +241,15 @@ export function GroundingSection() {
           <code>embedding</code> policy. Both are deployment faults, and an
           identical retry clears neither.
         </p>
-      </section>
+      </ApiReferenceSectionLayout>
   );
 }
 
 
 
-export function StreamingSection() {
+export function StreamingSection({ section }: ApiReferenceSectionProps) {
   return (
-<section className="space-y-3">
-        <h2 className="font-heading text-base font-semibold">
-          A measured limit of the models, not of the API
-        </h2>
+      <ApiReferenceSectionLayout section={section}>
         <p className="text-sm text-muted-foreground">
           <strong>
             A model on this deployment will answer a question its input cannot
@@ -277,6 +272,6 @@ export function StreamingSection() {
           carries a cost, have the model produce the inputs and perform the
           arithmetic in the client.
         </p>
-      </section>
+      </ApiReferenceSectionLayout>
   );
 }
