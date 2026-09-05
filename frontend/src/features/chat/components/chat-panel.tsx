@@ -45,18 +45,7 @@ export function ChatPanel() {
   const hasContent = turns.length > 0 || isStreaming;
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
-      <div className="flex justify-end">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={clear}
-          disabled={!hasContent}
-        >
-          Clear transcript
-        </Button>
-      </div>
+    <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="relative min-h-0 flex-1">
         <div
           ref={containerRef}
@@ -125,8 +114,10 @@ export function ChatPanel() {
         isStreaming={isStreaming}
         gatewayLoading={gatewayLoading}
         servable={servable}
+        hasContent={hasContent}
         onSubmit={submit}
         onCancel={cancel}
+        onClear={clear}
       />
     </div>
   );
