@@ -15,8 +15,10 @@ const baseProps = {
   isStreaming: false,
   gatewayLoading: false,
   servable: new Set(['chat']),
+  hasContent: false,
   onSubmit: vi.fn(),
   onCancel: vi.fn(),
+  onClear: vi.fn(),
 };
 
 describe('ChatComposer', () => {
@@ -30,7 +32,7 @@ describe('ChatComposer', () => {
     expect(message.closest('[data-slot="chat-composer-writing"]')).not.toBeNull();
     expect(capability.closest('[data-slot="chat-composer-settings"]')).not.toBeNull();
     expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
-    expect(screen.queryByRole('button', { name: /clear/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /clear/i })).toBeDisabled();
   });
 
   it('replaces Send with Stop without leaving editable settings behind', () => {
@@ -40,7 +42,7 @@ describe('ChatComposer', () => {
     expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
     expect(screen.getByRole('textbox', { name: 'Message' })).toBeDisabled();
     expect(
-      screen.getByRole('checkbox', { name: 'Answer from the knowledge base' }),
+      screen.getByRole('checkbox', { name: 'Knowledge base' }),
     ).toBeDisabled();
     expect(screen.getByRole('checkbox', { name: 'Thinking' })).toBeDisabled();
   });
