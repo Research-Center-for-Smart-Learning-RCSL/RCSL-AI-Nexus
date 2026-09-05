@@ -107,6 +107,20 @@ describe('ErrorsSection search', () => {
     expect(visibleCodes()).toEqual(['quota_exceeded']);
   });
 
+  it('uses the shared opacity-only feedback wrapper when the filtered results change', async () => {
+    const user = userEvent.setup();
+    renderErrors();
+
+    await user.type(screen.getByRole('searchbox'), 'quota_exceeded');
+
+    expect(screen.getByTestId('api-error-card').parentElement).toHaveClass(
+      'nexus-filtered-results',
+    );
+    expect(screen.getByRole('table').parentElement).toHaveClass(
+      'nexus-filtered-results',
+    );
+  });
+
   it('matches visible remediation text', async () => {
     const user = userEvent.setup();
     renderErrors();

@@ -116,7 +116,11 @@ export function ErrorsSection({ section }: ApiReferenceSectionProps) {
       </p>
 
       {!hasResults ? (
-        <div data-md-skip className="[&_p]:[overflow-wrap:anywhere]">
+        <div
+          key={query}
+          data-md-skip
+          className="nexus-filtered-results [&_p]:[overflow-wrap:anywhere]"
+        >
           <EmptyState
             title="No matching errors"
             description={`No status, error code, or remediation matches “${query}”.`}
@@ -139,8 +143,9 @@ export function ErrorsSection({ section }: ApiReferenceSectionProps) {
           They are deliberately excluded from Markdown: the desktop table below
           remains the single complete export source at every breakpoint. */}
       <div
+        key={query}
         data-md-skip
-        className="grid gap-3 md:hidden"
+        className="nexus-filtered-results grid gap-3 md:hidden"
         hidden={!hasResults}
       >
         {matches.map((error) => (
@@ -163,7 +168,11 @@ export function ErrorsSection({ section }: ApiReferenceSectionProps) {
       {/* Hidden rows remain in the DOM deliberately: Markdown export walks the
           authored table rather than its visual state, so a filtered screen can
           never produce incomplete reference documentation. */}
-      <div className="hidden overflow-x-auto md:block" hidden={!hasResults}>
+      <div
+        key={query}
+        className="nexus-filtered-results hidden overflow-x-auto md:block"
+        hidden={!hasResults}
+      >
         <table className="w-full text-left text-sm">
           <thead className="text-muted-foreground">
             <tr className="border-b">

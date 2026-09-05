@@ -357,6 +357,14 @@ describe('API Reference section navigation', () => {
       expect.objectContaining({ behavior: 'auto' }),
     );
     expect(screen.getByRole('heading', { name: 'Limits' })).toHaveFocus();
+    expect(screen.getByRole('link', { name: 'Limits' })).toHaveAttribute(
+      'aria-current',
+      'location',
+    );
+    expect(screen.getByRole('link', { name: 'Limits' })).toHaveClass(
+      'nexus-active-inpage-indicator',
+      '-translate-x-1',
+    );
   });
 
   it('keeps explicit section jumps usable without IntersectionObserver', async () => {

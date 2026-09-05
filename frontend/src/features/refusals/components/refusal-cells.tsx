@@ -1,8 +1,7 @@
 'use client';
 
-import { CheckIcon, CopyIcon } from 'lucide-react';
-
 import { Button } from '@/components/ui/button';
+import { CopySuccessIcon } from '@/components/composed/copy-success-icon';
 import { FIGURE_LABELS, type Refusal } from '@/features/refusals/schema';
 import { refusalToMarkdown } from '@/features/refusals/markdown';
 import { useCopyToClipboard } from '@/lib/use-copy-to-clipboard';
@@ -81,7 +80,7 @@ export function CopyRefusal({
       aria-label={`Copy this ${refusal.code} refusal as Markdown`}
       onClick={() => void copy(refusalToMarkdown(refusal, { account }))}
     >
-      {copied ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}
+      <CopySuccessIcon copied={copied} className="size-4" />
       <span className="sr-only sm:not-sr-only">
         {copied ? 'Copied' : 'Copy'}
       </span>

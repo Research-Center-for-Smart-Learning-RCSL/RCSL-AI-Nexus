@@ -17,9 +17,10 @@
  */
 
 import { type RefObject } from 'react';
-import { CheckIcon, CopyIcon, DownloadIcon } from 'lucide-react';
+import { DownloadIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { CopySuccessIcon } from '@/components/composed/copy-success-icon';
 import { elementToMarkdown } from '@/lib/markdown-export';
 import { useCopyToClipboard } from '@/lib/use-copy-to-clipboard';
 
@@ -74,7 +75,7 @@ export function ExportMarkdown({
   return (
     <div className='flex flex-wrap items-center gap-2' data-md-skip>
       <Button variant='outline' size='sm' type='button' onClick={copy}>
-        {copied ? <CheckIcon /> : <CopyIcon />}
+        <CopySuccessIcon copied={copied} className="size-3.5" />
         {copied ? 'Copied' : 'Copy as Markdown'}
       </Button>
       <Button variant='outline' size='sm' type='button' onClick={download}>
