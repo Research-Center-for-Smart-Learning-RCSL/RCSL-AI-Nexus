@@ -6,8 +6,10 @@ import { CodeBlock } from './code-block';
 
 describe('CodeBlock copy feedback', () => {
   beforeEach(() => {
-    Object.assign(navigator, {
-      clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+      configurable: true,
+      writable: true,
     });
   });
 
