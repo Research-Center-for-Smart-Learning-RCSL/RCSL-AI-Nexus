@@ -102,7 +102,7 @@ test('signs in with password and TOTP, then refreshes identity before redirectin
   // wide enough for that path, since the assertions below — not this deadline
   // — are what prove the identity refetch gated the redirect.
   await expect(page).toHaveURL(/\/chat$/, { timeout: 20_000 });
-  await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Message' })).toBeVisible();
   expect(authenticatedMeCalls).toBeGreaterThanOrEqual(1);
   expect(totpBody).toEqual({ challenge: 'challenge-123', code: '123456' });
 });
