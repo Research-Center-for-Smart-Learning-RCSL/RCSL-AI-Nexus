@@ -1,0 +1,16 @@
+[package]
+name = "nexus-native"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "nexus_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.25", features = ["extension-module"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
+minijinja = "2"
+ahash = "0.8"
