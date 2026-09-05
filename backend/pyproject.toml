@@ -112,3 +112,9 @@ ignore_missing_imports = true
 # every attribute read is a string off a paragraph or cell.
 module = "docx.*"
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# nexus_native is a PyO3 Rust extension built with maturin. It ships no stubs;
+# the adapter narrows every return value at the call site.
+module = "nexus_native.*"
+ignore_missing_imports = true

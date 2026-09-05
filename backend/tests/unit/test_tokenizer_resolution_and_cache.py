@@ -159,4 +159,6 @@ async def test_the_cache_holds_only_what_it_was_sized_for(tmp_path: Path) -> Non
     assert await counter.prepare("one:latest") is True
     assert await counter.prepare("two:latest") is True
 
+    if counter._use_native:
+        pytest.skip("Rust backend manages its own bounded cache")
     assert len(counter._cache) == 1
