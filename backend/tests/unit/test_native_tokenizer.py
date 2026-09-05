@@ -6,7 +6,6 @@ import json
 import struct
 from pathlib import Path
 
-import nexus_native
 import pytest
 
 from tests.unit.exact_token_counting_fixtures import (
@@ -14,6 +13,8 @@ from tests.unit.exact_token_counting_fixtures import (
     write_gguf,
     write_store,
 )
+
+nexus_native = pytest.importorskip("nexus_native")
 
 
 def test_read_gguf_metadata_keeps_wanted_keys(tmp_path: Path) -> None:
