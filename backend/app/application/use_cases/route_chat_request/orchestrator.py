@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
+from typing import Any
 
 from app.application.use_cases.list_capabilities import ListCapabilities
 from app.domain.entities.actor import Actor, Scope
@@ -16,7 +18,7 @@ from app.domain.entities.chat import (
     ToolChoice,
     ToolDefinition,
 )
-from app.domain.entities.model import RuntimeKind
+from app.domain.entities.model import Model, RuntimeKind
 from app.domain.exceptions import (
     COUNT_BY_LOWER_BOUND,
     CapabilityNotIssuedError,
@@ -37,6 +39,8 @@ from app.domain.ports.token_counter_port import TokenCounterPort
 from app.domain.services.routing_service import RoutingService
 from app.shared.clock import Clock
 
+from .compaction import try_compact
+from .compaction_tier2 import try_tier2
 from .diagnostics import _warn_if_tools_dominate
 from .estimates import _counted_phrase, _floor_composition, _floor_prompt_tokens
 from .generation_session import GenerationSessionMixin
@@ -68,7 +72,13 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
         generation_deadline_seconds: int = 600,
         thinking_default: bool = True,
         monotonic: Callable[[], float] = time.monotonic,
+        summarise_fn: Callable[..., Any] | None = None,
+        compaction_cache: Any | None = None,
+        compaction_lock: asyncio.Lock | None = None,
     ) -> None:
+        self._summarise_fn = summarise_fn
+        self._compaction_cache = compaction_cache
+        self._compaction_lock = compaction_lock or asyncio.Lock()
         self._policies = policies
         self._models = models
         self._nodes = nodes
@@ -284,18 +294,62 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
                 self._request_id(),
                 actor,
             )
+            compaction_result = None
             if counted > self._max_context_tokens:
-                composition = await self._prompt_composition(target, messages, tools, basis)
-                raise ContextTooLongError(
-                    detail=(
-                        f"{_counted_phrase(basis, counted)} exceeds the configured limit "
-                        f"of {self._max_context_tokens}: {composition}"
-                    ),
-                    estimated=counted,
-                    limit=self._max_context_tokens,
-                    composition=composition,
-                    basis=basis,
-                )
+                if actor.compaction_enabled:
+
+                    async def _recount(
+                        t: Model,
+                        m: Sequence[Message],
+                        tl: Sequence[ToolDefinition],
+                    ) -> int | None:
+                        c, _ = await self._count_prompt(t, m, tl)
+                        return c
+
+                    compaction_result = await try_compact(
+                        messages=messages,
+                        tools=tools,
+                        counted=counted,
+                        limit=self._max_context_tokens,
+                        count_fn=_recount,
+                        target=target,
+                    )
+                    if compaction_result is None and self._summarise_fn is not None:
+                        compaction_result = await try_tier2(
+                            messages=messages,
+                            tools=tools,
+                            counted=counted,
+                            limit=self._max_context_tokens,
+                            count_fn=_recount,
+                            target=target,
+                            summarise_fn=self._summarise_fn,
+                            cache=self._compaction_cache,
+                            lock=self._compaction_lock,
+                        )
+                if compaction_result is not None:
+                    messages = compaction_result.messages
+                    tools = compaction_result.tools
+                    counted = compaction_result.tokens_after
+                    logger.info(
+                        "compaction applied: tier=%d %d->%d tokens, %s request_id=%s",
+                        compaction_result.tier,
+                        compaction_result.tokens_before,
+                        compaction_result.tokens_after,
+                        compaction_result.disclosure,
+                        self._request_id(),
+                    )
+                else:
+                    composition = await self._prompt_composition(target, messages, tools, basis)
+                    raise ContextTooLongError(
+                        detail=(
+                            f"{_counted_phrase(basis, counted)} exceeds the configured limit "
+                            f"of {self._max_context_tokens}: {composition}"
+                        ),
+                        estimated=counted,
+                        limit=self._max_context_tokens,
+                        composition=composition,
+                        basis=basis,
+                    )
             await self._refuse_what_this_target_would_truncate(
                 counted, basis, target, actor, messages, tools
             )
@@ -334,6 +388,13 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
                     # usage row is written in `finally` here, and it is the one
                     # place the substitution outlives the request.
                     requested_capability,
+                    compaction_tier=compaction_result.tier if compaction_result else None,
+                    tokens_before_compaction=compaction_result.tokens_before
+                    if compaction_result
+                    else None,
+                    tokens_after_compaction=compaction_result.tokens_after
+                    if compaction_result
+                    else None,
                 )
             ) as generation:
                 async for chunk in generation:

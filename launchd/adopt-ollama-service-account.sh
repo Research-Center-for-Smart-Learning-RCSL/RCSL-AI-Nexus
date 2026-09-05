@@ -138,8 +138,9 @@ log "  stopped after ${waited}s"
 log "moving $OPERATOR_HOME -> $SERVICE_HOME"
 mv "$OPERATOR_HOME" "$SERVICE_HOME"
 
-# Group `staff`, not the service group: Docker Desktop shares this path as the
-# operator, and the gateway bind-mounts it read-only for the tokenizer. Owner
+# Group `staff`, not the service group: the Docker daemon (Colima) shares this
+# path as the operator, and the gateway bind-mounts it read-only for the
+# tokenizer. Owner
 # rwx, group r-x, everyone else nothing.
 log "owning it to $SERVICE_USER:staff"
 chown -R "$SERVICE_USER:staff" "$SERVICE_HOME"

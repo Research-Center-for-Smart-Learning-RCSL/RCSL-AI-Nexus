@@ -23,3 +23,26 @@ id = "generic-api-key"
   with the shape of a key can pass through it.
   """
   regexes = ['''num_ctx\s*=\s*\d+''']
+
+  [[rules.allowlists]]
+  description = """
+  The canary word from the prompt-truncation probe of 2026-09-03, quoted in the
+  progress log and in the compaction plan. The probe put a unique word in the
+  first line of a 99,271-character prompt and asked for it back; the runtime had
+  dropped the front of the prompt, so the model never read it and answered
+  confidently and wrong. The label carrying that word is `SECRET`, which is
+  exactly what `generic-api-key` looks for in front of a high-entropy value --
+  and the value scores 3.5 because it is two words joined to a number.
+
+  It is not a credential and never was one: it is a literal chosen to be
+  recognisable in a transcript, and quoting it is the point of recording the
+  probe at all. Narrow to that one string, so nothing else passes through it. If
+  the probe is re-run with a different word this entry stops matching and the
+  new one has to be justified on its own, which is the intended behaviour.
+  """
+  # `regexTarget = "line"` because the default target is the extracted secret,
+  # and the extracted secret here is the bare value -- so a pattern naming the
+  # label it follows never matches. Matching the line is also what makes the
+  # entry narrow: it requires the label and the value together.
+  regexTarget = "line"
+  regexes = ['''SECRET-WORD:\s*pomegranate-47''']

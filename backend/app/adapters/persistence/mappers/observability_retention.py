@@ -50,6 +50,9 @@ def usage_to_row(usage: UsageRecord) -> UsageRecordRow:
         latency_ms=usage.latency_ms,
         completed=usage.completed,
         at=usage.at,
+        compaction_tier=usage.compaction_tier,
+        tokens_before_compaction=usage.tokens_before_compaction,
+        tokens_after_compaction=usage.tokens_after_compaction,
     )
 
 

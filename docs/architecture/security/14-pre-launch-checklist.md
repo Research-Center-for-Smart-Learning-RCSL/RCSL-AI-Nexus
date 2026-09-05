@@ -8,8 +8,13 @@
 [ ] Compare requested against actual bindings, not just the Compose declaration: every
     container's HostConfig.PortBindings has a matching non-empty NetworkSettings.Ports.
     An empty [] means the bind failed and Docker did not retry; the container still runs
-    and reports healthy. Grafana's port had never bound once, and a reboot silently
-    dropped three more. `docker compose ps` shows none of this. (deployment.md §9)
+    and reports healthy. Under Docker Desktop (before 2026-09-05) Grafana's port had
+    never bound once, and a reboot silently dropped three more. Under Colima all
+    containers bind 127.0.0.1, so this failure mode is gone, but the check remains
+    valid as defence in depth. `docker compose ps` shows none of this. (deployment.md §9)
+[ ] Verify socat forwards are active: the three proxy-facing ports (8000, 8002, 3001)
+    answer on the tailnet address, not just on 127.0.0.1. `pgrep -fl socat` should show
+    three forwarders. (Added 2026-09-05 with the Colima migration)
 [ ] Scan the Mac Studio from outside the tailnet: no open ports
 [ ] Tailscale ACL applied; verify a plain member cannot reach 8000/8002 directly
 [ ] Verify uvicorn binds 0.0.0.0 inside containers (published ports otherwise forward nowhere)

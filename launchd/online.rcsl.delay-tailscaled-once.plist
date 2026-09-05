@@ -7,9 +7,11 @@
 
 	<!-- A TEST TOOL, NOT PART OF THE PLATFORM. Do not install this as part of a
 	     deploy; runbook §7 does not list it and must not. It holds the machine
-	     off the tailnet for ninety seconds at boot so that Docker Desktop binds
-	     its port forwards before the tailnet address exists, which is the one
-	     acceptance outcome that cannot be produced by waiting. The reasoning,
+	     off the tailnet for ninety seconds at boot so that the Docker daemon
+	     binds port forwards before the tailnet address exists. Under Colima
+	     with loopback binding, the port-binding race this was designed to test
+	     no longer occurs; the script may still be useful for testing the
+	     reconciler's "containers not restored" path. The reasoning,
 	     the measurements behind the ninety seconds, and the risk are at the top
 	     of the script. Procedure: runbook §1.1a. -->
 	<key>ProgramArguments</key>

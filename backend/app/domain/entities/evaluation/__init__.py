@@ -6,6 +6,7 @@ from .entities import (
     EvaluationReport,
     EvaluationRun,
     EvaluationSample,
+    EvaluationTaskDefinition,
     EvaluationTaskScore,
     TaskVerdict,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "EvaluationReport",
     "EvaluationRun",
     "EvaluationSample",
+    "EvaluationTaskDefinition",
     "EvaluationTaskScore",
     "TaskVerdict",
     "aggregate",

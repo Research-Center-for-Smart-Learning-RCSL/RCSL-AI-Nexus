@@ -3,6 +3,7 @@
 from .evaluations import (
     evaluation_model_score_to_domain,
     evaluation_run_to_domain,
+    evaluation_task_definition_to_domain,
     evaluation_task_score_to_domain,
 )
 from .identity import (
@@ -82,4 +83,5 @@ __all__ = [
     "evaluation_run_to_domain",
     "evaluation_model_score_to_domain",
     "evaluation_task_score_to_domain",
+    "evaluation_task_definition_to_domain",
 ]

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -20,9 +21,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.adapters.persistence.repositories import PostgresEvaluationRepository
 from app.adapters.persistence.sqlalchemy_models import (
     EvaluationModelScoreRow,
+    EvaluationTaskDefinitionRow,
     EvaluationTaskScoreRow,
 )
-from app.domain.entities.evaluation import EvaluationSample, aggregate
+from app.domain.entities.evaluation import (
+    EvaluationSample,
+    EvaluationTaskDefinition,
+    aggregate,
+)
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -45,6 +51,7 @@ def _report(
     ran_at: datetime | None = None,
     scores: dict[str, dict[str, float | None]] | None = None,
     caveats: tuple[str, ...] = (),
+    definitions: tuple[EvaluationTaskDefinition, ...] = (),
 ):
     """A report over `{model: {task: score}}`, in the task order given."""
     scores = scores or {"m1": {"zulu": 1.0, "alpha": 0.5}}
@@ -62,7 +69,7 @@ def _report(
         for model, tasks in scores.items()
         for task, score in tasks.items()
     ]
-    return aggregate(
+    report = aggregate(
         samples,
         run_id=str(uuid.uuid4()),
         label=label,
@@ -71,6 +78,7 @@ def _report(
         harness_ref="scripts/model-eval",
         caveats=caveats,
     )
+    return replace(report, task_definitions=definitions)
 
 
 async def test_a_report_survives_the_round_trip(session) -> None:
@@ -100,6 +108,69 @@ async def test_task_order_survives_the_query(session) -> None:
 
     assert read is not None
     assert [entry.task for entry in read.tasks] == ["zulu", "alpha", "mike"]
+
+
+async def test_task_text_round_trips_and_keeps_the_order_it_was_written_in(session) -> None:
+    """Held by the id the writer assigns, like the task scores: the harness
+    emits tasks in the order the set is meant to be read, and a dialogue prompt
+    is long enough that a reordered list is not obvious on the screen."""
+    repository = PostgresEvaluationRepository(session)
+    stored = _report(
+        "with text",
+        scores={"m1": {"zulu": 1.0, "alpha": 1.0}},
+        definitions=(
+            EvaluationTaskDefinition(
+                task="zulu", group="H", kind="dialogue", prompt="[system prompt]\nbe firm", checks=6
+            ),
+            EvaluationTaskDefinition(
+                task="alpha", group="A", kind="exact", prompt="what is 2 + 2?", checks=1
+            ),
+        ),
+    )
+    await repository.save_report(stored)
+
+    read = await repository.get_report(stored.run.id)
+
+    assert read is not None
+    assert [d.task for d in read.task_definitions] == ["zulu", "alpha"]
+    assert read.task_definitions[0].prompt == "[system prompt]\nbe firm"
+    assert read.task_definitions[0].kind == "dialogue"
+    assert read.task_definitions[0].checks == 6
+    # `task_group` in the column, `group` in the entity: the mapping is the
+    # thing that can silently be wired to the wrong one.
+    assert read.task_definitions[1].group == "A"
+
+
+async def test_a_run_stored_without_task_text_still_reads(session) -> None:
+    """Two runs predate the field, and a report that could not be read back
+    without definitions would be a schema change presented as a feature."""
+    repository = PostgresEvaluationRepository(session)
+    stored = _report("no text")
+    await repository.save_report(stored)
+
+    read = await repository.get_report(stored.run.id)
+
+    assert read is not None
+    assert read.task_definitions == ()
+    assert read.models[0].score is not None
+
+
+async def test_deleting_a_run_takes_its_task_text_with_it(session) -> None:
+    """The cascade again, on the new table: declared in the ORM alone it passes
+    against `create_all` and leaves orphaned prompts in production."""
+    repository = PostgresEvaluationRepository(session)
+    stored = _report(
+        "text to delete",
+        definitions=(
+            EvaluationTaskDefinition(task="zulu", group="A", kind="exact", prompt="p", checks=1),
+        ),
+    )
+    await repository.save_report(stored)
+    assert await _definition_count(session, stored.run.id) == 1
+
+    assert await repository.delete_run(stored.run.id) is True
+
+    assert await _definition_count(session, stored.run.id) == 0
 
 
 async def test_re_importing_a_label_replaces_the_run_rather_than_adding_one(
@@ -171,3 +242,12 @@ async def _child_count(session, run_id: str) -> tuple[int, int]:
         .where(EvaluationTaskScoreRow.run_id == run_id)
     )
     return models or 0, tasks or 0
+
+
+async def _definition_count(session, run_id: str) -> int:
+    count = await session.scalar(
+        select(func.count())
+        .select_from(EvaluationTaskDefinitionRow)
+        .where(EvaluationTaskDefinitionRow.run_id == run_id)
+    )
+    return count or 0

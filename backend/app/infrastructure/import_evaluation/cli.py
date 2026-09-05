@@ -25,6 +25,15 @@ def main() -> int:
             "an earlier one task by task (e.g. --phase full --phase repair)"
         ),
     )
+    parser.add_argument(
+        "--tasks",
+        default=None,
+        help=(
+            "JSON file of task definitions from `tasks.py --json`, stored with "
+            "the run so the screen can show the question beside the score; only "
+            "the tasks the run's samples name are kept"
+        ),
+    )
     parser.add_argument("--note", default="", help="a sentence about the run")
     parser.add_argument(
         "--caveat",
