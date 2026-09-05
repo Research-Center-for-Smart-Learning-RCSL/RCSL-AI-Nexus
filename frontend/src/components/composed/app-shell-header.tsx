@@ -1,9 +1,25 @@
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 import Link from 'next/link';
-import { LogOutIcon, MenuIcon, SparklesIcon, UserCogIcon } from 'lucide-react';
+import {
+  CircleUserRoundIcon,
+  LogOutIcon,
+  MenuIcon,
+  SparklesIcon,
+  UserCogIcon,
+} from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
-import { ThemeToggle } from '@/components/composed/theme-toggle';
+import {
+  Menu as AccountMenu,
+  MenuContent,
+  MenuGroup,
+  MenuItem,
+  MenuLabel,
+  MenuLinkItem,
+  MenuSeparator,
+  MenuTrigger,
+} from '@/components/ui/menu';
+import { ThemeMenuItem } from '@/components/composed/theme-toggle';
 import { ROLE_LABELS } from '@/features/users/schema';
 import type { AuthMode, Me } from '@/lib/session';
 import { cn } from '@/lib/utils';
@@ -11,6 +27,8 @@ import { cn } from '@/lib/utils';
 type Props = { navButtonRef: RefObject<HTMLButtonElement | null>; navOpen: boolean; setNavOpen: Dispatch<SetStateAction<boolean>>; me: Me; authMode: AuthMode | null; assistant: { isOpen: boolean; setOpen: (open: boolean) => void }; signOut: () => Promise<void> };
 
 export function AppShellHeader({ navButtonRef, navOpen, setNavOpen, me, authMode, assistant, signOut }: Props) {
+  const hasLocalSession = authMode === 'local';
+
   return (
           <header className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2">
             <div className="flex min-w-0 items-center gap-2">
@@ -32,19 +50,8 @@ export function AppShellHeader({ navButtonRef, navOpen, setNavOpen, me, authMode
               >
                 AI Nexus
               </Link>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium">{me.display_name}</p>
-                {/* The role as it is named to people, not as the wire spells
-                    it: `platform_admin` beside a display name reads as an
-                    account identifier rather than as an authority. An en dash
-                    separates the two, since a hyphen between two names reads as
-                    a compound. */}
-                <p className="truncate text-xs text-muted-foreground">
-                  {me.login} – {ROLE_LABELS[me.role] ?? me.role}
-                </p>
-              </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-1 sm:gap-2">
               {/* Labelled, not just an icon. The sparkle alone said nothing
                   about what it opens — an operator has to already know the
                   feature exists to try it, which is the opposite of what an
@@ -63,48 +70,61 @@ export function AppShellHeader({ navButtonRef, navOpen, setNavOpen, me, authMode
                 aria-expanded={assistant.isOpen}
                 onClick={() => assistant.setOpen(!assistant.isOpen)}
                 className={cn(
-                  'gap-1.5',
+                  'gap-1.5 max-sm:size-7 max-sm:p-0',
                   assistant.isOpen && 'bg-muted text-foreground',
                 )}
               >
                 <SparklesIcon className="size-4" />
                 <span className="hidden sm:inline">Assistant</span>
               </Button>
-              <ThemeToggle />
-              {/* Account settings only apply where local credentials exist. */}
-              {authMode !== 'tailnet' ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-label="Account"
-                  // This renders an anchor, not a button. Without saying so,
-                  // Base UI keeps native button semantics for an element that
-                  // has none, and warns. A link that navigates is the correct
-                  // element here — it is Ctrl-clickable and has an href — so
-                  // the prop follows the markup rather than the other way.
-                  nativeButton={false}
-                  render={<Link href="/account" />}
+              <AccountMenu>
+                <MenuTrigger
+                  className="inline-flex min-h-7 max-w-[min(20rem,42vw)] min-w-7 items-center justify-center rounded-[min(var(--radius-md),12px)] px-1.5 outline-none transition-colors hover:bg-muted focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 aria-expanded:bg-muted md:justify-start md:px-2 [&_svg]:size-4"
+                  aria-label="Open account and appearance menu"
                 >
-                  <UserCogIcon />
-                  {/* The label is the first thing to go when the header has to
-                      share a narrow row with the menu button and the identity
-                      block; the icon still carries the meaning, and the
-                      aria-label above keeps the name for anyone not seeing it. */}
-                  <span className="hidden md:inline">Account</span>
-                </Button>
-              ) : null}
-              {/* No session on the tailnet, so nothing to sign out of. */}
-              {authMode !== 'tailnet' ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  aria-label="Sign out"
-                  onClick={() => void signOut()}
-                >
-                  <LogOutIcon />
-                  <span className="hidden md:inline">Sign out</span>
-                </Button>
-              ) : null}
+                  <CircleUserRoundIcon className="md:hidden" />
+                  <span className="hidden min-w-0 text-left md:block">
+                    <span className="block truncate text-sm font-medium text-foreground">
+                      {me.display_name}
+                    </span>
+                    <span className="block truncate text-xs font-normal text-muted-foreground">
+                      {me.login} – {ROLE_LABELS[me.role] ?? me.role}
+                    </span>
+                  </span>
+                </MenuTrigger>
+                <MenuContent className="w-80">
+                  <MenuGroup>
+                    <MenuLabel>
+                      <span className="block whitespace-normal text-sm font-medium text-foreground [overflow-wrap:anywhere]">
+                        {me.display_name}
+                      </span>
+                      <span className="block whitespace-normal text-xs font-normal text-muted-foreground [overflow-wrap:anywhere]">
+                        {me.login} – {ROLE_LABELS[me.role] ?? me.role}
+                      </span>
+                    </MenuLabel>
+                    <MenuSeparator />
+                    <ThemeMenuItem />
+                    {hasLocalSession ? (
+                      <MenuLinkItem
+                        closeOnClick
+                        render={<Link href="/account" />}
+                      >
+                        <UserCogIcon />
+                        <span>Account settings</span>
+                      </MenuLinkItem>
+                    ) : null}
+                    {hasLocalSession ? (
+                      <MenuItem
+                        className="text-destructive data-highlighted:bg-destructive/10 data-highlighted:text-destructive"
+                        onClick={() => void signOut()}
+                      >
+                        <LogOutIcon />
+                        <span>Sign out</span>
+                      </MenuItem>
+                    ) : null}
+                  </MenuGroup>
+                </MenuContent>
+              </AccountMenu>
             </div>
           </header>
   );

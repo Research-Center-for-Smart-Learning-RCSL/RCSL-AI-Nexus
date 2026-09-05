@@ -8,17 +8,21 @@ import { authModeLabel, type AuthMode } from '@/lib/session';
 import { NavGroups } from './app-shell-navigation';
 import type { NavGroup, NavItem } from './app-shell-navigation-catalog';
 
-type Props = { navOpen: boolean; setNavOpen: Dispatch<SetStateAction<boolean>>; navPanelRef: RefObject<HTMLDivElement | null>; navButtonRef: RefObject<HTMLButtonElement | null>; authMode: AuthMode | null; pinned: NavItem[]; groups: NavGroup[]; pathname: string | null; collapsed: Set<string>; onToggle: (id: string) => void };
+type Props = { navMounted: boolean; navPanelState: 'open' | 'closed'; navClosing: boolean; setNavOpen: Dispatch<SetStateAction<boolean>>; navPanelRef: RefObject<HTMLDivElement | null>; authMode: AuthMode | null; pinned: NavItem[]; groups: NavGroup[]; pathname: string | null; collapsed: Set<string>; onToggle: (id: string) => void };
 
-export function MobileNavigation({ navOpen, setNavOpen, navPanelRef, navButtonRef, authMode, pinned: visiblePinned, groups: visibleGroups, pathname, collapsed, onToggle: toggleGroup }: Props) {
+export function MobileNavigation({ navMounted, navPanelState, navClosing, setNavOpen, navPanelRef, authMode, pinned: visiblePinned, groups: visibleGroups, pathname, collapsed, onToggle: toggleGroup }: Props) {
   return (
     <>
-{navOpen ? (
+{navMounted ? (
           <div className="fixed inset-0 z-50 lg:hidden">
             <button
               type="button"
               aria-label="Close the menu"
-              className="absolute inset-0 bg-black/40"
+              aria-hidden="true"
+              tabIndex={-1}
+              disabled={navClosing}
+              data-panel-state={navPanelState}
+              className="nexus-panel-backdrop nexus-panel-motion absolute inset-0 bg-black/40"
               onClick={() => setNavOpen(false)}
             />
             <div
@@ -26,11 +30,14 @@ export function MobileNavigation({ navOpen, setNavOpen, navPanelRef, navButtonRe
               role="dialog"
               aria-modal="true"
               aria-label="Navigation"
+              aria-hidden={navClosing || undefined}
+              inert={navClosing || undefined}
+              data-panel-state={navPanelState}
               // Focusable only as a target for the effect above, so focus lands
               // inside the panel and Tab continues through the links rather
               // than leaving for the header.
               tabIndex={-1}
-              className="absolute inset-y-0 left-0 flex w-64 max-w-[85%] flex-col overflow-y-auto overscroll-contain border-r bg-background p-3 outline-none"
+              className="nexus-panel-from-inline-start nexus-panel-motion absolute inset-y-0 left-0 flex w-64 max-w-[85%] flex-col overflow-y-auto overscroll-contain border-r bg-background p-3 outline-none"
             >
               <div className="mb-4 flex items-start justify-between gap-2 px-2">
                 <div>
@@ -47,7 +54,6 @@ export function MobileNavigation({ navOpen, setNavOpen, navPanelRef, navButtonRe
                   aria-label="Close the menu"
                   onClick={() => {
                     setNavOpen(false);
-                    navButtonRef.current?.focus();
                   }}
                 >
                   <XIcon />

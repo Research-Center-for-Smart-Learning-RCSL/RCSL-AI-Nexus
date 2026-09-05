@@ -1,58 +1,65 @@
 import type { FormEvent } from 'react';
 
+import { ComposerTextarea } from '@/components/composed/composer-textarea';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 
 type AssistantComposerProps = {
   question: string;
   setQuestion: (question: string) => void;
   isStreaming: boolean;
-  hasTurns: boolean;
   onSubmit: (event: FormEvent) => void;
   onCancel: () => void;
-  onClear: () => void;
 };
 
 export function AssistantComposer({
   question,
   setQuestion,
   isStreaming,
-  hasTurns,
   onSubmit,
   onCancel,
-  onClear,
 }: AssistantComposerProps) {
   return (
     <form
       onSubmit={onSubmit}
-      className="flex items-center gap-2 border-t px-4 py-3"
+      className="border-t px-4 py-3"
     >
-      <Input
-        value={question}
-        onChange={(event) => setQuestion(event.target.value)}
-        placeholder="Ask about this screen"
-        disabled={isStreaming}
-        className="flex-1"
-        aria-label="Ask the assistant"
-      />
-      {isStreaming ? (
-        <Button type="button" variant="outline" size="sm" onClick={onCancel}>
-          Stop
-        </Button>
-      ) : (
-        <Button type="submit" size="sm" disabled={!question.trim()}>
-          Ask
-        </Button>
-      )}
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        onClick={onClear}
-        disabled={!hasTurns && !isStreaming}
+      <div className="flex items-end gap-2">
+        <ComposerTextarea
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          placeholder="Ask about this screen"
+          disabled={isStreaming}
+          className="flex-1"
+          aria-label="Ask the assistant"
+          aria-describedby="assistant-composer-keyboard-hint"
+        />
+        {isStreaming ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="min-w-12"
+            onClick={onCancel}
+          >
+            Stop
+          </Button>
+        ) : (
+          <Button
+            type="submit"
+            size="sm"
+            className="min-w-12"
+            disabled={!question.trim()}
+          >
+            Ask
+          </Button>
+        )}
+      </div>
+      <p
+        id="assistant-composer-keyboard-hint"
+        className="mt-1.5 text-xs text-muted-foreground"
       >
-        Clear
-      </Button>
+        Enter to ask · Shift+Enter for a new line
+      </p>
     </form>
   );
 }

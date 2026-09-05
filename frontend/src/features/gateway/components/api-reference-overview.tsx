@@ -1,14 +1,20 @@
 import { CodeBlock } from '@/components/composed/code-block';
 import { Badge } from '@/components/ui/badge';
+import {
+  ApiReferenceSectionLayout,
+  type ApiReferenceSectionProps,
+} from './api-reference-section';
 
 type EndpointSectionProps = {
   baseUrl: string;
 };
 
-export function EndpointSection({ baseUrl }: EndpointSectionProps) {
+export function EndpointSection({
+  baseUrl,
+  section,
+}: EndpointSectionProps & ApiReferenceSectionProps) {
   return (
-<section className="space-y-3">
-        <h2 className="font-heading text-base font-semibold">Endpoint</h2>
+      <ApiReferenceSectionLayout section={section}>
         <p className="text-sm text-muted-foreground">
           The API is OpenAI-compatible, so any client library that accepts a
           base URL works unchanged. Point it at:
@@ -22,7 +28,7 @@ export function EndpointSection({ baseUrl }: EndpointSectionProps) {
           code={'Authorization: Bearer nx_live_<key id>.<secret>'}
           label="Copy the header"
         />
-      </section>
+      </ApiReferenceSectionLayout>
   );
 }
 
@@ -31,14 +37,18 @@ type CapabilitiesSectionProps = {
   capabilities: string[];
   sample: string;
   isLoading: boolean;
+  isUnavailable: boolean;
 };
 
-export function CapabilitiesSection({ capabilities, sample, isLoading }: CapabilitiesSectionProps) {
+export function CapabilitiesSection({
+  capabilities,
+  sample,
+  isLoading,
+  isUnavailable,
+  section,
+}: CapabilitiesSectionProps & ApiReferenceSectionProps) {
   return (
-<section className="space-y-3">
-        <h2 className="font-heading text-base font-semibold">
-          <code>model</code> names a capability, not a model
-        </h2>
+      <ApiReferenceSectionLayout section={section}>
         <p className="text-sm text-muted-foreground">
           This is the one convention that differs from every other provider. A
           request asks for what it needs done and a routing policy decides which
@@ -50,6 +60,10 @@ export function CapabilitiesSection({ capabilities, sample, isLoading }: Capabil
           {isLoading ? (
             <span className="text-sm text-muted-foreground">
               Loading capabilities…
+            </span>
+          ) : isUnavailable ? (
+            <span className="text-sm text-muted-foreground" data-md-skip>
+              Live capabilities are unavailable.
             </span>
           ) : capabilities.length ? (
             capabilities.map((capability) => (
@@ -82,7 +96,7 @@ export function CapabilitiesSection({ capabilities, sample, isLoading }: Capabil
 }`}
           label="Copy the /v1/models shape"
         />
-      </section>
+      </ApiReferenceSectionLayout>
   );
 }
 
@@ -92,10 +106,13 @@ type RequestSectionProps = {
   sample: string;
 };
 
-export function RequestSection({ baseUrl, sample }: RequestSectionProps) {
+export function RequestSection({
+  baseUrl,
+  sample,
+  section,
+}: RequestSectionProps & ApiReferenceSectionProps) {
   return (
-<section className="space-y-3">
-        <h2 className="font-heading text-base font-semibold">A request</h2>
+      <ApiReferenceSectionLayout section={section}>
         <CodeBlock
           code={`curl ${baseUrl}/v1/chat/completions \\
   -H "Authorization: Bearer $NEXUS_API_KEY" \\
@@ -210,6 +227,6 @@ export function RequestSection({ baseUrl, sample }: RequestSectionProps) {
           instead; and <code>stream_options</code> on a request whose{' '}
           <code>stream</code> is not <code>true</code>.
         </p>
-      </section>
+      </ApiReferenceSectionLayout>
   );
 }
