@@ -1,8 +1,7 @@
 'use client';
 
-import { CheckIcon, CopyIcon } from 'lucide-react';
-
 import { Button } from '@/components/ui/button';
+import { CopySuccessIcon } from '@/components/composed/copy-success-icon';
 import { useCopyToClipboard } from '@/lib/use-copy-to-clipboard';
 import { cn } from '@/lib/utils';
 
@@ -46,8 +45,11 @@ export function CodeBlock({
         aria-label={label}
         className="absolute top-1.5 right-1.5"
       >
-        {copied ? <CheckIcon /> : <CopyIcon />}
+        <CopySuccessIcon copied={copied} className="size-3" />
       </Button>
+      <span aria-live="polite" className="sr-only">
+        {copied ? 'Copied to the clipboard.' : ''}
+      </span>
     </div>
   );
 }

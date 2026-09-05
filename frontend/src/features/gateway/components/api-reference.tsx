@@ -334,8 +334,8 @@ export function ApiReference() {
                       onClick={(event) => onSectionLink(event, section.id)}
                       className={
                         active
-                          ? 'block rounded-sm py-1 text-sm font-medium text-foreground'
-                          : 'block rounded-sm py-1 text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                          ? 'nexus-active-inpage-indicator block -translate-x-1 rounded-sm py-1 text-sm font-medium text-foreground'
+                          : 'nexus-active-inpage-indicator block rounded-sm py-1 text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
                       }
                     >
                       {apiReferenceSectionTitleText(section)}

@@ -57,7 +57,7 @@ export function PageHeader({
               '[&::-webkit-details-marker]:hidden',
             )}
           >
-            <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-open:rotate-90" />
+            <ChevronRightIcon className="nexus-disclosure-chevron size-3.5 shrink-0 group-open:rotate-90" />
             {detailsLabel}
           </summary>
           <div className="space-y-3 border-t px-3 py-3 text-sm text-muted-foreground">

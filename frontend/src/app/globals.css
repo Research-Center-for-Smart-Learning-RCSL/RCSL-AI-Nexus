@@ -139,6 +139,91 @@
   opacity: 1;
 }
 
+/*
+ * The small feedback vocabulary for controls that are already reachable. These
+ * are deliberately separate from the entry and panel rules above: none of the
+ * states below controls focus, visibility, or whether a control can be used.
+ */
+:root {
+  --nexus-interaction-ease: cubic-bezier(0.2, 0, 0, 1);
+  --nexus-disclosure-duration: 160ms;
+  --nexus-menu-duration: 160ms;
+  --nexus-copy-feedback-duration: 120ms;
+  --nexus-context-feedback-duration: 180ms;
+}
+
+.nexus-disclosure-chevron {
+  transition: rotate var(--nexus-disclosure-duration) var(--nexus-interaction-ease);
+}
+
+.nexus-menu-popover {
+  transition:
+    opacity var(--nexus-menu-duration) var(--nexus-interaction-ease),
+    transform var(--nexus-menu-duration) var(--nexus-interaction-ease);
+}
+
+/* Base UI keeps a popup mounted through its exit transition and exposes these
+   attributes for exactly that purpose. The contents stay operable throughout. */
+.nexus-menu-popover[data-starting-style],
+.nexus-menu-popover[data-ending-style] {
+  opacity: 0;
+  transform: translateY(-3px);
+}
+
+@keyframes nexus-menu-popover-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* The table column picker is a small local disclosure, so it mounts directly
+   rather than through Base UI's transition lifecycle. */
+.nexus-menu-popover-enter {
+  animation: nexus-menu-popover-enter var(--nexus-menu-duration) var(--nexus-interaction-ease) both;
+}
+
+.nexus-copy-feedback {
+  display: inline-grid;
+  place-items: center;
+}
+
+.nexus-copy-feedback > svg {
+  grid-area: 1 / 1;
+  transition: opacity var(--nexus-copy-feedback-duration) var(--nexus-interaction-ease);
+}
+
+.nexus-copy-feedback[data-copied='false'] [data-copy-icon='success'],
+.nexus-copy-feedback[data-copied='true'] [data-copy-icon='copy'] {
+  opacity: 0;
+}
+
+@keyframes nexus-filtered-results-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Result renderers remount after a local filter change; opacity is the only
+   feedback so the search field never loses focus or has its order disturbed. */
+.nexus-filtered-results {
+  animation: nexus-filtered-results-in var(--nexus-context-feedback-duration) var(--nexus-interaction-ease) both;
+}
+
+.nexus-active-inpage-indicator {
+  transition:
+    color var(--nexus-context-feedback-duration) var(--nexus-interaction-ease),
+    opacity var(--nexus-context-feedback-duration) var(--nexus-interaction-ease),
+    translate var(--nexus-context-feedback-duration) var(--nexus-interaction-ease);
+}
+
 /* Dot grid for the pre-authentication screens, after adilsarfraz02's
    "sweet-termite-95". Drawn in the border colour so it stays a texture rather
    than becoming a focal point, and so it survives the theme switch. */
@@ -150,6 +235,18 @@
 @media (prefers-reduced-motion: reduce) {
   .nexus-panel-motion {
     transition-duration: 0ms;
+  }
+
+  .nexus-disclosure-chevron,
+  .nexus-menu-popover,
+  .nexus-copy-feedback > svg,
+  .nexus-active-inpage-indicator {
+    transition-duration: 0ms;
+  }
+
+  .nexus-menu-popover-enter,
+  .nexus-filtered-results {
+    animation-duration: 0ms;
   }
 
   .nexus-spinner {

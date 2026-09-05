@@ -77,7 +77,7 @@ export function DataTableToolbar<TData>({
                 id="data-table-columns"
                 role="group"
                 aria-label="Columns to show"
-                className="absolute right-0 z-50 mt-1 w-48 rounded-lg bg-popover p-1 text-popover-foreground ring-1 ring-foreground/10"
+                className="nexus-menu-popover nexus-menu-popover-enter absolute right-0 z-50 mt-1 w-48 rounded-lg bg-popover p-1 text-popover-foreground ring-1 ring-foreground/10"
               >
                 {hideable.map((column) => (
                   <label

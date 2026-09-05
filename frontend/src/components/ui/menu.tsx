@@ -35,7 +35,7 @@ function MenuContent({
         <MenuPrimitive.Popup
           data-slot="menu-content"
           className={cn(
-            "relative isolate z-50 max-h-(--available-height) w-64 max-w-(--available-width) origin-(--transform-origin) overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none",
+            "nexus-menu-popover relative isolate z-50 max-h-(--available-height) w-64 max-w-(--available-width) origin-(--transform-origin) overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none",
             className
           )}
           {...props}

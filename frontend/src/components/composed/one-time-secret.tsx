@@ -9,9 +9,8 @@
  */
 
 import { useState, type ReactNode } from 'react';
-import { CheckIcon, CopyIcon } from 'lucide-react';
-
 import { Button } from '@/components/ui/button';
+import { CopySuccessIcon } from '@/components/composed/copy-success-icon';
 import { useCopyToClipboard } from '@/lib/use-copy-to-clipboard';
 import { cn } from '@/lib/utils';
 
@@ -71,7 +70,7 @@ export function OneTimeSecret({
           {acknowledgement}
         </label>
         <Button variant="outline" size="sm" onClick={() => void copy(values.join('\n'))} type="button">
-          {copied ? <CheckIcon /> : <CopyIcon />}
+          <CopySuccessIcon copied={copied} className="size-3.5" />
           {copied ? 'Copied' : 'Copy'}
         </Button>
       </div>
