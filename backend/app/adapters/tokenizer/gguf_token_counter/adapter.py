@@ -170,28 +170,30 @@ class GgufTokenCounter:
             return self._build_native(ref, blob)
         return self._build_python(ref, blob)
 
-    def _build_native(self, ref: str, blob: Path) -> _NativeVocabulary | None:
-        """Build using Python for tokenizer construction + template, Rust for encoding.
+    def _build_native(self, ref: str, blob: Path) -> _NativeVocabulary | _Vocabulary | None:
+        """Build the tokenizer directly in Rust from the GGUF blob.
 
-        The tokenizer is built in Python (identical to the pure-Python path) and
-        serialized to JSON, then loaded into the Rust side. This guarantees that
-        special tokens, pre-tokenizer patterns and merge tables are interpreted
-        identically — the JSON is a lossless representation of the constructed
-        tokenizer object.
+        Template rendering stays in Python Jinja2 (which handles ``namespace()``,
+        ``macro`` and every other template the deployment has seen), so the GGUF
+        is still read on the Python side for the chat template.  If the Rust
+        build fails, the full Python tokenizer is returned instead of ``None``
+        so the model still gets real token counts rather than the character
+        estimate.
         """
         python_vocab = self._build_python(ref, blob)
         if python_vocab is None:
             return None
 
         cache_key = str(blob) + ":" + ref
-        tokenizer_json: str = python_vocab._tokenizer.to_str()
-        result: tuple[bool, str | None] = _nexus_native.prepare_from_json(tokenizer_json, cache_key)
+        result: tuple[bool, str | None] = _nexus_native.prepare(str(blob), cache_key)
         success, error = result
         if not success:
             logger.warning(
-                "could not load tokeniser into Rust for %s: %s; using Python path", ref, error
+                "Rust tokenizer build failed for %s: %s; falling back to Python tokenizer",
+                ref,
+                error,
             )
-            return None
+            return python_vocab
 
         logger.info("counting %s with Rust encoder + Python template from %s", ref, blob.name)
         return _NativeVocabulary(
