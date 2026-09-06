@@ -1,0 +1,125 @@
+=== seed 1 ===
+seed-probe-1: 2 models x 1 rounds x 3 tasks = 6 samples, 6 to go
+  temperature=0.3  top_k=40  top_p=0.9  seed=1
+
+  snapshot: gemma4:31b-it-q8_0, qwen2.5:7b, nomic-embed-text:latest
+round 0  qwen3.8:27b-q8_0  (3 tasks)
+    evicting gemma4:31b-it-q8_0
+    evicting nomic-embed-text:latest
+    evicting qwen2.5:7b
+    loading qwen3.8:27b-q8_0 ...
+    loaded in 13.1s
+   visible_suffix            1.00   1647tok depth=  246  107.0s
+   text_wrap_exact           0.50   3156tok depth=  453  205.5s
+   csv_pipe                  0.25   1817tok depth=  308  118.2s
+   -- round 0 qwen3.8:27b-q8_0 done, 444s elapsed
+
+round 0  qwen3.8:27b-q4_K_M  (3 tasks)
+    evicting qwen3.8:27b-q8_0
+    loading qwen3.8:27b-q4_K_M ...
+    loaded in 8.3s
+   visible_suffix            1.00   1555tok depth=  246   68.9s
+   text_wrap_exact           0.12   2042tok depth=  453   90.9s
+   csv_pipe                  0.92   1532tok depth=  308   67.9s
+   -- round 0 qwen3.8:27b-q4_K_M done, 680s elapsed
+
+seed-probe-1 complete: 6 new samples in 680s
+=== seed 2 ===
+seed-probe-2: 2 models x 1 rounds x 3 tasks = 6 samples, 6 to go
+  temperature=0.3  top_k=40  top_p=0.9  seed=2
+
+  keeping the existing snapshot (/Users/rcslmac1/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
+round 0  qwen3.8:27b-q8_0  (3 tasks)
+    evicting qwen3.8:27b-q4_K_M
+    loading qwen3.8:27b-q8_0 ...
+    loaded in 2.8s
+   visible_suffix            1.00   1082tok depth=  246   70.8s
+   text_wrap_exact           1.00   2542tok depth=  453  165.6s
+   csv_pipe                  0.08   2609tok depth=  308  168.9s
+   -- round 0 qwen3.8:27b-q8_0 done, 408s elapsed
+
+round 0  qwen3.8:27b-q4_K_M  (3 tasks)
+    evicting qwen3.8:27b-q8_0
+    loading qwen3.8:27b-q4_K_M ...
+    loaded in 2.7s
+   visible_suffix            1.00   1063tok depth=  246   47.6s
+   text_wrap_exact           0.88   2179tok depth=  453   97.0s
+   csv_pipe                  1.00   2192tok depth=  308   96.9s
+   -- round 0 qwen3.8:27b-q4_K_M done, 653s elapsed
+
+seed-probe-2 complete: 6 new samples in 653s
+=== seed 3 ===
+seed-probe-3: 2 models x 1 rounds x 3 tasks = 6 samples, 6 to go
+  temperature=0.3  top_k=40  top_p=0.9  seed=3
+
+  keeping the existing snapshot (/Users/rcslmac1/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
+round 0  qwen3.8:27b-q8_0  (3 tasks)
+    evicting qwen3.8:27b-q4_K_M
+    loading qwen3.8:27b-q8_0 ...
+    loaded in 3.1s
+   visible_suffix            1.00   1264tok depth=  246   82.5s
+   text_wrap_exact           0.12   2153tok depth=  453  140.4s
+   csv_pipe                  0.08   2518tok depth=  308  163.2s
+   -- round 0 qwen3.8:27b-q8_0 done, 389s elapsed
+
+round 0  qwen3.8:27b-q4_K_M  (3 tasks)
+    evicting qwen3.8:27b-q8_0
+    loading qwen3.8:27b-q4_K_M ...
+    loaded in 2.7s
+   visible_suffix            1.00    937tok depth=  246   42.1s
+   text_wrap_exact           1.00   2610tok depth=  453  115.8s
+   csv_pipe                  0.92    840tok depth=  308   38.0s
+   -- round 0 qwen3.8:27b-q4_K_M done, 588s elapsed
+
+seed-probe-3 complete: 6 new samples in 588s
+=== seed 4 ===
+seed-probe-4: 2 models x 1 rounds x 3 tasks = 6 samples, 6 to go
+  temperature=0.3  top_k=40  top_p=0.9  seed=4
+
+  keeping the existing snapshot (/Users/rcslmac1/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
+round 0  qwen3.8:27b-q8_0  (3 tasks)
+    evicting qwen3.8:27b-q4_K_M
+    loading qwen3.8:27b-q8_0 ...
+    loaded in 3.1s
+   visible_suffix            0.07   2002tok depth=  246  129.8s
+   text_wrap_exact           1.00   2244tok depth=  453  146.5s
+   csv_pipe                  0.25   1471tok depth=  308   95.9s
+   -- round 0 qwen3.8:27b-q8_0 done, 375s elapsed
+
+round 0  qwen3.8:27b-q4_K_M  (3 tasks)
+    evicting qwen3.8:27b-q8_0
+    loading qwen3.8:27b-q4_K_M ...
+    loaded in 2.5s
+   visible_suffix            1.00    828tok depth=  246   37.3s
+   text_wrap_exact           1.00   2168tok depth=  453   96.5s
+   csv_pipe                  0.92   2190tok depth=  308   96.7s
+   -- round 0 qwen3.8:27b-q4_K_M done, 608s elapsed
+
+seed-probe-4 complete: 6 new samples in 608s
+=== seed 5 ===
+seed-probe-5: 2 models x 1 rounds x 3 tasks = 6 samples, 6 to go
+  temperature=0.3  top_k=40  top_p=0.9  seed=5
+
+  keeping the existing snapshot (/Users/rcslmac1/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
+round 0  qwen3.8:27b-q8_0  (3 tasks)
+    evicting qwen3.8:27b-q4_K_M
+    loading qwen3.8:27b-q8_0 ...
+    loaded in 3.1s
+   visible_suffix            0.33   1690tok depth=  246  110.3s
+   text_wrap_exact           0.88   1603tok depth=  453  104.8s
+   csv_pipe                  0.25   2305tok depth=  308  149.5s
+   -- round 0 qwen3.8:27b-q8_0 done, 368s elapsed
+
+round 0  qwen3.8:27b-q4_K_M  (3 tasks)
+    evicting qwen3.8:27b-q8_0
+    loading qwen3.8:27b-q4_K_M ...
+    loaded in 2.2s
+   visible_suffix            0.13   2345tok depth=  246  103.3s
+   text_wrap_exact           1.00   2494tok depth=  453  110.8s
+   csv_pipe                  0.83   1464tok depth=  308   65.1s
+   -- round 0 qwen3.8:27b-q4_K_M done, 649s elapsed
+
+seed-probe-5 complete: 6 new samples in 649s
+
+=== all seeds done ===
+Analyse with:  python3 analyse_multiseed.py
