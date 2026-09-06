@@ -36,6 +36,9 @@ separately at the end, marked as superseded.
 
 ### September 2026
 
+**[2026-09-07](./progress/2026-09-07.md)**
+- Asked whether the platform draws, and the answer turned out to be about the GPU rather than about the code
+
 **[2026-09-04](./progress/2026-09-04.md)**
 - The five tasks yesterday's set could not measure with, and the conclusion that reversed when they were replaced
 - The two tasks that measured the output budget now measure the model
