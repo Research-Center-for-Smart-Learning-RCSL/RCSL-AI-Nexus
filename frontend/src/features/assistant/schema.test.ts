@@ -240,4 +240,34 @@ describe('the default capability, which the strict schema had to be told about',
       'default_capability' in draftFor({ default_capability: NO_DEFAULT }),
     ).toBe(false);
   });
+
+  it('carries a proposed compaction_enabled as a real boolean, not a string', () => {
+    const patch = proposalToFormPatch({
+      compaction_enabled: false,
+    } as ProposalFields);
+
+    expect(patch.compaction_enabled).toBe(false);
+  });
+
+  it('leaves compaction_enabled alone when the proposal did not name it', () => {
+    const patch = proposalToFormPatch({ name: 'ci' } as ProposalFields);
+
+    expect('compaction_enabled' in patch).toBe(false);
+  });
+
+  it('applies a proposed compaction_enabled through the allowlist', () => {
+    const written: Record<string, unknown> = {};
+    applyProposalPatch({ compaction_enabled: false }, (field, value) => {
+      written[field] = value;
+    });
+
+    expect(written.compaction_enabled).toBe(false);
+  });
+
+  it('publishes compaction_enabled in the draft whenever the form has an opinion', () => {
+    expect(draftFor({ compaction_enabled: false }).compaction_enabled).toBe(
+      false,
+    );
+    expect('compaction_enabled' in draftFor({})).toBe(false);
+  });
 });

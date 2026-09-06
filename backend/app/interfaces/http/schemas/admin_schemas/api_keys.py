@@ -41,6 +41,11 @@ class ApiKeyResponse(BaseModel):
     which is what makes it a shortcut rather than a grant.
     """
 
+    compaction_enabled: bool
+    """Whether oversized requests through this key are compacted before they
+    are refused, rather than refused outright. Default on; see
+    `app.domain.entities.api_key.ApiKey.compaction_enabled`."""
+
     @classmethod
     def of(
         cls,
@@ -67,6 +72,7 @@ class ApiKeyResponse(BaseModel):
             created_at=key.created_at,
             debug_logging_until=key.debug_logging_until,
             default_capability=key.default_capability,
+            compaction_enabled=key.compaction_enabled,
             last_used_at=last_used_at,
         )
 
@@ -107,6 +113,10 @@ class CreateApiKeyRequest(BaseModel):
     list it had to be in.
     """
 
+    compaction_enabled: bool = True
+    """Opt out per key if an integration would rather see the refusal than a
+    summarized prompt. See `ApiKey.compaction_enabled`."""
+
 
 class UpdateApiKeyRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
@@ -125,6 +135,11 @@ class UpdateApiKeyRequest(BaseModel):
     the router tells them apart with `model_fields_set` rather than by their
     value. Without that, a default could be set and never cleared.
     """
+
+    compaction_enabled: bool | None = None
+    """`None` means "not mentioned, leave it alone" — the same convention as
+    `rate_limit_rpm` above, not the `default_capability` one: this field has
+    no meaningful null to protect from a default."""
 
 
 class AdminErrorResponse(BaseModel):

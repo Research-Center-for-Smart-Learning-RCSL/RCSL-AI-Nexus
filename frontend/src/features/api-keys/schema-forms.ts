@@ -18,6 +18,7 @@ const sharedFields = {
   allowed_cidrs_text: cidrTextSchema,
   expires_at: z.string().min(1, 'An expiry is required.'),
   default_capability: z.string().default(NO_DEFAULT),
+  compaction_enabled: z.boolean().default(true),
 };
 
 export const createApiKeySchema = z
@@ -34,6 +35,7 @@ export type CreateApiKeyPayload = {
   allowed_cidrs: string[];
   expires_at: string;
   default_capability: string | null;
+  compaction_enabled: boolean;
 };
 
 export const updateApiKeySchema = z
@@ -49,4 +51,5 @@ export type UpdateApiKeyPayload = {
   allowed_cidrs: string[];
   expires_at: string;
   default_capability: string | null;
+  compaction_enabled: boolean;
 };

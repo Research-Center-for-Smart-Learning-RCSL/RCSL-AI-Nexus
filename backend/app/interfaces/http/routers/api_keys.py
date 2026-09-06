@@ -76,6 +76,7 @@ async def create_api_key(
         quota_tokens_per_day=payload.quota_tokens_per_day,
         allowed_cidrs=payload.allowed_cidrs,
         default_capability=payload.default_capability,
+        compaction_enabled=payload.compaction_enabled,
     )
     return IssuedApiKeyResponse(key=ApiKeyResponse.of(issued.key), plaintext=issued.plaintext)
 
@@ -105,6 +106,7 @@ async def update_api_key(
             if "default_capability" in payload.model_fields_set
             else UNCHANGED
         ),
+        compaction_enabled=payload.compaction_enabled,
     )
     return ApiKeyResponse.of(key)
 

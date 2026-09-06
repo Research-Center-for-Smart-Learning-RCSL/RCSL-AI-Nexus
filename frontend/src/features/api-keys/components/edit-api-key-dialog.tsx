@@ -19,6 +19,7 @@ import { describeError } from '@/components/composed/error-state';
 import {
   ApiKeyCapabilities,
   CidrTextarea,
+  CompactionToggle,
   DefaultCapabilitySelect,
   ExpiryField,
 } from '@/features/api-keys/components/api-key-policy-controls';
@@ -85,6 +86,7 @@ export function EditApiKeyDialog({
       allowed_cidrs_text: apiKey.allowed_cidrs.join('\n'),
       expires_at: expired ? defaultExpiry() : toDateInput(apiKey.expires_at),
       default_capability: defaultCapabilityField(apiKey.default_capability),
+      compaction_enabled: apiKey.compaction_enabled,
     },
   });
 
@@ -126,6 +128,7 @@ export function EditApiKeyDialog({
         // unchanged would work, and would also make "refuse again" the one
         // edit this dialog could not express.
         default_capability: defaultCapabilityPayload(values.default_capability),
+        compaction_enabled: values.compaction_enabled,
         // Sent only when it is actually meant to change, which is what the
         // endpoint being a PATCH is for. A date input holds a calendar day, so
         // resubmitting an untouched value rewrites an `18:00Z` expiry to
@@ -244,6 +247,20 @@ export function EditApiKeyDialog({
                       onChange={(value) => field.onChange(value)}
                       onBlur={field.onBlur}
                     />
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="compaction_enabled"
+              label="Auto-compress oversized requests"
+              description="When a request would exceed the context limit, summarize the oldest turns instead of refusing outright. Disable to see the refusal instead."
+              render={(field) => (
+                <CompactionToggle
+                  id="edit-compaction-enabled"
+                  checked={field.value as boolean}
+                  onChange={(value) => field.onChange(value)}
+                />
               )}
             />
 

@@ -99,6 +99,33 @@ export function ExpiryField({
   );
 }
 
+/** A single checkbox rather than the project's `Switch`, because there isn't
+ * one — every other boolean-shaped control in this codebase is a `Select`
+ * (see `DefaultCapabilitySelect`), and adding a new primitive for one field
+ * would be more surface than the setting needs. */
+export function CompactionToggle({
+  id,
+  checked,
+  onChange,
+}: {
+  id: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label htmlFor={id} className="flex items-center gap-2 text-sm">
+      <input
+        id={id}
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="h-4 w-4 rounded border-input accent-primary"
+      />
+      {checked ? 'Enabled' : 'Disabled'}
+    </label>
+  );
+}
+
 export function CidrTextarea({
   id,
   value,

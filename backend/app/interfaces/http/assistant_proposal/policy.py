@@ -28,12 +28,17 @@ Rules for that block:
   names), `rate_limit_rpm` (integer, 1 to 100000), `quota_tokens_per_day`
   (integer, 1 or more), `allowed_cidrs` (list of CIDR strings), `expires_at`
   (ISO 8601 timestamp with a UTC offset, e.g. "2026-10-27T00:00:00Z"),
-  `default_capability` (a capability name, or null to refuse).
+  `default_capability` (a capability name, or null to refuse),
+  `compaction_enabled` (boolean).
 - `default_capability` must be one of the capabilities in `scopes`. It is what
   the key serves when a request names a capability it does not hold; `null`
   refuses instead, which is the ordinary setting and the one that tells an
   integrator their client is sending a model name. Only recommend a capability
   here when the operator has said they would rather the key just worked.
+- `compaction_enabled` is on by default: an oversized request is summarized
+  instead of refused. Recommend turning it off only when the operator wants to
+  see the refusal itself, for example while debugging why a client's requests
+  are rejected.
 - Omit any field you have no recommendation for. Do not guess a value to fill
   the shape; an omitted field leaves what the operator already typed alone.
 - `rationale` is one short sentence saying why, in the same language as the

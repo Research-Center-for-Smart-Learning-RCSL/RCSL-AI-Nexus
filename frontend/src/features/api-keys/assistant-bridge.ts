@@ -37,6 +37,7 @@ export const APPLICABLE_FIELDS = [
   'allowed_cidrs_text',
   'expires_at',
   'default_capability',
+  'compaction_enabled',
 ] as const;
 
 export type ApplicableField = (typeof APPLICABLE_FIELDS)[number];
@@ -55,6 +56,7 @@ export type KeyFormValues = {
   allowed_cidrs_text?: string;
   expires_at?: string;
   default_capability?: string;
+  compaction_enabled?: boolean;
 };
 
 function text(value: unknown): string {
@@ -85,6 +87,9 @@ export function draftFor(values: KeyFormValues): ApiKeyDraft {
     ...(values.default_capability && values.default_capability !== NO_DEFAULT
       ? { default_capability: values.default_capability }
       : {}),
+    ...(values.compaction_enabled !== undefined
+      ? { compaction_enabled: values.compaction_enabled }
+      : {}),
   };
 }
 
@@ -98,7 +103,7 @@ export function draftFor(values: KeyFormValues): ApiKeyDraft {
  */
 export function applyProposalPatch(
   patch: FormPatch,
-  setField: (name: ApplicableField, value: string | string[]) => void,
+  setField: (name: ApplicableField, value: string | string[] | boolean) => void,
 ): void {
   for (const field of APPLICABLE_FIELDS) {
     const value = patch[field];

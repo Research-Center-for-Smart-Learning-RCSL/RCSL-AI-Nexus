@@ -20,6 +20,7 @@ type KeyWrite = Pick<
   // clears a default. A stub that dropped it would let the form stop sending
   // it and nothing here would notice.
   | 'default_capability'
+  | 'compaction_enabled'
 >;
 
 function json(
@@ -176,6 +177,7 @@ test('issues, edits, and revokes an API key', async ({ page }) => {
     // it. `toEqual` rather than `toMatchObject` here on purpose: the assertion
     // is that the form sends this and nothing else.
     default_capability: null,
+    compaction_enabled: true,
     name: 'browser-agent-renamed',
     scopes: ['chat'],
     rate_limit_rpm: 30,

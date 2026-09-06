@@ -50,6 +50,7 @@ class ApiKeyCommandsMixin(ApiKeyPolicyMixin):
         quota_tokens_per_day: int | None,
         allowed_cidrs: Sequence[str],
         default_capability: str | None = None,
+        compaction_enabled: bool = True,
     ) -> IssuedApiKey:
         self._require_owner_permission(actor, owner_id)
 
@@ -82,6 +83,7 @@ class ApiKeyCommandsMixin(ApiKeyPolicyMixin):
             rate_limit_rpm=rate_limit_rpm,
             quota_tokens_per_day=quota_tokens_per_day,
             default_capability=default_capability,
+            compaction_enabled=compaction_enabled,
         )
         await self._keys.save(key)
 
@@ -103,6 +105,10 @@ class ApiKeyCommandsMixin(ApiKeyPolicyMixin):
                 # issued with a default behaves differently from one without,
                 # and the audit log is where that is read back.
                 "default_capability": default_capability or "",
+                # Compaction being off means an oversized request is refused
+                # rather than summarized, which is a visible behaviour
+                # difference worth the same record as the default above.
+                "compaction_enabled": str(compaction_enabled),
             },
         )
         return IssuedApiKey(key=stored, plaintext=issued.plaintext)
@@ -119,6 +125,7 @@ class ApiKeyCommandsMixin(ApiKeyPolicyMixin):
         quota_tokens_per_day: int | None = None,
         allowed_cidrs: Sequence[str] | None = None,
         default_capability: str | None | Unchanged = UNCHANGED,
+        compaction_enabled: bool | None = None,
     ) -> ApiKey:
         key = await self._require(key_id)
         self._require_owner_permission(actor, key.owner_id)
@@ -164,6 +171,9 @@ class ApiKeyCommandsMixin(ApiKeyPolicyMixin):
                 _parse_cidrs(allowed_cidrs) if allowed_cidrs is not None else key.allowed_cidrs
             ),
             default_capability=resulting_default,
+            compaction_enabled=(
+                compaction_enabled if compaction_enabled is not None else key.compaction_enabled
+            ),
         )
         # A targeted update of the editable columns only, guarded on
         # `revoked_at IS NULL`. The revoked check above is a courtesy that
@@ -180,6 +190,7 @@ class ApiKeyCommandsMixin(ApiKeyPolicyMixin):
                 "quota_tokens_per_day": updated.quota_tokens_per_day,
                 "allowed_cidrs": [str(n) for n in updated.allowed_cidrs],
                 "default_capability": updated.default_capability,
+                "compaction_enabled": updated.compaction_enabled,
             },
         ):
             raise ApiKeyStateConflictError(detail=f"key {key_id} was revoked concurrently")
@@ -193,6 +204,7 @@ class ApiKeyCommandsMixin(ApiKeyPolicyMixin):
             detail={
                 "scopes": ",".join(sorted(updated.scopes)),
                 "default_capability": updated.default_capability or "",
+                "compaction_enabled": str(updated.compaction_enabled),
             },
         )
         return updated
