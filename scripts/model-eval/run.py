@@ -424,6 +424,9 @@ if __name__ == "__main__":
         run("tutor-pilot", [INCUMBENT], ROUNDS, only=tutor_set())
     elif cmd == "tutor-full":
         run("tutor-full", CANDIDATES_38, ROUNDS, only=tutor_set())
+    elif cmd.startswith("seed-probe-"):
+        run(cmd, ["qwen3.8:27b-q8_0", "qwen3.8:27b-q4_K_M"], ROUNDS,
+            only=["visible_suffix", "text_wrap_exact", "csv_pipe"])
     elif cmd == "restore":
         restore()
     else:
