@@ -42,16 +42,25 @@ if [ -z "$TAILNET_IP" ]; then
   fail "config" "TAILNET_IP is not set in $REPO/.env, so nothing below could be checked against the right address."
 fi
 
+# The real tailnet address, which may differ from TAILNET_IP when containers
+# bind loopback and socat forwards from the tailnet interface (the Colima
+# arrangement .env documents).  Ollama runs on the host, not in Docker, so
+# the exposure check must probe the real tailnet address — using TAILNET_IP
+# when it is 127.0.0.1 tests loopback against loopback and always fires.
+TAILNET_REAL_IP="$(sed -n 's/^TAILNET_REAL_IP=//p' .env 2>/dev/null | head -1 | tr -d '"'\''[:space:]')"
+: "${TAILNET_REAL_IP:=$TAILNET_IP}"
+
 # The only host addresses any container is allowed to publish on. Check 5b
 # compares against this, so it has to be built from what the deployment is
 # entitled to and not from what it happens to be doing.
 ALLOWED_HOST_IPS="127.0.0.1"
 [ -n "$TAILNET_IP" ] && ALLOWED_HOST_IPS="$ALLOWED_HOST_IPS $TAILNET_IP"
+[ -n "$TAILNET_REAL_IP" ] && [ "$TAILNET_REAL_IP" != "$TAILNET_IP" ] && ALLOWED_HOST_IPS="$ALLOWED_HOST_IPS $TAILNET_REAL_IP"
 
 # --- 2. the tailnet address is on an interface ------------------------------
 
-if [ -n "$TAILNET_IP" ] && ! ifconfig 2>/dev/null | grep -qw "$TAILNET_IP"; then
-  fail "tailnet" "$TAILNET_IP is not on any interface. tailscaled is down or has not brought utun0 up; every tailnet-facing binding depends on this."
+if [ -n "$TAILNET_REAL_IP" ] && ! ifconfig 2>/dev/null | grep -qw "$TAILNET_REAL_IP"; then
+  fail "tailnet" "$TAILNET_REAL_IP is not on any interface. tailscaled is down or has not brought utun0 up; every tailnet-facing binding depends on this."
 fi
 
 # --- 3. the docker daemon answers -------------------------------------------

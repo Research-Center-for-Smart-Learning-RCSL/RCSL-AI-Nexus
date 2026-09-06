@@ -28,10 +28,10 @@ OLLAMA_LOOPBACK="$(curl -s -o /dev/null -m 5 -w '%{http_code}' http://127.0.0.1:
 if [ "$OLLAMA_LOOPBACK" != "200" ]; then
   fail "ollama" "Ollama did not answer on 127.0.0.1:11434 (got $OLLAMA_LOOPBACK). Inference is down; the gateway's /readyz runtime check will follow."
 fi
-if [ -n "$TAILNET_IP" ]; then
-  OLLAMA_TAILNET="$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://$TAILNET_IP:11434/api/tags" 2>/dev/null)"
+if [ -n "$TAILNET_REAL_IP" ]; then
+  OLLAMA_TAILNET="$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://$TAILNET_REAL_IP:11434/api/tags" 2>/dev/null)"
   if [ "$OLLAMA_TAILNET" = "200" ]; then
-    fail "ollama-exposed" "Ollama is answering on $TAILNET_IP:11434. It must bind loopback only (security.md 7.1) — OLLAMA_HOST has been lost, most likely by an upgrade replacing online.rcsl.ollama.plist."
+    fail "ollama-exposed" "Ollama is answering on $TAILNET_REAL_IP:11434. It must bind loopback only (security.md 7.1) — OLLAMA_HOST has been lost, most likely by an upgrade replacing online.rcsl.ollama.plist."
   fi
 fi
 
