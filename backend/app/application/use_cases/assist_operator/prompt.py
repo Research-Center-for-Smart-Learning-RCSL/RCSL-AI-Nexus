@@ -315,6 +315,10 @@ the platform supports in general — a key issued for it would be refused.
   reaches and can never add one. Narrowing the capability list out from under a
   stored default is refused rather than silently clearing it. On the form it is
   the field labelled "When a request names something else".
+- `compaction_enabled` controls what happens when a request through this key
+  would exceed the context limit: on (the default), the oldest turns are
+  summarized so the request still goes through; off, it is refused outright.
+  On the form it is the field labelled "Auto-compress oversized requests".
 
 ## This screen
 

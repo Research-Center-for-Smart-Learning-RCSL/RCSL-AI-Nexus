@@ -44,7 +44,7 @@ import {
 import type { ApiKeyDraft, AssistSurface } from '@/features/assistant/schema';
 
 /** Values a proposal can be applied as; see `proposalToFormPatch`. */
-export type FormPatch = Record<string, string | string[]>;
+export type FormPatch = Record<string, string | string[] | boolean>;
 
 export type AssistantRegistration = {
   surface: AssistSurface;

@@ -118,6 +118,41 @@ async def test_an_explicit_null_clears_the_default() -> None:
     assert harness.keys.rows[issued.key.key_id].default_capability is None
 
 
+async def test_a_key_is_issued_with_compaction_enabled_by_default() -> None:
+    harness = KeyHarness()
+
+    issued = await harness.issue()
+
+    assert issued.key.compaction_enabled is True
+
+
+async def test_compaction_can_be_disabled_at_issue() -> None:
+    harness = KeyHarness()
+
+    issued = await harness.issue(compaction_enabled=False)
+
+    assert issued.key.compaction_enabled is False
+    assert harness.keys.rows[issued.key.key_id].compaction_enabled is False
+
+
+async def test_an_edit_that_does_not_mention_compaction_leaves_it_alone() -> None:
+    harness = KeyHarness()
+    issued = await harness.issue(compaction_enabled=False)
+
+    await harness.use_case.update(ADMIN, issued.key.key_id, rate_limit_rpm=30)
+
+    assert harness.keys.rows[issued.key.key_id].compaction_enabled is False
+
+
+async def test_an_edit_can_turn_compaction_back_on() -> None:
+    harness = KeyHarness()
+    issued = await harness.issue(compaction_enabled=False)
+
+    await harness.use_case.update(ADMIN, issued.key.key_id, compaction_enabled=True)
+
+    assert harness.keys.rows[issued.key.key_id].compaction_enabled is True
+
+
 async def test_an_unparsable_cidr_is_refused() -> None:
     harness = KeyHarness()
 

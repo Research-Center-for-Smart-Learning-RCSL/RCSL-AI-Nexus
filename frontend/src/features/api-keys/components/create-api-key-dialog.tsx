@@ -19,6 +19,7 @@ import { describeError } from '@/components/composed/error-state';
 import {
   ApiKeyCapabilities,
   CidrTextarea,
+  CompactionToggle,
   DefaultCapabilitySelect,
   ExpiryField,
 } from '@/features/api-keys/components/api-key-policy-controls';
@@ -78,6 +79,7 @@ export function CreateApiKeyDialog({
       expires_at: defaultExpiry(),
       owner_id: ownerId,
       default_capability: NO_DEFAULT,
+      compaction_enabled: true,
     },
   });
 
@@ -121,6 +123,7 @@ export function CreateApiKeyDialog({
       allowed_cidrs: parseCidrText(values.allowed_cidrs_text),
       expires_at: values.expires_at,
       default_capability: defaultCapabilityPayload(values.default_capability),
+      compaction_enabled: values.compaction_enabled,
     });
     // The first capability, which is what a one-capability key makes obvious
     // and what a multi-capability key can reasonably start from.
@@ -260,6 +263,20 @@ export function CreateApiKeyDialog({
                       value={(field.value as string) ?? ''}
                       onChange={(value) => field.onChange(value)}
                       onBlur={field.onBlur}
+                    />
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="compaction_enabled"
+                  label="Auto-compress oversized requests"
+                  description="When a request would exceed the context limit, summarize the oldest turns instead of refusing outright. Disable to see the refusal instead."
+                  render={(field) => (
+                    <CompactionToggle
+                      id="compaction-enabled"
+                      checked={field.value as boolean}
+                      onChange={(value) => field.onChange(value)}
                     />
                   )}
                 />

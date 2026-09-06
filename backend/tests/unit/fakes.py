@@ -439,6 +439,7 @@ class FakeApiKeys:
             quota_tokens_per_day=values["quota_tokens_per_day"],
             allowed_cidrs=tuple(ip_network(c) for c in values["allowed_cidrs"]),  # type: ignore[union-attr]
             default_capability=values["default_capability"],
+            compaction_enabled=values["compaction_enabled"],
         )
         return True
 

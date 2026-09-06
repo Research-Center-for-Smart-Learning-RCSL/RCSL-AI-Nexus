@@ -17,6 +17,7 @@ export const apiKeySchema = z.object({
   last_used_at: z.string().nullable(),
   default_capability: z.string().nullable(),
   debug_logging_until: z.string().nullable(),
+  compaction_enabled: z.boolean(),
 });
 export type ApiKey = z.infer<typeof apiKeySchema>;
 export const apiKeyListSchema = z.array(apiKeySchema);

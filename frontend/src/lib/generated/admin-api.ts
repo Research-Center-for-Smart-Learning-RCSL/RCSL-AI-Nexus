@@ -1458,6 +1458,8 @@ export interface components {
         ApiKeyDraftIn: {
             /** Allowed Cidrs */
             allowed_cidrs?: string[] | null;
+            /** Compaction Enabled */
+            compaction_enabled?: boolean | null;
             /** Default Capability */
             default_capability?: string | null;
             /** Expires At */
@@ -1475,6 +1477,8 @@ export interface components {
         ApiKeyResponse: {
             /** Allowed Cidrs */
             allowed_cidrs: string[];
+            /** Compaction Enabled */
+            compaction_enabled: boolean;
             /** Created At */
             created_at: string | null;
             /** Debug Logging Until */
@@ -1608,6 +1612,11 @@ export interface components {
         CreateApiKeyRequest: {
             /** Allowed Cidrs */
             allowed_cidrs?: string[];
+            /**
+             * Compaction Enabled
+             * @default true
+             */
+            compaction_enabled: boolean;
             /** Default Capability */
             default_capability?: string | null;
             /**
@@ -2498,6 +2507,8 @@ export interface components {
         UpdateApiKeyRequest: {
             /** Allowed Cidrs */
             allowed_cidrs?: string[] | null;
+            /** Compaction Enabled */
+            compaction_enabled?: boolean | null;
             /** Default Capability */
             default_capability?: string | null;
             /** Expires At */

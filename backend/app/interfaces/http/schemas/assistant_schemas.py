@@ -91,6 +91,12 @@ class ApiKeyDraftIn(BaseModel):
     sends for it — the sentinel the select uses is a frontend concern and does
     not travel."""
 
+    compaction_enabled: bool | None = None
+    """What the form's compaction toggle currently holds. Unlike
+    `default_capability`, absent here has no special meaning of its own — it is
+    the same "not yet known" that every other optional field on this model
+    uses — because the toggle is a plain boolean with no sentinel to translate."""
+
 
 class AssistRequest(BaseModel):
     surface: AssistSurface = "other"
