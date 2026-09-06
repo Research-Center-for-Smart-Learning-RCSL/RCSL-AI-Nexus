@@ -1,0 +1,173 @@
+{
+  "phase": "tutor-full",
+  "models": [
+    "gemma4:31b-it-q8_0",
+    "qwen3.8:27b-mlx",
+    "qwen3.8:27b-q4_K_M",
+    "qwen3.8:27b-q8_0"
+  ],
+  "conditions": {
+    "num_ctx": 16384,
+    "num_predict": 4096
+  },
+  "overall": {
+    "gemma4:31b-it-q8_0": {
+      "mean": 0.9894,
+      "ci_lo": 0.9809,
+      "ci_hi": 0.9957,
+      "scored": 20,
+      "no_result": 0,
+      "gen_tok_s": 14.2,
+      "wall_s_per_task": 32.1
+    },
+    "qwen3.8:27b-mlx": {
+      "mean": 0.8896,
+      "ci_lo": 0.8418,
+      "ci_hi": 0.9337,
+      "scored": 20,
+      "no_result": 0,
+      "gen_tok_s": 55.6,
+      "wall_s_per_task": 12.0
+    },
+    "qwen3.8:27b-q4_K_M": {
+      "mean": 0.9153,
+      "ci_lo": 0.8909,
+      "ci_hi": 0.9404,
+      "scored": 20,
+      "no_result": 0,
+      "gen_tok_s": 23.6,
+      "wall_s_per_task": 23.8
+    },
+    "qwen3.8:27b-q8_0": {
+      "mean": 0.9234,
+      "ci_lo": 0.8874,
+      "ci_hi": 0.9587,
+      "scored": 20,
+      "no_result": 0,
+      "gen_tok_s": 16.0,
+      "wall_s_per_task": 28.9
+    }
+  },
+  "tasks": [
+    {
+      "id": "tutor_answer_withholding",
+      "group": "T",
+      "scores": {
+        "gemma4:31b-it-q8_0": {
+          "mean": 0.9574,
+          "ci_lo": 0.9574,
+          "ci_hi": 0.9574,
+          "n": 5
+        },
+        "qwen3.8:27b-mlx": {
+          "mean": 0.9234,
+          "ci_lo": 0.9064,
+          "ci_hi": 0.9447,
+          "n": 5
+        },
+        "qwen3.8:27b-q4_K_M": {
+          "mean": 0.9362,
+          "ci_lo": 0.9362,
+          "ci_hi": 0.9362,
+          "n": 5
+        },
+        "qwen3.8:27b-q8_0": {
+          "mean": 0.8936,
+          "ci_lo": 0.8936,
+          "ci_hi": 0.8936,
+          "n": 5
+        }
+      }
+    },
+    {
+      "id": "tutor_lesson_flow",
+      "group": "T",
+      "scores": {
+        "gemma4:31b-it-q8_0": {
+          "mean": 1.0,
+          "ci_lo": 1.0,
+          "ci_hi": 1.0,
+          "n": 5
+        },
+        "qwen3.8:27b-mlx": {
+          "mean": 0.935,
+          "ci_lo": 0.89,
+          "ci_hi": 0.98,
+          "n": 5
+        },
+        "qwen3.8:27b-q4_K_M": {
+          "mean": 0.875,
+          "ci_lo": 0.875,
+          "ci_hi": 0.875,
+          "n": 5
+        },
+        "qwen3.8:27b-q8_0": {
+          "mean": 1.0,
+          "ci_lo": 1.0,
+          "ci_hi": 1.0,
+          "n": 5
+        }
+      }
+    },
+    {
+      "id": "tutor_digression_recovery",
+      "group": "T",
+      "scores": {
+        "gemma4:31b-it-q8_0": {
+          "mean": 1.0,
+          "ci_lo": 1.0,
+          "ci_hi": 1.0,
+          "n": 5
+        },
+        "qwen3.8:27b-mlx": {
+          "mean": 0.9,
+          "ci_lo": 0.8,
+          "ci_hi": 1.0,
+          "n": 5
+        },
+        "qwen3.8:27b-q4_K_M": {
+          "mean": 1.0,
+          "ci_lo": 1.0,
+          "ci_hi": 1.0,
+          "n": 5
+        },
+        "qwen3.8:27b-q8_0": {
+          "mean": 1.0,
+          "ci_lo": 1.0,
+          "ci_hi": 1.0,
+          "n": 5
+        }
+      }
+    },
+    {
+      "id": "tutor_format_persistence",
+      "group": "T",
+      "scores": {
+        "gemma4:31b-it-q8_0": {
+          "mean": 1.0,
+          "ci_lo": 1.0,
+          "ci_hi": 1.0,
+          "n": 5
+        },
+        "qwen3.8:27b-mlx": {
+          "mean": 0.8,
+          "ci_lo": 0.695,
+          "ci_hi": 0.87,
+          "n": 5
+        },
+        "qwen3.8:27b-q4_K_M": {
+          "mean": 0.85,
+          "ci_lo": 0.85,
+          "ci_hi": 0.85,
+          "n": 5
+        },
+        "qwen3.8:27b-q8_0": {
+          "mean": 0.8,
+          "ci_lo": 0.8,
+          "ci_hi": 0.8,
+          "n": 5
+        }
+      }
+    }
+  ]
+}

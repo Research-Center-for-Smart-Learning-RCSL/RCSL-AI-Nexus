@@ -1,0 +1,1291 @@
+=== validate ===
+task                        ref  wrong  verdict
+--------------------------------------------------------------
+merge_disjoint             1.00   0.71  ok  (0.1s)
+search_last_rotated        1.00   0.57  ok  (0.1s)
+rate_limiter               1.00   0.88  ok  (0.1s)
+retry_deadline             1.00   0.75  ok  (0.1s)
+count_inversions           1.00   0.60  ok  (50.5s)
+range_sum_updates          1.00   0.80  ok  (32.3s)
+cache_decorator            1.00   0.67  ok  (0.1s)
+pagination_boundary        1.00   0.57  ok  (0.1s)
+spec_contradiction         1.00   0.00  ok  (0.0s)
+spec_precedence            1.00   0.00  ok  (0.0s)
+insufficient_data          1.00   0.00  ok  (0.0s)
+ambiguous_requirement      1.00   0.00  ok  (0.0s)
+capacity_chain             1.00   0.00  ok  (0.0s)
+retention_window           1.00   0.00  ok  (0.0s)
+policy_json                1.00   0.71  ok  (0.1s)
+csv_reconcile              1.00   0.71  ok  (0.1s)
+vm_accumulate              1.00   0.00  ok  (0.0s)
+vm_implement               1.00   0.81  ok  (0.1s)
+config_merge               1.00   0.78  ok  (0.1s)
+duration_grammar           1.00   0.72  ok  (0.1s)
+visible_suffix             1.00   0.87  ok  (105.3s)
+text_wrap_exact            1.00   0.81  ok  (0.0s)
+determined_seats           1.00   0.00  ok  (0.0s)
+undetermined_seats         1.00   0.00  ok  (0.0s)
+determined_routes          1.00   0.00  ok  (0.0s)
+undetermined_routes        1.00   0.00  ok  (0.0s)
+ledger_short               1.00   0.00  ok  (0.0s)
+precedence_relief          1.00   0.00  ok  (0.0s)
+tax_cascade                1.00   0.00  ok  (0.0s)
+currency_chain             1.00   0.00  ok  (0.0s)
+prorate_billing            1.00   0.00  ok  (0.0s)
+csv_pipe                   1.00   0.67  ok  (0.0s)
+duration_parse             1.00   0.58  ok  (0.0s)
+config_inherit             1.00   0.30  ok  (0.0s)
+tutor_answer_withholding   1.00   0.70  ok  (0.0s)
+tutor_lesson_flow          1.00   0.88  ok  (0.0s)
+tutor_digression_recovery   1.00   0.79  ok  (0.0s)
+tutor_format_persistence   1.00   0.68  ok  (0.0s)
+ini_parse                  1.00   0.62  ok  (0.0s)
+logic_order                1.00   0.00  ok  (0.0s)
+--------------------------------------------------------------
+40/40 tasks have a scorer that works in both directions
+
+=== hard-pilot-3 (calibration) ===
+hard-pilot-3: 1 models x 5 rounds x 21 tasks = 105 samples, 105 to go
+  temperature=0.3  top_k=40  top_p=0.9  seed=42
+
+  snapshot: gemma4:31b-it-q8_0, qwen2.5:7b, nomic-embed-text:latest
+round 0  gemma4:31b-it-q8_0  (21 tasks)
+    evicting nomic-embed-text:latest
+    evicting qwen2.5:7b
+   search_last_rotated       1.00   1194tok depth=  127  102.0s
+   range_sum_updates         1.00    296tok depth=  175   22.9s
+   vm_accumulate             1.00   1431tok depth=  918  109.3s
+   vm_implement              1.00    828tok depth=  858   64.4s
+   config_merge              1.00    738tok depth=  589   56.5s
+   duration_grammar          0.94    885tok depth=  447   66.4s
+   visible_suffix            1.00    350tok depth=  249   26.8s
+   text_wrap_exact           0.88   1955tok depth=  454  144.8s
+   determined_seats          1.00    337tok depth=  306   26.0s
+   undetermined_seats        1.00    370tok depth=  300   28.3s
+   determined_routes         1.00    297tok depth=  290   22.9s
+   undetermined_routes       1.00    340tok depth=  285   26.0s
+   ledger_short              1.00    816tok depth=  521   61.7s
+   precedence_relief         1.00    438tok depth= 3117   47.7s
+   tax_cascade               0.00    856tok depth=  493   64.5s
+   currency_chain            0.00    473tok depth=  347   35.9s
+   prorate_billing           0.00    515tok depth=  391   39.2s
+   csv_pipe                  1.00   1409tok depth=  314  104.0s
+   duration_parse            1.00    447tok depth=  385   34.3s
+   config_inherit            1.00    628tok depth=  352   47.1s
+   ini_parse                 1.00    708tok depth=  279   52.6s
+   -- round 0 gemma4:31b-it-q8_0 done, 1183s elapsed
+
+round 1  gemma4:31b-it-q8_0  (21 tasks)
+   duration_grammar          0.94    885tok depth=  447   66.3s
+   visible_suffix            1.00    350tok depth=  249   26.7s
+   text_wrap_exact           0.88   1955tok depth=  454  144.8s
+   determined_seats          1.00    337tok depth=  306   25.9s
+   undetermined_seats        1.00    370tok depth=  300   28.3s
+   determined_routes         1.00    297tok depth=  290   22.9s
+   undetermined_routes       1.00    340tok depth=  285   26.0s
+   ledger_short              1.00    816tok depth=  521   61.7s
+   precedence_relief         1.00    438tok depth= 3117   47.7s
+   tax_cascade               0.00    856tok depth=  493   64.5s
+   currency_chain            0.00    473tok depth=  347   35.9s
+   prorate_billing           0.00    515tok depth=  391   39.2s
+   csv_pipe                  1.00   1409tok depth=  314  103.9s
+   duration_parse            1.00    447tok depth=  385   34.2s
+   config_inherit            1.00    628tok depth=  352   47.1s
+   ini_parse                 1.00    708tok depth=  279   52.6s
+   search_last_rotated       1.00   1194tok depth=  127   87.1s
+   range_sum_updates         1.00    296tok depth=  175   22.8s
+   vm_accumulate             1.00   1431tok depth=  918  109.2s
+   vm_implement              1.00    828tok depth=  858   64.4s
+   config_merge              1.00    738tok depth=  589   56.4s
+   -- round 1 gemma4:31b-it-q8_0 done, 2351s elapsed
+
+round 2  gemma4:31b-it-q8_0  (21 tasks)
+   determined_routes         1.00    297tok depth=  290   22.9s
+   undetermined_routes       1.00    340tok depth=  285   26.0s
+   ledger_short              1.00    816tok depth=  521   61.7s
+   precedence_relief         1.00    438tok depth= 3117   47.6s
+   tax_cascade               0.00    856tok depth=  493   64.5s
+   currency_chain            0.00    473tok depth=  347   35.9s
+   prorate_billing           0.00    515tok depth=  391   39.2s
+   csv_pipe                  1.00   1409tok depth=  314  103.9s
+   duration_parse            1.00    447tok depth=  385   34.2s
+   config_inherit            1.00    628tok depth=  352   47.1s
+   ini_parse                 1.00    708tok depth=  279   52.7s
+   search_last_rotated       1.00   1194tok depth=  127   87.1s
+   range_sum_updates         1.00    296tok depth=  175   22.8s
+   vm_accumulate             1.00   1431tok depth=  918  109.1s
+   vm_implement              1.00    828tok depth=  858   64.4s
+   config_merge              1.00    738tok depth=  589   56.5s
+   duration_grammar          0.94    885tok depth=  447   66.3s
+   visible_suffix            1.00    350tok depth=  249   26.7s
+   text_wrap_exact           0.88   1955tok depth=  454  145.1s
+   determined_seats          1.00    337tok depth=  306   25.9s
+   undetermined_seats        1.00    370tok depth=  300   28.3s
+   -- round 2 gemma4:31b-it-q8_0 done, 3519s elapsed
+
+round 3  gemma4:31b-it-q8_0  (21 tasks)
+   currency_chain            0.00    473tok depth=  347   35.9s
+   prorate_billing           0.00    515tok depth=  391   39.2s
+   csv_pipe                  1.00   1409tok depth=  314  103.9s
+   duration_parse            1.00    447tok depth=  385   34.3s
+   config_inherit            1.00    628tok depth=  352   47.1s
+   ini_parse                 1.00    708tok depth=  279   52.6s
+   search_last_rotated       1.00   1194tok depth=  127   87.1s
+   range_sum_updates         1.00    296tok depth=  175   22.8s
+   vm_accumulate             1.00   1431tok depth=  918  109.2s
+   vm_implement              1.00    828tok depth=  858   64.4s
+   config_merge              1.00    738tok depth=  589   56.4s
+   duration_grammar          0.94    885tok depth=  447   66.3s
+   visible_suffix            1.00    350tok depth=  249   26.7s
+   text_wrap_exact           0.88   1955tok depth=  454  145.1s
+   determined_seats          1.00    337tok depth=  306   25.9s
+   undetermined_seats        1.00    370tok depth=  300   28.3s
+   determined_routes         1.00    297tok depth=  290   22.8s
+   undetermined_routes       1.00    340tok depth=  285   25.9s
+   ledger_short              1.00    816tok depth=  521   61.7s
+   precedence_relief         1.00    438tok depth= 3117   47.6s
+   tax_cascade               0.00    856tok depth=  493   64.5s
+   -- round 3 gemma4:31b-it-q8_0 done, 4687s elapsed
+
+round 4  gemma4:31b-it-q8_0  (21 tasks)
+   ini_parse                 1.00    708tok depth=  279   52.6s
+   search_last_rotated       1.00   1194tok depth=  127   87.1s
+   range_sum_updates         1.00    296tok depth=  175   22.8s
+   vm_accumulate             1.00   1431tok depth=  918  109.1s
+   vm_implement              1.00    828tok depth=  858   64.4s
+   config_merge              1.00    738tok depth=  589   56.4s
+   duration_grammar          0.94    885tok depth=  447   66.3s
+   visible_suffix            1.00    350tok depth=  249   26.7s
+   text_wrap_exact           0.88   1955tok depth=  454  145.1s
+   determined_seats          1.00    337tok depth=  306   25.9s
+   undetermined_seats        1.00    370tok depth=  300   28.2s
+   determined_routes         1.00    297tok depth=  290   22.9s
+   undetermined_routes       1.00    340tok depth=  285   26.0s
+   ledger_short              1.00    816tok depth=  521   61.7s
+   precedence_relief         1.00    438tok depth= 3117   47.6s
+   tax_cascade               0.00    856tok depth=  493   64.5s
+   currency_chain            0.00    473tok depth=  347   35.9s
+   prorate_billing           0.00    515tok depth=  391   39.2s
+   csv_pipe                  1.00   1409tok depth=  314  104.0s
+   duration_parse            1.00    447tok depth=  385   34.2s
+   config_inherit            1.00    628tok depth=  352   47.1s
+   -- round 4 gemma4:31b-it-q8_0 done, 5855s elapsed
+
+hard-pilot-3 complete: 105 new samples in 5855s
+--- hard-pilot-3 analysis ---
+=== hard-pilot-3: overall ===
+
+conditions: temperature=0.3  top_k=40  top_p=0.9  seed=42  num_ctx=16384  num_predict=4096
+
+model                         score  scored  no result  gen tok/s   depth   s/task
+----------------------------------------------------------------------------------
+gemma4:31b-it-q8_0            84.9%     105          0       13.8     533     55.7
+
+=== hard-pilot-3: wall clock per round (inference only) ===
+
+gemma4:31b-it-q8_0         r0:   1182s  r1:   1167s  r2:   1167s  r3:   1167s  r4:   1167s
+
+=== hard-pilot-3: by group ===
+
+model                            A       C       J       K       L       M       N       P       Q       R       S  anchor
+--------------------------------------------------------------------------------------------------------------------------
+gemma4:31b-it-q8_0            100%    100%    100%    100%    100%     97%    100%    100%     88%      0%    100%    100%
+
+=== hard-pilot-3: by task (mean of samples, 95% CI, and the spread) ===
+
+grp  task                              31b-it-q8_0   verdict
+---------------------------------------------------------------
+A    search_last_rotated        100% [100-100] (5)   SATURATED high
+C    range_sum_updates          100% [100-100] (5)   SATURATED high
+J    vm_accumulate              100% [100-100] (5)   SATURATED high
+J    vm_implement               100% [100-100] (5)   SATURATED high
+M    config_merge               100% [100-100] (5)   SATURATED high
+M    duration_grammar              94% [94-94] (5)
+K    visible_suffix             100% [100-100] (5)   SATURATED high
+Q    text_wrap_exact               88% [88-88] (5)
+N    determined_seats           100% [100-100] (5)   SATURATED high
+N    undetermined_seats         100% [100-100] (5)   SATURATED high
+N    determined_routes          100% [100-100] (5)   SATURATED high
+N    undetermined_routes        100% [100-100] (5)   SATURATED high
+L    ledger_short               100% [100-100] (5)   SATURATED high
+P    precedence_relief          100% [100-100] (5)   SATURATED high
+R    tax_cascade                    0% [ 0- 0] (5)   SATURATED low
+R    currency_chain                 0% [ 0- 0] (5)   SATURATED low
+R    prorate_billing                0% [ 0- 0] (5)   SATURATED low
+S    csv_pipe                   100% [100-100] (5)   SATURATED high
+S    duration_parse             100% [100-100] (5)   SATURATED high
+S    config_inherit             100% [100-100] (5)   SATURATED high
+anchor ini_parse                  100% [100-100] (5)   SATURATED high
+
+=== hard-pilot-3: calibration (4.3, 4.4) ===
+
+gemma4:31b-it-q8_0          84.9%  ABOVE the band - the set will saturate again
+
+always 1.00 for the one model here (gemma4:31b-it-q8_0): search_last_rotated, range_sum_updates, vm_accumulate, vm_implement, config_merge, visible_suffix, determined_seats, undetermined_seats, determined_routes, undetermined_routes, ledger_short, precedence_relief, csv_pipe, duration_parse, config_inherit, ini_parse
+always 0.00 for the one model here (gemma4:31b-it-q8_0): tax_cascade, currency_chain, prorate_billing
+carries signal: none
+
+19 of 21 tasks were never missed by this model. That is the 4.3 band read;
+the 4.4 replacement test needs the other candidates on the bench.
+
+=== hard-full-3 (main measurement) ===
+hard-full-3: 4 models x 5 rounds x 21 tasks = 420 samples, 420 to go
+  temperature=0.3  top_k=40  top_p=0.9  seed=42
+
+  keeping the existing snapshot (/Users/rcslmac1/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
+round 0  gemma4:31b-it-q8_0  (21 tasks)
+   search_last_rotated       1.00   1194tok depth=  127   87.2s
+   range_sum_updates         1.00    296tok depth=  175   22.8s
+   vm_accumulate             1.00   1431tok depth=  918  109.2s
+   vm_implement              1.00    828tok depth=  858   64.4s
+   config_merge              1.00    738tok depth=  589   56.4s
+   duration_grammar          0.94    885tok depth=  447   66.3s
+   visible_suffix            1.00    350tok depth=  249   26.7s
+   text_wrap_exact           0.88   1955tok depth=  454  145.0s
+   determined_seats          1.00    337tok depth=  306   25.9s
+   undetermined_seats        1.00    370tok depth=  300   28.3s
+   determined_routes         1.00    297tok depth=  290   22.8s
+   undetermined_routes       1.00    340tok depth=  285   26.0s
+   ledger_short              1.00    816tok depth=  521   61.7s
+   precedence_relief         1.00    438tok depth= 3117   47.7s
+   tax_cascade               0.00    856tok depth=  493   64.5s
+   currency_chain            0.00    473tok depth=  347   35.9s
+   prorate_billing           0.00    515tok depth=  391   39.2s
+   csv_pipe                  1.00   1409tok depth=  314  103.9s
+   duration_parse            1.00    447tok depth=  385   34.2s
+   config_inherit            1.00    628tok depth=  352   47.1s
+   ini_parse                 1.00    708tok depth=  279   52.6s
+   -- round 0 gemma4:31b-it-q8_0 done, 1168s elapsed
+
+round 0  qwen3.8:27b-q8_0  (21 tasks)
+    evicting gemma4:31b-it-q8_0
+    loading qwen3.8:27b-q8_0 ...
+    loaded in 18.5s
+   search_last_rotated       1.00    801tok depth=  124   52.0s
+   range_sum_updates         1.00    315tok depth=  171   21.7s
+   vm_accumulate             1.00   3911tok depth=  909  256.4s
+   vm_implement              1.00    983tok depth=  844   66.5s
+   config_merge              1.00    883tok depth=  576   59.0s
+   duration_grammar          1.00   1407tok depth=  448   92.1s
+   visible_suffix            0.00   1257tok depth=  246   81.8s
+   text_wrap_exact           0.12   1918tok depth=  453  125.2s
+   determined_seats          1.00    494tok depth=  300   33.0s
+   undetermined_seats        1.00    673tok depth=  295   44.5s
+   determined_routes         1.00    478tok depth=  280   31.9s
+   undetermined_routes       1.00    752tok depth=  276   49.5s
+   ledger_short              1.00   1555tok depth=  531  101.9s
+   precedence_relief         1.00   1173tok depth= 3209   88.8s
+   tax_cascade               0.00   1396tok depth=  485   91.6s
+   currency_chain            0.00   1010tok depth=  348   66.2s
+   prorate_billing           1.00    996tok depth=  391   65.6s
+   csv_pipe                  0.25   1951tok depth=  308  126.6s
+   duration_parse            1.00    760tok depth=  388   50.4s
+   config_inherit            1.00    572tok depth=  340   38.2s
+   ini_parse                 0.38   1355tok depth=  282   88.1s
+   -- round 0 qwen3.8:27b-q8_0 done, 2818s elapsed
+
+round 0  qwen3.8:27b-q4_K_M  (21 tasks)
+    evicting qwen3.8:27b-q8_0
+    loading qwen3.8:27b-q4_K_M ...
+    loaded in 10.8s
+   search_last_rotated       1.00    861tok depth=  124   38.0s
+   range_sum_updates         1.00    314tok depth=  171   15.2s
+   vm_accumulate             1.00   3409tok depth=  909  152.7s
+   vm_implement              1.00   1816tok depth=  844   82.5s
+   config_merge              1.00   1060tok depth=  576   48.6s
+   duration_grammar          1.00   1139tok depth=  448   51.3s
+   visible_suffix            1.00   1528tok depth=  246   67.6s
+   text_wrap_exact           1.00   2696tok depth=  453  119.3s
+   determined_seats          1.00    606tok depth=  300   27.7s
+   undetermined_seats        1.00    971tok depth=  295   43.5s
+   determined_routes         1.00    962tok depth=  280   43.0s
+   undetermined_routes       1.00    588tok depth=  276   26.8s
+   ledger_short              1.00   1509tok depth=  531   67.7s
+   precedence_relief         1.00   1061tok depth= 3209   59.8s
+   tax_cascade               0.00   1631tok depth=  485   72.9s
+   currency_chain            0.00    956tok depth=  348   43.0s
+   prorate_billing           1.00    952tok depth=  391   43.1s
+   csv_pipe                  0.92   1110tok depth=  308   49.6s
+   duration_parse            0.75    462tok depth=  388   21.8s
+   config_inherit            1.00    707tok depth=  340   32.2s
+   ini_parse                 0.38    658tok depth=  282   29.8s
+   -- round 0 qwen3.8:27b-q4_K_M done, 3965s elapsed
+
+round 0  qwen3.8:27b-mlx  (21 tasks)
+    evicting qwen3.8:27b-q4_K_M
+    loading qwen3.8:27b-mlx ...
+    loaded in 7.6s
+   search_last_rotated       1.00    252tok depth=  124    4.6s
+   range_sum_updates         1.00    277tok depth=  171    6.0s
+   vm_accumulate             1.00   1855tok depth=  909   30.5s
+   vm_implement              0.12   1055tok depth=  844   18.6s
+   config_merge              1.00    947tok depth=  576   16.6s
+   duration_grammar          0.56   1068tok depth=  448   18.3s
+   visible_suffix            0.40    713tok depth=  246   13.5s
+   text_wrap_exact           0.12   3064tok depth=  453   51.9s
+   determined_seats          1.00    638tok depth=  300   10.6s
+   undetermined_seats        1.00   1143tok depth=  295   19.9s
+   determined_routes         1.00    643tok depth=  280   10.6s
+   undetermined_routes       1.00   1096tok depth=  276   20.2s
+   ledger_short              1.00   1723tok depth=  521   26.6s
+   precedence_relief         1.00   1098tok depth= 3113   30.1s
+   tax_cascade               0.00   1332tok depth=  485   21.4s
+   currency_chain            0.00   1041tok depth=  348   16.4s
+   prorate_billing           0.00   2023tok depth=  390   32.6s
+   csv_pipe                  0.83   2041tok depth=  308   35.1s
+   duration_parse            0.92    622tok depth=  388   12.3s
+   config_inherit            1.00    819tok depth=  340   15.0s
+   ini_parse                 0.38   1220tok depth=  282   21.0s
+   -- round 0 qwen3.8:27b-mlx done, 4404s elapsed
+
+round 1  qwen3.8:27b-q8_0  (21 tasks)
+    evicting qwen3.8:27b-mlx
+    loading qwen3.8:27b-q8_0 ...
+    loaded in 10.4s
+   duration_grammar          1.00   1407tok depth=  448   92.1s
+   visible_suffix            0.00   1257tok depth=  246   81.8s
+   text_wrap_exact           0.12   1918tok depth=  453  125.3s
+   determined_seats          1.00    494tok depth=  300   33.0s
+   undetermined_seats        1.00    673tok depth=  295   44.5s
+   determined_routes         1.00    478tok depth=  280   31.9s
+   undetermined_routes       1.00    752tok depth=  276   49.4s
+   ledger_short              1.00   1555tok depth=  531  102.2s
+   precedence_relief         1.00   1173tok depth= 3209   88.8s
+   tax_cascade               0.00   1396tok depth=  485   91.7s
+   currency_chain            0.00   1010tok depth=  348   66.2s
+   prorate_billing           1.00    996tok depth=  391   65.6s
+   csv_pipe                  0.25   1951tok depth=  308  126.8s
+   duration_parse            1.00    760tok depth=  388   50.4s
+   config_inherit            1.00    572tok depth=  340   38.2s
+   ini_parse                 0.38   1355tok depth=  282   88.3s
+   search_last_rotated       1.00    801tok depth=  124   52.1s
+   range_sum_updates         1.00    315tok depth=  171   21.7s
+   vm_accumulate             1.00   3911tok depth=  909  256.1s
+   vm_implement              1.00    983tok depth=  844   65.0s
+   config_merge              1.00    883tok depth=  576   59.1s
+   -- round 1 qwen3.8:27b-q8_0 done, 6045s elapsed
+
+round 1  qwen3.8:27b-q4_K_M  (21 tasks)
+    evicting qwen3.8:27b-q8_0
+    loading qwen3.8:27b-q4_K_M ...
+    loaded in 10.0s
+   duration_grammar          1.00   1139tok depth=  448   51.5s
+   visible_suffix            1.00   1528tok depth=  246   67.7s
+   text_wrap_exact           1.00   2696tok depth=  453  119.5s
+   determined_seats          1.00    606tok depth=  300   27.7s
+   undetermined_seats        1.00    971tok depth=  295   43.5s
+   determined_routes         1.00    962tok depth=  280   42.9s
+   undetermined_routes       1.00    588tok depth=  276   26.8s
+   ledger_short              1.00   1509tok depth=  531   67.8s
+   precedence_relief         1.00   1061tok depth= 3209   60.0s
+   tax_cascade               0.00   1631tok depth=  485   73.3s
+   currency_chain            0.00    956tok depth=  348   43.0s
+   prorate_billing           1.00    952tok depth=  391   43.1s
+   csv_pipe                  0.92   1110tok depth=  308   49.6s
+   duration_parse            0.75    462tok depth=  388   21.8s
+   config_inherit            1.00    707tok depth=  340   32.3s
+   ini_parse                 0.38    658tok depth=  282   29.9s
+   search_last_rotated       1.00    861tok depth=  124   38.1s
+   range_sum_updates         1.00    314tok depth=  171   15.2s
+   vm_accumulate             1.00   3409tok depth=  909  152.8s
+   vm_implement              1.00   1816tok depth=  844   82.6s
+   config_merge              1.00   1060tok depth=  576   48.5s
+   -- round 1 qwen3.8:27b-q4_K_M done, 7193s elapsed
+
+round 1  qwen3.8:27b-mlx  (21 tasks)
+    evicting qwen3.8:27b-q4_K_M
+    loading qwen3.8:27b-mlx ...
+    loaded in 6.0s
+   duration_grammar          0.56   1134tok depth=  448   19.5s
+   visible_suffix            1.00    474tok depth=  246    9.2s
+   text_wrap_exact           0.62   2531tok depth=  453   49.1s
+   determined_seats          1.00    814tok depth=  300   14.8s
+   undetermined_seats        1.00    810tok depth=  295   15.0s
+   determined_routes         1.00    642tok depth=  280   11.2s
+   undetermined_routes       1.00    727tok depth=  276   13.3s
+   ledger_short              1.00   1626tok depth=  521   29.5s
+   precedence_relief         1.00   1046tok depth= 3113   30.0s
+   tax_cascade               0.00   1521tok depth=  485   29.6s
+   currency_chain            0.00   1033tok depth=  348   17.6s
+   prorate_billing            --    4096tok depth=  390   71.9s truncated at num_predict with no answer
+   csv_pipe                  0.92   1052tok depth=  308   19.4s
+   duration_parse            1.00   1632tok depth=  388   29.8s
+   config_inherit            1.00    812tok depth=  340   15.0s
+   ini_parse                 0.38   1265tok depth=  282   22.3s
+   search_last_rotated       1.00    240tok depth=  124    4.9s
+   range_sum_updates         1.00    274tok depth=  171    5.7s
+   vm_accumulate             1.00   3342tok depth=  909   56.1s
+   vm_implement              1.00    891tok depth=  844   18.6s
+   config_merge              1.00    986tok depth=  576   17.3s
+   -- round 1 qwen3.8:27b-mlx done, 7699s elapsed
+
+round 1  gemma4:31b-it-q8_0  (21 tasks)
+    evicting qwen3.8:27b-mlx
+    loading gemma4:31b-it-q8_0 ...
+    loaded in 10.3s
+   duration_grammar          0.94    885tok depth=  447   66.4s
+   visible_suffix            1.00    350tok depth=  249   26.8s
+   text_wrap_exact           0.88   3011tok depth=  454  222.9s
+   determined_seats          1.00    337tok depth=  306   26.0s
+   undetermined_seats        1.00    370tok depth=  300   28.3s
+   determined_routes         1.00    297tok depth=  290   22.9s
+   undetermined_routes       1.00    340tok depth=  285   26.0s
+   ledger_short              1.00    816tok depth=  521   61.9s
+   precedence_relief         1.00    445tok depth= 3117   48.3s
+   tax_cascade               0.00    856tok depth=  493   64.6s
+   currency_chain            0.00    473tok depth=  347   36.0s
+   prorate_billing           0.00    515tok depth=  391   39.2s
+   csv_pipe                  1.00   1393tok depth=  314  102.8s
+   duration_parse            1.00    447tok depth=  385   34.3s
+   config_inherit            1.00    628tok depth=  352   47.4s
+   ini_parse                 1.00    708tok depth=  279   52.7s
+   search_last_rotated       1.00   1194tok depth=  127   87.3s
+   range_sum_updates         1.00    296tok depth=  175   22.9s
+   vm_accumulate             1.00   1431tok depth=  918  109.0s
+   vm_implement              1.00    828tok depth=  858   62.7s
+   config_merge              1.00    738tok depth=  589   56.6s
+   -- round 1 gemma4:31b-it-q8_0 done, 8954s elapsed
+
+round 2  qwen3.8:27b-q4_K_M  (21 tasks)
+    evicting gemma4:31b-it-q8_0
+    loading qwen3.8:27b-q4_K_M ...
+    loaded in 8.2s
+   determined_routes         1.00    962tok depth=  280   43.0s
+   undetermined_routes       1.00    588tok depth=  276   26.8s
+   ledger_short              1.00   1509tok depth=  531   67.8s
+   precedence_relief         1.00   1061tok depth= 3209   59.9s
+   tax_cascade               0.00   1631tok depth=  485   73.0s
+   currency_chain            0.00    956tok depth=  348   43.0s
+   prorate_billing           1.00    952tok depth=  391   43.1s
+   csv_pipe                  0.92   1110tok depth=  308   49.6s
+   duration_parse            0.75    462tok depth=  388   21.8s
+   config_inherit            1.00    707tok depth=  340   32.2s
+   ini_parse                 0.38    658tok depth=  282   29.9s
+   search_last_rotated       1.00    861tok depth=  124   38.0s
+   range_sum_updates         1.00    314tok depth=  171   15.2s
+   vm_accumulate             1.00   3409tok depth=  909  152.8s
+   vm_implement              1.00   1816tok depth=  844   82.6s
+   config_merge              1.00   1060tok depth=  576   48.4s
+   duration_grammar          1.00   1139tok depth=  448   51.5s
+   visible_suffix            1.00   1528tok depth=  246   67.7s
+   text_wrap_exact           1.00   2696tok depth=  453  119.4s
+   determined_seats          1.00    606tok depth=  300   27.7s
+   undetermined_seats        1.00    971tok depth=  295   43.5s
+   -- round 2 qwen3.8:27b-q4_K_M done, 10099s elapsed
+
+round 2  qwen3.8:27b-mlx  (21 tasks)
+    evicting qwen3.8:27b-q4_K_M
+    loading qwen3.8:27b-mlx ...
+    loaded in 5.0s
+   determined_routes         1.00    671tok depth=  280   10.9s
+   undetermined_routes       1.00    718tok depth=  276   13.5s
+   ledger_short              1.00   2136tok depth=  521   31.8s
+   precedence_relief         1.00   1587tok depth= 3113   38.6s
+   tax_cascade               0.00   1602tok depth=  485   25.0s
+   currency_chain            0.00   1005tok depth=  348   16.1s
+   prorate_billing           1.00   1213tok depth=  390   20.2s
+   csv_pipe                  0.83    927tok depth=  308   15.8s
+   duration_parse            1.00    749tok depth=  388   14.7s
+   config_inherit            1.00    730tok depth=  340   12.5s
+   ini_parse                 0.38   1062tok depth=  282   17.1s
+   search_last_rotated       1.00    247tok depth=  124    5.0s
+   range_sum_updates         1.00    280tok depth=  171    5.3s
+   vm_accumulate             1.00   2599tok depth=  909   40.4s
+   vm_implement              1.00   1061tok depth=  844   18.7s
+   config_merge              1.00    966tok depth=  576   17.8s
+   duration_grammar          0.56   1151tok depth=  448   20.8s
+   visible_suffix            1.00    663tok depth=  246   12.9s
+   text_wrap_exact           1.00   2283tok depth=  453   39.1s
+   determined_seats          1.00    621tok depth=  300   11.0s
+   undetermined_seats        1.00    716tok depth=  295   13.1s
+   -- round 2 qwen3.8:27b-mlx done, 10505s elapsed
+
+round 2  gemma4:31b-it-q8_0  (21 tasks)
+    evicting qwen3.8:27b-mlx
+    loading gemma4:31b-it-q8_0 ...
+    loaded in 15.8s
+   determined_routes         1.00    297tok depth=  290   22.9s
+   undetermined_routes       1.00    340tok depth=  285   26.0s
+   ledger_short              1.00    816tok depth=  521   61.8s
+   precedence_relief         1.00    445tok depth= 3117   48.2s
+   tax_cascade               0.00    856tok depth=  493   64.6s
+   currency_chain            0.00    473tok depth=  347   35.9s
+   prorate_billing           0.00    515tok depth=  391   39.2s
+   csv_pipe                  1.00   1393tok depth=  314  102.8s
+   duration_parse            1.00    447tok depth=  385   34.3s
+   config_inherit            1.00    628tok depth=  352   47.3s
+   ini_parse                 1.00    708tok depth=  279   52.8s
+   search_last_rotated       1.00   1194tok depth=  127   87.2s
+   range_sum_updates         1.00    296tok depth=  175   22.9s
+   vm_accumulate             1.00   1431tok depth=  918  108.8s
+   vm_implement              1.00    828tok depth=  858   62.8s
+   config_merge              1.00    738tok depth=  589   56.6s
+   duration_grammar          0.94    885tok depth=  447   66.4s
+   visible_suffix            1.00    350tok depth=  249   26.7s
+   text_wrap_exact           0.88   3011tok depth=  454  223.0s
+   determined_seats          1.00    337tok depth=  306   26.0s
+   undetermined_seats        1.00    370tok depth=  300   28.4s
+   -- round 2 gemma4:31b-it-q8_0 done, 11765s elapsed
+
+round 2  qwen3.8:27b-q8_0  (21 tasks)
+    evicting gemma4:31b-it-q8_0
+    loading qwen3.8:27b-q8_0 ...
+    loaded in 17.9s
+   determined_routes         1.00    478tok depth=  280   31.9s
+   undetermined_routes       1.00    752tok depth=  276   49.4s
+   ledger_short              1.00   1555tok depth=  531  101.9s
+   precedence_relief         1.00   1173tok depth= 3209   88.6s
+   tax_cascade               0.00   1396tok depth=  485   91.6s
+   currency_chain            0.00   1010tok depth=  348   66.2s
+   prorate_billing           1.00    996tok depth=  391   65.5s
+   csv_pipe                  0.25   1951tok depth=  308  126.6s
+   duration_parse            1.00    760tok depth=  388   50.3s
+   config_inherit            1.00    572tok depth=  340   38.2s
+   ini_parse                 0.38   1355tok depth=  282   88.1s
+   search_last_rotated       1.00    801tok depth=  124   52.0s
+   range_sum_updates         1.00    315tok depth=  171   21.7s
+   vm_accumulate             1.00   3911tok depth=  909  256.3s
+   vm_implement              1.00    983tok depth=  844   66.6s
+   config_merge              1.00    883tok depth=  576   58.9s
+   duration_grammar          1.00   1407tok depth=  448   92.1s
+   visible_suffix            0.00   1257tok depth=  246   81.8s
+   text_wrap_exact           0.12   1918tok depth=  453  125.1s
+   determined_seats          1.00    494tok depth=  300   33.0s
+   undetermined_seats        1.00    673tok depth=  295   44.5s
+   -- round 2 qwen3.8:27b-q8_0 done, 13413s elapsed
+
+round 3  qwen3.8:27b-mlx  (21 tasks)
+    evicting qwen3.8:27b-q8_0
+    loading qwen3.8:27b-mlx ...
+    loaded in 7.5s
+   currency_chain            0.00   1051tok depth=  348   18.7s
+   prorate_billing           1.00   2916tok depth=  390   49.9s
+   csv_pipe                  0.92   1886tok depth=  308   30.3s
+   duration_parse            1.00    602tok depth=  388   11.1s
+   config_inherit            1.00    735tok depth=  340   13.1s
+   ini_parse                 0.38   1263tok depth=  282   19.5s
+   search_last_rotated       1.00    327tok depth=  124    5.7s
+   range_sum_updates         1.00    274tok depth=  171    5.8s
+   vm_accumulate             1.00   3888tok depth=  909   61.4s
+   vm_implement              1.00    990tok depth=  844   17.9s
+   config_merge              1.00   1804tok depth=  576   31.9s
+   duration_grammar          0.56   1151tok depth=  448   20.7s
+   visible_suffix            1.00    460tok depth=  246    8.9s
+   text_wrap_exact           0.94   1967tok depth=  453   33.7s
+   determined_seats          1.00    621tok depth=  300   10.9s
+   undetermined_seats        1.00    782tok depth=  295   14.5s
+   determined_routes         1.00    740tok depth=  280   13.7s
+   undetermined_routes       1.00    699tok depth=  276   13.3s
+   ledger_short              1.00   1634tok depth=  521   25.2s
+   precedence_relief         1.00    976tok depth= 3113   29.9s
+   tax_cascade               0.00   1513tok depth=  485   26.5s
+   -- round 3 qwen3.8:27b-mlx done, 13883s elapsed
+
+round 3  gemma4:31b-it-q8_0  (21 tasks)
+    evicting qwen3.8:27b-mlx
+    loading gemma4:31b-it-q8_0 ...
+    loaded in 9.6s
+   currency_chain            0.00    473tok depth=  347   35.9s
+   prorate_billing           0.00    515tok depth=  391   39.2s
+   csv_pipe                  1.00   1393tok depth=  314  102.8s
+   duration_parse            1.00    447tok depth=  385   34.4s
+   config_inherit            1.00    628tok depth=  352   47.2s
+   ini_parse                 1.00    708tok depth=  279   52.8s
+   search_last_rotated       1.00   1194tok depth=  127   87.2s
+   range_sum_updates         1.00    296tok depth=  175   22.9s
+   vm_accumulate             1.00   1431tok depth=  918  108.9s
+   vm_implement              1.00    828tok depth=  858   62.8s
+   config_merge              1.00    738tok depth=  589   56.7s
+   duration_grammar          0.94    885tok depth=  447   66.4s
+   visible_suffix            1.00    350tok depth=  249   26.8s
+   text_wrap_exact           0.88   3011tok depth=  454  223.2s
+   determined_seats          1.00    337tok depth=  306   26.0s
+   undetermined_seats        1.00    370tok depth=  300   28.3s
+   determined_routes         1.00    297tok depth=  290   22.9s
+   undetermined_routes       1.00    340tok depth=  285   26.0s
+   ledger_short              1.00    816tok depth=  521   61.8s
+   precedence_relief         1.00    445tok depth= 3117   48.2s
+   tax_cascade               0.00    856tok depth=  493   64.6s
+   -- round 3 gemma4:31b-it-q8_0 done, 15138s elapsed
+
+round 3  qwen3.8:27b-q8_0  (21 tasks)
+    evicting gemma4:31b-it-q8_0
+    loading qwen3.8:27b-q8_0 ...
+    loaded in 13.4s
+   currency_chain            0.00   1010tok depth=  348   66.2s
+   prorate_billing           1.00    996tok depth=  391   65.5s
+   csv_pipe                  0.25   1951tok depth=  308  126.5s
+   duration_parse            1.00    760tok depth=  388   50.3s
+   config_inherit            1.00    572tok depth=  340   38.2s
+   ini_parse                 0.38   1355tok depth=  282   88.1s
+   search_last_rotated       1.00    801tok depth=  124   52.0s
+   range_sum_updates         1.00    315tok depth=  171   21.7s
+   vm_accumulate             1.00   3911tok depth=  909  256.0s
+   vm_implement              1.00    983tok depth=  844   66.5s
+   config_merge              1.00    883tok depth=  576   58.9s
+   duration_grammar          1.00   1407tok depth=  448   92.1s
+   visible_suffix            0.00   1257tok depth=  246   81.7s
+   text_wrap_exact           0.12   1918tok depth=  453  125.0s
+   determined_seats          1.00    494tok depth=  300   33.0s
+   undetermined_seats        1.00    673tok depth=  295   44.4s
+   determined_routes         1.00    478tok depth=  280   31.9s
+   undetermined_routes       1.00    752tok depth=  276   49.4s
+   ledger_short              1.00   1555tok depth=  531  101.9s
+   precedence_relief         1.00   1173tok depth= 3209   88.7s
+   tax_cascade               0.00   1396tok depth=  485   91.5s
+   -- round 3 qwen3.8:27b-q8_0 done, 16781s elapsed
+
+round 3  qwen3.8:27b-q4_K_M  (21 tasks)
+    evicting qwen3.8:27b-q8_0
+    loading qwen3.8:27b-q4_K_M ...
+    loaded in 8.0s
+   currency_chain            0.00    956tok depth=  348   43.0s
+   prorate_billing           1.00    952tok depth=  391   43.1s
+   csv_pipe                  0.92   1110tok depth=  308   49.6s
+   duration_parse            0.75    462tok depth=  388   21.9s
+   config_inherit            1.00    707tok depth=  340   32.4s
+   ini_parse                 0.38    658tok depth=  282   29.9s
+   search_last_rotated       1.00    861tok depth=  124   38.0s
+   range_sum_updates         1.00    314tok depth=  171   15.2s
+   vm_accumulate             1.00   3409tok depth=  909  152.7s
+   vm_implement              1.00   1816tok depth=  844   82.5s
+   config_merge              1.00   1060tok depth=  576   48.5s
+   duration_grammar          1.00   1139tok depth=  448   51.4s
+   visible_suffix            1.00   1528tok depth=  246   67.7s
+   text_wrap_exact           1.00   2696tok depth=  453  119.4s
+   determined_seats          1.00    606tok depth=  300   27.7s
+   undetermined_seats        1.00    971tok depth=  295   43.5s
+   determined_routes         1.00    962tok depth=  280   43.0s
+   undetermined_routes       1.00    588tok depth=  276   26.8s
+   ledger_short              1.00   1509tok depth=  531   67.7s
+   precedence_relief         1.00   1061tok depth= 3209   59.9s
+   tax_cascade               0.00   1631tok depth=  485   72.9s
+   -- round 3 qwen3.8:27b-q4_K_M done, 17926s elapsed
+
+round 4  gemma4:31b-it-q8_0  (21 tasks)
+    evicting qwen3.8:27b-q4_K_M
+    loading gemma4:31b-it-q8_0 ...
+    loaded in 21.4s
+   ini_parse                 1.00    708tok depth=  279   52.7s
+   search_last_rotated       1.00   1194tok depth=  127   87.3s
+   range_sum_updates         1.00    296tok depth=  175   22.9s
+   vm_accumulate             1.00   1431tok depth=  918  109.3s
+   vm_implement              1.00    828tok depth=  858   64.5s
+   config_merge              1.00    738tok depth=  589   56.6s
+   duration_grammar          0.94    885tok depth=  447   66.5s
+   visible_suffix            1.00    350tok depth=  249   26.8s
+   text_wrap_exact           0.88   1955tok depth=  454  145.3s
+   determined_seats          1.00    337tok depth=  306   26.0s
+   undetermined_seats        1.00    370tok depth=  300   28.3s
+   determined_routes         1.00    297tok depth=  290   22.9s
+   undetermined_routes       1.00    340tok depth=  285   26.0s
+   ledger_short              1.00    816tok depth=  521   61.8s
+   precedence_relief         1.00    438tok depth= 3117   47.7s
+   tax_cascade               0.00    856tok depth=  493   64.6s
+   currency_chain            0.00    473tok depth=  347   36.0s
+   prorate_billing           0.00    515tok depth=  391   39.3s
+   csv_pipe                  1.00   1409tok depth=  314  104.0s
+   duration_parse            1.00    447tok depth=  385   34.3s
+   config_inherit            1.00    628tok depth=  352   47.2s
+   -- round 4 gemma4:31b-it-q8_0 done, 19118s elapsed
+
+round 4  qwen3.8:27b-q8_0  (21 tasks)
+    evicting gemma4:31b-it-q8_0
+    loading qwen3.8:27b-q8_0 ...
+    loaded in 14.4s
+   ini_parse                 0.38   1355tok depth=  282   88.2s
+   search_last_rotated       1.00    801tok depth=  124   52.0s
+   range_sum_updates         1.00    315tok depth=  171   21.7s
+   vm_accumulate             1.00   3911tok depth=  909  256.2s
+   vm_implement              1.00    983tok depth=  844   66.5s
+   config_merge              1.00    883tok depth=  576   58.9s
+   duration_grammar          1.00   1407tok depth=  448   92.1s
+   visible_suffix            0.00   1257tok depth=  246   81.8s
+   text_wrap_exact           0.12   1918tok depth=  453  125.1s
+   determined_seats          1.00    494tok depth=  300   33.0s
+   undetermined_seats        1.00    673tok depth=  295   44.4s
+   determined_routes         1.00    478tok depth=  280   31.9s
+   undetermined_routes       1.00    752tok depth=  276   49.4s
+   ledger_short              1.00   1555tok depth=  531  101.9s
+   precedence_relief         1.00   1173tok depth= 3209   88.7s
+   tax_cascade               0.00   1396tok depth=  485   91.6s
+   currency_chain            0.00   1010tok depth=  348   66.2s
+   prorate_billing           1.00    996tok depth=  391   65.5s
+   csv_pipe                  0.25   1951tok depth=  308  126.5s
+   duration_parse            1.00    760tok depth=  388   50.3s
+   config_inherit            1.00    572tok depth=  340   38.2s
+   -- round 4 qwen3.8:27b-q8_0 done, 20763s elapsed
+
+round 4  qwen3.8:27b-q4_K_M  (21 tasks)
+    evicting qwen3.8:27b-q8_0
+    loading qwen3.8:27b-q4_K_M ...
+    loaded in 11.1s
+   ini_parse                 0.38    658tok depth=  282   29.9s
+   search_last_rotated       1.00    861tok depth=  124   38.1s
+   range_sum_updates         1.00    314tok depth=  171   15.2s
+   vm_accumulate             1.00   3409tok depth=  909  152.8s
+   vm_implement              1.00   1816tok depth=  844   82.7s
+   config_merge              1.00   1060tok depth=  576   48.5s
+   duration_grammar          1.00   1139tok depth=  448   51.4s
+   visible_suffix            1.00   1528tok depth=  246   67.7s
+   text_wrap_exact           1.00   2696tok depth=  453  119.5s
+   determined_seats          1.00    606tok depth=  300   27.7s
+   undetermined_seats        1.00    971tok depth=  295   43.5s
+   determined_routes         1.00    962tok depth=  280   43.0s
+   undetermined_routes       1.00    588tok depth=  276   26.8s
+   ledger_short              1.00   1509tok depth=  531   68.0s
+   precedence_relief         1.00   1061tok depth= 3209   59.9s
+   tax_cascade               0.00   1631tok depth=  485   73.0s
+   currency_chain            0.00    956tok depth=  348   43.0s
+   prorate_billing           1.00    952tok depth=  391   43.0s
+   csv_pipe                  0.92   1110tok depth=  308   49.6s
+   duration_parse            0.75    462tok depth=  388   21.8s
+   config_inherit            1.00    707tok depth=  340   32.5s
+   -- round 4 qwen3.8:27b-q4_K_M done, 21911s elapsed
+
+round 4  qwen3.8:27b-mlx  (21 tasks)
+    evicting qwen3.8:27b-q4_K_M
+    loading qwen3.8:27b-mlx ...
+    loaded in 7.1s
+   ini_parse                 0.38   1321tok depth=  282   21.7s
+   search_last_rotated       1.00    240tok depth=  124    4.8s
+   range_sum_updates         1.00    277tok depth=  171    5.2s
+   vm_accumulate             1.00   2656tok depth=  909   41.2s
+   vm_implement              1.00   1066tok depth=  844   18.8s
+   config_merge              1.00   1252tok depth=  576   20.8s
+   duration_grammar          0.89   1590tok depth=  448   27.5s
+   visible_suffix            1.00    460tok depth=  246    8.9s
+   text_wrap_exact           1.00   2335tok depth=  453   41.9s
+   determined_seats          1.00    621tok depth=  300   10.9s
+   undetermined_seats        1.00    782tok depth=  295   14.5s
+   determined_routes         1.00    670tok depth=  280   10.6s
+   undetermined_routes       1.00   2119tok depth=  276   38.0s
+   ledger_short              1.00   1714tok depth=  521   26.2s
+   precedence_relief         1.00   1895tok depth= 3113   45.0s
+   tax_cascade               0.00   2286tok depth=  485   35.7s
+   currency_chain            0.00   1006tok depth=  348   17.1s
+   prorate_billing            --    4096tok depth=  390   69.2s truncated at num_predict with no answer
+   csv_pipe                  0.75    637tok depth=  308   11.0s
+   duration_parse            1.00   1018tok depth=  388   17.7s
+   config_inherit            1.00    690tok depth=  340   12.0s
+   -- round 4 qwen3.8:27b-mlx done, 22417s elapsed
+
+hard-full-3 complete: 420 new samples in 22417s
+--- hard-full-3 analysis ---
+=== hard-full-3: overall ===
+
+conditions: temperature=0.3  top_k=40  top_p=0.9  seed=42  num_ctx=16384  num_predict=4096
+
+model                         score  scored  no result  gen tok/s   depth   s/task
+----------------------------------------------------------------------------------
+gemma4:31b-it-q8_0            84.9%     105          0       13.8     533     57.8
+qwen3.8:27b-mlx               80.9%     103          2       63.0     528     21.8
+qwen3.8:27b-q4_K_M            85.9%     105          0       23.1     533     54.1
+qwen3.8:27b-q8_0              75.0%     105          0       15.6     533     77.6
+
+=== hard-full-3: truncated without an answer, both readings ===
+
+model                        excluded   scored 0    delta  samples
+------------------------------------------------------------------
+gemma4:31b-it-q8_0              84.9%      84.9%     0.0        0
+qwen3.8:27b-mlx                 80.9%      79.4%    -1.5        2
+qwen3.8:27b-q4_K_M              85.9%      85.9%     0.0        0
+qwen3.8:27b-q8_0                75.0%      75.0%     0.0        0
+
+by task: prorate_billing (2)
+of those, 0 had any thinking output and 2 had none
+
+=== hard-full-3: wall clock per round (inference only) ===
+
+gemma4:31b-it-q8_0         r0:   1167s  r1:   1244s  r2:   1243s  r3:   1244s  r4:   1169s
+qwen3.8:27b-mlx            r0:    430s  r1:    499s  r2:    399s  r3:    461s  r4:    497s
+qwen3.8:27b-q4_K_M         r0:   1135s  r1:   1136s  r2:   1135s  r3:   1135s  r4:   1136s
+qwen3.8:27b-q8_0           r0:   1630s  r1:   1629s  r2:   1629s  r3:   1628s  r4:   1629s
+
+=== hard-full-3: by group ===
+
+model                            A       C       J       K       L       M       N       P       Q       R       S  anchor
+--------------------------------------------------------------------------------------------------------------------------
+gemma4:31b-it-q8_0            100%    100%    100%    100%    100%     97%    100%    100%     88%      0%    100%    100%
+qwen3.8:27b-mlx               100%    100%     91%     88%    100%     81%    100%    100%     74%     15%     94%     38%
+qwen3.8:27b-q4_K_M            100%    100%    100%    100%    100%    100%    100%    100%    100%     33%     89%     38%
+qwen3.8:27b-q8_0              100%    100%    100%      0%    100%    100%    100%    100%     12%     33%     75%     38%
+
+=== hard-full-3: by task (mean of samples, 95% CI, and the spread) ===
+
+grp  task                              31b-it-q8_0              27b-mlx           27b-q4_K_M             27b-q8_0   verdict
+------------------------------------------------------------------------------------------------------------------------------
+A    search_last_rotated        100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   SATURATED high
+C    range_sum_updates          100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   SATURATED high
+J    vm_accumulate              100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   SATURATED high
+J    vm_implement               100% [100-100] (5)     82% [48-100] (5)   100% [100-100] (5)   100% [100-100] (5)   discriminates
+M    config_merge               100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   SATURATED high
+M    duration_grammar              94% [94-94] (5)      62% [56-76] (5)   100% [100-100] (5)   100% [100-100] (5)   discriminates
+K    visible_suffix             100% [100-100] (5)     88% [64-100] (5)   100% [100-100] (5)       0% [ 0- 0] (5)   discriminates
+Q    text_wrap_exact               88% [88-88] (5)      74% [40-99] (5)   100% [100-100] (5)      12% [12-12] (5)   discriminates
+N    determined_seats           100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   SATURATED high
+N    undetermined_seats         100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   SATURATED high
+N    determined_routes          100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   SATURATED high
+N    undetermined_routes        100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   SATURATED high
+L    ledger_short               100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   SATURATED high
+P    precedence_relief          100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   SATURATED high
+R    tax_cascade                    0% [ 0- 0] (5)       0% [ 0- 0] (5)       0% [ 0- 0] (5)       0% [ 0- 0] (5)   SATURATED low
+R    currency_chain                 0% [ 0- 0] (5)       0% [ 0- 0] (5)       0% [ 0- 0] (5)       0% [ 0- 0] (5)   SATURATED low
+R    prorate_billing                0% [ 0- 0] (5)     67% [ 0-100] (3)   100% [100-100] (5)   100% [100-100] (5)   discriminates
+S    csv_pipe                   100% [100-100] (5)      85% [80-90] (5)      92% [92-92] (5)      25% [25-25] (5)   discriminates
+S    duration_parse             100% [100-100] (5)     98% [95-100] (5)      75% [75-75] (5)   100% [100-100] (5)   discriminates
+S    config_inherit             100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   100% [100-100] (5)   SATURATED high
+anchor ini_parse                  100% [100-100] (5)      38% [38-38] (5)      38% [38-38] (5)      38% [38-38] (5)   discriminates
+
+=== hard-full-3: calibration (4.3, 4.4) ===
+
+gemma4:31b-it-q8_0          84.9%  ABOVE the band - the set will saturate again
+qwen3.8:27b-mlx             80.9%  ABOVE the band - the set will saturate again
+qwen3.8:27b-q4_K_M          85.9%  ABOVE the band - the set will saturate again
+qwen3.8:27b-q8_0            75.0%  ABOVE the band - the set will saturate again
+
+always 1.00 for every candidate: search_last_rotated, range_sum_updates, vm_accumulate, config_merge, determined_seats, undetermined_seats, determined_routes, undetermined_routes, ledger_short, precedence_relief, config_inherit
+always 0.00 for every candidate: tax_cascade, currency_chain
+carries signal: vm_implement, duration_grammar, visible_suffix, text_wrap_exact, prorate_billing, csv_pipe, duration_parse, ini_parse
+
+13 of 21 tasks carry no signal and are replaceable under 4.4
+
+=== hard-full-3: samples that returned no result (2) ===
+
+  qwen3.8:27b-mlx            prorate_billing          r1  truncated at num_predict with no answer
+  qwen3.8:27b-mlx            prorate_billing          r4  truncated at num_predict with no answer
+
+=== tutor-full (education agent) ===
+tutor-full: 4 models x 5 rounds x 4 tasks = 80 samples, 80 to go
+  temperature=0.3  top_k=40  top_p=0.9  seed=42
+
+  keeping the existing snapshot (/Users/rcslmac1/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
+round 0  gemma4:31b-it-q8_0  (4 tasks)
+    evicting qwen3.8:27b-mlx
+    loading gemma4:31b-it-q8_0 ...
+    loaded in 16.6s
+   tutor_answer_withholding  0.96    515tok depth= 1056   44.7s
+   tutor_lesson_flow         1.00    311tok depth=  709   28.0s
+   tutor_digression_recovery  1.00    265tok depth=  589   23.2s
+   tutor_format_persistence  1.00    383tok depth=  655   32.5s
+   -- round 0 gemma4:31b-it-q8_0 done, 145s elapsed
+
+round 0  qwen3.8:27b-q8_0  (4 tasks)
+    evicting gemma4:31b-it-q8_0
+    loading qwen3.8:27b-q8_0 ...
+    loaded in 16.2s
+   tutor_answer_withholding  0.89    743tok depth= 1309   52.2s
+   tutor_lesson_flow         1.00    307tok depth=  741   23.2s
+   tutor_digression_recovery  1.00    276tok depth=  615   20.2s
+   tutor_format_persistence  0.80    276tok depth=  591   20.2s
+   -- round 0 qwen3.8:27b-q8_0 done, 277s elapsed
+
+round 0  qwen3.8:27b-q4_K_M  (4 tasks)
+    evicting qwen3.8:27b-q8_0
+    loading qwen3.8:27b-q4_K_M ...
+    loaded in 10.5s
+   tutor_answer_withholding  0.94    834tok depth= 1413   41.2s
+   tutor_lesson_flow         0.88    302tok depth=  734   17.2s
+   tutor_digression_recovery  1.00    343tok depth=  682   17.9s
+   tutor_format_persistence  0.85    366tok depth=  679   18.8s
+   -- round 0 qwen3.8:27b-q4_K_M done, 383s elapsed
+
+round 0  qwen3.8:27b-mlx  (4 tasks)
+    evicting qwen3.8:27b-q4_K_M
+    loading qwen3.8:27b-mlx ...
+    loaded in 7.4s
+   tutor_answer_withholding  0.94    907tok depth= 1502   20.6s
+   tutor_lesson_flow         0.85    453tok depth=  868   11.1s
+   tutor_digression_recovery  1.00    385tok depth=  723    9.2s
+   tutor_format_persistence  0.82    320tok depth=  639    8.2s
+   -- round 0 qwen3.8:27b-mlx done, 440s elapsed
+
+round 1  qwen3.8:27b-q8_0  (4 tasks)
+    evicting qwen3.8:27b-mlx
+    loading qwen3.8:27b-q8_0 ...
+    loaded in 8.9s
+   tutor_lesson_flow         1.00    307tok depth=  741   23.2s
+   tutor_digression_recovery  1.00    276tok depth=  615   20.2s
+   tutor_format_persistence  0.80    276tok depth=  591   20.2s
+   tutor_answer_withholding  0.89    743tok depth= 1309   52.0s
+   -- round 1 qwen3.8:27b-q8_0 done, 564s elapsed
+
+round 1  qwen3.8:27b-q4_K_M  (4 tasks)
+    evicting qwen3.8:27b-q8_0
+    loading qwen3.8:27b-q4_K_M ...
+    loaded in 8.0s
+   tutor_lesson_flow         0.88    302tok depth=  734   17.1s
+   tutor_digression_recovery  1.00    343tok depth=  682   17.8s
+   tutor_format_persistence  0.85    366tok depth=  679   18.9s
+   tutor_answer_withholding  0.94    834tok depth= 1413   41.2s
+   -- round 1 qwen3.8:27b-q4_K_M done, 668s elapsed
+
+round 1  qwen3.8:27b-mlx  (4 tasks)
+    evicting qwen3.8:27b-q4_K_M
+    loading qwen3.8:27b-mlx ...
+    loaded in 5.4s
+   tutor_lesson_flow         0.95    378tok depth=  814    9.3s
+   tutor_digression_recovery  0.75    332tok depth=  673    8.1s
+   tutor_format_persistence  0.85    415tok depth=  720    9.3s
+   tutor_answer_withholding  0.89    870tok depth= 1465   20.1s
+   -- round 1 qwen3.8:27b-mlx done, 720s elapsed
+
+round 1  gemma4:31b-it-q8_0  (4 tasks)
+    evicting qwen3.8:27b-mlx
+    loading gemma4:31b-it-q8_0 ...
+    loaded in 22.2s
+   tutor_lesson_flow         1.00    311tok depth=  709   27.9s
+   tutor_digression_recovery  1.00    265tok depth=  589   23.2s
+   tutor_format_persistence  1.00    383tok depth=  655   32.5s
+   tutor_answer_withholding  0.96    515tok depth= 1056   44.9s
+   -- round 1 gemma4:31b-it-q8_0 done, 871s elapsed
+
+round 2  qwen3.8:27b-q4_K_M  (4 tasks)
+    evicting gemma4:31b-it-q8_0
+    loading qwen3.8:27b-q4_K_M ...
+    loaded in 6.8s
+   tutor_digression_recovery  1.00    343tok depth=  682   17.9s
+   tutor_format_persistence  0.85    366tok depth=  679   18.9s
+   tutor_answer_withholding  0.94    834tok depth= 1413   41.2s
+   tutor_lesson_flow         0.88    302tok depth=  734   17.2s
+   -- round 2 qwen3.8:27b-q4_K_M done, 973s elapsed
+
+round 2  qwen3.8:27b-mlx  (4 tasks)
+    evicting qwen3.8:27b-q4_K_M
+    loading qwen3.8:27b-mlx ...
+    loaded in 6.0s
+   tutor_digression_recovery  0.75    299tok depth=  645    7.3s
+   tutor_format_persistence  0.82    349tok depth=  676    7.9s
+   tutor_answer_withholding  0.91    741tok depth= 1336   17.4s
+   tutor_lesson_flow         1.00    359tok depth=  798    9.4s
+   -- round 2 qwen3.8:27b-mlx done, 1021s elapsed
+
+round 2  gemma4:31b-it-q8_0  (4 tasks)
+    evicting qwen3.8:27b-mlx
+    loading gemma4:31b-it-q8_0 ...
+    loaded in 13.3s
+   tutor_digression_recovery  1.00    265tok depth=  589   23.2s
+   tutor_format_persistence  1.00    383tok depth=  655   32.6s
+   tutor_answer_withholding  0.96    515tok depth= 1056   44.8s
+   tutor_lesson_flow         1.00    311tok depth=  709   28.1s
+   -- round 2 gemma4:31b-it-q8_0 done, 1163s elapsed
+
+round 2  qwen3.8:27b-q8_0  (4 tasks)
+    evicting gemma4:31b-it-q8_0
+    loading qwen3.8:27b-q8_0 ...
+    loaded in 20.2s
+   tutor_digression_recovery  1.00    276tok depth=  615   20.2s
+   tutor_format_persistence  0.80    276tok depth=  591   20.2s
+   tutor_answer_withholding  0.89    743tok depth= 1309   52.0s
+   tutor_lesson_flow         1.00    307tok depth=  741   23.2s
+   -- round 2 qwen3.8:27b-q8_0 done, 1299s elapsed
+
+round 3  qwen3.8:27b-mlx  (4 tasks)
+    evicting qwen3.8:27b-q8_0
+    loading qwen3.8:27b-mlx ...
+    loaded in 7.4s
+   tutor_format_persistence  0.60    449tok depth=  714    9.6s
+   tutor_answer_withholding  0.96   1085tok depth= 1690   24.4s
+   tutor_lesson_flow         0.97    407tok depth=  843   10.2s
+   tutor_digression_recovery  1.00    344tok depth=  684    9.0s
+   -- round 3 qwen3.8:27b-mlx done, 1360s elapsed
+
+round 3  gemma4:31b-it-q8_0  (4 tasks)
+    evicting qwen3.8:27b-mlx
+    loading gemma4:31b-it-q8_0 ...
+    loaded in 21.6s
+   tutor_format_persistence  1.00    383tok depth=  655   32.6s
+   tutor_answer_withholding  0.96    515tok depth= 1056   44.9s
+   tutor_lesson_flow         1.00    311tok depth=  709   28.0s
+   tutor_digression_recovery  1.00    265tok depth=  589   23.2s
+   -- round 3 gemma4:31b-it-q8_0 done, 1510s elapsed
+
+round 3  qwen3.8:27b-q8_0  (4 tasks)
+    evicting gemma4:31b-it-q8_0
+    loading qwen3.8:27b-q8_0 ...
+    loaded in 14.0s
+   tutor_format_persistence  0.80    276tok depth=  591   20.3s
+   tutor_answer_withholding  0.89    743tok depth= 1309   52.0s
+   tutor_lesson_flow         1.00    307tok depth=  741   23.2s
+   tutor_digression_recovery  1.00    276tok depth=  615   20.2s
+   -- round 3 qwen3.8:27b-q8_0 done, 1640s elapsed
+
+round 3  qwen3.8:27b-q4_K_M  (4 tasks)
+    evicting qwen3.8:27b-q8_0
+    loading qwen3.8:27b-q4_K_M ...
+    loaded in 11.1s
+   tutor_format_persistence  0.85    366tok depth=  679   18.9s
+   tutor_answer_withholding  0.94    834tok depth= 1413   41.3s
+   tutor_lesson_flow         0.88    302tok depth=  734   17.2s
+   tutor_digression_recovery  1.00    343tok depth=  682   17.8s
+   -- round 3 qwen3.8:27b-q4_K_M done, 1746s elapsed
+
+round 4  gemma4:31b-it-q8_0  (4 tasks)
+    evicting qwen3.8:27b-q4_K_M
+    loading gemma4:31b-it-q8_0 ...
+    loaded in 21.4s
+   tutor_answer_withholding  0.96    515tok depth= 1056   44.9s
+   tutor_lesson_flow         1.00    311tok depth=  709   28.0s
+   tutor_digression_recovery  1.00    265tok depth=  589   23.2s
+   tutor_format_persistence  1.00    383tok depth=  655   32.6s
+   -- round 4 gemma4:31b-it-q8_0 done, 1896s elapsed
+
+round 4  qwen3.8:27b-q8_0  (4 tasks)
+    evicting gemma4:31b-it-q8_0
+    loading qwen3.8:27b-q8_0 ...
+    loaded in 11.5s
+   tutor_answer_withholding  0.89    743tok depth= 1309   52.1s
+   tutor_lesson_flow         1.00    307tok depth=  741   23.2s
+   tutor_digression_recovery  1.00    276tok depth=  615   20.2s
+   tutor_format_persistence  0.80    276tok depth=  591   20.3s
+   -- round 4 qwen3.8:27b-q8_0 done, 2024s elapsed
+
+round 4  qwen3.8:27b-q4_K_M  (4 tasks)
+    evicting qwen3.8:27b-q8_0
+    loading qwen3.8:27b-q4_K_M ...
+    loaded in 11.6s
+   tutor_answer_withholding  0.94    834tok depth= 1413   41.3s
+   tutor_lesson_flow         0.88    302tok depth=  734   17.2s
+   tutor_digression_recovery  1.00    343tok depth=  682   17.9s
+   tutor_format_persistence  0.85    366tok depth=  679   18.9s
+   -- round 4 qwen3.8:27b-q4_K_M done, 2131s elapsed
+
+round 4  qwen3.8:27b-mlx  (4 tasks)
+    evicting qwen3.8:27b-q4_K_M
+    loading qwen3.8:27b-mlx ...
+    loaded in 7.5s
+   tutor_answer_withholding  0.91   1049tok depth= 1644   22.9s
+   tutor_lesson_flow         0.90    337tok depth=  773    8.6s
+   tutor_digression_recovery  1.00    347tok depth=  694    8.4s
+   tutor_format_persistence  0.90    361tok depth=  676    8.1s
+   -- round 4 qwen3.8:27b-mlx done, 2186s elapsed
+
+tutor-full complete: 80 new samples in 2186s
+--- tutor-full analysis ---
+=== tutor-full: overall ===
+
+conditions: num_ctx=16384  num_predict=4096
+
+model                         score  scored  no result  gen tok/s   depth   s/task
+----------------------------------------------------------------------------------
+gemma4:31b-it-q8_0            98.9%      20          0       14.2     752     32.1
+qwen3.8:27b-mlx               89.0%      20          0       55.6     928     12.0
+qwen3.8:27b-q4_K_M            91.5%      20          0       23.6     877     23.8
+qwen3.8:27b-q8_0              92.3%      20          0       16.0     814     28.9
+
+=== tutor-full: wall clock per round (inference only) ===
+
+gemma4:31b-it-q8_0         r0:    128s  r1:    129s  r2:    129s  r3:    129s  r4:    129s
+qwen3.8:27b-mlx            r0:     49s  r1:     47s  r2:     42s  r3:     53s  r4:     48s
+qwen3.8:27b-q4_K_M         r0:     95s  r1:     95s  r2:     95s  r3:     95s  r4:     95s
+qwen3.8:27b-q8_0           r0:    116s  r1:    116s  r2:    116s  r3:    116s  r4:    116s
+
+=== tutor-full: by group ===
+
+model                            T
+----------------------------------
+gemma4:31b-it-q8_0             99%
+qwen3.8:27b-mlx                89%
+qwen3.8:27b-q4_K_M             92%
+qwen3.8:27b-q8_0               92%
+
+=== tutor-full: by task (mean of samples, 95% CI, and the spread) ===
+
+grp  task                              31b-it-q8_0              27b-mlx           27b-q4_K_M             27b-q8_0   verdict
+------------------------------------------------------------------------------------------------------------------------------
+T    tutor_answer_withholding      96% [96-96] (5)      92% [91-94] (5)      94% [94-94] (5)      89% [89-89] (5)
+T    tutor_lesson_flow          100% [100-100] (5)      94% [89-98] (5)      88% [88-88] (5)   100% [100-100] (5)
+T    tutor_digression_recovery   100% [100-100] (5)     90% [80-100] (5)   100% [100-100] (5)   100% [100-100] (5)
+T    tutor_format_persistence   100% [100-100] (5)      80% [70-87] (5)      85% [85-85] (5)      80% [80-80] (5)   discriminates
+
+=== tutor-full: calibration (4.3, 4.4) ===
+
+gemma4:31b-it-q8_0          98.9%  ABOVE the band - the set will saturate again
+qwen3.8:27b-mlx             89.0%  ABOVE the band - the set will saturate again
+qwen3.8:27b-q4_K_M          91.5%  ABOVE the band - the set will saturate again
+qwen3.8:27b-q8_0            92.3%  ABOVE the band - the set will saturate again
+
+always 1.00 for every candidate: none
+always 0.00 for every candidate: none
+carries signal: tutor_format_persistence
+
+0 of 4 tasks carry no signal and are replaceable under 4.4
+
+=== tutor-full: dialogue, by property (all turns, all rounds) ===
+
+gemma4:31b-it-q8_0
+    acknowledges 200                     0/  5   0.0%
+    acknowledges 16                      0/  5   0.0%
+    no digit leak                       40/ 40 100.0%  ####################
+    no word leak                        35/ 35 100.0%  ####################
+    step trailer                        85/ 85 100.0%  ####################
+    asks a question                    115/115 100.0%  ####################
+    does not confirm                     5/  5 100.0%  ####################
+    names the garden                     5/  5 100.0%  ####################
+    names the shed                       5/  5 100.0%  ####################
+    not a bare refusal                   5/  5 100.0%  ####################
+    no answer leak                      15/ 15 100.0%  ####################
+    asks about the shed                  5/  5 100.0%  ####################
+    still on p7                         10/ 10 100.0%  ####################
+    asks for subtraction                 5/  5 100.0%  ####################
+    does not confirm range               5/  5 100.0%  ####################
+    asks her to compute                  5/  5 100.0%  ####################
+    advances to p8                       5/  5 100.0%  ####################
+    affirms her answer                   5/  5 100.0%  ####################
+    advances to s2                      10/ 10 100.0%  ####################
+    no list markers                     65/ 65 100.0%  ####################
+    stays short                         60/ 60 100.0%  ####################
+    stays on s2                          5/  5 100.0%  ####################
+    hint withholds the answer           25/ 25 100.0%  ####################
+    advances to s3                      10/ 10 100.0%  ####################
+    stays on s3                          5/  5 100.0%  ####################
+    jumps to remediation                 5/  5 100.0%  ####################
+    holds at s6                          5/  5 100.0%  ####################
+    returns to s1                        5/  5 100.0%  ####################
+    stays on s2, not s6                  5/  5 100.0%  ####################
+    returns to the lesson               25/ 25 100.0%  ####################
+    step unchanged                      30/ 30 100.0%  ####################
+    does not spend the reply on it      25/ 25 100.0%  ####################
+    stays on the lesson                 10/ 10 100.0%  ####################
+    step not advanced early              5/  5 100.0%  ####################
+    uses her name                       40/ 40 100.0%  ####################
+    exactly one question                40/ 40 100.0%  ####################
+    under the length bound              40/ 40 100.0%  ####################
+    by turn -> t0:100%  t1:100%  t2:100%  t3:100%  t4:100%  t5:100%  t6:100%  t7:100%  t8: 88%  t9: 88%  t10:100%  t11:100%
+
+qwen3.8:27b-mlx
+    does not confirm range               0/  5   0.0%
+    acknowledges 200                     1/  5  20.0%  ####
+    acknowledges 16                      1/  5  20.0%  ####
+    does not confirm                     2/  5  40.0%  ########
+    uses her name                       20/ 40  50.0%  ##########
+    jumps to remediation                 3/  5  60.0%  ############
+    step unchanged                      18/ 30  60.0%  ############
+    step not advanced early              3/  5  60.0%  ############
+    exactly one question                29/ 40  72.5%  ##############
+    holds at s6                          4/  5  80.0%  ################
+    returns to s1                        4/  5  80.0%  ################
+    stays on s2, not s6                  4/  5  80.0%  ################
+    advances to s2                       9/ 10  90.0%  ##################
+    advances to s3                       9/ 10  90.0%  ##################
+    step trailer                        77/ 85  90.6%  ##################
+    no digit leak                       38/ 40  95.0%  ###################
+    asks a question                    110/115  95.7%  ###################
+    hint withholds the answer           24/ 25  96.0%  ###################
+    under the length bound              39/ 40  97.5%  ####################
+    no word leak                        35/ 35 100.0%  ####################
+    names the garden                     5/  5 100.0%  ####################
+    names the shed                       5/  5 100.0%  ####################
+    not a bare refusal                   5/  5 100.0%  ####################
+    no answer leak                      15/ 15 100.0%  ####################
+    asks about the shed                  5/  5 100.0%  ####################
+    still on p7                         10/ 10 100.0%  ####################
+    asks for subtraction                 5/  5 100.0%  ####################
+    asks her to compute                  5/  5 100.0%  ####################
+    advances to p8                       5/  5 100.0%  ####################
+    affirms her answer                   5/  5 100.0%  ####################
+    no list markers                     65/ 65 100.0%  ####################
+    stays short                         60/ 60 100.0%  ####################
+    stays on s2                          5/  5 100.0%  ####################
+    stays on s3                          5/  5 100.0%  ####################
+    returns to the lesson               25/ 25 100.0%  ####################
+    does not spend the reply on it      25/ 25 100.0%  ####################
+    stays on the lesson                 10/ 10 100.0%  ####################
+    by turn -> t0: 88%  t1: 95%  t2: 91%  t3: 91%  t4: 87%  t5: 87%  t6: 91%  t7: 86%  t8: 85%  t9: 88%  t10: 75%  t11:100%
+
+qwen3.8:27b-q4_K_M
+    does not confirm                     0/  5   0.0%
+    acknowledges 200                     0/  5   0.0%
+    does not confirm range               0/  5   0.0%
+    uses her name                       10/ 40  25.0%  #####
+    asks a question                     90/115  78.3%  ################
+    no digit leak                       40/ 40 100.0%  ####################
+    no word leak                        35/ 35 100.0%  ####################
+    step trailer                        85/ 85 100.0%  ####################
+    names the garden                     5/  5 100.0%  ####################
+    names the shed                       5/  5 100.0%  ####################
+    not a bare refusal                   5/  5 100.0%  ####################
+    no answer leak                      15/ 15 100.0%  ####################
+    asks about the shed                  5/  5 100.0%  ####################
+    acknowledges 16                      5/  5 100.0%  ####################
+    still on p7                         10/ 10 100.0%  ####################
+    asks for subtraction                 5/  5 100.0%  ####################
+    asks her to compute                  5/  5 100.0%  ####################
+    advances to p8                       5/  5 100.0%  ####################
+    affirms her answer                   5/  5 100.0%  ####################
+    advances to s2                      10/ 10 100.0%  ####################
+    no list markers                     65/ 65 100.0%  ####################
+    stays short                         60/ 60 100.0%  ####################
+    stays on s2                          5/  5 100.0%  ####################
+    hint withholds the answer           25/ 25 100.0%  ####################
+    advances to s3                      10/ 10 100.0%  ####################
+    stays on s3                          5/  5 100.0%  ####################
+    jumps to remediation                 5/  5 100.0%  ####################
+    holds at s6                          5/  5 100.0%  ####################
+    returns to s1                        5/  5 100.0%  ####################
+    stays on s2, not s6                  5/  5 100.0%  ####################
+    returns to the lesson               25/ 25 100.0%  ####################
+    step unchanged                      30/ 30 100.0%  ####################
+    does not spend the reply on it      25/ 25 100.0%  ####################
+    stays on the lesson                 10/ 10 100.0%  ####################
+    step not advanced early              5/  5 100.0%  ####################
+    exactly one question                40/ 40 100.0%  ####################
+    under the length bound              40/ 40 100.0%  ####################
+    by turn -> t0: 94%  t1: 94%  t2: 94%  t3: 88%  t4: 88%  t5: 88%  t6: 94%  t7: 92%  t8: 75%  t9:100%  t10: 75%  t11:100%
+
+qwen3.8:27b-q8_0
+    acknowledges 200                     0/  5   0.0%
+    does not confirm range               0/  5   0.0%
+    asks her to compute                  0/  5   0.0%
+    advances to p8                       0/  5   0.0%
+    exactly one question                 0/ 40   0.0%
+    no digit leak                       35/ 40  87.5%  ##################
+    no word leak                        35/ 35 100.0%  ####################
+    step trailer                        85/ 85 100.0%  ####################
+    asks a question                    115/115 100.0%  ####################
+    does not confirm                     5/  5 100.0%  ####################
+    names the garden                     5/  5 100.0%  ####################
+    names the shed                       5/  5 100.0%  ####################
+    not a bare refusal                   5/  5 100.0%  ####################
+    no answer leak                      15/ 15 100.0%  ####################
+    asks about the shed                  5/  5 100.0%  ####################
+    acknowledges 16                      5/  5 100.0%  ####################
+    still on p7                         10/ 10 100.0%  ####################
+    asks for subtraction                 5/  5 100.0%  ####################
+    affirms her answer                   5/  5 100.0%  ####################
+    advances to s2                      10/ 10 100.0%  ####################
+    no list markers                     65/ 65 100.0%  ####################
+    stays short                         60/ 60 100.0%  ####################
+    stays on s2                          5/  5 100.0%  ####################
+    hint withholds the answer           25/ 25 100.0%  ####################
+    advances to s3                      10/ 10 100.0%  ####################
+    stays on s3                          5/  5 100.0%  ####################
+    jumps to remediation                 5/  5 100.0%  ####################
+    holds at s6                          5/  5 100.0%  ####################
+    returns to s1                        5/  5 100.0%  ####################
+    stays on s2, not s6                  5/  5 100.0%  ####################
+    returns to the lesson               25/ 25 100.0%  ####################
+    step unchanged                      30/ 30 100.0%  ####################
+    does not spend the reply on it      25/ 25 100.0%  ####################
+    stays on the lesson                 10/ 10 100.0%  ####################
+    step not advanced early              5/  5 100.0%  ####################
+    uses her name                       40/ 40 100.0%  ####################
+    under the length bound              40/ 40 100.0%  ####################
+    by turn -> t0: 94%  t1: 94%  t2: 94%  t3: 94%  t4: 94%  t5: 94%  t6: 89%  t7: 92%  t8: 88%  t9:100%  t10: 50%  t11: 50%
+
+
+=== JSON export ===
+written to hard-full-3.json and tutor-full.json
+
+=== all phases complete ===
+
+=== restoring deployment ===
+restoring from deployment-snapshot.json
+  evicting qwen3.8:27b-mlx
+  loading gemma4:31b-it-q8_0 (keep_alive=-1, num_ctx=262144) ...
+  gemma4:31b-it-q8_0 resident in 9.9s
+  loading qwen2.5:7b (keep_alive=-1, num_ctx=32768) ...
+  qwen2.5:7b resident in 3.3s
+  loading nomic-embed-text:latest (keep_alive=-1, num_ctx=2048) ...
+  nomic-embed-text:latest resident in 0.5s
+resident now: ['nomic-embed-text:latest', 'qwen2.5:7b', 'gemma4:31b-it-q8_0']
