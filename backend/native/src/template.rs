@@ -2,7 +2,32 @@ use minijinja::{Environment, Value};
 
 use crate::gguf::GgufError;
 
+/// The template used when a GGUF carries none of its own.
+///
+/// The tools block is not decoration. This iterated `messages` alone until
+/// 2026-09-07, so on `gemma4:31b-it-q8_0` — which carries a template of zero
+/// characters and serves `chat` and `code` — every tool definition counted as
+/// nothing: 29 tokens for none, 29 for twelve, 29 for thirty-six, against
+/// `qwen2.5:7b`'s 57 / 1,395 / 3,915. An under-count is the direction that
+/// admits a prompt the runtime then truncates in silence.
+///
+/// Name, description and parameter schema, because that is what a runtime puts
+/// in front of a model for a tool and because it measures closest: 6,748
+/// against the runtime's own 6,607 for a twelve-tool payload, where the
+/// tool-less fallback read 5,723 and rendering the whole OpenAI-shaped object
+/// reaches 6,977. Over by 2%, which is the safe direction for a figure that
+/// decides whether a prompt is refused.
+///
+/// Kept byte-identical to `_CHATML_FALLBACK` on the Python side. The two
+/// tokenizer implementations carried the same defect at once earlier today
+/// because they were held in step by a comment alone.
 const CHATML_FALLBACK: &str = concat!(
+    "{% if tools %}<|im_start|>system\n",
+    "{% for t in tools %}",
+    "{{ t.function.name }}: {{ t.function.description }}\n",
+    "{{ t.function.parameters | tojson }}\n",
+    "{% endfor %}",
+    "<|im_end|>\n{% endif %}",
     "{% for message in messages %}",
     "<|im_start|>{{ message.role }}\n{{ message.content }}<|im_end|>\n",
     "{% endfor %}",

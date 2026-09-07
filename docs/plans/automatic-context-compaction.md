@@ -382,6 +382,13 @@ nothing to trim. About 74 tokens per definition, unseen.
 This one under-counts, which is the direction that admits a prompt the guardrail
 never measured. Everything else found today over-counted.
 
+**Fixed the same day**, in both the Python and the Rust fallback, with a test
+asserting the two agree. The rendering is name, description and parameter
+schema, which measures 6,748 against the runtime's 6,607 where the tool-less
+fallback read 5,723 — over by 2%, which is the safe direction for a figure that
+decides whether a prompt is refused. Tier 0 can now see what it was written to
+trim.
+
 **And §8 item 3c's answer changes shape.** Real traffic tops out at 75,245 real
 tokens on the incumbent (§2.9's history), which fits inside 122,880 with room.
 The ceiling did not need raising; it needed a correct ruler. What binds instead

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from app.adapters.tokenizer.gguf_token_counter.adapter import _CHATML_FALLBACK
 from tests.unit.exact_token_counting_fixtures import (
     VOCAB,
     write_gguf,
@@ -170,3 +171,57 @@ def test_no_chat_template_still_counts(tmp_path: Path) -> None:
     result = nexus_native.count_prompt(blob_path, "no-tmpl-ref", json.dumps(messages), "[]")
     assert result is not None
     assert result > 0
+
+
+def test_the_fallback_counts_tool_definitions(tmp_path: Path) -> None:
+    """The defect that shipped because nothing asked this.
+
+    `gemma4:31b-it-q8_0` carries a chat template of zero characters, so it falls
+    back — and until 2026-09-07 the fallback iterated `messages` alone. Measured
+    on the deployment that day by holding a message fixed and varying only the
+    tool count: 29 tokens for none, 29 for twelve, 29 for thirty-six, on the
+    model serving `chat` and `code`. An under-count is the direction that admits
+    a prompt the runtime then truncates in silence.
+    """
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, template=None)
+    blob_path = str(tmp_path / "blobs" / "sha256-abc123")
+    nexus_native.prepare(blob_path, "tools-fallback-ref")
+
+    messages = json.dumps([{"role": "user", "content": "hello"}])
+    tools = json.dumps(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search",
+                    "description": "Find a phrase in the corpus and return matching lines.",
+                    "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+                },
+            }
+        ]
+    )
+
+    without = nexus_native.count_prompt(blob_path, "tools-fallback-ref", messages, "[]")
+    with_tools = nexus_native.count_prompt(blob_path, "tools-fallback-ref", messages, tools)
+
+    assert without is not None and with_tools is not None
+    assert with_tools > without, "a tool definition has to cost tokens"
+
+
+def test_both_fallback_templates_are_the_same_text() -> None:
+    """The Python and Rust fallbacks are two copies of one template, and on
+    2026-09-07 two copies of one expression shipped the same twofold counting
+    error at once because a comment was all that held them together. This is
+    the assertion that comment could not make.
+    """
+    rust = Path("native/src/template.rs").read_text()
+    # The Rust source spells it as `concat!` string pieces; comparing the parts
+    # that matter is enough to catch one side gaining a block the other lacks.
+    for fragment in (
+        "{% if tools %}<|im_start|>system",
+        "{{ t.function.name }}: {{ t.function.description }}",
+        "{{ t.function.parameters | tojson }}",
+    ):
+        assert fragment in _CHATML_FALLBACK, fragment
+        assert fragment in rust, f"{fragment} missing from the Rust fallback"
