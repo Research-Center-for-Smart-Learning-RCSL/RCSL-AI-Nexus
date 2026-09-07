@@ -41,6 +41,7 @@ from app.application.use_cases.read_host_status import ReadHostStatus
 from app.application.use_cases.read_prompt_logs import ReadPromptLogs
 from app.application.use_cases.read_refusals import ReadRefusals
 from app.application.use_cases.read_usage_analytics import ReadUsageAnalytics
+from app.application.use_cases.read_usage_records import ReadUsageRecords
 from app.domain.entities.retention import RetentionDataset
 from app.shared.clock import SystemClock
 
@@ -177,6 +178,24 @@ def build_read_refusals(request: Request, session: SessionDep, tenant: TenantIdD
     """
     return ReadRefusals(
         refusals=PostgresRefusalRepository(session, tenant),
+        authz=request.app.state.authz,
+        audit=get_audit(request),
+    )
+
+
+def build_read_usage_records(
+    request: Request, session: SessionDep, tenant: TenantIdDep
+) -> ReadUsageRecords:
+    """Tenant-scoped like the charts, and narrowed to one account inside.
+
+    The repository is the same one the charts read, constructed the same way:
+    the boundary between "which installation's rows exist" and "whose rows may
+    this person see" is the one `build_read_refusals` states, and this listing
+    is on the second side of it for the first time — every previous reader of
+    this table returned aggregates that were the tenant's rather than anyone's.
+    """
+    return ReadUsageRecords(
+        usage=PostgresUsageRepository(session, tenant),
         authz=request.app.state.authz,
         audit=get_audit(request),
     )

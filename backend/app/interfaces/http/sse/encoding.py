@@ -8,6 +8,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 
 from app.domain.entities.actor import Actor
+from app.interfaces.http.request_context import current_compaction
 
 DONE_SENTINEL = "data: [DONE]\n\n"
 
@@ -59,6 +60,39 @@ def capability_defaulted_header(actor: Actor, requested: str) -> dict[str, str]:
         # raises and the error handler writes the response.
         return {}
     return {CAPABILITY_DEFAULTED_HEADER: served}
+
+
+COMPACTION_HEADER = "X-Context-Compacted"
+
+
+def compaction_header() -> dict[str, str]:
+    """Empty unless this request's prompt was reduced before it was served.
+
+    The fourth header on this endpoint that announces a narrowing — beside
+    `X-Capability-Defaulted`, `X-Dropped-Tools` and `X-Dropped-Input-Items` —
+    and it is a header for the reason the roadmap gave when the first of them
+    shipped: the envelope is OpenAI's, an extra frame shape is a protocol error
+    to a strict client, and the durable evidence belongs on the usage row
+    because it "has to outlive both a header the client may not read and a log
+    line that rotates".
+
+    **Read after the generator is primed**, unlike `capability_defaulted_header`
+    beside it, and the difference is worth stating because the two look alike.
+    That one is derivable from the actor before anything runs. This one is not
+    known until the use case has counted the prompt, found it over the ceiling
+    and reduced it — all of which happens inside the concurrency slot, upstream
+    of the first chunk. `sse.prime` pulls that chunk while the response object
+    still does not exist, so there is a window where the fact is known and the
+    headers are not yet written. This function is only correct inside it.
+
+    The value is machine-readable rather than the prose the use case logs.
+    A caller reading it wants to branch on the tier; an operator wanting the
+    sentence has the log line, and one wanting the numbers has the usage row.
+    """
+    compaction = current_compaction()
+    if compaction is None:
+        return {}
+    return {COMPACTION_HEADER: f"tier={compaction.tier}"}
 
 
 def created_now() -> int:

@@ -47,6 +47,7 @@ export const AUDIT_ACTIONS = [
   'routing_policy.deleted',
   'routing_policy.saved',
   'tenant.created',
+  'usage.read_any',
   'user.debug_window_set',
   'user.deleted',
   'user.disabled',

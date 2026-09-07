@@ -32,6 +32,15 @@ export const promptLogSummarySchema = z.object({
   completion_chars: z.number().int().nonnegative(),
   reasoning_chars: z.number().int().nonnegative(),
   truncated_fields: z.array(z.string()),
+  /**
+   * Which tier reduced the prompt this row stores, or null if nothing did.
+   *
+   * `messages` in a transcript is what the model was *sent*. After a compaction
+   * that is not what the caller composed, and this is the only screen where a
+   * person reads the prompt itself — so a transcript with no such marker is the
+   * hardest place in the platform for the reduction to go unnoticed.
+   */
+  compaction_tier: z.number().int().nonnegative().nullable(),
 });
 
 export const promptLogListSchema = z.object({

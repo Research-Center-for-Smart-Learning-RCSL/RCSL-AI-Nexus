@@ -88,6 +88,7 @@ async def finalize_generation(
                     messages=tuple(messages),
                     finish_reason=finish_reason,
                     completed=completed,
+                    compaction_tier=compaction_tier,
                 )
             )
         except Exception:  # noqa: BLE001

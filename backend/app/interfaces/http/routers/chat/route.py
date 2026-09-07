@@ -129,7 +129,15 @@ async def chat_completions(
             first=first,
             # Headers rather than frames: the envelope is OpenAI's, and an
             # extra frame shape is a protocol error to a strict client.
-            extra_headers=headers,
+            #
+            # `compaction_header` is added *after* priming and the two above
+            # before it, which is the one asymmetry on this line. Whether a
+            # capability is defaulted is known from the actor; whether the
+            # prompt was reduced is not known until the use case has counted
+            # it, and that happens inside the concurrency slot upstream of the
+            # first chunk. Priming is therefore the earliest point the answer
+            # exists and the latest point a header can still be written.
+            extra_headers={**headers, **sse.compaction_header()},
             include_usage=bool(body.stream_options and body.stream_options.include_usage),
         )
 
@@ -140,7 +148,7 @@ async def chat_completions(
     for name, value in headers.items():
         response.headers[name] = value
 
-    return await _collect(
+    collected = await _collect(
         completion_id,
         created,
         body.model,
@@ -153,3 +161,10 @@ async def chat_completions(
         tool_choice,
         sampling,
     )
+    # After `_collect`, because that is when the use case has run. FastAPI
+    # merges this `Response`'s headers when the handler returns, so setting one
+    # here still reaches the caller — the constraint the streaming path has,
+    # that headers close when the body opens, does not exist on this one.
+    for name, value in sse.compaction_header().items():
+        response.headers[name] = value
+    return collected

@@ -1,9 +1,9 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
-import { getOwnUsage, getUsage } from '@/features/usage/api';
-import type { UsageRange } from '@/features/usage/schema';
+import { getOwnUsage, getUsage, listUsageRecords } from '@/features/usage/api';
+import type { UsageRange, UsageRecordFilters } from '@/features/usage/schema';
 
 export const usageKeys = {
   all: ['usage'] as const,
@@ -15,6 +15,7 @@ export const usageKeys = {
    * narrower one arriving first would look exactly like a quiet platform.
    */
   own: (range: UsageRange) => [...usageKeys.all, 'me', range] as const,
+  records: (filters: UsageRecordFilters) => [...usageKeys.all, 'records', filters] as const,
 };
 
 /**
@@ -31,5 +32,23 @@ export function useUsage(range: UsageRange, { mine = false }: { mine?: boolean }
     queryKey: mine ? usageKeys.own(range) : usageKeys.range(range),
     queryFn: () => (mine ? getOwnUsage(range) : getUsage(range)),
     staleTime: 60_000,
+  });
+}
+
+/**
+ * Server-paged, like the refusals table and the audit log, and for the same
+ * reason: append-only, and anyone holding a key can add to it.
+ *
+ * Ten seconds rather than the minute the charts use. Somebody opens this
+ * because of a request that just happened — an integrator quoting a time, a
+ * key that was just given a new setting — and a minute-old page is one that may
+ * not contain it yet.
+ */
+export function useUsageRecords(filters: UsageRecordFilters) {
+  return useQuery({
+    queryKey: usageKeys.records(filters),
+    queryFn: () => listUsageRecords(filters),
+    placeholderData: keepPreviousData,
+    staleTime: 10_000,
   });
 }

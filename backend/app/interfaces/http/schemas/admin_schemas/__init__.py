@@ -59,6 +59,8 @@ from .logs_usage_refusals import (
     RefusalResponse,
     UsageAnalyticsResponse,
     UsagePointResponse,
+    UsageRecordListResponse,
+    UsageRecordResponse,
 )
 from .models_nodes_routing import (
     CreateModelRequest,
@@ -153,6 +155,8 @@ __all__ = [
     "UsagePointResponse",
     "CapabilitySeriesResponse",
     "UsageAnalyticsResponse",
+    "UsageRecordListResponse",
+    "UsageRecordResponse",
     "KnowledgeCollectionResponse",
     "CreateCollectionRequest",
     "KnowledgeDocumentResponse",

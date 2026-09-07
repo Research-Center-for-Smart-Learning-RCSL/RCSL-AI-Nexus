@@ -39,7 +39,12 @@ from prometheus_client import (
 from prometheus_client.core import GaugeMetricFamily
 from prometheus_client.registry import Collector
 
-from app.domain.entities.usage import BucketUnit, UsageBucket, UsageRecord
+from app.domain.entities.usage import (
+    BucketUnit,
+    CompactionSummary,
+    UsageBucket,
+    UsageRecord,
+)
 from app.domain.ports.infrastructure_ports import ConcurrencyLimiterPort
 from app.domain.ports.repositories import UsageRepositoryPort
 
@@ -98,6 +103,28 @@ class Metrics:
             buckets=LATENCY_BUCKETS,
             registry=registry,
         )
+        # Compaction fires on a minority of requests and is invisible from the
+        # figures above: a compacted request looks like an ordinary served one.
+        # The tier is the label because the tiers cost different things — 0 and
+        # 1 are mechanical, 2 is an inference call on another model — so "is
+        # compaction firing" and "is it reaching the expensive tier" are two
+        # questions an operator asks separately.
+        #
+        # Not labelled by whether the key had the setting on: a request that
+        # was not compacted increments nothing here, and the ratio against
+        # `inference_requests` is what a dashboard wants.
+        self.compactions = Counter(
+            "nexus_compactions_total",
+            "Prompts reduced before being served, by capability, model, and tier.",
+            ["capability", "model", "tier"],
+            registry=registry,
+        )
+        self.compaction_tokens_removed = Counter(
+            "nexus_compaction_tokens_removed_total",
+            "Prompt tokens removed by compaction, by capability and model.",
+            ["capability", "model"],
+            registry=registry,
+        )
 
     def observe_http(self, method: str, path: str, status: int, elapsed_seconds: float) -> None:
         self.http_requests.labels(method, path, str(status)).inc()
@@ -112,6 +139,20 @@ class Metrics:
         self.inference_duration.labels(record.capability, record.model_alias).observe(
             record.latency_ms / 1000
         )
+        # `compaction_tier` is None on every request nothing reduced, which is
+        # most of them, so this reads as "was anything done" rather than as a
+        # tier of zero. Tier 0 is a real tier and `if record.compaction_tier`
+        # would have skipped it.
+        if record.compaction_tier is not None:
+            self.compactions.labels(
+                record.capability, record.model_alias, str(record.compaction_tier)
+            ).inc()
+            before = record.tokens_before_compaction
+            after = record.tokens_after_compaction
+            if before is not None and after is not None and before > after:
+                self.compaction_tokens_removed.labels(record.capability, record.model_alias).inc(
+                    before - after
+                )
 
 
 class _ConcurrencyCollector(Collector):
@@ -205,3 +246,60 @@ class MeteredUsageRepository:
         actor_id: str | None = None,
     ) -> list[UsageBucket]:
         return await self._inner.bucketed_usage(since, until, unit, actor_id=actor_id)
+
+    # The reads below are forwarded and not instrumented. This class exists to
+    # count inference as it is *written*; a metric on a read would count how
+    # often an operator refreshed a screen. They are here because the port grew
+    # them and a decorator that answers for less than what it wraps is a
+    # decorator that breaks the first caller to use the new method — which is
+    # what mypy caught the moment `list_records` was added.
+    async def compaction_summary(
+        self,
+        since: datetime,
+        until: datetime,
+        *,
+        actor_id: str | None = None,
+    ) -> CompactionSummary:
+        return await self._inner.compaction_summary(since, until, actor_id=actor_id)
+
+    async def list_records(
+        self,
+        *,
+        actor_id: str | None = None,
+        api_key_id: str | None = None,
+        capability: str | None = None,
+        compacted: bool | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[UsageRecord]:
+        return await self._inner.list_records(
+            actor_id=actor_id,
+            api_key_id=api_key_id,
+            capability=capability,
+            compacted=compacted,
+            since=since,
+            until=until,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def count_records(
+        self,
+        *,
+        actor_id: str | None = None,
+        api_key_id: str | None = None,
+        capability: str | None = None,
+        compacted: bool | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> int:
+        return await self._inner.count_records(
+            actor_id=actor_id,
+            api_key_id=api_key_id,
+            capability=capability,
+            compacted=compacted,
+            since=since,
+            until=until,
+        )

@@ -111,9 +111,17 @@ async def create_response(
             model=body.model,
             generation=generation,
             first=first,
-            extra_headers=headers,
+            # The fourth header, and the only one of them added after priming:
+            # whether the prompt was reduced is not known until the use case
+            # has counted it inside the concurrency slot, which is upstream of
+            # the first chunk and therefore of this line. Same reasoning, and
+            # same helper, as the chat path.
+            extra_headers={**headers, **sse.compaction_header()},
         )
 
     for name, value in headers.items():
         response.headers[name] = value
-    return await _collect(response_id, created, body.model, generation)
+    collected = await _collect(response_id, created, body.model, generation)
+    for name, value in sse.compaction_header().items():
+        response.headers[name] = value
+    return collected

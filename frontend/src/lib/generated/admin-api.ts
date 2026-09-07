@@ -1186,6 +1186,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/usage/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Usage Records
+         * @description The individual requests behind the charts above.
+         *
+         *     One route rather than the `/usage` and `/usage/me` pair beside it, and the
+         *     difference is deliberate. Those two are separate because they check
+         *     different scopes and return the tenant's figures or yours, and a boolean
+         *     argument would put that decision at the call site. Here the rows are the
+         *     same object whoever reads them, so the narrowing is a filter the use case
+         *     applies — the shape `read_refusals.py` settled on for exactly this question.
+         *
+         *     `compacted=true` is the filter the disclosure requirement wanted: it is how
+         *     an operator answers "which requests did this platform reduce, and whose".
+         */
+        get: operations["list_usage_records_admin_usage_records_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/users": {
         parameters: {
             query?: never;
@@ -1595,6 +1625,29 @@ export interface components {
             current_password: string;
             /** Password */
             password: string;
+        };
+        /**
+         * CompactionSummaryResponse
+         * @description Compaction over the same window as the charts beside it.
+         *
+         *     `requests` counts requests whose prompt was reduced, not requests through a
+         *     key that allows it — the second is not a number this platform tracks and
+         *     would not be a ratio worth showing if it were.
+         */
+        CompactionSummaryResponse: {
+            /** By Tier */
+            by_tier: components["schemas"]["CompactionTierCountResponse"][];
+            /** Requests */
+            requests: number;
+            /** Tokens Removed */
+            tokens_removed: number;
+        };
+        /** CompactionTierCountResponse */
+        CompactionTierCountResponse: {
+            /** Requests */
+            requests: number;
+            /** Tier */
+            tier: number;
         };
         /** ConfirmTotpRequest */
         ConfirmTotpRequest: {
@@ -2190,6 +2243,8 @@ export interface components {
             at: string;
             /** Capability */
             capability: string;
+            /** Compaction Tier */
+            compaction_tier: number | null;
             /** Completed */
             completed: boolean;
             /** Completion Chars */
@@ -2228,6 +2283,8 @@ export interface components {
             at: string;
             /** Capability */
             capability: string;
+            /** Compaction Tier */
+            compaction_tier: number | null;
             /** Completed */
             completed: boolean;
             /** Completion */
@@ -2569,6 +2626,7 @@ export interface components {
             bucket: string;
             /** By Capability */
             by_capability: components["schemas"]["CapabilitySeriesResponse"][];
+            compaction: components["schemas"]["CompactionSummaryResponse"];
             /**
              * Since
              * Format: date-time
@@ -2593,6 +2651,61 @@ export interface components {
             t: string;
             /** Tokens */
             tokens: number;
+        };
+        /** UsageRecordListResponse */
+        UsageRecordListResponse: {
+            /** Entries */
+            entries: components["schemas"]["UsageRecordResponse"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Scoped To Self */
+            scoped_to_self: boolean;
+            /** Total */
+            total: number;
+        };
+        /**
+         * UsageRecordResponse
+         * @description One served request, in the shape the row was written.
+         *
+         *     Carries no prompt and no completion — this table never held either. That is
+         *     what makes it the general per-request surface: `prompt_logs` holds the text
+         *     and exists only while a debug window is open, so it can answer "what was
+         *     said" for a few requests and never "what happened" for all of them.
+         */
+        UsageRecordResponse: {
+            /** Actor Id */
+            actor_id: string;
+            /** Api Key Id */
+            api_key_id: string | null;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Capability */
+            capability: string;
+            /** Compaction Tier */
+            compaction_tier: number | null;
+            /** Completed */
+            completed: boolean;
+            /** Id */
+            id: string;
+            /** Latency Ms */
+            latency_ms: number;
+            /** Model Alias */
+            model_alias: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Requested Capability */
+            requested_capability: string | null;
+            /** Tokens */
+            tokens: number;
+            /** Tokens After Compaction */
+            tokens_after_compaction: number | null;
+            /** Tokens Before Compaction */
+            tokens_before_compaction: number | null;
         };
         /** UserResponse */
         UserResponse: {
@@ -4961,6 +5074,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UsageAnalyticsResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    list_usage_records_admin_usage_records_get: {
+        parameters: {
+            query?: {
+                actor_id?: string | null;
+                api_key_id?: string | null;
+                capability?: string | null;
+                compacted?: boolean | null;
+                since?: string | null;
+                until?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageRecordListResponse"];
                 };
             };
             /** @description Unprocessable Entity */

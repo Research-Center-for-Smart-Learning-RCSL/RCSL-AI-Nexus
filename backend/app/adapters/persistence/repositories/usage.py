@@ -5,12 +5,19 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.adapters.persistence import mappers as m
 from app.adapters.persistence.sqlalchemy_models import (
     UsageRecordRow,
 )
-from app.domain.entities.usage import BucketUnit, UsageBucket, UsageRecord
+from app.domain.entities.usage import (
+    BucketUnit,
+    CompactionSummary,
+    CompactionTierCount,
+    UsageBucket,
+    UsageRecord,
+)
 
 from .shared import _TenantScoped
 
@@ -117,6 +124,144 @@ class PostgresUsageRepository(_TenantScoped):
             )
         ).one()
         return int(row[0] or 0), int(row[1] or 0)
+
+    def _record_filters(
+        self,
+        *,
+        actor_id: str | None,
+        api_key_id: str | None,
+        capability: str | None,
+        compacted: bool | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> list[ColumnElement[bool]]:
+        """The predicate both the page and its count are built from.
+
+        Shared rather than written twice, because a pager whose total is
+        computed from a different `where` than its rows is a pager that lies —
+        and the two drifting apart is the ordinary way that happens.
+        """
+        where: list[ColumnElement[bool]] = []
+        if actor_id is not None:
+            where.append(UsageRecordRow.actor_id == actor_id)
+        if api_key_id is not None:
+            where.append(UsageRecordRow.api_key_id == api_key_id)
+        if capability is not None:
+            where.append(UsageRecordRow.capability == capability)
+        if compacted is True:
+            where.append(UsageRecordRow.compaction_tier.is_not(None))
+        elif compacted is False:
+            where.append(UsageRecordRow.compaction_tier.is_(None))
+        if since is not None:
+            where.append(UsageRecordRow.at >= since)
+        if until is not None:
+            where.append(UsageRecordRow.at < until)
+        return where
+
+    async def list_records(
+        self,
+        *,
+        actor_id: str | None = None,
+        api_key_id: str | None = None,
+        capability: str | None = None,
+        compacted: bool | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[UsageRecord]:
+        where = self._record_filters(
+            actor_id=actor_id,
+            api_key_id=api_key_id,
+            capability=capability,
+            compacted=compacted,
+            since=since,
+            until=until,
+        )
+        rows = await self._session.execute(
+            self._scope(
+                select(UsageRecordRow)
+                .where(*where)
+                .order_by(UsageRecordRow.at.desc(), UsageRecordRow.id.desc())
+                .limit(limit)
+                .offset(offset),
+                UsageRecordRow.tenant_id,
+            )
+        )
+        return [m.usage_row_to_domain(row) for row in rows.scalars().all()]
+
+    async def count_records(
+        self,
+        *,
+        actor_id: str | None = None,
+        api_key_id: str | None = None,
+        capability: str | None = None,
+        compacted: bool | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> int:
+        where = self._record_filters(
+            actor_id=actor_id,
+            api_key_id=api_key_id,
+            capability=capability,
+            compacted=compacted,
+            since=since,
+            until=until,
+        )
+        total = await self._session.scalar(
+            self._scope(
+                select(func.count()).select_from(UsageRecordRow).where(*where),
+                UsageRecordRow.tenant_id,
+            )
+        )
+        return int(total or 0)
+
+    async def compaction_summary(
+        self,
+        since: datetime,
+        until: datetime,
+        *,
+        actor_id: str | None = None,
+    ) -> CompactionSummary:
+        where = [
+            UsageRecordRow.at >= since,
+            UsageRecordRow.at < until,
+            # `is not None` rather than a truth test: tier 0 is a real tier and
+            # a truth test would count it as no compaction at all.
+            UsageRecordRow.compaction_tier.is_not(None),
+        ]
+        if actor_id is not None:
+            where.append(UsageRecordRow.actor_id == actor_id)
+        rows = await self._session.execute(
+            self._scope(
+                select(
+                    UsageRecordRow.compaction_tier,
+                    func.count(),
+                    # Rows written before the columns existed carry nulls, and
+                    # so does any row whose counter could not answer; coalescing
+                    # to zero keeps one such row from nulling the whole sum.
+                    func.coalesce(
+                        func.sum(
+                            UsageRecordRow.tokens_before_compaction
+                            - UsageRecordRow.tokens_after_compaction
+                        ),
+                        0,
+                    ),
+                )
+                .where(*where)
+                .group_by(UsageRecordRow.compaction_tier)
+                .order_by(UsageRecordRow.compaction_tier),
+                UsageRecordRow.tenant_id,
+            )
+        )
+        by_tier: list[CompactionTierCount] = []
+        requests = 0
+        removed = 0
+        for tier, count, tokens in rows.all():
+            by_tier.append(CompactionTierCount(tier=int(tier), requests=int(count or 0)))
+            requests += int(count or 0)
+            removed += int(tokens or 0)
+        return CompactionSummary(requests=requests, tokens_removed=removed, by_tier=by_tier)
 
     async def bucketed_usage(
         self,

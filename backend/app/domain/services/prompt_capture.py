@@ -102,6 +102,7 @@ class TranscriptBuffer:
         messages: tuple[Message, ...],
         finish_reason: str | None,
         completed: bool,
+        compaction_tier: int | None = None,
     ) -> PromptLogEntry:
         rendered = _render_messages(messages)
         completion = "".join(self._deltas)
@@ -134,6 +135,10 @@ class TranscriptBuffer:
             tool_calls=self._tool_calls,
             tenant_id=actor.tenant_id,
             truncated_fields=frozenset(truncated),
+            # `messages` above is what the model was sent. When a tier reduced
+            # it, that is not what the caller composed, and a transcript is the
+            # one place a person reads the prompt itself.
+            compaction_tier=compaction_tier,
         )
 
 

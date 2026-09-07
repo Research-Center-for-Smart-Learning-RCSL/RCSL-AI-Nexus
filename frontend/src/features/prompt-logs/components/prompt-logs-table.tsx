@@ -23,6 +23,14 @@ import type { PromptLogSummary } from '@/features/prompt-logs/schema';
 const PAGE_SIZE = 50;
 const COLUMNS = ['When', 'Capability', 'Model', 'Request', 'Size', 'Result', ''];
 
+/** The tiers, spelled out where they are shown. A bare "2" beside a transcript
+ *  says the prompt was changed without saying what was taken out of it. */
+const COMPACTION_TITLE: Record<number, string> = {
+  0: 'Tool definitions were deduplicated and trimmed before this prompt was sent',
+  1: 'Old tool results were replaced with markers before this prompt was sent',
+  2: 'The oldest turns were replaced with a summary before this prompt was sent',
+};
+
 /** Characters, not tokens, and said so — the row stores what it can measure. */
 function chars(n: number): string {
   if (n < 1000) return `${n}`;
@@ -142,6 +150,21 @@ export function PromptLogsTable() {
                   <TableCell className="whitespace-nowrap tabular-nums text-xs text-muted-foreground">
                     {chars(entry.message_chars)} in / {chars(entry.completion_chars)} out
                     {entry.reasoning_chars > 0 ? ` / ${chars(entry.reasoning_chars)} think` : ''}
+                    {/* `!== null` rather than a truth test: tier 0 is a real
+                        compaction and a falsy check would hide it, which is
+                        the one tier a reader is least likely to expect. */}
+                    {entry.compaction_tier !== null ? (
+                      <Badge
+                        variant="outline"
+                        className="ml-2"
+                        title={
+                          COMPACTION_TITLE[entry.compaction_tier] ??
+                          'This prompt was reduced before it was sent'
+                        }
+                      >
+                        compacted T{entry.compaction_tier}
+                      </Badge>
+                    ) : null}
                   </TableCell>
                   <TableCell className="whitespace-nowrap">
                     {entry.completed ? (

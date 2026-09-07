@@ -13,6 +13,7 @@ from .admin_observability import (
     build_read_prompt_logs,
     build_read_refusals,
     build_read_usage_analytics,
+    build_read_usage_records,
 )
 from .identity_authentication import (
     build_accept_invitation,
@@ -169,6 +170,7 @@ __all__ = [
     "build_read_prompt_logs",
     "build_read_refusals",
     "build_read_usage_analytics",
+    "build_read_usage_records",
     "build_manage_retention",
     "build_manage_evaluations",
     "build_read_host_status",

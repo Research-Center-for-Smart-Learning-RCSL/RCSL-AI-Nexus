@@ -11,9 +11,11 @@ from app.application.use_cases.read_audit_log import AuditLogPage
 from app.application.use_cases.read_prompt_logs import PromptLogPage
 from app.application.use_cases.read_refusals import RefusalPage
 from app.application.use_cases.read_usage_analytics import UsageAnalytics
+from app.application.use_cases.read_usage_records import UsageRecordPage
 from app.domain.entities.audit import AuditEntry
 from app.domain.entities.prompt_log import PromptLogEntry, PromptLogSummary
 from app.domain.entities.refusal import Refusal
+from app.domain.entities.usage import UsageRecord
 
 
 class AuditEntryResponse(BaseModel):
@@ -83,6 +85,7 @@ class PromptLogSummaryResponse(BaseModel):
     completion_chars: int
     reasoning_chars: int
     truncated_fields: list[str]
+    compaction_tier: int | None
 
     @classmethod
     def of(cls, entry: PromptLogSummary) -> PromptLogSummaryResponse:
@@ -101,6 +104,7 @@ class PromptLogSummaryResponse(BaseModel):
             completion_chars=entry.completion_chars,
             reasoning_chars=entry.reasoning_chars,
             truncated_fields=sorted(entry.truncated_fields),
+            compaction_tier=entry.compaction_tier,
         )
 
 
@@ -198,6 +202,16 @@ class PromptLogTranscriptResponse(BaseModel):
     completed: bool
     tool_calls: int
     truncated_fields: list[str]
+    compaction_tier: int | None
+    """Which tier reduced `messages` below, or None.
+
+    This response is the reason the column exists. Everywhere else a reader
+    sees counts; here they see the prompt itself, and after a compaction that
+    prompt is not the one the caller composed. A transcript that showed the
+    reduced conversation with nothing saying so would be the quietest place in
+    the platform for the reduction to hide.
+    """
+
     messages: str
     completion: str
     reasoning: str
@@ -216,9 +230,74 @@ class PromptLogTranscriptResponse(BaseModel):
             completed=entry.completed,
             tool_calls=entry.tool_calls,
             truncated_fields=sorted(entry.truncated_fields),
+            compaction_tier=entry.compaction_tier,
             messages=entry.messages,
             completion=entry.completion,
             reasoning=entry.reasoning,
+        )
+
+
+class UsageRecordResponse(BaseModel):
+    """One served request, in the shape the row was written.
+
+    Carries no prompt and no completion — this table never held either. That is
+    what makes it the general per-request surface: `prompt_logs` holds the text
+    and exists only while a debug window is open, so it can answer "what was
+    said" for a few requests and never "what happened" for all of them.
+    """
+
+    id: str
+    at: datetime
+    actor_id: str
+    api_key_id: str | None
+    capability: str
+    requested_capability: str | None
+    model_alias: str
+    tokens: int
+    prompt_tokens: int
+    latency_ms: int
+    completed: bool
+    compaction_tier: int | None
+    tokens_before_compaction: int | None
+    tokens_after_compaction: int | None
+
+    @classmethod
+    def of(cls, record: UsageRecord) -> UsageRecordResponse:
+        return cls(
+            id=record.id,
+            at=record.at,
+            actor_id=record.actor_id,
+            api_key_id=record.api_key_id,
+            capability=record.capability,
+            requested_capability=record.requested_capability,
+            model_alias=record.model_alias,
+            tokens=record.tokens,
+            prompt_tokens=record.prompt_tokens,
+            latency_ms=record.latency_ms,
+            completed=record.completed,
+            compaction_tier=record.compaction_tier,
+            tokens_before_compaction=record.tokens_before_compaction,
+            tokens_after_compaction=record.tokens_after_compaction,
+        )
+
+
+class UsageRecordListResponse(BaseModel):
+    entries: list[UsageRecordResponse]
+    total: int
+    limit: int
+    offset: int
+    scoped_to_self: bool
+    """True when the reader may see only their own requests, so the screen can
+    say so instead of showing an actor filter that silently does nothing."""
+
+    @classmethod
+    def of(cls, page: UsageRecordPage) -> UsageRecordListResponse:
+        return cls(
+            entries=[UsageRecordResponse.of(e) for e in page.entries],
+            total=page.total,
+            limit=page.limit,
+            offset=page.offset,
+            scoped_to_self=page.scoped_to_self,
         )
 
 
@@ -233,12 +312,31 @@ class CapabilitySeriesResponse(BaseModel):
     points: list[UsagePointResponse]
 
 
+class CompactionTierCountResponse(BaseModel):
+    tier: int
+    requests: int
+
+
+class CompactionSummaryResponse(BaseModel):
+    """Compaction over the same window as the charts beside it.
+
+    `requests` counts requests whose prompt was reduced, not requests through a
+    key that allows it — the second is not a number this platform tracks and
+    would not be a ratio worth showing if it were.
+    """
+
+    requests: int
+    tokens_removed: int
+    by_tier: list[CompactionTierCountResponse]
+
+
 class UsageAnalyticsResponse(BaseModel):
     bucket: str
     since: datetime
     until: datetime
     totals: list[UsagePointResponse]
     by_capability: list[CapabilitySeriesResponse]
+    compaction: CompactionSummaryResponse
 
     @classmethod
     def of(cls, analytics: UsageAnalytics) -> UsageAnalyticsResponse:
@@ -246,6 +344,14 @@ class UsageAnalyticsResponse(BaseModel):
             bucket=analytics.bucket,
             since=analytics.since,
             until=analytics.until,
+            compaction=CompactionSummaryResponse(
+                requests=analytics.compaction.requests,
+                tokens_removed=analytics.compaction.tokens_removed,
+                by_tier=[
+                    CompactionTierCountResponse(tier=t.tier, requests=t.requests)
+                    for t in analytics.compaction.by_tier
+                ],
+            ),
             totals=[
                 UsagePointResponse(t=p.at, requests=p.requests, tokens=p.tokens)
                 for p in analytics.totals

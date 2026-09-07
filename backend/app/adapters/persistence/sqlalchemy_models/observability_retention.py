@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     func,
@@ -179,6 +180,15 @@ class PromptLogRow(Base):
     api_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     capability: Mapped[str] = mapped_column(String(64))
     model_alias: Mapped[str] = mapped_column(String(128))
+    compaction_tier: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    """Which tier reduced the prompt in `messages`, or null if nothing did.
+
+    Nullable with no default: null means "nothing was compacted", which is the
+    honest value for every row written before the column existed and for most
+    written after it. The token counts live on `usage_records` for the same
+    request rather than being copied here.
+    """
+
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     """Indexed because it is the way in. A caller reports a failure by quoting
     the request id from their error envelope, and finding that conversation is
@@ -246,6 +256,7 @@ class RefusalRow(Base):
     surface: Mapped[str] = mapped_column(String(32))
     method: Mapped[str] = mapped_column(String(8))
     path: Mapped[str] = mapped_column(Text)
+
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     """Indexed because it is the way in. A caller reports a failure by quoting
     the id from their error envelope."""

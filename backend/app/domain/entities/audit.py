@@ -80,6 +80,21 @@ class AuditAction(StrEnum):
     NODE_UPDATED = "node.updated"
     NODE_REMOVED = "node.removed"
 
+    USAGE_READ_ANY = "usage.read_any"
+    """Somebody listed the individual requests of an account that is not their
+    own.
+
+    The same judgement as `REFUSAL_READ_ANY` beside it and for the same reason,
+    which is worth stating because the aggregate usage charts are *not* audited:
+    those are counts per hour per capability and describe a tenant, while this
+    is one row per request with its model, its size, its latency and its
+    timestamp. A month of that is a description of how somebody works, and it
+    became readable on 2026-09-07 when this listing was built.
+
+    Listing your own is not recorded, for the reason `prompt_log.list` is not:
+    it is the feature working, and a row per screen refresh is noise.
+    """
+
     REFUSAL_READ_ANY = "refusal.read_any"
     """Somebody read refusals that were not their own.
 
