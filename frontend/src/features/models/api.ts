@@ -2,11 +2,13 @@ import { api } from '@/lib/api-client';
 import {
   downloadJobSchema,
   modelListSchema,
+  modelReferenceSchema,
   modelSchema,
   nodeListSchema,
   type CreateModelInput,
   type DownloadJob,
   type Model,
+  type ModelReference,
   type Node,
   type UpdateModelInput,
 } from '@/features/models/schema';
@@ -67,4 +69,17 @@ export async function getDownloadJob(jobId: string): Promise<DownloadJob> {
  */
 export async function listNodes(): Promise<Node[]> {
   return nodeListSchema.parse(await api.get<unknown>('/nodes'));
+}
+
+/**
+ * What the host's weights declare for a reference, for the register form.
+ *
+ * Behind `model:write`, because it answers "does this host hold weights under
+ * that name" — a fact about the inventory, of no use to a reader who cannot
+ * register anything.
+ */
+export async function readModelReference(ref: string): Promise<ModelReference> {
+  return modelReferenceSchema.parse(
+    await api.get<unknown>('/model-reference', { query: { ref } }),
+  );
 }

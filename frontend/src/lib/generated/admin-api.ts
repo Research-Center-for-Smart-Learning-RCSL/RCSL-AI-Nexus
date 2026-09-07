@@ -674,6 +674,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/model-reference": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Model Reference
+         * @description What the host's own weights declare for a reference.
+         *
+         *     Its own path rather than `/models/inspect`, because that would be matched
+         *     by `/models/{model_id}` with an id of "inspect" — the shadowing the usage
+         *     router's own comment warns about — and because a reference carries `:` and
+         *     `/`, which belong in a query string rather than in a path segment.
+         */
+        get: operations["read_model_reference_admin_model_reference_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/models": {
         parameters: {
             query?: never;
@@ -2169,6 +2194,25 @@ export interface components {
             scopes?: string[];
             /** Session Expires At */
             session_expires_at?: string | null;
+        };
+        /**
+         * ModelReferenceResponse
+         * @description What this host's own weights say about a reference, for the register form.
+         *
+         *     One field, and it is deliberately not the whole GGUF header: the form needs
+         *     a figure to start from, and everything else a header carries would be
+         *     inventory disclosure with no use behind it.
+         *
+         *     `declared_context_length` is `None` when the host holds no readable GGUF for
+         *     the reference — not pulled, a different runtime, a missing mount. The form
+         *     then offers nothing rather than a guess, which is the whole point of the
+         *     endpoint: the value it replaces was a plausible-looking 8192.
+         */
+        ModelReferenceResponse: {
+            /** Declared Context Length */
+            declared_context_length: number | null;
+            /** Ref */
+            ref: string;
         };
         /** ModelResponse */
         ModelResponse: {
@@ -3902,6 +3946,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    read_model_reference_admin_model_reference_get: {
+        parameters: {
+            query: {
+                ref: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelReferenceResponse"];
                 };
             };
             /** @description Unprocessable Entity */

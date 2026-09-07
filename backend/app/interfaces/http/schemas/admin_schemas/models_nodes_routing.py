@@ -20,6 +20,23 @@ class ResourceProfileBody(BaseModel):
     context_length: int = Field(gt=0)
 
 
+class ModelReferenceResponse(BaseModel):
+    """What this host's own weights say about a reference, for the register form.
+
+    One field, and it is deliberately not the whole GGUF header: the form needs
+    a figure to start from, and everything else a header carries would be
+    inventory disclosure with no use behind it.
+
+    `declared_context_length` is `None` when the host holds no readable GGUF for
+    the reference — not pulled, a different runtime, a missing mount. The form
+    then offers nothing rather than a guess, which is the whole point of the
+    endpoint: the value it replaces was a plausible-looking 8192.
+    """
+
+    ref: str
+    declared_context_length: int | None
+
+
 class ModelResponse(BaseModel):
     id: str
     alias: str

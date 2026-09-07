@@ -105,6 +105,22 @@ export const resourceProfileSchema = z.object({
   context_length: z.number().int().positive(),
 });
 
+/**
+ * What this host's own weights declare for a reference.
+ *
+ * `declared_context_length` is null when the host holds no readable GGUF for
+ * it — not pulled, a different runtime, a missing mount — and the form then
+ * suggests nothing rather than a guess. That is the point: what this replaced
+ * was a plausible-looking 8192, which is the value `qwen7b` was registered
+ * with and which put the per-model truncation guard at 4096.
+ */
+export const modelReferenceSchema = z.object({
+  ref: z.string(),
+  declared_context_length: z.number().int().positive().nullable(),
+});
+
+export type ModelReference = z.infer<typeof modelReferenceSchema>;
+
 export const modelSchema = z.object({
   // Internal UUID. Never exposed on the public gateway; the admin API needs a
   // stable handle and `alias` is user-editable, so it is carried here.

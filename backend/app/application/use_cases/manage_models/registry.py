@@ -66,6 +66,40 @@ class ModelRegistryMixin:
         self._authz.require(actor, Scope.MODEL_READ)
         return await self._require(model_id)
 
+    async def declared_context_length(self, actor: Actor, ref: str) -> int | None:
+        """What the GGUF behind `ref` says its own maximum context is.
+
+        Exists so a registration can start from the model's own figure rather
+        than from a number somebody typed. Until 2026-09-07 the form offered
+        8192, and that value has a history: it is what `qwen7b` was registered
+        with, which put `_refuse_what_this_target_would_truncate` at 4096 and
+        served `assist` truncated for as long as nobody noticed. A default that
+        looks plausible and is wrong is worse than none, because the form
+        submits and the consequence arrives later and quietly.
+
+        **`MODEL_WRITE`, not `MODEL_READ`.** It answers "does this host hold
+        weights under that name, and what do they say", which is a fact about
+        the inventory. A reader who cannot register a model has nothing to do
+        with the answer.
+
+        `None` means cannot say, exactly as on `TokenCounterPort`: no GGUF for
+        that reference, an unreadable header, or a build with no counter wired.
+        The caller offers no suggestion in that case rather than a guess.
+        """
+        self._authz.require(actor, Scope.MODEL_WRITE)
+        if self._tokens is None:
+            return None
+        try:
+            return await self._tokens.native_context_length(ref)
+        except Exception:  # noqa: BLE001
+            # The same guard `_warn_if_registered_context_overstates` has, for
+            # the same reason: this is advice on a form. The port's contract is
+            # that `None` means cannot say, so a raising implementation is
+            # already misbehaving — but the caller of a hint should learn
+            # nothing from that beyond having no hint.
+            logger.exception("could not read the declared context for %s", ref)
+            return None
+
     async def register(
         self,
         actor: Actor,
