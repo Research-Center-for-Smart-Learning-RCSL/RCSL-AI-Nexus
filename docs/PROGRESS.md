@@ -38,6 +38,9 @@ separately at the end, marked as superseded.
 
 **[2026-09-07](./progress/2026-09-07.md)**
 - Asked whether the platform draws, and the answer turned out to be about the GPU rather than about the code
+- Verified the five plans against the tree, and three of them were describing a repository that no longer exists
+- Wired the compaction that was written and unreachable, and the first test found the bug the reading had not
+- The disclosure, and the surface §3 assumed already existed
 
 **[2026-09-04](./progress/2026-09-04.md)**
 - The five tasks yesterday's set could not measure with, and the conclusion that reversed when they were replaced

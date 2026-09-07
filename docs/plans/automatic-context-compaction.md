@@ -1,8 +1,17 @@
 # Plan: Automatic Context Compaction, and Two Heavy Users on One Machine
 
-**Status: planned, not implemented.** Written 2026-09-03 against `main` at
-`cb43eb4`. Every figure below was measured on this deployment on that date and
-the measurement is named beside it; where something is a hypothesis rather than
+**Status: implemented.** Written 2026-09-03 against `main` at `cb43eb4`; §9 is
+a verification written on 2026-09-07 against `bd185eb`, and the work it
+describes was done the same day. All three tiers run, the cache is constructed
+and can hit, the `api_keys` switch is live, the acceptance instrument exists,
+and §3's disclosure now reaches all three surfaces it asked for.
+
+Two items are open and neither is compaction: §8's item 3 — whether
+`--context-shift` *is* the `num_ctx / 2` halving, still the largest lead in this
+document — and item 4, reconciling the three memory figures.
+
+Every figure below was measured on this deployment on 2026-09-03 and the
+measurement is named beside it; where something is a hypothesis rather than
 a measurement it says so in terms. One hypothesis in the first draft was tested
 the same day and refuted; §2.5 keeps it, and the probe that killed it, because
 the probe is the most useful thing in this document.
@@ -268,9 +277,15 @@ This is why §6 defers "how much to cut" rather than merely postponing it.
 
 ## 5. The design
 
-Four tiers, cheapest first. A request enters compaction only when the counted or
-estimated input exceeds the target, and stops at the first tier that brings it
-under.
+Three tiers, cheapest first. A request enters compaction only when the counted
+or estimated input exceeds the target, and stops at the first tier that brings
+it under. What follows a tier that was not enough is the next one; what follows
+the last is the refusal, which is not a tier.
+
+(This sentence read "Four tiers" from the first draft until 2026-09-07, and
+§5.1 to §5.3 have only ever described three. The miscount was copied into
+`compaction.py`'s own module docstring, where it named three and then said
+four.)
 
 ### 5.1 Tier 0 — tool definitions
 
@@ -389,22 +404,272 @@ recorded regretting getting backwards.
 
 ## 8. Ordered work
 
-| # | Item | Cost | Blocks |
+| # | Item | Cost | State as of 2026-09-07 |
 |---|---|---|---|
-| 1 | ~~Probe the `num_ctx / 2` rule at `-np 1`~~ **done 2026-09-03: the rule holds** (§2.5) | — | — |
-| 2 | Raise `queue_wait_seconds` so a second heavy user waits rather than being refused (§2.3) | one value | two-user working |
-| 3 | Test whether `--context-shift` *is* the halving (§4.1) | one probe | possibly 2x context |
-| 3b | If it is: patch or replace the runtime to disable it | large | honest overflow, 2x context |
-| 4 | Reconcile the three memory figures for the incumbent (§2.2) | measurement | capacity planning |
-| 5 | Group T's cross-turn dependency property (§7) | harness work | judging compaction |
-| 6 | Tier 0 and Tier 1 compaction, with disclosure (§5.1, §5.2, §3) | code | — |
-| 7 | The prefix-hash cache (§5.4) | code + Redis | Tier 2 |
-| 8 | Make the incumbent countable (§4.3) | investigation | choosing the target |
-| 9 | Tier 2 summarisation on `qwen7b`, serialised (§5.3) | code | — |
-| 10 | The `api_keys` column, defaulting on (§5.5) | migration | ships last |
+| 1 | Probe the `num_ctx / 2` rule at `-np 1` (§2.5) | — | **done 2026-09-03**: the rule holds |
+| 2 | Raise `queue_wait_seconds` (§2.3) | one value | **done 2026-09-07.** The code default was raised to 1200 on 2026-09-05, but `.env`, `.env.example` and the deployment configuration table all still carried 120, so the raise reached nothing until all four were aligned. Takes effect on restart |
+| 3 | Test whether `--context-shift` *is* the halving (§4.1) | one probe | **not done.** Still the largest lead here |
+| 3b | If it is: patch or replace the runtime to disable it | large | not started |
+| 4 | Reconcile the three memory figures for the incumbent (§2.2) | measurement | **not done** |
+| 5 | Group T's cross-turn dependency property (§7) | harness work | **done 2026-09-07**: `recall_across_turns`, described in model-evaluation.md §7.6 |
+| 6 | Tier 0 and Tier 1 compaction, with disclosure (§5.1, §5.2, §3) | code | **done**: tiers live, tested, and disclosed (§9.1) |
+| 7 | The prefix-hash cache (§5.4) | code + Redis | **constructed 2026-09-07**, and it had never hit — see §9.4 |
+| 8 | Make the incumbent countable (§4.3) | investigation | **done**: `gemma4` pre-tokenizer support, then a native Rust GGUF reader |
+| 9 | Tier 2 summarisation on `qwen7b`, serialised (§5.3) | code | **wired 2026-09-07 (§9.2)** |
+| 10 | The `api_keys` column, defaulting on (§5.5) | migration | **done**, and shipped ahead of the disclosure it was supposed to ship with |
 
 Item 2 is one configuration value and is most of what "two people using this
-hard at once" actually needs; it is not compaction. Item 1 is done. Item 3 is now
-the largest single lead in this document rather than a tidy-up, because §2.5 and
-§4.1 together suggest the deployment may be running at half the context it has
-paid for, for a reason that is one flag wide.
+hard at once" actually needs; it is not compaction. Item 3 is now the largest
+single lead in this document rather than a tidy-up, because §2.5 and §4.1
+together suggest the deployment may be running at half the context it has paid
+for, for a reason that is one flag wide.
+
+## 9. What shipped, verified 2026-09-07
+
+Written after the fact, against `main` at `bd185eb`. Everything below was read
+out of the tree; nothing here is a plan.
+
+What is live and correct: `compaction.py` implements Tiers 0 and 1 exactly as
+§5.1 and §5.2 describe, stopping at the first tier that brings the prompt under
+the ceiling and re-counting on the same basis the guardrail used. The
+`api_keys.compaction_enabled` column exists, defaults on, is set on every
+existing key by `c1d5f8a3e497`, and is reachable from both API-key dialogs and
+from the assistant's proposal path. `usage_records` carries `compaction_tier`,
+`tokens_before_compaction` and `tokens_after_compaction`.
+
+### 9.1 The disclosure is one third built, and the code claims otherwise
+
+§3 requires three things of every compacted request: that the response carry
+what was dropped and by which tier, that the `usage_records` row record it, and
+that it be visible in the admin UI beside the request.
+
+Only the second exists. `CompactionResult.disclosure` is composed by both tiers
+and then goes to exactly one place — `logger.info` in `orchestrator.py`. It is
+not in `CompletionChunk`, not in any chat or Responses schema, and not in the
+admin usage schema, so `compaction_tier` is written to the database and read by
+nothing. Neither the gateway's caller nor an administrator can see that
+compaction happened.
+
+Two comments in the tree state the opposite and should be read as intent rather
+than as description until this is closed:
+
+- `api_key.py`: "it does not control the disclosure, which is always present
+  when compaction fires".
+- `c1d5f8a3e497`: "it ships together with the disclosure, never before it."
+
+The switch shipped first. That is the ordering §5.5 explicitly ruled out, and
+it means a live integration is currently having its prompt silently reduced —
+which is the failure §3 was written to prevent, reintroduced by the one part of
+the plan that was supposed to prevent it.
+
+**Closed 2026-09-07, and the channel was already decided.** §3 says "in the
+response" without saying body or header, and this repository had answered that
+question three times before compaction existed: `X-Capability-Defaulted`,
+`X-Dropped-Tools` / `X-Dropped-Input-Items`, and `X-Knowledge-Sources`. The
+first of those is the same problem exactly — an opt-in per-key setting that
+removes a refusal — and the roadmap wrote down the reasoning when it shipped:
+announced in a header, and recorded on the usage row *because* the evidence "has
+to outlive both a header the client may not read and a log line that rotates".
+So `X-Context-Compacted: tier=N`, on both the chat and the Responses paths, in
+the same helper module as its three predecessors.
+
+The two alternatives were rejected on the repository's own prior grounds. A body
+field or an extra frame is what `routers/chat/route.py` already refuses — "the
+envelope is OpenAI's, and an extra frame shape is a protocol error to a strict
+client"; the SSE trailer mechanism exists but its only user is `/admin/assistant`,
+which is not OpenAI-shaped. Putting the disclosure in a system message prefixed
+to the model's output is worse than either: it enters content the caller stores,
+replays and sends back, so it would become part of the prompt being compacted on
+the next turn.
+
+**What was genuinely uncertain was whether a header could carry it at all**, and
+§9.5 is that answer.
+
+The other two surfaces:
+
+- **The admin UI**, which needed a screen that did not exist — §9.6.
+- **The transcript**, which was not in §3's list and should have been. It is the
+  only place a person reads the prompt itself, and after a compaction that is
+  not the prompt the caller composed. `prompt_logs` gained a `compaction_tier`
+  column (`a2f7c31b9e84`) and the transcript dialog states, above the
+  conversation, that what follows is what the model read rather than what was
+  submitted. The frontend's `api-contract.ts` found this omission: the
+  transcript response was the one shape that disagreed with its zod schema after
+  the summary was widened.
+
+And one channel §3 did not ask for: `nexus_compactions_total`, labelled by
+capability, model and tier, beside `nexus_compaction_tokens_removed_total`.
+Compaction is invisible in the existing series — a compacted request looks like
+an ordinary served one — and "is it firing" and "is it reaching the tier that
+costs an inference call" are two questions an operator asks separately.
+
+### 9.2 Tier 2 and the cache are written, tested by nothing, and constructed by nobody
+
+`compaction_tier2.py` and `compaction_cache.py` implement §5.3 and §5.4
+faithfully — the `assist` model, the `asyncio.Lock`, the SHA-256 prefix key,
+the one-hour TTL. `orchestrator.py` calls `try_tier2` only when
+`self._summarise_fn is not None`, and `build_route_chat_request` in
+`di/inference_runtime.py` passes none of `summarise_fn`, `compaction_cache` or
+`compaction_lock`. **So Tier 2 has never run outside a hand-built orchestrator,
+and the cache has never been read.** A conversation that tiers 0 and 1 cannot
+bring under the ceiling is refused today, exactly as before this work.
+
+The three parameters are also typed `Callable[..., Any] | None` and
+`Any | None`, which is the one place in this use case where a dependency
+arrives untyped. The port discipline the rest of the file argues for
+(`TokenCounterPort | None`, `PromptLogWriterPort | None`) says what these
+should look like when they are wired.
+
+There are **no tests** for any of the 591 lines across the three modules. The
+sixteen references to "compaction" under `backend/tests` are all the API-key
+switch. Tiers 0 and 1 are live in production with no test asserting what they
+drop.
+
+**Closed 2026-09-07.** `build_route_chat_request` now passes all three, and the
+untyped parameters are `SummariseFn | None` and `CompactionCache | None`. The
+lock is built once per process on `app.state` in both composition roots, since
+that dependency is per-request and a lock built there would serialise nothing.
+The summariser is a closure that resolves the `assist` capability through
+`RoutingService` **per call**, not per request: resolving at build time would
+put a routing read on the front of every chat request to prepare a collaborator
+Tier 2 rarely reaches, and it would pin the policy until the next restart.
+
+There is deliberately no fallback to the serving model when `assist` cannot be
+routed. §5.3 chose `assist` precisely so a summary never competes for the slot
+the caller is waiting on, and a fallback would undo that silently on the day the
+policy is missing. A summariser that raises leaves `compaction_result` at None,
+so the request meets the same `ContextTooLongError` it would have met with
+compaction switched off — a refusal that names the ceiling, which is the
+disclosure an oversized prompt is owed. `tests/unit/test_context_compaction.py`
+holds twenty-two tests, and the last two are about this wiring rather than about
+compaction: the modules were correct and unreachable, so a test of the modules
+would have passed throughout.
+
+### 9.3 The instrument still does not exist, and now the feature is ahead of it
+
+§7 argued that Group T's cross-turn dependency property is the acceptance test
+for compaction, and that building the instrument before the feature is the
+order this repository has twice recorded regretting getting backwards. The
+feature shipped first anyway. `model-evaluation.md` §7.6 still lists the
+property as missing and `scripts/model-eval/task_families` has no set that
+asks for it.
+
+This is the cheapest thing on the list to be wrong about, because Tiers 0 and 1
+are mechanical: what they drop is decidable by reading the code. It becomes
+load-bearing the moment §9.2 is closed, since a summary's quality is exactly
+what no amount of reading settles.
+
+**Built 2026-09-07, and §9.2 was closed the same day, so the order this
+repository twice regretted getting backwards was very nearly repeated.**
+`recall_across_turns` is fifteen turns with two figures given once at turn
+three, asked back separately at turns twelve and thirteen and as their product
+at turn fifteen, with a control at turn fourteen on which inventing a figure is
+the failure. Asking for the parts before the product is the part that earns its
+keep against compaction: it separates a summary that kept one figure from one
+that lost the turn. model-evaluation.md §7.6 has the detail. It is validated in
+both directions and **not calibrated** — no model has answered it yet.
+
+### 9.4 The cache could not have hit, and the first test written found it
+
+The cache was not merely unconstructed. It was ineffective by construction, and
+this is the one thing in §9 that no amount of reading the modules would have
+turned up — it took the second test.
+
+`try_tier2` chose the summarised prefix as `len(messages) - _KEEP_RECENT`. That
+boundary is measured from the *end* of a conversation which, by §4.2, grows by
+two messages every turn: the client replays everything and appends. So every
+turn hashed a different prefix, every turn missed, and every turn summarised.
+§5.4 says a naive implementation "would summarise the same history on every
+turn" and that on a one-slot runtime this "is not a slow feature, it is an
+outage" — the cache written to prevent exactly that would have delivered
+exactly that.
+
+The fix is the behaviour §5.4 already describes in words: "a conversation is
+summarised once and reused **until it grows past the next threshold**". The
+boundary is floored to a multiple of `_PREFIX_STEP` (ten messages), so it holds
+still across the turns between two thresholds and the same prefix hashes the
+same. Erring towards summarising *less* also keeps more of the conversation
+verbatim, which is the safe direction for a boundary that has to be stable.
+
+Worth keeping for its own sake: the plan asserted prefix stability as a property
+of the client's behaviour, and it is one. It is not automatically a property of
+a boundary computed from the length.
+
+### 9.5 The header window, which is why this was a question at all
+
+The doubt was never which header. It was whether a header could carry the fact
+on the streaming path, since compaction happens inside the concurrency slot —
+after routing, after counting — and headers are gone once the body starts.
+
+They are not, and the reason is already written down for a different purpose.
+Both routes call `sse.prime(generation)` before constructing the response, and
+the Responses route says why: "Primed before the response object exists, so a
+routing failure is a status code rather than a 200 carrying an error event."
+Priming pulls the first chunk, and the first chunk is downstream of the slot, of
+routing, of counting and of compaction. So there is a window in which the fact
+is known and the headers are not yet written, and it exists because of a
+decision taken about error handling.
+
+`compaction_header()` is therefore read *after* priming while
+`capability_defaulted_header()` beside it is read before, and the asymmetry is
+commented at both call sites: one is derivable from the actor before anything
+runs, the other is not knowable until the prompt has been counted. The
+non-streaming path has no such constraint — FastAPI merges the `Response`
+object's headers when the handler returns — but it uses the same helper, because
+`route.py`'s existing rule is that both paths carry the same headers "so the two
+cannot answer differently about the same request".
+
+Getting the fact out of the use case is a callback, `report_compaction`, passed
+in by the composition root exactly as `request_id` already was. The application
+layer keeps not knowing it is behind HTTP. What crosses the boundary is
+`CompactionDisclosure` — three integers — rather than `CompactionResult`, which
+holds the compacted messages and tools: handing those to the HTTP layer so it
+could render a header would put the whole prompt somewhere that needs a number.
+
+The contextvar is reset at the start of every request rather than on the way
+out, unlike the request id beside it. It is read to decide whether to *add*
+something, so a leftover value announces a compaction that did not happen.
+
+### 9.6 The admin UI needed a screen that did not exist
+
+§3 asks for the disclosure to be "visible in the admin UI beside the request",
+and that sentence assumed a surface the platform did not have. `/admin/usage`
+is aggregate: counts per hour per capability. The only per-request view was
+`prompt_logs`, which exists solely while a debug window is open. **So there was
+nowhere to put it**, and `usage_records.compaction_tier` was written by the
+gateway and read by nothing at all.
+
+`usage_records` had in fact never had a reader that returned a row. Every
+consumer since the first migration was an aggregate — dashboard totals, chart
+buckets, a quota sum — so the platform recorded what each request did and could
+show nobody a single one of them. "Which request was the 413 the integrator is
+quoting?" was answerable only from a log line that rotates.
+
+Three things now carry it, in ascending cost:
+
+1. **A compaction card on the usage screen**, from one extra grouped query. It
+   is a ratio rather than a count, because eleven compactions is unremarkable
+   against forty thousand requests and alarming against twelve; the denominator
+   was already on that response. It renders at zero, because an operator who has
+   just enabled the setting is asking whether it does anything and a card that
+   vanishes on "no" cannot be told from a screen that never had one.
+2. **`GET /admin/usage/records`**, one page of individual requests, with a
+   `compacted` filter. One path rather than the `/usage` and `/usage/me` pair
+   beside it: a chart is a claim about a population so who it counts belongs in
+   its name, while a row is the same object whoever reads it, and the reader who
+   may see only their own still wants the filters to work. That is the shape
+   `read_refusals.py` settled first.
+3. **The transcript marker**, above.
+
+**Making that table readable is a new disclosure, not a new query**, and it is
+audited accordingly. `usage.read_any` fires when somebody lists an account that
+is not their own, on the same line `refusal.read_any` draws: aggregate charts
+describe a tenant, while one row per request with a timestamp describes how a
+person works. Reading your own is not recorded, for the reason `prompt_log.list`
+is not.
+
+One detail recurs at every layer and is the same mistake each time: **tier 0 is
+a compaction.** The SQL filter is `is_not(None)`, the Prometheus branch is
+`is not None`, the React conditions are `!== null`, and the zod schema keeps the
+zero. A truth test anywhere in that chain would have hidden the cheapest tier —
+the one a reader is least likely to expect and most likely to meet.
