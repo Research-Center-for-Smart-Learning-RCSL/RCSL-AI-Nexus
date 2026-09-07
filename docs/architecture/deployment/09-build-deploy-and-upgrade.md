@@ -58,6 +58,33 @@ way that dropped `secrets_dir`. Nothing in the unit suite or CI can ask this —
 be asked, and asking costs one container that exits immediately. The mount is
 read-only and the container is discarded; nothing here writes.
 
+**Colima's `mounts` list replaces its default, it does not extend it.** The VM
+mounts `$HOME` and nothing else while `~/.colima/default/colima.yaml` has
+`mounts: []`, which is why `OLLAMA_MODELS_HOST_PATH=/Users/Shared/ollama/models`
+was invisible to every container from the 2026-09-05 migration until 2026-09-07:
+a bind mount of a path the VM cannot see becomes an *empty directory* rather
+than an error, so the platform read no GGUF headers and estimated every prompt
+instead of counting it, announcing this once per model load at INFO.
+
+Adding an entry to that list makes it the whole list. Mounting the model store
+alone un-mounted `$HOME` and the next `docker compose up` failed on
+`bind source path does not exist: .../secrets/redis_password`, with
+`/Users/rcslmac1` still present inside the VM as an empty stub. Both paths must
+be listed, and Colima rewrites this file on start, so the reason belongs in a
+comment beside them:
+
+```yaml
+mounts:
+  - location: /Users/rcslmac1
+    writable: true
+  - location: /Users/Shared/ollama/models
+    writable: false
+```
+
+Changing it needs `colima stop` and `colima start`, which stops every container.
+Named volumes live in the VM's disk image and survive that; only `colima delete`
+destroys them.
+
 **[Updated 2026-09-05] The credential helper problem below is resolved.** The migration from Docker Desktop to Colima on 2026-09-05 replaced `credsStore: desktop` with `osxkeychain`, eliminating `docker-credential-desktop` from the registry path entirely. The workaround is no longer needed and the throwaway `DOCKER_CONFIG` trick is retired. The history is preserved because the diagnostic method — test the credential helper directly, expect an answer in milliseconds — applies to any credential store.
 
 **A build that times out resolving a base image is not necessarily a network fault, and on 2026-08-25 it was not one.** `docker compose build` failed at `load metadata for ghcr.io/astral-sh/uv:0.5.14` with `DeadlineExceeded` while the host reached `ghcr.io`, a container reached both `ghcr.io` and `registry-1.docker.io` (`401` to an unauthenticated `/v2/` is reachability, not a refusal), the daemon's own proxy at `http.docker.internal:3128` answered when driven by hand, and the VM's disk was 37.7 GB of 2.0 TB. The distinguishing symptom is an absence: `docker pull` hung without printing `Pulling from ...`, so nothing had been requested yet and no network layer could be responsible. The cause was `docker-credential-desktop`, which `credsStore: desktop` puts in front of every registry operation and which hung with no output; `docker desktop diagnose` hangs identically and for the same reason, so it cannot be used to investigate this. Confirm it directly, and expect an answer in milliseconds:
