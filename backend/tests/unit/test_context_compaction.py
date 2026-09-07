@@ -34,7 +34,12 @@ from app.application.use_cases.route_chat_request.compaction_cache import (
 from app.application.use_cases.route_chat_request.compaction_cache import (
     CompactionResult as CachedPrefix,
 )
-from app.application.use_cases.route_chat_request.compaction_tier2 import try_tier2
+from app.application.use_cases.route_chat_request.compaction_tier2 import (
+    SUMMARY_OUTPUT_TOKENS,
+    SummaryTooLongError,
+    build_summarise_fn,
+    try_tier2,
+)
 from app.domain.entities.chat import Message, MessageRole, ToolDefinition
 from app.domain.entities.model import Model, ModelState, ResourceProfile, RuntimeKind
 from app.domain.exceptions import ContextTooLongError
@@ -774,3 +779,92 @@ async def test_the_disclosure_that_leaves_the_use_case_carries_no_prompt() -> No
     assert len(seen) == 1
     assert seen[0] == CompactionDisclosure(tier=1, tokens_before=50_000, tokens_after=900)
     assert not hasattr(seen[0], "messages")
+
+
+# --- Not trusting the registration ---------------------------------------
+
+
+class DeclaringCounter:
+    """A counter with an opinion about size and about the model's own limit."""
+
+    def __init__(self, counted: int | None, declared: int | None = None) -> None:
+        self._counted = counted
+        self._declared = declared
+
+    async def prepare(self, ref: str) -> bool:
+        return True
+
+    async def count_prompt(self, ref, messages, tools) -> int | None:
+        return self._counted
+
+    async def count_parts(self, ref, texts) -> list[int] | None:
+        return None
+
+    async def native_context_length(self, ref: str) -> int | None:
+        return self._declared
+
+
+async def test_the_summariser_refuses_a_prefix_the_model_cannot_read() -> None:
+    """The failure this whole plan is about, in the one place the plan itself
+    created it.
+
+    Above a model's real context the runtime truncates to half and reports a
+    clean stop, so a summary written from an over-long prefix describes part of
+    the history while the disclosure says the history was summarised. Refusing
+    puts the request back where it was before Tier 2 existed: refused at a
+    ceiling, which is honest.
+    """
+    runtime = FakeRuntime(chunks=1)
+    summarise = build_summarise_fn(
+        runtime,  # type: ignore[arg-type]
+        "qwen2.5:7b",
+        32768,
+        DeclaringCounter(counted=40_000),
+    )
+
+    with pytest.raises(SummaryTooLongError):
+        await summarise([Message(role=MessageRole.USER, content="x") for _ in range(20)])
+
+
+async def test_the_summariser_leaves_room_for_the_summary_itself() -> None:
+    """The bound is the context minus what the answer needs. A prefix that fits
+    the context exactly leaves nowhere to write."""
+    runtime = FakeRuntime(chunks=1)
+    over = build_summarise_fn(
+        runtime,  # type: ignore[arg-type]
+        "qwen2.5:7b",
+        32768,
+        DeclaringCounter(counted=32_768 - SUMMARY_OUTPUT_TOKENS + 1),
+    )
+    under = build_summarise_fn(
+        runtime,  # type: ignore[arg-type]
+        "qwen2.5:7b",
+        32768,
+        DeclaringCounter(counted=32_768 - SUMMARY_OUTPUT_TOKENS),
+    )
+
+    with pytest.raises(SummaryTooLongError):
+        await over([Message(role=MessageRole.USER, content="x")])
+    assert await under([Message(role=MessageRole.USER, content="x")]) != ""
+
+
+async def test_a_build_with_no_counter_sends_the_prompt_unchecked() -> None:
+    """Every build that has no GGUF to read, which is why the counter is
+    optional rather than required. The bound is declared and unenforced there,
+    exactly as the prompt ceiling is estimated rather than counted."""
+    runtime = FakeRuntime(chunks=1)
+    summarise = build_summarise_fn(runtime, "qwen2.5:7b", 32768, None)  # type: ignore[arg-type]
+
+    assert await summarise([Message(role=MessageRole.USER, content="x")]) != ""
+
+
+async def test_the_runner_is_sized_by_what_was_asked_for() -> None:
+    """The figure reaches the runtime, because it is what `_set_num_ctx` turns
+    into `num_ctx` — the argument whose absence caused the 2026-08-07
+    eviction."""
+    runtime = FakeRuntime(chunks=1)
+    summarise = build_summarise_fn(runtime, "qwen2.5:7b", 32768, None)  # type: ignore[arg-type]
+
+    await summarise([Message(role=MessageRole.USER, content="x")])
+
+    assert runtime.seen_context_length == 32768

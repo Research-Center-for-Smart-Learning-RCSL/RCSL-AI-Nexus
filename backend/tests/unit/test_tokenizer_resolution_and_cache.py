@@ -162,3 +162,56 @@ async def test_the_cache_holds_only_what_it_was_sized_for(tmp_path: Path) -> Non
     if counter._use_native:
         pytest.skip("Rust backend manages its own bounded cache")
     assert len(counter._cache) == 1
+
+
+# --- what the model says about itself ------------------------------------
+
+
+async def test_the_declared_context_is_read_from_the_model_and_not_the_registry(
+    tmp_path: Path,
+) -> None:
+    """The registry's figure is a claim; this one is the model's own.
+
+    On 2026-09-07 `qwen7b` was registered at 262144 against a declared 32768,
+    and every guard trusting the registration was eight times too permissive —
+    including the one added on 2026-08-17 to stop silent truncation.
+    """
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, context_length=32768)
+    counter = GgufTokenCounter(tmp_path)
+
+    assert await counter.native_context_length("primary:latest") == 32768
+
+
+async def test_a_header_that_declares_nothing_says_so(tmp_path: Path) -> None:
+    """`None` is cannot-say, as everywhere on this port. A caller must fall
+    back to the registered figure rather than to no bound at all, so an absent
+    key has to be distinguishable from a small one."""
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path)
+    counter = GgufTokenCounter(tmp_path)
+
+    assert await counter.native_context_length("primary:latest") is None
+
+
+async def test_a_reference_with_no_blob_says_cannot_say_rather_than_raising(
+    tmp_path: Path,
+) -> None:
+    """An MLX model, or one registered but not pulled. Reading its context must
+    not be the thing that fails a request."""
+    counter = GgufTokenCounter(tmp_path)
+
+    assert await counter.native_context_length("absent:latest") is None
+
+
+async def test_the_declared_context_is_read_once_per_reference(tmp_path: Path) -> None:
+    """Cached beside the vocabulary and separately from it: the two are wanted
+    at different moments, and this one must not cost a header scan on every
+    summarisation."""
+    (tmp_path / "blobs").mkdir(parents=True)
+    blob = write_store(tmp_path, context_length=8192)
+    counter = GgufTokenCounter(tmp_path)
+
+    assert await counter.native_context_length("primary:latest") == 8192
+    blob.unlink()
+    assert await counter.native_context_length("primary:latest") == 8192

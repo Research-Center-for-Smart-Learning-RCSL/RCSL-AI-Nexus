@@ -41,6 +41,28 @@ class TokenCounterPort(Protocol):
         """
         ...
 
+    async def native_context_length(self, ref: str) -> int | None:
+        """The largest context this model declares it can hold, or None.
+
+        Read from the same GGUF header the vocabulary comes from, under the
+        `<family>.context_length` key. Here rather than on a port of its own
+        for the reason `ModelRuntimePort.embed` gives for living beside
+        `generate`: a second reader of the same file would be a second place
+        for the answer to be wrong.
+
+        It exists because the registry's figure is a claim and this one is the
+        model's own. On 2026-09-07 `qwen7b` was registered at 262144 against a
+        declared 32768, and every guard that trusted the registration was
+        eight times too permissive — including the one added on 2026-08-17 to
+        stop exactly this class of silent truncation.
+
+        `None` means cannot say, as everywhere else on this port: an MLX model
+        with no GGUF, a reference not pulled, a missing mount. A caller that
+        cannot learn the real figure must fall back to the registered one
+        rather than to no bound at all.
+        """
+        ...
+
     async def count_prompt(
         self, ref: str, messages: Sequence[Message], tools: Sequence[ToolDefinition]
     ) -> int | None:
