@@ -164,9 +164,12 @@ prompt_eval_count = 16386          ← 32768 / 2, plus two
 done_reason       = "stop"
 ```
 
-**The rule holds at `-np 1`.** `max_context_length = 122880` sits correctly
-below the 131072 that a 262144-token registration implies, and nothing in this
-plan may assume otherwise.
+**The rule holds at `-np 1`** — this was the reading on 2026-09-03, and §2.6
+corrects it. The halving is real, but it is not a cap on every prompt: it is
+what happens to a prompt that *exceeds* `num_ctx`. A prompt that fits is read
+whole. The probe below could not see the difference because its prompt was
+larger than `num_ctx` and the two readings predict the same number for that
+case.
 
 The second probe is the one worth keeping. The same filler was sent again with
 `SECRET-WORD: pomegranate-47` as its **first line**, and a closing question
@@ -195,6 +198,80 @@ between a long conversation and this behaviour, which raises their priority. And
 §2.4's option (b), `-np 2`, becomes more expensive than it looked: whether the
 halving composes with the per-slot division — giving `num_ctx / 4` — is
 **unmeasured**, and must be probed the same way before any parallelism change.
+
+### 2.6 The halving is what happens *above* `num_ctx`, not a cap on every prompt
+
+**Measured 2026-09-07 on this deployment**, against `qwen2.5:7b` resident at
+`num_ctx = 32768`, through `/api/generate`, with the prompt counted exactly by
+the platform's own GGUF tokenizer rather than estimated:
+
+| counted tokens | `prompt_eval_count` | |
+|---:|---:|---|
+| 26,624 | 26,602 | whole prompt read — **81% of `num_ctx`** |
+| 31,506 | 31,484 | whole prompt read — **96% of `num_ctx`** |
+| 34,816 | **16,386** | truncated to `num_ctx / 2` |
+| 66,328 | **16,386** | truncated to `num_ctx / 2` |
+
+The constant 22-token gap is the chat template the counter applies and
+`/api/generate` does not.
+
+**So the rule is: a prompt that fits inside `num_ctx` is evaluated whole; a
+prompt that exceeds `num_ctx` is silently truncated to `num_ctx / 2`.** §2.5
+generalised the second half into a cap on all prompts, and the platform's input
+ceiling was built on that generalisation — `max_context_length = 122880` sits
+below half of 262144 rather than below 262144.
+
+**§8 item 3 was looking for this and it is here, one step to the side of where
+it looked.** The deployment may indeed be running at half the context it has
+paid for, but the cause is not `--context-shift` and the remedy is not a runtime
+patch: it is one configuration value, bounded by the requirement that the
+platform must never let a prompt exceed `num_ctx`, because above it the loss is
+silent and reports `done_reason: "stop"`. That half of §2.5 is confirmed twice
+over and is the reason the ceiling must stay strictly below `num_ctx` rather
+than at it.
+
+**The secret-word evidence does not survive.** §2.5 read the model's failure to
+see a first-line marker as proof the beginning had been dropped. The first probe
+above put three markers in a prompt that was demonstrably *not* truncated, and
+the model reported two of them and missed the first. A 7B model missing a marker
+at the head of 26,000 tokens of filler is an attention failure, and it is
+indistinguishable from truncation by that method. The token counts are the
+evidence; the markers are not.
+
+**Not yet confirmed where it matters.** All four measurements are `qwen2.5:7b`
+at 32768 through `/api/generate`. The incumbent at 262144, and the `/api/chat`
+path the platform actually uses, are unmeasured, and no ceiling should move
+before they are.
+
+### 2.7 Two registry rows describe models that do not exist
+
+Read from the deployment on 2026-09-07, and the second is live exposure rather
+than tidiness:
+
+| alias | registered `context_length` | the model's own maximum |
+|---|---:|---:|
+| `qwen7b` | 262144 | **32768** (`qwen2.context_length` in its GGUF) |
+| `embedder` | 8192 | 2048 (resident) |
+
+`_refuse_what_this_target_would_truncate` refuses at
+`resource_profile.context_length // 2`, so for `assist` it refuses at 131072 —
+against a model that truncates anything above 32768 down to 16384. **A prompt
+between roughly 32,769 and 122,880 tokens on `assist` passes the global ceiling
+and the per-model guard and is silently truncated by the runtime**, which is
+precisely the failure that guard was added on 2026-08-17 to prevent, reopened by
+a row that overstates the model eight-fold.
+
+The exposure was theoretical while `assist` carried only the management
+assistant, whose traffic peaks near 4,000 tokens. **Tier 2 changed that**: it
+sends the oldest prefix of an over-long conversation to this same model, and
+that prefix is large by construction. See §9.7.
+
+Reconciling this is §8 item 4's real content. The three memory figures it names
+are not three views of one model — `memory_gb = 41` and `/api/ps`'s 33.55 GiB
+are `gemma4:31b-it-q8_0`, while the 55.8 GiB prediction in
+`ollama_adapter/encoding.py` was for `gemma4:31b-it-qat`, a different build
+registered separately at `memory_gb = 18`. Two figures, not three, and the
+question is only why the registry says 41 where the runtime holds 33.55.
 
 ## 3. The one place this plan amends the request
 
@@ -408,9 +485,10 @@ recorded regretting getting backwards.
 |---|---|---|---|
 | 1 | Probe the `num_ctx / 2` rule at `-np 1` (§2.5) | — | **done 2026-09-03**: the rule holds |
 | 2 | Raise `queue_wait_seconds` (§2.3) | one value | **done 2026-09-07.** The code default was raised to 1200 on 2026-09-05, but `.env`, `.env.example` and the deployment configuration table all still carried 120, so the raise reached nothing until all four were aligned. Takes effect on restart |
-| 3 | Test whether `--context-shift` *is* the halving (§4.1) | one probe | **not done.** Still the largest lead here |
-| 3b | If it is: patch or replace the runtime to disable it | large | not started |
-| 4 | Reconcile the three memory figures for the incumbent (§2.2) | measurement | **not done** |
+| 3 | Test whether `--context-shift` *is* the halving (§4.1) | one probe | **answered from the side, 2026-09-07 (§2.6).** The halving applies only above `num_ctx`, so the capacity this item was chasing is real and is reached with a configuration value rather than a runtime patch |
+| 3b | If it is: patch or replace the runtime to disable it | large | **not needed for the capacity**, and still open for the silent-truncation behaviour above `num_ctx` |
+| 3c | Confirm §2.6 on the incumbent at 262144 and through `/api/chat`, then raise `max_context_length` | one probe, then one value | **not done, and nothing should move first** |
+| 4 | Reconcile the memory figures for the incumbent (§2.2) | measurement | **partly done (§2.7)**: two figures, not three — the 55.8 GiB was a different build. Two registry rows also overstate their model's context |
 | 5 | Group T's cross-turn dependency property (§7) | harness work | **done 2026-09-07**: `recall_across_turns`, described in model-evaluation.md §7.6 |
 | 6 | Tier 0 and Tier 1 compaction, with disclosure (§5.1, §5.2, §3) | code | **done**: tiers live, tested, and disclosed (§9.1) |
 | 7 | The prefix-hash cache (§5.4) | code + Redis | **constructed 2026-09-07**, and it had never hit — see §9.4 |
@@ -673,3 +751,39 @@ a compaction.** The SQL filter is `is_not(None)`, the Prometheus branch is
 `is not None`, the React conditions are `!== null`, and the zod schema keeps the
 zero. A truth test anywhere in that chain would have hidden the cheapest tier —
 the one a reader is least likely to expect and most likely to meet.
+
+### 9.7 What §2.7 means for Tier 2, which is the part that needs deciding
+
+Tier 2 sends the oldest prefix of an over-long conversation to `assist`, and
+`build_assist_summariser` passes `target.resource_profile.context_length` — the
+registered figure — as the context to size the runner for. For `qwen7b` that
+figure is 262144 and the model's own maximum is 32768.
+
+The prefix Tier 2 hands it is large by construction: it is what remains of a
+conversation that tiers 0 and 1 could not bring under the ceiling. So a
+summarisation prompt above 32,768 tokens is truncated to 16,384 by the runtime,
+silently, and the summary that comes back describes part of what it was asked
+to summarise while claiming to describe all of it — inside the feature whose
+entire purpose is to make that class of loss visible.
+
+Nothing observed this happening; it is read out of §2.6 and §2.7 together.
+
+**Three candidate fixes, and the choice is not obvious:**
+
+1. **Correct the `qwen7b` row to 32768.** It is the truth, and it repairs the
+   guard, `_set_num_ctx` and Tier 2 at once — `_refuse_what_this_target_would_truncate`
+   would then refuse `assist` above 16384, restoring exactly the protection
+   2026-08-17 added. It is a write to the deployment's `models` table and it
+   makes `assist` refuse prompts it currently serves.
+2. **Bound what Tier 2 sends** rather than trusting the registration: summarise
+   in pieces that fit, or refuse to summarise a prefix the summary model cannot
+   read. Refusing means the request meets `ContextTooLongError`, which is honest
+   and is what happened before Tier 2 existed.
+3. **Stop trusting the registry for this number at all.** The platform already
+   reads each model's GGUF to count tokens, and `qwen2.context_length` is in the
+   same header it reads. A registration that exceeds the model's own maximum
+   could be refused at write time, or clamped at load. This is the durable fix
+   and the largest.
+
+(1) and (2) are not alternatives — (1) is the data being wrong and (2) is the
+code trusting it — and (3) is what stops the pair recurring for the next model.
