@@ -30,7 +30,27 @@ class RuntimeSettings(BaseSettings):
 
     node_name: str = "local"
 
-    node_total_memory_gb: float = 64.0
+    node_total_memory_gb: float = 54.0
+    """What is available to **models**, not what the machine has.
+
+    The two were the same number until 2026-09-07 and the difference is the
+    Colima VM. Since the 2026-09-05 migration the containers run inside one,
+    and its host footprint was 9.3 GB — outside this figure and outside the
+    fifth `MemoryBudgetService` reserves, which is sized for "the OS, the
+    containers, and inference working memory" and was written when the
+    containers were not behind a hypervisor.
+
+    Measured that day with 39.05 GB of models resident: 0.8 GB free, 13.5 GB
+    held by the compressor and 6.9 GB of swap in use, while the budget still
+    reported 12.2 GB available to load another model. `qwen36-35b-a3b-q8` is
+    registered at 42 GB and loading it beside the small models needs 47.5 GB,
+    which 64 permitted.
+
+    54 x the 0.8 headroom is 43.2 GB: above the 48.8 this must exceed for the
+    current three to stay reloadable, and below what the host cannot hold. It
+    is the memory available to models on *this* host in *this* shape — a second
+    node, or a return to running containers natively, would change it.
+    """
 
     node_heartbeat_interval_seconds: int = 30
     """How often the admin app probes each node and writes the observed status,
