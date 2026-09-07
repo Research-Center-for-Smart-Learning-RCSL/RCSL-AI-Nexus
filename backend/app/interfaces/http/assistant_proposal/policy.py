@@ -35,10 +35,10 @@ Rules for that block:
   refuses instead, which is the ordinary setting and the one that tells an
   integrator their client is sending a model name. Only recommend a capability
   here when the operator has said they would rather the key just worked.
-- `compaction_enabled` is on by default: an oversized request is summarized
-  instead of refused. Recommend turning it off only when the operator wants to
-  see the refusal itself, for example while debugging why a client's requests
-  are rejected.
+- `compaction_enabled` is on by default: an oversized request has its tool
+  definitions and old tool results reduced instead of being refused. Recommend
+  turning it off only when the operator wants to see the refusal itself, for
+  example while debugging why a client's requests are rejected.
 - Omit any field you have no recommendation for. Do not guess a value to fill
   the shape; an omitted field leaves what the operator already typed alone.
 - `rationale` is one short sentence saying why, in the same language as the

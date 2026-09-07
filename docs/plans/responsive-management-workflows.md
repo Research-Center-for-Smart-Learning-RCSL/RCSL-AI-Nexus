@@ -1,8 +1,23 @@
 # Plan: Responsive Management Workflows
 
-**Status: proposed 2026-08-30.** Written against `main` at `53c7f0f` after a
-browser review at 1280 × 720 and 390 × 844. This plan is the first of two
-companion UI work packages. The second is
+**Status: implemented.** Proposed 2026-08-30 against `main` at `53c7f0f` after
+a browser review at 1280 × 720 and 390 × 844; landed on `main` through
+`codex/ui-optimization-plans` (merged at `07f09d5`, 2026-09-05) and verified
+item by item against `bd185eb` on 2026-09-07. All five items are in the tree:
+
+| # | Item | Where it landed |
+|---:|---|---|
+| 1 | Mobile management header | `28aa934`, one account-and-appearance menu below `sm` |
+| 2 | Chat composer rows | `2886fe6`, and the shared `ComposerTextarea` primitive both composers now use |
+| 3 | Assistant composer | `2886fe6`, same primitive |
+| 8 | Mobile navigation motion | `42f42aa`, `nexus-panel-motion` / `nexus-panel-from-inline-start` |
+| 9 | Assistant drawer motion | `42f42aa`, `nexus-panel-from-inline-end` |
+
+The frozen list held: no file under `entry-transition*` has been touched since
+this plan was written. The frontend suite is 483 tests across 67 files, green
+at `bd185eb`.
+
+This plan is the first of two companion UI work packages. The second is
 [information-discovery-and-interface-polish.md](./information-discovery-and-interface-polish.md).
 
 This package groups the changes that share the management shell, narrow-screen
