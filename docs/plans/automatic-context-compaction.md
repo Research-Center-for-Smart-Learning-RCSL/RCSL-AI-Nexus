@@ -273,6 +273,53 @@ are `gemma4:31b-it-q8_0`, while the 55.8 GiB prediction in
 registered separately at `memory_gb = 18`. Two figures, not three, and the
 question is only why the registry says 41 where the runtime holds 33.55.
 
+### 2.8 The ruler was 2.2x wrong, which makes §2.6 unusable until now
+
+The probe §8 item 3c asked for was run on 2026-09-07 — 160,218 counted tokens
+to the incumbent at `num_ctx = 262144` through `/api/chat`, the platform's own
+path. It came back `prompt_eval_count = 70,749`, which is neither the whole
+prompt nor `num_ctx / 2`, and 453,928 characters over 70,749 tokens is 6.42
+characters per token — an ordinary density for repetitive English, while the
+platform's counter had claimed 2.83.
+
+**The prompt was never truncated. It was never 160,218 tokens.** A calibration
+against the runtime's own `prompt_eval_count`, on three texts:
+
+| text | Ollama | counted | |
+|---|---:|---:|---|
+| repetitive prose | 236 | 527 | 2.23x |
+| ordinary prose | 154 | 382 | 2.48x |
+| Python source | 315 | 448 | 1.42x |
+
+`qwen2.5:7b` was the control and came back at 1.08-1.11x — a constant offset of
+about 21 tokens, which is this platform's chat template rendering slightly
+longer than Ollama's, not a scaling error. The two models take different code
+paths: `qwen2` declares `tokenizer.ggml.model = gpt2` and goes through BPE,
+`gemma4` declares `llama` and goes through Unigram. **Only the Unigram path is
+wrong, and it had no test at all.**
+
+The cause is in what a GGUF stores. Its `scores` for a `llama`-type vocabulary
+are ordinal ranks — `gemma4:31b-it-q8_0` carries exactly 0.0 to 262143.0 — and
+Unigram needs log-probabilities. The conversion was
+`log((N - rank) / N)`, which preserves the order and crushes the vocabulary
+against zero: rank 1000 lands at -0.0038, rank 20000 at -0.079. Unigram
+segments by maximising the *sum* over a split, so when every score is that
+close to zero, splitting a word into three tokens costs almost nothing and the
+segmenter splits it. `-log(rank + 1)` spreads the same ranks over twelve nats
+and the counts land at 1.03-1.10x, matching the control.
+
+**What this cost.** The incumbent serves `chat` and `code`. At
+`max_context_length = 122880` counted, callers were being refused at roughly
+55,000 real tokens against a model that reads 262144 — and the ceiling had been
+raised three times chasing agent clients who kept hitting it. Compaction fired
+on prompts that were never near any limit. The figure was wrong in the
+over-counting direction, so nothing was ever served from a prompt the runtime
+had truncated; what was lost is capacity, not correctness.
+
+**And §2.6 could not have been acted on before this.** Every input to that
+decision — how much context a request uses, how close the ceiling is, what a
+raise would buy — was measured with this ruler.
+
 ## 3. The one place this plan amends the request
 
 The request is for compaction on by default. This plan implements that. What it
@@ -487,7 +534,7 @@ recorded regretting getting backwards.
 | 2 | Raise `queue_wait_seconds` (§2.3) | one value | **done 2026-09-07.** The code default was raised to 1200 on 2026-09-05, but `.env`, `.env.example` and the deployment configuration table all still carried 120, so the raise reached nothing until all four were aligned. Takes effect on restart |
 | 3 | Test whether `--context-shift` *is* the halving (§4.1) | one probe | **answered from the side, 2026-09-07 (§2.6).** The halving applies only above `num_ctx`, so the capacity this item was chasing is real and is reached with a configuration value rather than a runtime patch |
 | 3b | If it is: patch or replace the runtime to disable it | large | **not needed for the capacity**, and still open for the silent-truncation behaviour above `num_ctx` |
-| 3c | Confirm §2.6 on the incumbent at 262144 and through `/api/chat`, then raise `max_context_length` | one probe, then one value | **not done, and nothing should move first** |
+| 3c | Confirm §2.6 on the incumbent at 262144 and through `/api/chat`, then raise `max_context_length` | one probe, then one value | **probe done 2026-09-07 and it found something else (§2.8): the counter was 2.2x over on the incumbent.** The rule held — 70,749 real tokens inside a 262144 context were read whole — but no ceiling can be set until the corrected counter has been measured against real traffic |
 | 4 | Reconcile the memory figures for the incumbent (§2.2) | measurement | **partly done (§2.7)**: two figures, not three — the 55.8 GiB was a different build. Two registry rows also overstate their model's context |
 | 5 | Group T's cross-turn dependency property (§7) | harness work | **done 2026-09-07**: `recall_across_turns`, described in model-evaluation.md §7.6 |
 | 6 | Tier 0 and Tier 1 compaction, with disclosure (§5.1, §5.2, §3) | code | **done**: tiers live, tested, and disclosed (§9.1) |
@@ -806,17 +853,19 @@ the prefix before sending it and raises `SummaryTooLongError` rather than
 handing the runtime a prompt it would cut. The orchestrator turns that into the
 ordinary context refusal, which is where the request was before Tier 2 existed.
 
-**Every row was then audited against its model**, and one is still overstated:
+**Every row was then audited against its model.** `embedder` was overstated
+fourfold as well — 8192 registered against a declared 2048 — and was corrected
+the same day once its consumers were traced. It has none of `qwen7b`'s: chunking
+is by characters at `DEFAULT_CHUNK_CHARS = 1200`, about 300 tokens, so nothing
+ingested has ever approached either figure; `ModelRuntimePort.embed` takes no
+context length; and the chat guard never sees an embedding request. The figure
+reached exactly two places, the `num_ctx` sent at load — which Ollama was
+already clamping to 2048, as `/api/ps` showed — and the models screen. Correcting
+it changed no behaviour and removed a false number.
 
-| alias | registered | declared |
-|---|---:|---:|
-| `embedder` | 8192 | **2048** |
-
-The others register at or below what their model declares, which is a
-deliberate choice rather than a defect — `gemma4-31b` at 131072 of 262144,
-`glm47-flash` at 32768 of 202752. The embedder is a fourfold overstatement and
-is left alone here, because lowering it changes what the knowledge base accepts
-at ingestion and that is a different decision from this one.
+Every other row registers at or below what its model declares, which is the
+ordinary deliberate choice rather than a defect: `gemma4-31b` at 131072 of
+262144, `glm47-flash` at 32768 of 202752. **No row overstates its model.**
 
 **(3) was done the same day, in the smallest form that closes it.** Loading a
 model now compares its registration against its own header and warns when the

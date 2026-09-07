@@ -44,6 +44,7 @@ separately at the end, marked as superseded.
 - The halving is not what the plan says it is, and one registry row is eight times too large
 - The registry row, and teaching the platform to read what the model says about itself
 - The durable half: comparing the claim against the model at the moment of loading
+- The embedder row, and the probe that found the ruler was 2.2x wrong
 
 **[2026-09-04](./progress/2026-09-04.md)**
 - The five tasks yesterday's set could not measure with, and the conclusion that reversed when they were replaced

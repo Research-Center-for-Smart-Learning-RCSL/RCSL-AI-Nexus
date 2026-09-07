@@ -146,17 +146,20 @@ fn build_unigram_tokenizer(metadata: &HashMap<String, GgufValue>) -> Result<Toke
         .map(|v| v.to_vec())
         .unwrap_or_default();
 
-    let n = tokens.len() as f64;
+    // The scores are ordinal ranks, not log-probabilities, and turning one into
+    // the other has to spread them: Unigram maximises the *sum* over a split,
+    // so what decides whether a word stays one token is the size of the gaps
+    // rather than their order. This read `((n - s) / n).ln()` until 2026-09-07,
+    // which is rank-preserving and crushes the vocabulary against zero — rank
+    // 1000 at -0.0038 — so extra tokens cost nothing and words were split.
+    // Measured 2.04x over the runtime's own prompt_eval_count on gemma4; this
+    // is 1.01x. Kept identical to `construction.rank_to_log_probability` on the
+    // Python side, which carries the measurement.
     let vocab: Vec<(String, f64)> = tokens
         .iter()
         .zip(scores.iter())
         .map(|(token, &score)| {
-            let s = score as f64;
-            let log_prob = if n - s > 0.0 {
-                ((n - s) / n).ln()
-            } else {
-                -100.0
-            };
+            let log_prob = -((score as f64) + 1.0).ln();
             (token.clone(), log_prob)
         })
         .collect();
