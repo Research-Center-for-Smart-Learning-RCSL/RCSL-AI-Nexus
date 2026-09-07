@@ -42,7 +42,22 @@ Two of these numbers are load-bearing rather than incidental. The 64 GB is
 unified across CPU and GPU, which is why the memory budget (`MemoryBudgetService`,
 `NODE_TOTAL_MEMORY_GB=64`) governs model loads against a single figure rather
 than a separate VRAM pool; that setting must match this number, since too high
-drives the host into swap and too low refuses models that would fit. And the
+drives the host into swap and too low refuses models that would fit. **What the
+host spends on things that are not models is a second setting**,
+`NODE_MEMORY_HEADROOM_FRACTION`, and the budget is the product: 51.2 GB
+against the 51 GB the three resident models are registered at. **That 0.2 GB
+of margin is the machine speaking rather than a choice** — `gemma4-31b-q8`
+alone allocates 44.02 GiB at its registered 262144 context, and the set is
+within half a percent of what 64 GB holds. The fraction is 0.80, which is also
+the service's own default, and it is a setting because for two days it could
+not be: the 2026-09-05 Colima migration put the containers inside a VM whose
+host footprint reached 9.4 GiB, and **that VM is now capped at 3 GiB, which is
+load-bearing for every number in this paragraph**
+([01-physical-components.md](./architecture/deployment/01-physical-components.md)). Keeping the deduction there rather than in the total is
+deliberate — a `nodes` row's `total_memory_gb` answers what the machine has,
+and netting the VM out of it (as 2026-09-07 briefly did) both hides the
+hardware and double-counts the containers against the fraction's own reserve.
+And the
 inference concurrency cap (`MAX_CONCURRENT_INFERENCE=4`) is sized for one 40-core
 GPU with no second compute node yet — it buys queueing depth rather than
 throughput, since that one GPU serves a single generation at a time, and the
