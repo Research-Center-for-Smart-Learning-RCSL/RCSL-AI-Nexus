@@ -163,14 +163,17 @@ class RuntimeSettings(BaseSettings):
     around. Eviction is least-recently-used and costs a rebuild of a quarter of
     a second, not a wrong answer.
 
-    **A model occupies a slot here only if it can be counted exactly, and since
-    2026-08-21 the main one cannot.** `gemma4:31b-it-q8_0` declares
-    `tokenizer.ggml.pre = gemma4`, which is not in `KNOWN_PRE_TOKENIZERS`, so
-    `prepare` refuses it and `chat` and `code` are estimated instead: the
-    gateway currently builds one vocabulary rather than two. Two is still the
-    right value — it is what the arrangement needs whenever a countable model
-    serves `chat`, and shrinking it to match an accident would only have to be
-    undone. Measured 2026-09-02; see `docs/roadmap/decisions.md`.
+    **A model occupies a slot here only if it can be counted exactly, and the
+    main one now can.** Between 2026-08-21 and 2026-09-05 it could not:
+    `gemma4:31b-it-q8_0` declares `tokenizer.ggml.pre = gemma4`, which was not
+    in `KNOWN_PRE_TOKENIZERS`, so `prepare` refused it and `chat` and `code`
+    were estimated. `gemma4` was added to that set, and on 2026-09-07 the
+    counting was measured against the runtime's own `prompt_eval_count` at
+    1.00x on prose. So the gateway builds two vocabularies rather than one, and
+    this value now has **no spare slot** rather than one — which is the state
+    the paragraph above sized it for, reached at last. A third countable model
+    serving a capability is what would make it wrong. Measured 2026-09-02 and
+    2026-09-07; see `docs/roadmap/decisions.md`.
     """
 
     max_context_length: int = 122880

@@ -74,7 +74,19 @@ export function CreateApiKeyDialog({
       name: '',
       scopes: ['chat'],
       rate_limit_rpm: 240,
-      quota_tokens_per_day: 90_000_000,
+      // 10M rather than the 90M this offered until 2026-09-07, and the change
+      // is a measurement rather than a preference. The quota counts what the
+      // runtime *evaluated*, so it is bounded by throughput: at 100%
+      // utilisation and zero idle this machine produces 2.0M tokens a day at
+      // the generation rate measured past token 16,000 and 18.5M at the
+      // prefill rate measured at 20k context. 90M was five to forty-five times
+      // a ceiling it could never reach, against a platform whose entire
+      // recorded history is 13.65M tokens.
+      //
+      // 10M is also what operators chose: four of the five live keys had been
+      // moved to it by hand, and it is the only figure `quota_exceeded` has
+      // ever fired at — twice, on a real key whose heaviest day was 4.76M.
+      quota_tokens_per_day: 10_000_000,
       allowed_cidrs_text: '',
       expires_at: defaultExpiry(),
       owner_id: ownerId,
