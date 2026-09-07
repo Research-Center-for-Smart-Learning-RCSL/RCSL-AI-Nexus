@@ -818,5 +818,19 @@ deliberate choice rather than a defect — `gemma4-31b` at 131072 of 262144,
 is left alone here, because lowering it changes what the knowledge base accepts
 at ingestion and that is a different decision from this one.
 
-(3) remains the durable fix: nothing prevents the next registration from
-overstating its model, and the audit above was a script run by hand.
+**(3) was done the same day, in the smallest form that closes it.** Loading a
+model now compares its registration against its own header and warns when the
+first exceeds the second, naming both figures, both silent consequences and the
+value to correct it to.
+
+Three choices in it are worth keeping. It warns **before** the runtime call
+rather than after, because the figure it warns about is the one about to be sent
+as `num_ctx` — a warning that arrives after the runtime has already reserved for
+a context the model cannot hold describes something the operator can no longer
+choose against, which is the shape of the 2026-08-07 eviction. It warns in one
+direction only: registering *below* the declared maximum is the ordinary
+deliberate choice and four of six rows make it, so firing on both would train an
+operator to ignore it. And it warns rather than refuses, because a refusal would
+make a wrong number in a table unable to serve at all on the strength of a file
+read that can fail for reasons having nothing to do with the number — a missing
+mount, an unpulled reference, an architecture spelling the key differently.

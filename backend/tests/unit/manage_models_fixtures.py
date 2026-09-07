@@ -69,6 +69,7 @@ class Harness:
         models: list[Model] | None = None,
         policies: list[RoutingPolicy] | None = None,
         runtime: FakeRuntime | None = None,
+        tokens: object | None = None,
     ) -> None:
         self.models = FakeModels(models or [])
         self.nodes = FakeNodes([NODE])
@@ -85,6 +86,7 @@ class Harness:
             state_committer=FakeStateCommitter(self.models),
             authz=RoleAuthorization(),
             audit=self.audit,
+            tokens=tokens,  # type: ignore[arg-type]
         )
 
     async def register(self, **overrides: object) -> Model:
@@ -98,3 +100,31 @@ class Harness:
         }
         kwargs.update(overrides)
         return await self.use_case.register(ADMIN, **kwargs)  # type: ignore[arg-type]
+
+
+class DeclaringCounter:
+    """A counter that has an opinion about what the model declares.
+
+    `None` is the ordinary answer for a host holding no GGUF, and the default
+    here, so a Harness built without one behaves as every build did before the
+    declared context could be read at all.
+    """
+
+    def __init__(self, declared: int | None = None) -> None:
+        self._declared = declared
+        self.prepared: list[str] = []
+        self.asked: list[str] = []
+
+    async def prepare(self, ref: str) -> bool:
+        self.prepared.append(ref)
+        return True
+
+    async def native_context_length(self, ref: str) -> int | None:
+        self.asked.append(ref)
+        return self._declared
+
+    async def count_prompt(self, ref, messages, tools) -> int | None:
+        return None
+
+    async def count_parts(self, ref, texts) -> list[int] | None:
+        return None
