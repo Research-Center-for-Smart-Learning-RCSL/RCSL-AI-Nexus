@@ -57,6 +57,12 @@ class ModelLifecycleMixin(ModelRegistryMixin):
         # write would be invisible to a concurrent load until it commits at the
         # end — which is after the runtime call — so the claim has to land now.
         await self._state.commit(model.id, ModelState.LOADING)
+        # Before the load and not after it, unlike `_prepare_token_counter`
+        # below, because the figure this warns about is the one about to be
+        # sent: a warning that arrives after an oversized `num_ctx` has already
+        # made the runtime reserve for a context the model cannot hold is a
+        # warning about something the operator can no longer choose against.
+        await self._warn_if_registered_context_overstates(model)
         try:
             await runtime.load(model.ref, context_length=model.resource_profile.context_length)
         except Exception:
@@ -78,6 +84,67 @@ class ModelLifecycleMixin(ModelRegistryMixin):
         await self._audit.record(actor, AuditAction.MODEL_LOADED, target=model.id)
         await self._prepare_token_counter(model)
         return _with_state(model, ModelState.LOADED)
+
+    async def _warn_if_registered_context_overstates(self, model: Model) -> None:
+        """Say so when a registration claims more context than the model has.
+
+        The registered figure is a claim an operator typed. The model's own
+        header is the fact, and until 2026-09-07 nothing compared them — so
+        `qwen7b` sat registered at 262144 against a declared 32768 for as long
+        as it took somebody to read `/api/ps` beside the `models` table.
+
+        Both consequences are silent, which is why this is a warning rather
+        than a note. `_refuse_what_this_target_would_truncate` refuses at half
+        the *registered* figure, so an overstatement holds that guard open by
+        the same factor — for `qwen7b` it refused at 131072 against a model
+        that cuts anything over 32768 down to 16384, reopening precisely what
+        that guard was added on 2026-08-17 to close. And the figure is sent to
+        the runtime as `num_ctx`, so the load reserves for a context that
+        cannot be used, which is the shape of the 2026-08-07 eviction.
+
+        **Registering below the declared maximum is not warned about**, because
+        it is the ordinary deliberate choice: four of this deployment's six
+        rows do it, to bound memory or to keep a model inside the platform's
+        ceiling. Only the direction that overstates is a defect.
+
+        Warning rather than refusing, and that is a decision rather than
+        timidity. A refusal here would make a wrong number in a table unable to
+        serve at all, on the strength of a file read that can fail for reasons
+        having nothing to do with the number — a missing mount, an unpulled
+        reference, an architecture whose header spells the key differently.
+        The load is the operator's; this makes sure they are told.
+
+        Swallows everything, for the reason `_prepare_token_counter` does: a
+        header that cannot be read must never be what stops a model loading.
+        """
+        if self._tokens is None:
+            return
+        registered = model.resource_profile.context_length
+        if registered <= 0:
+            # A row from before the profile was required. `_set_num_ctx`
+            # declines to send it and this declines to judge against it.
+            return
+        try:
+            declared = await self._tokens.native_context_length(model.ref)
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to read the declared context for %s", model.ref)
+            return
+        if declared is None or registered <= declared:
+            return
+        logger.warning(
+            "%s is registered with context_length=%d but %s declares %d. The runtime will "
+            "silently truncate anything above %d, and the per-model guard refuses at %d "
+            "rather than %d, so prompts between those figures are served from a prompt the "
+            "model never fully read. Correct the registration to %d.",
+            model.alias,
+            registered,
+            model.ref,
+            declared,
+            declared,
+            registered // 2,
+            declared // 2,
+            declared,
+        )
 
     async def _prepare_token_counter(self, model: Model) -> None:
         """Read this model's vocabulary now rather than on somebody's request.

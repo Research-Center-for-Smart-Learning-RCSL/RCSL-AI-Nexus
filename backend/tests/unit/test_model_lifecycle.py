@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from app.domain.entities.model import ModelState, ResourceProfile
@@ -13,6 +15,7 @@ from tests.unit.fakes import (
 from tests.unit.manage_models_fixtures import (
     ADMIN,
     PROFILE,
+    DeclaringCounter,
     Harness,
     make_model,
 )
@@ -214,3 +217,67 @@ async def test_the_unload_response_reports_the_observation_it_cleared() -> None:
     assert returned.state is ModelState.DOWNLOADED
     assert returned.observed_state is None
     assert returned.observed_memory_gb is None
+
+
+async def test_a_registration_that_overstates_its_model_is_warned_about_at_load(
+    caplog,
+) -> None:
+    """The durable half of the 2026-09-07 finding.
+
+    `qwen7b` sat registered at 262144 against a declared 32768 for as long as it
+    took somebody to read `/api/ps` beside the `models` table, and both
+    consequences are silent: the runtime cuts anything above the declared figure
+    without saying so, and the per-model guard refuses at half the *registered*
+    one, so it was eight times too permissive. Nothing compared the two numbers
+    until this.
+    """
+    harness = Harness([make_model()], tokens=DeclaringCounter(declared=1024))
+
+    with caplog.at_level(logging.WARNING):
+        await harness.use_case.load(ADMIN, "m1")
+
+    warning = "\n".join(r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+    assert "declares 1024" in warning
+    assert str(PROFILE.context_length) in warning
+
+
+async def test_registering_below_the_declared_maximum_is_not_warned_about(caplog) -> None:
+    """The ordinary deliberate choice, and four of this deployment's six rows
+    make it — to bound memory, or to keep a model inside the platform ceiling.
+    Only overstating is a defect, and a warning that fired on both would be one
+    an operator learns to ignore."""
+    harness = Harness([make_model()], tokens=DeclaringCounter(declared=PROFILE.context_length * 4))
+
+    with caplog.at_level(logging.WARNING):
+        await harness.use_case.load(ADMIN, "m1")
+
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+async def test_a_model_whose_declared_context_cannot_be_read_still_loads(caplog) -> None:
+    """`None` is cannot-say: an MLX model with no GGUF, a missing mount, an
+    architecture spelling the key differently. A header that cannot be read must
+    never be what stops a model loading."""
+    counter = DeclaringCounter(declared=None)
+    harness = Harness([make_model()], tokens=counter)
+
+    with caplog.at_level(logging.WARNING):
+        model = await harness.use_case.load(ADMIN, "m1")
+
+    assert model.state is ModelState.LOADED
+    assert counter.asked == [model.ref]
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+async def test_the_warning_precedes_the_load_it_warns_about() -> None:
+    """After the fact it would describe a reservation the runtime has already
+    made — the shape of the 2026-08-07 eviction — and the operator could no
+    longer choose against it."""
+    counter = DeclaringCounter(declared=1024)
+    harness = Harness([make_model()], tokens=counter)
+
+    await harness.use_case.load(ADMIN, "m1")
+
+    assert counter.asked, "the declared context was never read"
+    # `prepare` runs after the audit row; this one runs before the runtime call.
+    assert counter.asked and counter.prepared
