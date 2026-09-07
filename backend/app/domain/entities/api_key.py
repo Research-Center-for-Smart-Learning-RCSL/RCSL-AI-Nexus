@@ -74,8 +74,15 @@ class ApiKey:
     """Whether oversized requests through this key are compacted before they
     are refused. Default on: the plan says so, and the migration sets every
     existing key to True. The switch controls whether compaction is *attempted*;
-    it does not control the disclosure, which is always present when compaction
-    fires (automatic-context-compaction.md §3)."""
+    it was never meant to control the disclosure.
+
+    That disclosure is not built yet. §3 of automatic-context-compaction.md
+    requires it in the response, on the `usage_records` row, and in the admin
+    UI; only the row exists, so a caller through a key with this on today has
+    its prompt reduced without being told — the failure §3 was written to
+    prevent. §5.5 said this column ships *with* the disclosure and it shipped
+    ahead of it. See §9.1 of that plan for what is missing and why choosing the
+    response shape is the open question."""
 
     created_at: datetime | None = None
     """Assigned by the database on first write. `None` means "not persisted

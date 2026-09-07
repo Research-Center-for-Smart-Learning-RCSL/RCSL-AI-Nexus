@@ -1,8 +1,25 @@
 # Plan: Information Discovery and Interface Polish
 
-**Status: proposed 2026-08-30.** Written against `main` at `53c7f0f` after a
-browser review at 1280 × 720 and 390 × 844. This plan is the second of two
-companion UI work packages. The first is
+**Status: implemented.** Proposed 2026-08-30 against `main` at `53c7f0f` after
+a browser review at 1280 × 720 and 390 × 844; landed on `main` through
+`codex/ui-optimization-plans` (merged at `07f09d5`, 2026-09-05) and verified
+item by item against `bd185eb` on 2026-09-07. All seven items are in the tree:
+
+| # | Item | Where it landed |
+|---:|---|---|
+| 4 | API Reference section navigation | `e584bfc`, `2e4ca18`; the catalogue is `api-reference-section-catalogue.ts`, as §2.2 required — one list, not two |
+| 5 | Error-code search | `9f4847b`, `fb87417`, over `api-reference-error-catalogue.tsx` |
+| 6 | Mobile error presentation | `e474733`, cards below `md` from the same catalogue |
+| 7 | Landing degraded state | `2886fe6`; "Management service unavailable" with Retry, in `landing-page.tsx` |
+| 10 | Login recovery copy | `425fb43`, the single sentence §5.1 specified, asserted by `login-form.test.tsx` |
+| 11 | Login brand as home link | `425fb43`, `aria-label="RCSL AI Nexus, home"` |
+| 12 | Micro-interaction vocabulary | `126036d`; `--nexus-disclosure-duration` (160ms), `--nexus-menu-duration` (160ms), `--nexus-copy-feedback-duration` (120ms), `--nexus-context-feedback-duration` (180ms) in `globals.css`, each within its §6 ceiling, all zeroed under `prefers-reduced-motion` |
+
+The frozen list held: no file under `entry-transition*` has been touched since
+this plan was written. The frontend suite is 483 tests across 67 files, green
+at `bd185eb`.
+
+This plan is the second of two companion UI work packages. The first is
 [responsive-management-workflows.md](./responsive-management-workflows.md).
 
 This package groups work whose common purpose is reducing the time between a

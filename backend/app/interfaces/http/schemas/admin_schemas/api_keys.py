@@ -115,7 +115,7 @@ class CreateApiKeyRequest(BaseModel):
 
     compaction_enabled: bool = True
     """Opt out per key if an integration would rather see the refusal than a
-    summarized prompt. See `ApiKey.compaction_enabled`."""
+    reduced prompt. See `ApiKey.compaction_enabled`."""
 
 
 class UpdateApiKeyRequest(BaseModel):

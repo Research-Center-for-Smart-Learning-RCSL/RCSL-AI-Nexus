@@ -23,8 +23,14 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     # Default on: the plan (automatic-context-compaction.md §5.5) says the
     # migration turns it on for every key that already exists, which is a
-    # behaviour change to live integrations — so it ships together with the
-    # disclosure, never before it.
+    # behaviour change to live integrations — so it was to ship together with
+    # the disclosure, never before it.
+    #
+    # It shipped before it. The three columns below are the whole of the
+    # disclosure that exists: nothing carries it in the response or shows it in
+    # the admin UI, so `compaction_tier` is written here and read by nobody.
+    # Recorded rather than quietly corrected because the ordering was the one
+    # thing §5.5 asked for. See §9.1 of that plan.
     op.add_column(
         "api_keys",
         sa.Column(
