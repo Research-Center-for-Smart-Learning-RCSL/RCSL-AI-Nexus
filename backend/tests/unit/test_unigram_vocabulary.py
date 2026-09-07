@@ -22,9 +22,13 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from app.adapters.tokenizer.gguf_token_counter.construction import (
+    UnusableScores,
     build_tokenizer_for_model,
     rank_to_log_probability,
+    scores_to_log_probabilities,
 )
 
 # A vocabulary shaped like a real one, because the defect does not reproduce in
@@ -105,3 +109,37 @@ def test_the_pieces_are_still_reachable_when_the_whole_is_not() -> None:
 
     assert encoded.tokens
     assert "".join(encoded.tokens).replace("▁", "") == "tenance"
+
+
+def test_real_log_probabilities_are_passed_through_untouched() -> None:
+    """A llama-2 or Mistral vocabulary, which carries what SentencePiece
+    measured rather than a rank.
+
+    `-log(score + 1)` on -12.5 is the logarithm of a negative number: a
+    `ValueError` here and a silent `NaN` in the Rust extension, which
+    `Unigram::from` accepts and then segments character by character. Clamping
+    instead would map every real log-probability to one value, which is the
+    uniform vocabulary this module was fixed for.
+    """
+    scores = [-1.5, -12.5, -3.25]
+
+    assert scores_to_log_probabilities(scores) == scores
+
+
+def test_ordinal_ranks_are_remapped() -> None:
+    """The other convention, under the same `model: llama` label."""
+    got = scores_to_log_probabilities([0.0, 1.0, 2.0])
+
+    assert got == [rank_to_log_probability(r) for r in (0.0, 1.0, 2.0)]
+    assert all(math.isfinite(v) for v in got)
+
+
+def test_a_placeholder_array_is_refused_rather_than_guessed_at() -> None:
+    """`gemma4:31b-it-qat` and `nomic-embed-text` both carry -1000.0 in every
+    entry. Refusing sends the caller to the character estimate, which is wrong
+    by a known band; guessing would send it to a uniform vocabulary, which is
+    wrong in the way that read 2.2x high."""
+    with pytest.raises(UnusableScores):
+        scores_to_log_probabilities([-1000.0] * 8)
+    with pytest.raises(UnusableScores):
+        scores_to_log_probabilities([])
