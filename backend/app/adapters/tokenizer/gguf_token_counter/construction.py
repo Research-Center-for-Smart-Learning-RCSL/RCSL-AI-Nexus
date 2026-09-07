@@ -88,6 +88,62 @@ def _build_tokenizer(metadata: dict[str, Any]) -> Any:
     return tokenizer
 
 
+class UnusableScores(ValueError):
+    """The `scores` array carries no information a segmenter can use.
+
+    Raised rather than worked around, so the caller falls back to the character
+    estimate — which is wrong by a known band — instead of segmenting from a
+    uniform vocabulary, which is wrong in the way this module was just fixed
+    for: with every score equal, splitting a word costs nothing and the counter
+    reads two to three times high.
+    """
+
+
+def scores_to_log_probabilities(scores: Sequence[float]) -> list[float]:
+    """Convert a GGUF `scores` array into log-probabilities Unigram can use.
+
+    **The array means two different things depending on who wrote the file**,
+    and both arrive under `tokenizer.ggml.model = "llama"`, so the convention
+    has to be detected rather than assumed. Read from this host on 2026-09-07:
+
+    | file | scores |
+    |---|---|
+    | `gemma4:31b-it-q8_0` | 0.0 … 262143.0 — ordinal ranks |
+    | `gemma4:31b-it-qat` | every entry -1000.0 — a placeholder |
+    | `nomic-embed-text` | every entry -1000.0 — a placeholder |
+
+    and llama-2, Mistral and anything converted from real SentencePiece carry
+    the fourth case: genuine negative log-probabilities, already in the units
+    Unigram wants.
+
+    So: **non-negative means ranks** and they are remapped; **negative and
+    varying means log-probabilities** and they are passed through untouched;
+    **all equal means nothing** and this refuses. The first version of this fix
+    handled only ranks, and `-log(rank + 1)` on a real log-probability of -12.5
+    is the logarithm of a negative number — `ValueError` in Python and a silent
+    `NaN` in the Rust extension, which `Unigram::from` accepts and then
+    segments character by character. A clamp would have been worse than either:
+    it maps every real log-probability to the same value, which is the uniform
+    vocabulary this module was just fixed for.
+
+    Kept in step with `native/src/tokenizer.rs`, which has its own copy and its
+    own test.
+    """
+    if not scores:
+        raise UnusableScores("the vocabulary carries no scores")
+    first = scores[0]
+    if all(score == first for score in scores):
+        raise UnusableScores(
+            f"every score is {first}, which is a placeholder rather than a distribution"
+        )
+    if any(score < 0.0 for score in scores):
+        # Real SentencePiece log-probabilities. Nothing to do to them, and
+        # anything done to them would be this module's opinion replacing the
+        # file's measurement.
+        return [float(score) for score in scores]
+    return [rank_to_log_probability(score) for score in scores]
+
+
 def rank_to_log_probability(rank: float) -> float:
     """Turn a GGUF ordinal rank into a log-probability Unigram can segment with.
 
@@ -144,10 +200,7 @@ def _build_unigram_tokenizer(metadata: dict[str, Any]) -> Any:
     scores: list[float] = metadata["tokenizer.ggml.scores"]
     types: list[int] = metadata.get("tokenizer.ggml.token_type") or []
 
-    vocab = [
-        (token, rank_to_log_probability(score))
-        for token, score in zip(tokens, scores, strict=False)
-    ]
+    vocab = list(zip(tokens, scores_to_log_probabilities(scores), strict=False))
     tokenizer = Tokenizer(Unigram(vocab))
 
     tokenizer.pre_tokenizer = pre_tokenizers.Metaspace(replacement="▁")

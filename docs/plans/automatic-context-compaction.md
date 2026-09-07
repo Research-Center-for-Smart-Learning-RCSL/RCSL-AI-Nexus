@@ -320,6 +320,28 @@ had truncated; what was lost is capacity, not correctness.
 decision — how much context a request uses, how close the ceiling is, what a
 raise would buy — was measured with this ruler.
 
+**The first fix assumed the scores were always ranks, and they are not.** A
+review caught it the same day. `tokenizer.ggml.model = "llama"` is the whole
+non-BPE branch, and three conventions arrive under it: ordinal ranks
+(`gemma4:31b-it-q8_0`), a constant placeholder (`gemma4:31b-it-qat` and
+`nomic-embed-text` both carry -1000.0 in every entry), and real SentencePiece
+log-probabilities (llama-2, Mistral, anything converted with true piece
+scores). `-log(score + 1)` on -12.5 is the logarithm of a negative number:
+`ValueError` in Python, and in Rust a silent `NaN` that `Unigram::from` accepts
+and then segments character by character — the same over-counting, reintroduced
+for those models.
+
+It was latent rather than live: `KNOWN_PRE_TOKENIZERS` refuses all three of
+this host's affected files before construction is reached, which was checked
+rather than assumed. The convention is now detected — non-negative means ranks
+and they are remapped, negative and varying means log-probabilities and they
+pass through, all-equal means no information and is refused so the caller falls
+back to the character estimate.
+
+**Clamping, which is the obvious repair, would have been worse than the crash.**
+`max(score, 0)` maps every real log-probability to one value, and a uniform
+vocabulary is exactly the condition that read 2.2x high.
+
 ## 3. The one place this plan amends the request
 
 The request is for compaction on by default. This plan implements that. What it
