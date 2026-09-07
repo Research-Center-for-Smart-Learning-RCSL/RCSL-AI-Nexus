@@ -451,11 +451,31 @@ be wrong in instructive ways.**
   the three Qwen builds are at 73.8–78.1%.
 - Group T needs the property that made the single-turn set work: correctness at
   turn fifteen depending on something established at turn three.
-  → **Not done, and now wanted for a second reason**: it is the acceptance test
-  for the compaction planned in
-  [plans/automatic-context-compaction.md](./plans/automatic-context-compaction.md),
-  where the question is whether a fact established before a compaction survives
-  it.
+  → **Built 2026-09-07 as `recall_across_turns`**, and built because it is the
+  acceptance test for the compaction in
+  [plans/automatic-context-compaction.md](./plans/automatic-context-compaction.md):
+  the question there is whether a fact established before a compaction survives
+  it, and that is this property with a different motive.
+
+  Fifteen turns. Two figures are given once, at turn three, inside a question
+  about something else — 35 minutes a day, 12 days left — and the conversation
+  never repeats either. Turn twelve asks for the days, turn thirteen for the
+  minutes, turn fifteen for the product, and none of the three questions
+  carries its own answer. Asking for the parts separately before the product is
+  what tells "the summary kept one figure and lost the other" apart from "the
+  summary lost the turn", and the first is the likelier failure: a summariser
+  told to preserve numbers tends to keep the one its sentence was about.
+
+  Turn fourteen is the control, on the group N pattern: it asks about something
+  the student never said, where producing a count is the failure. Without it a
+  model that had lost the history could pass by inventing, and one that never
+  invents could pass by declining everything.
+
+  **Validated, not calibrated.** The reference scores 1.00 and the deliberately
+  decayed answer 0.40; a model that declines every question about the past
+  scores 0.70, failing all three recall checks and passing the control. Where a
+  real model lands is unknown — it has not been run against one, so §4.3's band
+  says nothing about it yet.
 
 ## 8. The 2026-09-04 revision, and the conclusion §7 could not have reached
 

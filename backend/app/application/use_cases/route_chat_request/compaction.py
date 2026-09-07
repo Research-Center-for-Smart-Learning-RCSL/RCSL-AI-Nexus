@@ -4,7 +4,8 @@ Compaction reduces a prompt that would exceed the context ceiling, in place of
 refusing it. It is applied only when the API key has compaction enabled, and
 only after the exact or estimated count says the prompt is too large.
 
-Four tiers, and a request stops at the first that brings it under the ceiling:
+Three tiers, and a request stops at the first that brings it under the ceiling.
+What follows the last one is the refusal, which is not a tier:
 
   0 — tool definitions: deduplicate and trim descriptions. Zero inference cost.
   1 — old tool results: replace with a length marker, oldest first. Zero
@@ -34,6 +35,21 @@ RECENT_MESSAGE_WINDOW = 10
 
 
 @dataclass(frozen=True, slots=True)
+class CompactionDisclosure:
+    """What a caller and an operator are told, with no prompt attached.
+
+    Separate from `CompactionResult` because it travels outward. The result
+    carries the compacted messages and tools, and handing those to the HTTP
+    layer so it can render a header would put the whole prompt somewhere that
+    only needs a number. This is the part that leaves the use case.
+    """
+
+    tier: int
+    tokens_before: int
+    tokens_after: int
+
+
+@dataclass(frozen=True, slots=True)
 class CompactionResult:
     """What compaction did and what it produced."""
 
@@ -43,6 +59,11 @@ class CompactionResult:
     tokens_before: int
     tokens_after: int
     disclosure: str
+
+    def to_disclosure(self) -> CompactionDisclosure:
+        return CompactionDisclosure(
+            tier=self.tier, tokens_before=self.tokens_before, tokens_after=self.tokens_after
+        )
 
 
 def _compact_tool_definitions(tools: Sequence[ToolDefinition]) -> tuple[list[ToolDefinition], str]:

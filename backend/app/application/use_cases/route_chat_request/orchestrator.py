@@ -7,7 +7,6 @@ import logging
 import time
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
-from typing import Any
 
 from app.application.use_cases.list_capabilities import ListCapabilities
 from app.domain.entities.actor import Actor, Scope
@@ -39,8 +38,9 @@ from app.domain.ports.token_counter_port import TokenCounterPort
 from app.domain.services.routing_service import RoutingService
 from app.shared.clock import Clock
 
-from .compaction import try_compact
-from .compaction_tier2 import try_tier2
+from .compaction import CompactionDisclosure, try_compact
+from .compaction_cache import CompactionCache
+from .compaction_tier2 import SummariseFn, try_tier2
 from .diagnostics import _warn_if_tools_dominate
 from .estimates import _counted_phrase, _floor_composition, _floor_prompt_tokens
 from .generation_session import GenerationSessionMixin
@@ -68,17 +68,46 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
         tokens: TokenCounterPort | None = None,
         prompt_logs: PromptLogWriterPort | None = None,
         request_id: Callable[[], str | None] = lambda: None,
+        report_compaction: Callable[[CompactionDisclosure], None] = lambda _: None,
         max_context_tokens: int = 32768,
         generation_deadline_seconds: int = 600,
         thinking_default: bool = True,
         monotonic: Callable[[], float] = time.monotonic,
-        summarise_fn: Callable[..., Any] | None = None,
-        compaction_cache: Any | None = None,
+        summarise_fn: SummariseFn | None = None,
+        compaction_cache: CompactionCache | None = None,
         compaction_lock: asyncio.Lock | None = None,
     ) -> None:
         self._summarise_fn = summarise_fn
+        """How Tier 2 summarises, or None where nothing built it.
+
+        None disables Tier 2 and nothing else: tiers 0 and 1 are mechanical
+        and need no collaborator, so a build without this still compacts, it
+        just refuses the conversations only a summary could rescue. That was
+        every build until 2026-09-07, when `build_route_chat_request` started
+        passing one — the module had been written, imported and never
+        constructed, which is the failure mode a `| None` default invites and
+        the reason this docstring names the composition root by name.
+        """
+
         self._compaction_cache = compaction_cache
+        """Where a compacted prefix is remembered, or None.
+
+        None is correct in a test and wrong in a deployment: the gateway is
+        stateless and the client replays the whole conversation every turn, so
+        without this Tier 2 summarises the same history on every turn of a long
+        agent session. On a one-slot runtime that is not a slow feature, it is
+        an outage (automatic-context-compaction.md §5.4).
+        """
+
         self._compaction_lock = compaction_lock or asyncio.Lock()
+        """Serialises Tier 2 so summarisation can never hold more than one of
+        the four gateway slots.
+
+        Must be process-wide to mean anything. The fallback here constructs a
+        lock per instance, and `RouteChatRequest` is a per-request FastAPI
+        dependency — so a build that relies on this default is not serialised
+        at all. Both composition roots put the real one on `app.state`.
+        """
         self._policies = policies
         self._models = models
         self._nodes = nodes
@@ -112,6 +141,18 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
             """
 
         self._request_id = request_id
+        self._report_compaction = report_compaction
+        """Where a compaction is announced to the layer that can tell the caller.
+
+        A callback rather than an import, for the same reason `request_id` is
+        one: this use case does not know it is behind HTTP, and the composition
+        root is where "ambient per-request context" is allowed to be a concept.
+        The default does nothing, which is right for every caller that has no
+        response to put a header on.
+
+        Called once, with the *effect* rather than the result — no messages, no
+        tools. What leaves here is three integers.
+        """
         """How the transcript learns which request it belongs to.
 
             A callable injected here rather than a parameter on `execute`, because
@@ -315,21 +356,53 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
                         target=target,
                     )
                     if compaction_result is None and self._summarise_fn is not None:
-                        compaction_result = await try_tier2(
-                            messages=messages,
-                            tools=tools,
-                            counted=counted,
-                            limit=self._max_context_tokens,
-                            count_fn=_recount,
-                            target=target,
-                            summarise_fn=self._summarise_fn,
-                            cache=self._compaction_cache,
-                            lock=self._compaction_lock,
-                        )
+                        try:
+                            compaction_result = await try_tier2(
+                                messages=messages,
+                                tools=tools,
+                                counted=counted,
+                                limit=self._max_context_tokens,
+                                count_fn=_recount,
+                                target=target,
+                                summarise_fn=self._summarise_fn,
+                                cache=self._compaction_cache,
+                                lock=self._compaction_lock,
+                            )
+                        except Exception:
+                            # Broad on purpose, and the breadth is the decision.
+                            # Summarising reaches a routing policy, a registry,
+                            # a node and another model's runtime; every one of
+                            # those has its own way of being unavailable, and
+                            # none of them is a reason to answer this caller
+                            # with a 500. Failing here leaves
+                            # `compaction_result` None, so the request falls
+                            # through to the same `ContextTooLongError` it
+                            # would have met if compaction were switched off —
+                            # a refusal that names the ceiling, which is the
+                            # disclosure this platform owes an oversized
+                            # prompt. What is never acceptable is proceeding
+                            # with the uncompacted messages, and that is why
+                            # nothing is assigned in this branch.
+                            #
+                            # Logged with the traceback because a summariser
+                            # that is failing every time looks, from the
+                            # caller's side, exactly like a deployment with no
+                            # Tier 2 at all.
+                            logger.warning(
+                                "compaction tier 2 failed, refusing instead request_id=%s",
+                                self._request_id(),
+                                exc_info=True,
+                            )
                 if compaction_result is not None:
                     messages = compaction_result.messages
                     tools = compaction_result.tools
                     counted = compaction_result.tokens_after
+                    # Announced before a token is generated, because the HTTP
+                    # layer reads this while it still has a response object to
+                    # put a header on: `sse.prime` pulls the first chunk before
+                    # the `StreamingResponse` exists, and the first chunk is
+                    # downstream of this line.
+                    self._report_compaction(compaction_result.to_disclosure())
                     logger.info(
                         "compaction applied: tier=%d %d->%d tokens, %s request_id=%s",
                         compaction_result.tier,

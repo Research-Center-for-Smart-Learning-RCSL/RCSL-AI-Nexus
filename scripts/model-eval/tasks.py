@@ -15,6 +15,7 @@ from task_families.hard_cascade import TASKS as HARD_CASCADE_TASKS
 from task_families.hard_chain import TASKS as HARD_CHAIN_TASKS
 from task_families.hard_derive import TASKS as HARD_DERIVE_TASKS
 from task_families.hard_parse import TASKS as HARD_PARSE_TASKS
+from task_families.hard_recall import TASKS as HARD_RECALL_TASKS
 from task_families.hard_refusal import TASKS as HARD_REFUSAL_TASKS
 from task_families.hard_spec import TASKS as HARD_SPEC_TASKS
 from task_families.hard_tutor import TASKS as HARD_TUTOR_TASKS
@@ -38,6 +39,7 @@ TASKS: list[dict] = [
     *HARD_CASCADE_TASKS,
     *HARD_PARSE_TASKS,
     *HARD_TUTOR_TASKS,
+    *HARD_RECALL_TASKS,
     *ANCHORS_TASKS,
 ]
 BY_ID = {task["id"]: task for task in TASKS}

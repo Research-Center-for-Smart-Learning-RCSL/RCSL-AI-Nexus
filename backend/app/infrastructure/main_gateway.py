@@ -9,6 +9,7 @@ See docs/architecture/security.md section 1.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -45,6 +46,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.runtimes = build_runtimes(settings)
     app.state.concurrency = build_concurrency_limiter(settings)
     app.state.token_counter = build_token_counter(settings)
+
+    # Process-wide, and that is the only property that matters: Tier 2
+    # compaction is serialised so a summary can never hold more than one of the
+    # `MAX_CONCURRENT_INFERENCE` slots (automatic-context-compaction.md §5.3).
+    # `build_route_chat_request` is a per-request dependency, so a lock built
+    # there would be a new lock every request and would serialise nothing.
+    app.state.compaction_lock = asyncio.Lock()
+
     # After the limiter, whose saturation it reports at scrape time.
     app.state.metrics = build_metrics(app.state.concurrency)
     app.state.api_key_service = build_api_key_service(settings)

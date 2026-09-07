@@ -176,7 +176,15 @@ def build(
     context_length: int = 8192,
     runtime_kind: RuntimeKind = RuntimeKind.OLLAMA,
     tokens=None,
+    **extra,
 ):
+    """`extra` is forwarded to `RouteChatRequest` unchanged.
+
+    Added for the compaction collaborators (`summarise_fn`, `compaction_cache`,
+    `compaction_lock`), which are optional constructor arguments rather than
+    part of every build. Passing them through here rather than adding three
+    named parameters keeps this helper from growing a knob per feature.
+    """
     model = Model(
         id="m1",
         alias="primary",
@@ -216,6 +224,7 @@ def build(
         max_context_tokens=max_context_tokens,
         tokens=tokens,
         **({"monotonic": monotonic} if monotonic is not None else {}),
+        **extra,
     )
     return use_case, usage, limiter
 
