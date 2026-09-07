@@ -146,7 +146,12 @@ test('issues, edits, and revokes an API key', async ({ page }) => {
     owner_id: OWNER_ID,
     scopes: ['chat'],
     rate_limit_rpm: 240,
-    quota_tokens_per_day: 90_000_000,
+    // 90_000_000 until 2026-09-07. The quota counts what the runtime
+    // evaluated, so it is bounded by throughput, and this machine produces
+    // between 2.0M and 18.5M tokens a day at full utilisation — the old
+    // default was a ceiling it could never reach. This assertion is what
+    // carries the form's defaults into the request, so it moves with them.
+    quota_tokens_per_day: 10_000_000,
     allowed_cidrs: [],
   });
   expect(api.issuedBody()?.expires_at).toMatch(/^\d{4}-\d{2}-\d{2}$/);
@@ -181,7 +186,10 @@ test('issues, edits, and revokes an API key', async ({ page }) => {
     name: 'browser-agent-renamed',
     scopes: ['chat'],
     rate_limit_rpm: 30,
-    quota_tokens_per_day: 90_000_000,
+    // Carried through from the create default rather than typed here: the edit
+    // dialog seeds this from the key's current value, which is the property the
+    // comment above is about.
+    quota_tokens_per_day: 10_000_000,
     allowed_cidrs: [],
   });
   const renamedRow = page
