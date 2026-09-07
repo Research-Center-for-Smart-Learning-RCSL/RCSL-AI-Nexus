@@ -48,6 +48,7 @@ separately at the end, marked as superseded.
 - What the review caught in the tokenizer fix, and the repair that would have been worse
 - Deployed, and the mount that has been empty since the Colima migration
 - Fixed the mount, and learned what an empty `mounts` list means
+- Measured it myself, and the counter is exact on prose and blind to tools
 
 **[2026-09-04](./progress/2026-09-04.md)**
 - The five tasks yesterday's set could not measure with, and the conclusion that reversed when they were replaced
