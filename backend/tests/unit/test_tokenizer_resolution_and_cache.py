@@ -215,3 +215,29 @@ async def test_the_declared_context_is_read_once_per_reference(tmp_path: Path) -
     assert await counter.native_context_length("primary:latest") == 8192
     blob.unlink()
     assert await counter.native_context_length("primary:latest") == 8192
+
+
+async def test_the_declared_context_cache_is_not_sized_for_vocabularies(
+    tmp_path: Path,
+) -> None:
+    """Two caches, bounded for different reasons.
+
+    A vocabulary is 132 MB resident and its ceiling is the memory budget this
+    deployment is designed around. A declared context length is an integer, and
+    what fills that cache is `/admin/model-reference` being typed into: a
+    register form walks it through every prefix of a reference — `gem`, `gemm`,
+    `gemma` — so at the vocabulary's size of two the real models' figures were
+    evicted before the operator finished the word.
+    """
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, context_length=32768)
+    counter = GgufTokenCounter(tmp_path, cache_size=2)
+
+    assert await counter.native_context_length("primary:latest") == 32768
+    # Every prefix a form would ask about, none of which resolves.
+    for i in range(20):
+        assert await counter.native_context_length(f"partial-{i}:latest") is None
+
+    # Still remembered, without going back to disk: the blob is gone.
+    (tmp_path / "blobs" / "sha256-abc123").unlink()
+    assert await counter.native_context_length("primary:latest") == 32768

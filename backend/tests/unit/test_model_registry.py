@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
+from app.domain.entities.actor import Scope
 from app.domain.entities.model import ModelState, RuntimeKind
 from app.domain.entities.routing_policy import RoutingCandidate, RoutingPolicy
 from app.domain.exceptions import (
@@ -19,6 +22,7 @@ from tests.unit.manage_models_fixtures import (
     NODE,
     PROFILE,
     READER,
+    DeclaringCounter,
     Harness,
     make_model,
 )
@@ -140,3 +144,44 @@ async def test_an_unreferenced_model_deletes() -> None:
 
     assert harness.models.rows == {}
     assert "model.deleted" in harness.audit.actions()
+
+
+async def test_the_declared_context_comes_from_the_model_not_the_operator() -> None:
+    """What replaced the register form's 8192.
+
+    That value has a history: it is what `qwen7b` was registered with, which
+    put `_refuse_what_this_target_would_truncate` at 4096 and served `assist`
+    from a truncated prompt for as long as nobody noticed. A default that looks
+    plausible and is wrong is worse than none, because the form submits and the
+    consequence arrives later and quietly.
+    """
+    harness = Harness([], tokens=DeclaringCounter(declared=262144))
+
+    assert await harness.use_case.declared_context_length(ADMIN, "gemma4:31b-it-q8_0") == 262144
+
+
+async def test_a_reference_this_host_cannot_read_offers_nothing() -> None:
+    """`None` is cannot-say, as everywhere on `TokenCounterPort`: not pulled, a
+    different runtime, a missing mount. The form then suggests nothing, which
+    is the whole point — a guess is what it is replacing."""
+    harness = Harness([], tokens=DeclaringCounter(declared=None))
+
+    assert await harness.use_case.declared_context_length(ADMIN, "absent:latest") is None
+
+
+async def test_a_build_with_no_counter_offers_nothing() -> None:
+    """Every deployment that holds no GGUF to read."""
+    harness = Harness([])
+
+    assert await harness.use_case.declared_context_length(ADMIN, "anything:latest") is None
+
+
+async def test_reading_a_reference_needs_model_write() -> None:
+    """`MODEL_WRITE`, not `MODEL_READ`. It answers "does this host hold weights
+    under that name", which is a fact about the inventory, and a reader who
+    cannot register a model has nothing to do with the answer."""
+    harness = Harness([], tokens=DeclaringCounter(declared=8192))
+    reader = replace(ADMIN, scopes=frozenset({Scope.MODEL_READ}))
+
+    with pytest.raises(NotAuthorizedError):
+        await harness.use_case.declared_context_length(reader, "gemma4:31b-it-q8_0")

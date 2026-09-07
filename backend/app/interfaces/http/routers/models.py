@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from app.application.use_cases.download_model import DownloadModel
 from app.application.use_cases.manage_models import ManageModels
@@ -25,6 +25,7 @@ from app.interfaces.http.middleware.identity import current_actor
 from app.interfaces.http.schemas.admin_schemas import (
     CreateModelRequest,
     DownloadJobResponse,
+    ModelReferenceResponse,
     ModelResponse,
     UpdateModelRequest,
 )
@@ -38,6 +39,25 @@ async def list_models(
     models: Annotated[ManageModels, Depends(build_manage_models)],
 ) -> list[ModelResponse]:
     return [ModelResponse.of(m) for m in await models.list_all(actor)]
+
+
+@router.get("/model-reference")
+async def read_model_reference(
+    actor: Annotated[Actor, Depends(current_actor)],
+    models: Annotated[ManageModels, Depends(build_manage_models)],
+    ref: Annotated[str, Query(min_length=1, max_length=256)],
+) -> ModelReferenceResponse:
+    """What the host's own weights declare for a reference.
+
+    Its own path rather than `/models/inspect`, because that would be matched
+    by `/models/{model_id}` with an id of "inspect" — the shadowing the usage
+    router's own comment warns about — and because a reference carries `:` and
+    `/`, which belong in a query string rather than in a path segment.
+    """
+    return ModelReferenceResponse(
+        ref=ref,
+        declared_context_length=await models.declared_context_length(actor, ref),
+    )
 
 
 @router.get("/models/{model_id}")

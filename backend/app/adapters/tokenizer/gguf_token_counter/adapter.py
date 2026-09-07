@@ -35,6 +35,15 @@ from .templates import _build_template
 
 logger = logging.getLogger("app.adapters.tokenizer.gguf_token_counter")
 
+_NATIVE_CONTEXT_CACHE = 64
+"""How many declared context lengths one process remembers.
+
+Not `token_counter_cache_size`, which bounds 132 MB vocabularies against the
+memory budget. These are integers, and the thing that fills them is a register
+form being typed into one character at a time.
+"""
+
+
 _CHATML_FALLBACK = (
     # Tools first, and this block is not decoration. A model with no chat
     # template in its GGUF falls back to this one, and until 2026-09-07 it
@@ -126,6 +135,20 @@ class GgufTokenCounter:
         self._cache_size = max(1, cache_size)
         self._cache: OrderedDict[str, _Vocabulary | _NativeVocabulary | None] = OrderedDict()
         self._native_context: OrderedDict[str, int | None] = OrderedDict()
+        """Declared context lengths, bounded separately from the vocabularies.
+
+        Sharing `cache_size` with them was wrong and the review that caught it
+        reasoned from the consequence: `/admin/model-reference` is typed into,
+        so a register form walks this cache through every prefix of a reference
+        — `gem`, `gemm`, `gemma` — and at two entries the real models' figures
+        were evicted before the operator finished the word.
+
+        The two caches are bounded for different reasons. A vocabulary is 132 MB
+        resident and its ceiling is the memory budget this whole deployment is
+        designed around. An entry here is an integer or None. `_NATIVE_CONTEXT_CACHE`
+        is therefore sized for the misses a form produces rather than for
+        memory, which is what a cache of integers should be sized for.
+        """
         self._lock = asyncio.Lock()
         self._use_native = _HAS_NATIVE
         if self._use_native:
@@ -160,7 +183,7 @@ class GgufTokenCounter:
         async with self._lock:
             self._native_context[ref] = value
             self._native_context.move_to_end(ref)
-            while len(self._native_context) > self._cache_size:
+            while len(self._native_context) > _NATIVE_CONTEXT_CACHE:
                 self._native_context.popitem(last=False)
         return value
 

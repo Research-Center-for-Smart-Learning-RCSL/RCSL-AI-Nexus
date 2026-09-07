@@ -41,6 +41,10 @@ FRONTEND_PATHS = [
     # The agent-setup page links this directly, so a rename here is a broken
     # download link rather than a failing call somebody sees in a console.
     "/admin/client-tools/windows-codex-app",
+    # The register form asks this what the host's own weights declare, so a
+    # rename is a form that silently stops suggesting and starts letting people
+    # type a context length again.
+    "/admin/model-reference",
 ]
 
 
