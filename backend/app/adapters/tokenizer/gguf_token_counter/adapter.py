@@ -36,6 +36,35 @@ from .templates import _build_template
 logger = logging.getLogger("app.adapters.tokenizer.gguf_token_counter")
 
 _CHATML_FALLBACK = (
+    # Tools first, and this block is not decoration. A model with no chat
+    # template in its GGUF falls back to this one, and until 2026-09-07 it
+    # iterated `messages` alone — so on `gemma4:31b-it-q8_0`, which carries a
+    # template of zero characters and serves `chat` and `code`, every tool
+    # definition was counted as nothing at all. Measured that day by holding a
+    # message fixed and varying the tool count: 29 tokens for none, 29 for
+    # twelve, 29 for thirty-six, against `qwen2.5:7b`'s 57 / 1,395 / 3,915.
+    #
+    # That is the direction this port's own docstring warns about — an
+    # under-count "is what precedes a prompt the runtime truncates in silence"
+    # — and it reached `max_context_length`, the per-model truncation guard,
+    # `_warn_if_tools_dominate`, and Tier 0 compaction, which exists to trim
+    # tool definitions and found none to trim.
+    #
+    # Name, description and parameter schema, because that is what a runtime
+    # actually puts in front of a model for a tool, and because it measures
+    # closest: against the runtime's own `prompt_eval_count` for a twelve-tool
+    # agent payload, this reads 6,748 where the runtime read 6,607 and the
+    # tool-less fallback read 5,723. Rendering the whole OpenAI-shaped object
+    # instead reaches 6,977. **Over by 2%, which is the safe direction**: this
+    # figure decides whether a prompt is refused, so erring high refuses a
+    # request that would have fitted, while erring low serves one the runtime
+    # then cuts without saying so.
+    "{% if tools %}<|im_start|>system\n"
+    "{% for t in tools %}"
+    "{{ t.function.name }}: {{ t.function.description }}\n"
+    "{{ t.function.parameters | tojson }}\n"
+    "{% endfor %}"
+    "<|im_end|>\n{% endif %}"
     "{% for message in messages %}"
     "<|im_start|>{{ message.role }}\n{{ message.content }}<|im_end|>\n"
     "{% endfor %}"
