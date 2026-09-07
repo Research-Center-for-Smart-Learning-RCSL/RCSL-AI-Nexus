@@ -352,6 +352,43 @@ back to the character estimate.
 `max(score, 0)` maps every real log-probability to one value, and a uniform
 vocabulary is exactly the condition that read 2.2x high.
 
+### 2.9 Measured on the real path: exact on prose, blind to tools
+
+Three requests through the gateway on 2026-09-07, with a two-hour measurement
+key since deleted, against the counter the same request used:
+
+| payload | counter | runtime | |
+|---|---:|---:|---|
+| 5k plain | 5,011 | 5,000 | 1.002x |
+| 20k plain | 19,951 | 19,940 | 1.001x |
+| agent-shaped, 12 tools | 5,723 | 6,607 | **0.866x** |
+
+Holding the message fixed and varying only the tool count shows what the third
+row is:
+
+| | 0 tools | 12 tools | 36 tools |
+|---|---:|---:|---:|
+| `qwen2.5:7b` | 57 | 1,395 | 3,915 |
+| `gemma4:31b-it-q8_0` | 29 | **29** | **29** |
+
+**`gemma4:31b-it-q8_0` carries no chat template at all** — zero characters — so
+the counter falls back to `_CHATML_FALLBACK`, which iterates `messages` and
+never mentions `tools`. On the model serving `chat` and `code`, every tool
+definition is invisible to `max_context_length`, to
+`_refuse_what_this_target_would_truncate`, to `_warn_if_tools_dominate`, and to
+**Tier 0 of this plan**, which exists to trim tool definitions and would find
+nothing to trim. About 74 tokens per definition, unseen.
+
+This one under-counts, which is the direction that admits a prompt the guardrail
+never measured. Everything else found today over-counted.
+
+**And §8 item 3c's answer changes shape.** Real traffic tops out at 75,245 real
+tokens on the incumbent (§2.9's history), which fits inside 122,880 with room.
+The ceiling did not need raising; it needed a correct ruler. What binds instead
+is prefill against `request_timeout_seconds`, and the rate is not flat — 214
+tok/s measured at 20k context today against the 89 tok/s the 2026-09-02 note
+measured at a full ceiling.
+
 ## 3. The one place this plan amends the request
 
 The request is for compaction on by default. This plan implements that. What it
