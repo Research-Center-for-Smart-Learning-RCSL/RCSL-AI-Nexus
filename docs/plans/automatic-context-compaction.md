@@ -320,6 +320,16 @@ had truncated; what was lost is capacity, not correctness.
 decision — how much context a request uses, how close the ceiling is, what a
 raise would buy — was measured with this ruler.
 
+**Except that in the deployment it was not measured with this ruler at all.**
+Checked at the 2026-09-07 deploy: `/ollama-models` inside every container is an
+empty directory dated Sep 5 02:50, because Colima mounts `$HOME` alone and
+`OLLAMA_MODELS_HOST_PATH` is `/Users/Shared/ollama/models`. A bind mount of a
+path the VM cannot see becomes an empty directory rather than an error, so
+since the Colima migration the counter has resolved no vocabulary and every
+`chat` and `code` prompt has been counted by the character estimate. The 2.2x
+over-count therefore never reached production, and the figures in this section
+describe the code rather than the deployment until that mount is fixed.
+
 **The first fix assumed the scores were always ranks, and they are not.** A
 review caught it the same day. `tokenizer.ggml.model = "llama"` is the whole
 non-BPE branch, and three conventions arrive under it: ordinal ranks
