@@ -112,6 +112,13 @@ async def admin_lifespan(app: FastAPI, *, run_node_heartbeat: bool = True) -> As
     app.state.runtimes = build_runtimes(settings)
     app.state.concurrency = build_concurrency_limiter(settings)
     app.state.token_counter = build_token_counter(settings)
+
+    # Process-wide, and that is the only property that matters: Tier 2
+    # compaction is serialised so a summary can never hold more than one of the
+    # `MAX_CONCURRENT_INFERENCE` slots (automatic-context-compaction.md §5.3).
+    # `build_route_chat_request` is a per-request dependency, so a lock built
+    # there would be a new lock every request and would serialise nothing.
+    app.state.compaction_lock = asyncio.Lock()
     # After the limiter, whose saturation it reports; `/admin/chat` runs inference
     # here too, so the slot gauge is meaningful on both admin entrances.
     app.state.metrics = build_metrics(app.state.concurrency)

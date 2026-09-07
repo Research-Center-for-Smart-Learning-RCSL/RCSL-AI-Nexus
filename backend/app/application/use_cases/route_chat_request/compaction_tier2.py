@@ -23,12 +23,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import aclosing
 
 from app.domain.entities.chat import Message, MessageRole, ToolDefinition
 from app.domain.entities.model import Model
+from app.domain.ports.model_runtime_port import ModelRuntimePort
 
 from .compaction import CompactionResult, CountFn
 from .compaction_cache import CompactionCache
+from .compaction_cache import CompactionResult as CachedPrefix
 
 logger = logging.getLogger("app.application.use_cases.route_chat_request")
 
@@ -55,6 +58,24 @@ belongs in the use-case layer.
 # How many recent messages to keep untouched. The summary replaces
 # everything before this window.
 _KEEP_RECENT = 6
+
+_PREFIX_STEP = 10
+"""Quantises where the summarised prefix ends, so the cache can hit at all.
+
+The boundary was `len(messages) - _KEEP_RECENT` until 2026-09-07, which is
+measured from the *end* of a conversation that grows by two messages a turn. So
+every turn hashed a different prefix, every turn missed, and every turn
+summarised — an inference call per turn on a one-slot runtime, which is exactly
+the outage §5.4 was written to prevent and which the cache existed to prevent.
+The first test written against it caught this on the first run.
+
+Flooring the boundary to a multiple of this step makes the prefix stable across
+the turns between two thresholds, which is what §5.4 describes in terms: "a
+conversation is summarised once and reused until it grows past the next
+threshold". Ten is a few turns of agent traffic — small enough that the tail
+kept verbatim stays close to `_KEEP_RECENT`, large enough that a summary is
+reused several times before it is recomputed.
+"""
 
 
 async def _do_summarise(
@@ -93,7 +114,14 @@ async def try_tier2(
     if n_messages <= _KEEP_RECENT:
         return None
 
-    n_to_summarise = n_messages - _KEEP_RECENT
+    # Floored to a step so the same prefix hashes the same on the next turn;
+    # see `_PREFIX_STEP`. Never more than `n_messages - _KEEP_RECENT`, so the
+    # recent window is always kept whole.
+    n_to_summarise = ((n_messages - _KEEP_RECENT) // _PREFIX_STEP) * _PREFIX_STEP
+    if n_to_summarise == 0:
+        # Under one step of history to summarise. Not worth an inference call,
+        # and taking it would mean a boundary that moves every single turn.
+        return None
     tokens_before = counted
     prefix_messages = messages[:n_to_summarise]
 
@@ -168,13 +196,11 @@ async def try_tier2(
                 disclosure=disclosure,
             )
             if cache is not None:
-                from .compaction_cache import CompactionResult as CacheResult
-
                 await cache.put(
                     prefix_messages,
                     tools,
                     tier=2,
-                    result=CacheResult(
+                    result=CachedPrefix(
                         messages=tuple(compacted_messages[:1]),
                         disclosure=disclosure,
                         tier=2,
@@ -194,21 +220,19 @@ async def try_tier2(
 
 
 def build_summarise_fn(
-    runtime: object,
+    runtime: ModelRuntimePort,
     ref: str,
     context_length: int | None = None,
 ) -> SummariseFn:
     """Build a ``SummariseFn`` from a ``ModelRuntimePort``.
 
-    Called once in the composition root or orchestrator, and the resulting
-    closure is passed down to ``try_tier2``. Keeps the adapter import out of
-    this module.
+    Called with a runtime and a ref already resolved, so this module never
+    learns how the ``assist`` model is chosen — that is a routing decision and
+    it belongs in the composition root. See
+    ``di/inference_runtime.build_assist_summariser``, which resolves the target
+    per call rather than per request, so a routing policy edited while the
+    process is up takes effect on the next summarisation.
     """
-    from contextlib import aclosing
-
-    from app.domain.ports.model_runtime_port import ModelRuntimePort
-
-    rt: ModelRuntimePort = runtime  # type: ignore[assignment]
 
     async def _summarise(messages: Sequence[Message]) -> str:
         prompt: list[Message] = [
@@ -220,7 +244,7 @@ def build_summarise_fn(
         ]
         parts: list[str] = []
         async with aclosing(
-            rt.generate(
+            runtime.generate(
                 ref,
                 prompt,
                 max_tokens=600,

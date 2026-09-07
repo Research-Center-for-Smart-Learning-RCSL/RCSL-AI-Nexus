@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -16,19 +17,76 @@ from app.adapters.persistence.repositories import (
     PostgresUsageRepository,
 )
 from app.application.use_cases.assist_operator import AssistOperator
+from app.application.use_cases.assist_operator.prompt import ASSIST_CAPABILITY
 from app.application.use_cases.download_model import DownloadModel
 from app.application.use_cases.list_capabilities import ListCapabilities
 from app.application.use_cases.manage_models import ManageModels
 from app.application.use_cases.manage_routing_policies import ManageRoutingPolicies
 from app.application.use_cases.route_chat_request import RouteChatRequest
+from app.application.use_cases.route_chat_request.compaction_cache import CompactionCache
+from app.application.use_cases.route_chat_request.compaction_tier2 import (
+    SummariseFn,
+    build_summarise_fn,
+)
+from app.domain.entities.chat import Message
+from app.domain.exceptions import NoAvailableModelError
 from app.domain.ports.repositories import UsageRepositoryPort
 from app.domain.services.memory_budget_service import MemoryBudgetService
 from app.domain.services.routing_service import RoutingService
 from app.infrastructure.db import get_session_factory
-from app.interfaces.http.request_context import current_request_id
+from app.interfaces.http.request_context import current_request_id, report_compaction
 from app.shared.clock import SystemClock
 
 from .shared import SessionDep, SettingsDep
+
+
+def build_assist_summariser(
+    request: Request,
+    session: SessionDep,
+) -> SummariseFn:
+    """A Tier 2 summariser that resolves the `assist` model per call.
+
+    Per call rather than per request, and the difference is the whole reason
+    this is a closure. Resolving at request-build time would put a routing read
+    and two table scans on the front of *every* chat request in order to
+    prepare a collaborator that Tier 2 reaches only for a conversation tiers 0
+    and 1 could not rescue — which is a small minority of them. Resolving here
+    also means an operator who repoints the `assist` policy sees the change on
+    the next summarisation rather than on the next restart.
+
+    Routing goes through `RoutingService` like every other capability, so
+    summarisation obeys the same node requirements and the same registry. There
+    is deliberately no fallback to the serving model: §5.3 chose `assist`
+    precisely so a summary never competes for the slot the caller is waiting
+    on, and a fallback would quietly undo that on the day the policy is
+    missing. When `assist` cannot be routed this raises, and the caller below
+    turns that into an ordinary refusal.
+    """
+    policies = PostgresRoutingPolicyRepository(session)
+    models_repo = PostgresModelRepository(session)
+    nodes_repo = PostgresNodeRepository(session)
+    routing = RoutingService()
+
+    async def _summarise(messages: Sequence[Message]) -> str:
+        policy = await policies.get(ASSIST_CAPABILITY)
+        if policy is None:
+            raise NoAvailableModelError(detail=f"no policy for capability={ASSIST_CAPABILITY}")
+
+        models = {m.alias: m for m in await models_repo.list_all()}
+        nodes = {n.id: n for n in await nodes_repo.list_all()}
+        target = routing.select(policy, models, nodes)
+
+        runtime = request.app.state.runtimes.get(target.runtime)
+        if runtime is None:
+            raise NoAvailableModelError(detail=f"no adapter for runtime={target.runtime}")
+
+        # The registered context length, not the platform ceiling: the summary
+        # is a prompt to a small model and asking for more than it was
+        # registered with is how the 2026-08-07 eviction started.
+        context_length = target.resource_profile.context_length or None
+        return await build_summarise_fn(runtime, target.ref, context_length)(messages)
+
+    return _summarise
 
 
 def build_route_chat_request(
@@ -79,9 +137,27 @@ def build_route_chat_request(
         # rebuilt that gap one layer down.
         prompt_logs=PostgresPromptLogWriter(get_session_factory()),
         request_id=current_request_id,
+        # The other half of `request_id`'s bargain: the use case does not know
+        # it is behind HTTP, so the composition root hands it both the reader
+        # and the writer of the ambient per-request context.
+        report_compaction=report_compaction,
         max_context_tokens=settings.max_context_length,
         generation_deadline_seconds=settings.generation_deadline_seconds,
         thinking_default=settings.ollama_thinking,
+        # Tier 2 compaction. All three were written on 2026-09-05 and passed by
+        # nobody until 2026-09-07, so `try_tier2` had never run outside a test
+        # and a conversation tiers 0 and 1 could not rescue was refused exactly
+        # as it had been before compaction existed.
+        #
+        # The lock and the cache come from `app.state` rather than being built
+        # here, and that is the point of them: this function is a per-request
+        # dependency, so a lock constructed at this line would be a fresh lock
+        # per request and would serialise nothing.
+        summarise_fn=build_assist_summariser(request, session),
+        compaction_cache=(
+            CompactionCache(cache) if (cache := getattr(request.app.state, "cache", None)) else None
+        ),
+        compaction_lock=getattr(request.app.state, "compaction_lock", None),
     )
 
 
