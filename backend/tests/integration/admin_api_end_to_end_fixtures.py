@@ -46,6 +46,10 @@ def admin() -> Iterator[TestClient]:
             "COOKIE_SECURE": "false",
             "NODE_ID": NODE_ID,
             "NODE_TOTAL_MEMORY_GB": "64",
+            # Beside it rather than left to the ambient environment: the
+            # budget is the *product* of the two, so pinning one and
+            # inheriting the other pins nothing.
+            "NODE_MEMORY_HEADROOM_FRACTION": "0.80",
         }
     )
     get_settings.cache_clear()

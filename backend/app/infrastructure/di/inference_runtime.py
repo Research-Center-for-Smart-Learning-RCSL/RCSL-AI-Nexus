@@ -225,7 +225,18 @@ RouteChatRequestDep = Annotated[RouteChatRequest, Depends(build_route_chat_reque
 AssistOperatorDep = Annotated[AssistOperator, Depends(build_assist_operator)]
 
 
-MemoryBudgetDep = Annotated[MemoryBudgetService, Depends(MemoryBudgetService)]
+def build_memory_budget(settings: SettingsDep) -> MemoryBudgetService:
+    """Built from the settings rather than from the domain default.
+
+    `Depends(MemoryBudgetService)` would construct it with
+    `DEFAULT_HEADROOM_FRACTION`, which is the figure for a host running the
+    containers natively — so a deployment behind a hypervisor would set
+    `NODE_MEMORY_HEADROOM_FRACTION` and this provider would ignore it.
+    """
+    return MemoryBudgetService(headroom_fraction=settings.node_memory_headroom_fraction)
+
+
+MemoryBudgetDep = Annotated[MemoryBudgetService, Depends(build_memory_budget)]
 
 
 def build_manage_models(
@@ -236,7 +247,7 @@ def build_manage_models(
         nodes=PostgresNodeRepository(session),
         policies=PostgresRoutingPolicyRepository(session),
         runtimes=request.app.state.runtimes,
-        budget=MemoryBudgetService(),
+        budget=MemoryBudgetService(headroom_fraction=settings.node_memory_headroom_fraction),
         # Its own session factory, so a terminal state write survives the
         # request transaction rolling back when a load or unload raises.
         state_committer=ModelStateCommitter(get_session_factory()),

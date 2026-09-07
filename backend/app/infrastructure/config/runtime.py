@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -30,26 +31,60 @@ class RuntimeSettings(BaseSettings):
 
     node_name: str = "local"
 
-    node_total_memory_gb: float = 54.0
-    """What is available to **models**, not what the machine has.
+    node_total_memory_gb: float = Field(default=64.0, gt=0.0)
+    """The node's unified memory, and nothing netted out of it.
 
-    The two were the same number until 2026-09-07 and the difference is the
-    Colima VM. Since the 2026-09-05 migration the containers run inside one,
-    and its host footprint was 9.3 GB — outside this figure and outside the
-    fifth `MemoryBudgetService` reserves, which is sized for "the OS, the
-    containers, and inference working memory" and was written when the
-    containers were not behind a hypervisor.
+    It is the `total_memory_gb` column of a `nodes` row, so it answers "how
+    much memory does this machine have" — the question the admin node form
+    asks, and the one a second node would answer from `sysctl hw.memsize`.
+    What the host spends on things that are not models belongs in
+    `node_memory_headroom_fraction`, next.
 
-    Measured that day with 39.05 GB of models resident: 0.8 GB free, 13.5 GB
-    held by the compressor and 6.9 GB of swap in use, while the budget still
-    reported 12.2 GB available to load another model. `qwen36-35b-a3b-q8` is
-    registered at 42 GB and loading it beside the small models needs 47.5 GB,
-    which 64 permitted.
+    It briefly meant something else. On 2026-09-07 it was lowered to 54 to net
+    out the Colima VM, which put the deduction in a figure whose name and
+    column say hardware, and left it stacked underneath the fifth
+    `MemoryBudgetService` already reserved for "the OS, the containers, and
+    inference working memory" — the containers counted twice. Restored the same
+    day with the reserve moved to the fraction, where the thing that changed on
+    2026-09-05 actually is.
+    """
 
-    54 x the 0.8 headroom is 43.2 GB: above the 48.8 this must exceed for the
-    current three to stay reloadable, and below what the host cannot hold. It
-    is the memory available to models on *this* host in *this* shape — a second
-    node, or a return to running containers natively, would change it.
+    node_memory_headroom_fraction: float = Field(default=0.80, gt=0.0, le=1.0)
+    """The share of `node_total_memory_gb` that models may occupy.
+
+    `MemoryBudgetService` refuses a load against the product of the two, so
+    this is where a host's non-model footprint is declared. It exists because
+    for two days this deployment's was not what the domain default assumes: the
+    2026-09-05 Colima migration put the containers inside a VM, and on
+    2026-09-07 its host footprint measured 9.4 GiB against a fifth that is
+    sized for "the OS, the containers, and inference working memory" on a host
+    running them natively.
+
+    **It is back at that default because the VM was sized down, not because
+    the problem went away.** The containers use 1.3 GiB inside the guest; the
+    VM was allocated 6 GiB and its host footprint is that allocation plus the
+    guest's page cache, which grows to fill it. Capped at 3 GiB the footprint
+    settles between 1.4 and 3.6 GiB, and that is the whole of the margin the
+    model set needs — so **the VM's 3 GiB cap is load-bearing for this figure**
+    and raising it back to 6 makes the arrangement below stop fitting.
+
+    What the arrangement is, from `common_memory_breakdown_print` in the Ollama
+    log, which reports what llama.cpp actually allocates:
+
+    | ref | `n_ctx` | model | context | compute | total | registered |
+    |---|---:|---:|---:|---:|---:|---:|
+    | `gemma4:31b-it-q8_0` | 262144 | 30.38 | 11.25 | 2.40 | 44.02 | 44 |
+    | `qwen2.5:7b` | 32768 | 4.07 | 0.93 | 0.32 | 5.32 | 6 |
+    | `nomic-embed-text` | 2048 | 0.21 | 0.00 | 0.09 | 0.30 | 1 |
+
+    64 x 0.80 = 51.2 against the 51 those three are registered at. **The margin
+    is 0.2 GiB, and that is a statement about the host rather than a choice**:
+    the model set is within 0.4% of what the machine can hold, and there is no
+    fraction that both admits it and leaves room. Measured with all three
+    resident: 0.09 GiB free, 4.44 GiB compressed, swap flat at 375 MB over 80
+    seconds and every service healthy — the shape §4.3 of
+    docs/architecture/security/04-data-plane-hardening.md documents as load
+    rather than distress.
     """
 
     node_heartbeat_interval_seconds: int = 30

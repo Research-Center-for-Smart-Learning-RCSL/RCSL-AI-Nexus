@@ -9,6 +9,17 @@
         <string>/opt/homebrew/bin/colima</string>
         <string>start</string>
         <string>--foreground</string>
+        <!-- Load-bearing, not housekeeping. Colima persists the size in
+             ~/.colima/default/colima.yaml, but that file is outside the
+             repository and does not survive `colima delete` or a rebuilt
+             host - and Colima's own default is larger. The VM's host
+             footprint is its allocation plus the guest page cache that grows
+             to fill it, so at 6 GiB it reached 9.4 and the three-model set
+             stopped fitting: NODE_MEMORY_HEADROOM_FRACTION is sized against
+             this number. Change it here and in docs/runbooks/first-deploy.md
+             together. -->
+        <string>--memory</string>
+        <string>3</string>
     </array>
     <key>RunAtLoad</key>
     <true/>

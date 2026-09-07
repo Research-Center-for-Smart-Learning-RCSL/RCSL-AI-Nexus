@@ -50,6 +50,9 @@ separately at the end, marked as superseded.
 - Fixed the mount, and learned what an empty `mounts` list means
 - Measured it myself, and the counter is exact on prose and blind to tools
 - The memory budget was still describing a machine without a hypervisor in it
+- Which broke the incumbent load, because the budget subtracts two different figures
+- And pressing the button found the real ceiling: the three models cannot be co-resident
+- Except the ceiling was a 6 GiB VM holding page cache; capped at 3 GiB, all three fit
 
 **[2026-09-04](./progress/2026-09-04.md)**
 - The five tasks yesterday's set could not measure with, and the conclusion that reversed when they were replaced
