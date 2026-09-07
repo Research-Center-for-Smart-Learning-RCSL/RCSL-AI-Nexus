@@ -22,6 +22,7 @@ const SUMMARY = {
   completion_chars: 340,
   reasoning_chars: 0,
   truncated_fields: [],
+  compaction_tier: null,
 };
 
 describe('promptLogSummarySchema', () => {
@@ -55,6 +56,13 @@ describe('promptLogSummarySchema', () => {
     // path that has none. Declaring it non-nullable would turn that row into a
     // parse failure and an error where a readable transcript should be.
     expect(promptLogSummarySchema.parse({ ...SUMMARY, request_id: null }).request_id).toBeNull();
+  });
+
+  it('keeps a tier of zero rather than treating it as no compaction', () => {
+    // Tier 0 trims tool definitions. A schema or a renderer that tested this
+    // for truthiness would show an unreduced prompt as unreduced.
+    const parsed = promptLogSummarySchema.parse({ ...SUMMARY, compaction_tier: 0 });
+    expect(parsed.compaction_tier).toBe(0);
   });
 });
 

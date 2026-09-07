@@ -128,6 +128,7 @@ class PostgresPromptLogRepository(_TenantScoped):
                 PromptLogRow.completed,
                 PromptLogRow.tool_calls,
                 PromptLogRow.truncated_fields,
+                PromptLogRow.compaction_tier,
                 func.char_length(PromptLogRow.messages).label("message_chars"),
                 func.char_length(PromptLogRow.completion).label("completion_chars"),
                 func.char_length(PromptLogRow.reasoning).label("reasoning_chars"),
@@ -158,6 +159,7 @@ class PostgresPromptLogRepository(_TenantScoped):
                 completion_chars=int(row.completion_chars or 0),
                 reasoning_chars=int(row.reasoning_chars or 0),
                 truncated_fields=frozenset(str(v) for v in (row.truncated_fields or [])),
+                compaction_tier=row.compaction_tier,
             )
             for row in rows
         ]

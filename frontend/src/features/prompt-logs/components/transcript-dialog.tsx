@@ -86,6 +86,13 @@ function Section({ title, body }: { title: string; body: string }) {
   );
 }
 
+/** What each tier took out, in the words a reader of the prompt needs. */
+const COMPACTION_NOTE: Record<number, string> = {
+  0: 'Repeated tool definitions were collapsed and long descriptions trimmed; no message was removed.',
+  1: 'Tool results from earlier in the conversation were replaced with markers naming their size.',
+  2: 'The oldest turns were replaced with a single summary written by the assist model.',
+};
+
 export function TranscriptDialog({
   id,
   onOpenChange,
@@ -138,6 +145,28 @@ export function TranscriptDialog({
                 </Badge>
               ) : null}
             </div>
+
+            {/* Above the prompt rather than beside the metadata, because it
+                is a statement about the text immediately below it: what is
+                shown is what the model was sent, and after a compaction that
+                is not what the caller composed. A reader who scrolls straight
+                to the conversation must not miss it.
+
+                `!== null` rather than a truth test: tier 0 is a compaction. */}
+            {data.compaction_tier !== null ? (
+              <p
+                className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground"
+                role="note"
+              >
+                <span className="font-medium text-foreground">
+                  This prompt was reduced before it was sent.
+                </span>{' '}
+                {COMPACTION_NOTE[data.compaction_tier] ??
+                  'A compaction tier this interface does not know about was applied.'}{' '}
+                The conversation below is what the model read, not what the caller submitted. The
+                token counts are on the usage record for this request.
+              </p>
+            ) : null}
 
             <section className="space-y-2">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">

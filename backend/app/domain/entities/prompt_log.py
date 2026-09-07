@@ -73,6 +73,10 @@ class PromptLogSummary:
     completion_chars: int
     reasoning_chars: int
     truncated_fields: frozenset[str]
+    compaction_tier: int | None = None
+    """Surfaced in the list, not only in the transcript, so an operator
+    scanning for "why does this conversation look short" sees it before opening
+    a row — and so the reason to open the row exists at all."""
     tenant_id: str = DEFAULT_TENANT_ID
 
 
@@ -141,6 +145,20 @@ class PromptLogEntry:
     """Stamped by the scoped repository on write, read back through the same
     filter. A transcript is the most sensitive row in the schema, so it gets
     the boundary the audit log gets rather than a weaker one."""
+
+    compaction_tier: int | None = None
+    """Which tier reduced the prompt above, or None if nothing did.
+
+    Here because `messages` is the prompt the model was *sent*, and after a
+    compaction that is not the prompt the caller composed. Without this, the one
+    surface in the platform where a person reads the actual prompt would show a
+    reduced one with nothing saying so — which is the failure the whole
+    disclosure requirement exists to prevent, in the place it would be hardest
+    to notice.
+
+    The counts are not repeated here; `usage_records` carries them for the same
+    request, joined by `request_id`.
+    """
 
     truncated_fields: frozenset[str] = field(default_factory=frozenset)
     """Which fields hit the per-row size guard, if any.

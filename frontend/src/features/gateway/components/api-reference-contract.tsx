@@ -191,6 +191,32 @@ export function ToolsSection({ section }: ApiReferenceSectionProps) {
           that ran. Read that header before concluding that the{' '}
           <code>model</code> line is the one in use.
         </p>
+        <p className="text-sm text-muted-foreground">
+          <strong>
+            A prompt over the context limit may be reduced rather than refused,
+            and the response states when it was.
+          </strong>{' '}
+          A key may allow automatic compaction, in which case a request that
+          would exceed the limit has its prompt shortened and served instead of
+          returning <code>413 context_too_long</code>. Repeated tool definitions
+          are collapsed first, then tool results from earlier turns are replaced
+          with markers naming their size, and only then are the oldest turns
+          replaced with a summary. Every compacted response carries this header:
+        </p>
+        <CodeBlock code={'X-Context-Compacted: tier=<0, 1 or 2>'} label="Copy the header name" />
+        <p className="text-sm text-muted-foreground">
+          The tier says what was taken: <code>0</code> tool definitions,{' '}
+          <code>1</code> earlier tool results, <code>2</code> the oldest turns,
+          summarised. A model that answers without the beginning of its
+          conversation is fluent and wrong in a way nothing downstream can
+          detect, so treat this header as significant: it is the only signal in
+          the response that the model did not read everything that was sent. The
+          exact token counts before and after are recorded against the request
+          and are visible to an administrator on the usage screen. Where a key
+          has compaction disabled, the request is refused as before and the
+          <code>413</code> body names the ceiling and the composition of the
+          prompt that exceeded it.
+        </p>
       </ApiReferenceSectionLayout>
   );
 }

@@ -29,7 +29,13 @@ from app.domain.entities.model import (
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import RoutingPolicy
 from app.domain.entities.tenant import Tenant
-from app.domain.entities.usage import BucketUnit, UsageBucket, UsageRecord
+from app.domain.entities.usage import (
+    BucketUnit,
+    CompactionSummary,
+    CompactionTierCount,
+    UsageBucket,
+    UsageRecord,
+)
 from app.domain.entities.user import User
 from app.domain.exceptions import (
     DocumentNotFoundError,
@@ -470,6 +476,106 @@ class FakeUsage:
     async def totals_since(self, since: datetime) -> tuple[int, int]:
         window = [r for r in self.records if r.at >= since]
         return len(window), sum(r.tokens for r in window)
+
+    def _matching_records(
+        self,
+        *,
+        actor_id: str | None,
+        api_key_id: str | None,
+        capability: str | None,
+        compacted: bool | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> list[UsageRecord]:
+        out = []
+        for r in self.records:
+            if actor_id is not None and r.actor_id != actor_id:
+                continue
+            if api_key_id is not None and r.api_key_id != api_key_id:
+                continue
+            if capability is not None and r.capability != capability:
+                continue
+            if compacted is True and r.compaction_tier is None:
+                continue
+            if compacted is False and r.compaction_tier is not None:
+                continue
+            if since is not None and r.at < since:
+                continue
+            if until is not None and r.at >= until:
+                continue
+            out.append(r)
+        return sorted(out, key=lambda r: (r.at, r.id), reverse=True)
+
+    async def list_records(
+        self,
+        *,
+        actor_id: str | None = None,
+        api_key_id: str | None = None,
+        capability: str | None = None,
+        compacted: bool | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[UsageRecord]:
+        rows = self._matching_records(
+            actor_id=actor_id,
+            api_key_id=api_key_id,
+            capability=capability,
+            compacted=compacted,
+            since=since,
+            until=until,
+        )
+        return rows[offset : offset + limit]
+
+    async def count_records(
+        self,
+        *,
+        actor_id: str | None = None,
+        api_key_id: str | None = None,
+        capability: str | None = None,
+        compacted: bool | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> int:
+        return len(
+            self._matching_records(
+                actor_id=actor_id,
+                api_key_id=api_key_id,
+                capability=capability,
+                compacted=compacted,
+                since=since,
+                until=until,
+            )
+        )
+
+    async def compaction_summary(
+        self,
+        since: datetime,
+        until: datetime,
+        *,
+        actor_id: str | None = None,
+    ) -> CompactionSummary:
+        by_tier: dict[int, int] = {}
+        removed = 0
+        for r in self.records:
+            if not (since <= r.at < until):
+                continue
+            if actor_id is not None and r.actor_id != actor_id:
+                continue
+            # `is None` rather than falsiness: tier 0 is a compaction.
+            if r.compaction_tier is None:
+                continue
+            by_tier[r.compaction_tier] = by_tier.get(r.compaction_tier, 0) + 1
+            if r.tokens_before_compaction is not None and r.tokens_after_compaction is not None:
+                removed += r.tokens_before_compaction - r.tokens_after_compaction
+        return CompactionSummary(
+            requests=sum(by_tier.values()),
+            tokens_removed=removed,
+            by_tier=[
+                CompactionTierCount(tier=tier, requests=n) for tier, n in sorted(by_tier.items())
+            ],
+        )
 
     async def bucketed_usage(
         self,

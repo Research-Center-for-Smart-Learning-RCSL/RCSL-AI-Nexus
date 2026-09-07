@@ -56,6 +56,32 @@ def usage_to_row(usage: UsageRecord) -> UsageRecordRow:
     )
 
 
+def usage_row_to_domain(row: UsageRecordRow) -> UsageRecord:
+    """The other direction, added when `usage_records` gained a reader.
+
+    There was none until 2026-09-07: every consumer of this table was an
+    aggregate query that never built an entity, so the mapping existed one way
+    only for as long as the rows were write-only.
+    """
+    return UsageRecord(
+        id=row.id,
+        tenant_id=row.tenant_id,
+        actor_id=row.actor_id,
+        api_key_id=row.api_key_id,
+        capability=row.capability,
+        requested_capability=row.requested_capability,
+        model_alias=row.model_alias,
+        tokens=row.tokens,
+        prompt_tokens=row.prompt_tokens,
+        latency_ms=row.latency_ms,
+        completed=row.completed,
+        at=row.at,
+        compaction_tier=row.compaction_tier,
+        tokens_before_compaction=row.tokens_before_compaction,
+        tokens_after_compaction=row.tokens_after_compaction,
+    )
+
+
 def retention_row_to_domain(row: RetentionPolicyRow) -> RetentionPolicy:
     # `dataset` is validated on the way in — the use case takes a
     # `RetentionDataset` and the column is written from `.value` — so a row that
@@ -119,6 +145,7 @@ def prompt_log_to_row(entry: PromptLogEntry) -> PromptLogRow:
         # byte-identical here. An unordered set serialised straight to JSON
         # would differ run to run and make a stored transcript look edited.
         truncated_fields=sorted(entry.truncated_fields),
+        compaction_tier=entry.compaction_tier,
     )
 
 
@@ -142,6 +169,7 @@ def prompt_log_row_to_domain(row: PromptLogRow) -> PromptLogEntry:
         # values: the column is JSON, so it hands back Any, and the entity
         # promises a set of field names.
         truncated_fields=frozenset(str(v) for v in (row.truncated_fields or [])),
+        compaction_tier=row.compaction_tier,
     )
 
 

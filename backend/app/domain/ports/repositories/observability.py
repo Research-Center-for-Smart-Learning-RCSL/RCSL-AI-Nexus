@@ -8,7 +8,12 @@ from typing import Protocol
 from app.domain.entities.audit import AuditEntry
 from app.domain.entities.prompt_log import PromptLogEntry, PromptLogSummary
 from app.domain.entities.refusal import Refusal
-from app.domain.entities.usage import BucketUnit, UsageBucket, UsageRecord
+from app.domain.entities.usage import (
+    BucketUnit,
+    CompactionSummary,
+    UsageBucket,
+    UsageRecord,
+)
 
 
 class PromptLogWriterPort(Protocol):
@@ -167,6 +172,64 @@ class UsageRepositoryPort(Protocol):
 
     async def totals_since(self, since: datetime) -> tuple[int, int]:
         """`(requests, tokens)` across all callers, for the dashboard."""
+        ...
+
+    async def list_records(
+        self,
+        *,
+        actor_id: str | None = None,
+        api_key_id: str | None = None,
+        capability: str | None = None,
+        compacted: bool | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[UsageRecord]:
+        """One page of individual requests, newest first.
+
+        The table has been written since the first migration and had no reader
+        that returned a row until 2026-09-07: every consumer was an aggregate.
+        So "what did this key actually do at 14:03" was a question the platform
+        recorded the answer to and could not show anybody, and the compaction
+        columns added in `c1d5f8a3e497` were written by the gateway and read by
+        nothing at all.
+
+        `compacted` filters on the presence of a tier rather than its value,
+        because "show me the requests that were reduced" is the question, and
+        tier 0 is a reduction like the others — a filter on truthiness would
+        have hidden it.
+        """
+        ...
+
+    async def count_records(
+        self,
+        *,
+        actor_id: str | None = None,
+        api_key_id: str | None = None,
+        capability: str | None = None,
+        compacted: bool | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> int:
+        """The total behind `list_records`, for the pager."""
+        ...
+
+    async def compaction_summary(
+        self,
+        since: datetime,
+        until: datetime,
+        *,
+        actor_id: str | None = None,
+    ) -> CompactionSummary:
+        """How many requests were compacted in the window, and by which tier.
+
+        Its own query rather than a widening of `bucketed_usage`, which groups
+        by capability for the charts; grouping by tier as well would multiply
+        those rows to carry a figure they do not plot. Scoped and narrowable by
+        actor exactly as that one is, so the "my usage" screen can answer the
+        same question about its own traffic.
+        """
         ...
 
     async def bucketed_usage(

@@ -32,6 +32,7 @@ from .observability_retention import (
     refusal_row_to_domain,
     refusal_to_row,
     retention_row_to_domain,
+    usage_row_to_domain,
     usage_to_row,
 )
 from .platform_runtime import (
@@ -72,6 +73,7 @@ __all__ = [
     "document_to_domain",
     "document_to_row",
     "audit_row_to_domain",
+    "usage_row_to_domain",
     "usage_to_row",
     "retention_row_to_domain",
     "prompt_template_to_domain",

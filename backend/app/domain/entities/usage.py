@@ -24,6 +24,31 @@ class UsageBucket:
 
 
 @dataclass(frozen=True, slots=True)
+class CompactionTierCount:
+    tier: int
+    requests: int
+
+
+@dataclass(frozen=True, slots=True)
+class CompactionSummary:
+    """How much compaction happened in a window, for the analytics screen.
+
+    Aggregated separately from `UsageBucket` rather than folded into it. That
+    query groups by `(bucket, capability)` for the charts, and compaction wants
+    a different grouping — by tier — so widening it would multiply the rows the
+    charts read in order to carry a figure they do not plot.
+
+    `requests` counts rows with a tier, not rows through a key with the setting
+    on: a request nothing reduced is not a compaction, and the ratio worth
+    showing is against everything served.
+    """
+
+    requests: int
+    tokens_removed: int
+    by_tier: list[CompactionTierCount]
+
+
+@dataclass(frozen=True, slots=True)
 class UsageRecord:
     id: str
     actor_id: str

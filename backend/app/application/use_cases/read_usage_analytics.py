@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 from app.domain.entities.actor import Actor, Scope
-from app.domain.entities.usage import BucketUnit
+from app.domain.entities.usage import BucketUnit, CompactionSummary
 from app.domain.ports.repositories import UsageRepositoryPort
 from app.domain.ports.security_ports import AuthorizationPort
 from app.shared.clock import Clock
@@ -52,6 +52,16 @@ class UsageAnalytics:
     until: datetime
     totals: list[UsagePoint]
     by_capability: list[CapabilitySeries]
+    compaction: CompactionSummary
+    """How many of the requests above had their prompt reduced before serving.
+
+    Here rather than on its own screen because it is only meaningful as a
+    ratio: "eleven compactions" says nothing without the number of requests
+    beside it, and that number is already on this response. It is the one
+    general surface where an operator can see the setting doing anything —
+    `usage_records` carries the fact per request and nothing lists those rows
+    for a whole tenant.
+    """
 
 
 class ReadUsageAnalytics:
@@ -95,6 +105,7 @@ class ReadUsageAnalytics:
         since = until - delta
 
         buckets = await self._usage.bucketed_usage(since, until, unit, actor_id=actor_id)
+        compaction = await self._usage.compaction_summary(since, until, actor_id=actor_id)
 
         # One pass folds the per-(bucket, capability) rows into per-bucket totals
         # and per-capability series. Buckets arrive ordered by time, so appending
@@ -117,5 +128,10 @@ class ReadUsageAnalytics:
             for capability, points in sorted(by_capability.items())
         ]
         return UsageAnalytics(
-            bucket=unit, since=since, until=until, totals=total_points, by_capability=series
+            bucket=unit,
+            since=since,
+            until=until,
+            totals=total_points,
+            by_capability=series,
+            compaction=compaction,
         )
