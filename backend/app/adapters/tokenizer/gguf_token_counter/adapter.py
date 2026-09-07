@@ -96,6 +96,7 @@ class GgufTokenCounter:
         self._root = root
         self._cache_size = max(1, cache_size)
         self._cache: OrderedDict[str, _Vocabulary | _NativeVocabulary | None] = OrderedDict()
+        self._native_context: OrderedDict[str, int | None] = OrderedDict()
         self._lock = asyncio.Lock()
         self._use_native = _HAS_NATIVE
         if self._use_native:
@@ -105,6 +106,51 @@ class GgufTokenCounter:
         async with self._lock:
             self._cache.pop(ref, None)
         return await self._vocabulary(ref) is not None
+
+    async def native_context_length(self, ref: str) -> int | None:
+        """The `<family>.context_length` the GGUF header declares.
+
+        A separate read from the vocabulary and a separate cache, because the
+        two are wanted at different moments: the vocabulary on every request
+        that counts a prompt, this one when a caller is deciding how much
+        context to ask the runtime to size a runner for. Reading it does not
+        build a tokenizer, so it costs a header scan that skips every value it
+        is not asked for.
+
+        The family prefix is not hardcoded — `qwen2.context_length`,
+        `gemma4.context_length`, and one per architecture — so the key is
+        matched by its suffix. A header carrying two would be a file this
+        reader has no opinion about; the smallest is taken, because the purpose
+        of this number is to bound something.
+        """
+        async with self._lock:
+            if ref in self._native_context:
+                self._native_context.move_to_end(ref)
+                return self._native_context[ref]
+        value = await asyncio.to_thread(self._read_native_context, ref)
+        async with self._lock:
+            self._native_context[ref] = value
+            self._native_context.move_to_end(ref)
+            while len(self._native_context) > self._cache_size:
+                self._native_context.popitem(last=False)
+        return value
+
+    def _read_native_context(self, ref: str) -> int | None:
+        try:
+            blob = weights_path(self._root, ref)
+        except (BlobNotFound, InvalidModelReferenceError) as exc:
+            logger.info("no GGUF for %s, cannot read its declared context: %s", ref, exc)
+            return None
+        try:
+            metadata = read_metadata(blob, lambda key: key.endswith(".context_length"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not read the declared context out of %s: %s", blob.name, exc)
+            return None
+        values = [int(v) for v in metadata.values() if isinstance(v, int) and v > 0]
+        if not values:
+            logger.info("%s declares no context length", blob.name)
+            return None
+        return min(values)
 
     async def count_prompt(
         self, ref: str, messages: Sequence[Message], tools: Sequence[ToolDefinition]

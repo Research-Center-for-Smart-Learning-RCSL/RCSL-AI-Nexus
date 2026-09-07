@@ -28,6 +28,7 @@ from contextlib import aclosing
 from app.domain.entities.chat import Message, MessageRole, ToolDefinition
 from app.domain.entities.model import Model
 from app.domain.ports.model_runtime_port import ModelRuntimePort
+from app.domain.ports.token_counter_port import TokenCounterPort
 
 from .compaction import CompactionResult, CountFn
 from .compaction_cache import CompactionCache
@@ -219,10 +220,29 @@ async def try_tier2(
         return None
 
 
+SUMMARY_OUTPUT_TOKENS = 600
+"""Reserved for the summary itself, and subtracted from what may be sent.
+
+The prompt asks for under 500 tokens; this is that with room, and it is a
+bound the input has to leave space for rather than a target."""
+
+
+class SummaryTooLongError(RuntimeError):
+    """The prefix is larger than the summary model can read.
+
+    Raised rather than sent, because sending it is the failure this whole plan
+    is about: a runtime that truncates silently would return a summary of part
+    of the history while the disclosure said the history was summarised. The
+    orchestrator turns this into the ordinary context refusal, which is what
+    the request would have met before Tier 2 existed.
+    """
+
+
 def build_summarise_fn(
     runtime: ModelRuntimePort,
     ref: str,
     context_length: int | None = None,
+    counter: TokenCounterPort | None = None,
 ) -> SummariseFn:
     """Build a ``SummariseFn`` from a ``ModelRuntimePort``.
 
@@ -232,6 +252,17 @@ def build_summarise_fn(
     ``di/inference_runtime.build_assist_summariser``, which resolves the target
     per call rather than per request, so a routing policy edited while the
     process is up takes effect on the next summarisation.
+
+    ``context_length`` must be a figure the model can actually hold, not the
+    one it is registered with. The two were eight times apart for ``qwen7b`` on
+    2026-09-07, and this is the one caller for which the difference is not
+    theoretical: the prefix Tier 2 sends is large by construction, so a
+    registration that overstates the model is a summary written from a prompt
+    the runtime quietly cut in half.
+
+    ``counter`` is what makes that bound enforceable rather than merely
+    declared. Without it the prompt is sent unchecked, which is the behaviour
+    of every build that has no GGUF to read and is why it is optional.
     """
 
     async def _summarise(messages: Sequence[Message]) -> str:
@@ -242,12 +273,22 @@ def build_summarise_fn(
                 content="\n\n".join(f"[{m.role.value}] {m.content}" for m in messages if m.content),
             ),
         ]
+        if counter is not None and context_length:
+            counted = await counter.count_prompt(ref, prompt, [])
+            budget = context_length - SUMMARY_OUTPUT_TOKENS
+            if counted is not None and counted > budget:
+                raise SummaryTooLongError(
+                    f"the {counted} tokens to summarise exceed the {budget} "
+                    f"{ref} can read; refusing rather than summarising a prompt "
+                    "the runtime would truncate"
+                )
+
         parts: list[str] = []
         async with aclosing(
             runtime.generate(
                 ref,
                 prompt,
-                max_tokens=600,
+                max_tokens=SUMMARY_OUTPUT_TOKENS,
                 thinking=False,
                 context_length=context_length,
             )

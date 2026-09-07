@@ -787,3 +787,36 @@ Nothing observed this happening; it is read out of §2.6 and §2.7 together.
 
 (1) and (2) are not alternatives — (1) is the data being wrong and (2) is the
 code trusting it — and (3) is what stops the pair recurring for the next model.
+
+**(1) and (2) were done on 2026-09-07. (3) was not.**
+
+The `qwen7b` row is now 32768, which is what its GGUF declares and what its
+running `llama-server` already carried. Nothing reloaded: the figure reaches
+`_set_num_ctx` and the guard, and the runner was at 32768 regardless. What
+changed is that `_refuse_what_this_target_would_truncate` now refuses `assist`
+above 16384 instead of 131072 — the protection 2026-08-17 added, restored.
+
+`TokenCounterPort` gained `native_context_length`, reading
+`<family>.context_length` from the same GGUF header the vocabulary comes from.
+It is on that port rather than a new one for the reason `ModelRuntimePort.embed`
+gives for living beside `generate`: a second reader of the same file is a second
+place for the answer to be wrong. Tier 2 now sizes its runner by the *smaller*
+of the registered and declared figures, and — with a counter available — counts
+the prefix before sending it and raises `SummaryTooLongError` rather than
+handing the runtime a prompt it would cut. The orchestrator turns that into the
+ordinary context refusal, which is where the request was before Tier 2 existed.
+
+**Every row was then audited against its model**, and one is still overstated:
+
+| alias | registered | declared |
+|---|---:|---:|
+| `embedder` | 8192 | **2048** |
+
+The others register at or below what their model declares, which is a
+deliberate choice rather than a defect — `gemma4-31b` at 131072 of 262144,
+`glm47-flash` at 32768 of 202752. The embedder is a fourfold overstatement and
+is left alone here, because lowering it changes what the knowledge base accepts
+at ingestion and that is a different decision from this one.
+
+(3) remains the durable fix: nothing prevents the next registration from
+overstating its model, and the audit above was a script run by hand.

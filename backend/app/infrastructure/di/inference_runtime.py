@@ -80,11 +80,27 @@ def build_assist_summariser(
         if runtime is None:
             raise NoAvailableModelError(detail=f"no adapter for runtime={target.runtime}")
 
-        # The registered context length, not the platform ceiling: the summary
-        # is a prompt to a small model and asking for more than it was
-        # registered with is how the 2026-08-07 eviction started.
-        context_length = target.resource_profile.context_length or None
-        return await build_summarise_fn(runtime, target.ref, context_length)(messages)
+        # The smaller of what the registry claims and what the model's own
+        # header declares — never the registration alone.
+        #
+        # That distinction was theoretical until 2026-09-07, when `qwen7b` was
+        # found registered at 262144 against a declared 32768. This is the one
+        # caller for which it is not theoretical: the prefix Tier 2 sends is
+        # what remains of a conversation two cheaper tiers could not rescue, so
+        # it is large by construction, and above the real figure the runtime
+        # truncates to half of it in silence and reports a clean stop. A
+        # summary written from that is a summary of part of the history
+        # describing itself as the whole of it — inside the feature built to
+        # make that class of loss visible.
+        #
+        # The counter is also handed down so the bound is enforced rather than
+        # merely declared; see `build_summarise_fn`.
+        counter = getattr(request.app.state, "token_counter", None)
+        registered = target.resource_profile.context_length or None
+        declared = await counter.native_context_length(target.ref) if counter else None
+        bounds = [n for n in (registered, declared) if n]
+        context_length = min(bounds) if bounds else None
+        return await build_summarise_fn(runtime, target.ref, context_length, counter)(messages)
 
     return _summarise
 

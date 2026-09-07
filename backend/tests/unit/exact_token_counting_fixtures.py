@@ -75,6 +75,7 @@ def write_gguf(
     template: str | None = TEMPLATE,
     version: int = 3,
     magic: bytes = b"GGUF",
+    context_length: int | None = None,
 ) -> Path:
     types = [3 if t in CONTROL else 1 for t in tokens]
     entries = [
@@ -90,6 +91,11 @@ def write_gguf(
     ]
     if template is not None:
         entries.append(_entry("tokenizer.chat_template", _STRING, _string(template)))
+    if context_length is not None:
+        # Under the architecture's own prefix, as every real header carries it:
+        # `qwen2.context_length`, `gemma4.context_length`, one per family. The
+        # reader matches the suffix precisely because the prefix is not fixed.
+        entries.append(_entry("test.context_length", _UINT32, struct.pack("<I", context_length)))
     body = magic + struct.pack("<I", version) + _u64(0) + _u64(len(entries)) + b"".join(entries)
     path.write_bytes(body + b"\x00" * 64)
     return path
