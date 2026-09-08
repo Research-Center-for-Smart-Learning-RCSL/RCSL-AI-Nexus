@@ -8,7 +8,8 @@
 計畫好的，而計畫性停機有一個非計畫中斷沒有的風險：**你關掉的東西，跟你以為你
 關掉的東西，可能不是同一組**。第 2 節就是這個風險的紀錄。
 
-首次實際執行：2026-09-08（PROGRESS.md 2026-09-08）。第 2 節的兩個發現來自那一次。
+首次實際執行：2026-09-08（PROGRESS.md 2026-09-08）。第 2 節的兩個發現來自那一次；
+它們的**根因**是隔天 2026-09-09 第一次真的走完復機程序時才問出來的，第 2 節已經改寫。
 
 相關文件：[`restore.md`](./restore.md) 是**資料**的還原，跟這份無關——這份不動任何
 volume；[`first-deploy.md`](./first-deploy.md) 是從零開始安裝，這份假設一切都已裝好。
@@ -70,14 +71,11 @@ volume；[`first-deploy.md`](./first-deploy.md) 是從零開始安裝，這份�
 
 ---
 
-## 2. 兩個不能只靠 `launchctl bootout` 的 daemon
+## 2. 兩個 `launchctl bootout` 停不掉的 daemon，以及它們為什麼停不掉
 
 **這是這份文件最重要的一節。** 直覺的做法是「主機層那些 daemon 都是 launchd 管的，
 `launchctl bootout` 一輪就停乾淨了」。2026-09-08 實測，這個直覺對六個裡的四個成立，
 對另外兩個不成立，而且**失敗是無聲的**——`bootout` 回傳 0，什麼都不印，程序還活著。
-
-原因是同一個：這兩個 job 的實際工作程序都已經 **reparent 到 PID 1**。`bootout`
-收掉的是 launchd 的 job 登記，不是那些已經脫離的程序。
 
 | Daemon | `bootout` 之後 | 真正停掉的方式 |
 |---|---|---|
@@ -88,9 +86,85 @@ volume；[`first-deploy.md`](./first-deploy.md) 是從零開始安裝，這份�
 | `backup` | 確實停止（本來就沒在跑） | — |
 | `reconcile-port-bindings` | 確實停止（本來就沒在跑，`KeepAlive=false`） | — |
 
-推論不出來，只能驗。**每次停機都要回頭看程序，不要看 `bootout` 的回傳值。**
+### 為什麼是這兩個（2026-09-09 修正）
+
+2026-09-08 當下記下的原因是「這兩個 job 的工作程序已經 reparent 到 PID 1，`bootout`
+收掉的是 job 登記而不是那些已脫離的程序」。這描述了機制，但沒有回答「為什麼偏偏是
+這兩個」。隔天復機時同樣這兩個 job 起不來，才問出真正的原因，而它比原本的說法更根本：
+
+**launchd 從來沒有 spawn 過這兩個 job，所以那些程序一開始就不是它的子程序。**
+
+`launchd` 是以 job 的 `UserName` 身分去開 `StandardOutPath`，不是以 root。這兩個
+plist 把日誌寫在 `/var/log`（`root:wheel drwxr-xr-x`）而 `UserName` 是 `rcslmac1`，
+建檔會拿到 `EACCES`，spawn 在程式執行之前就失敗了。六個 daemon 裡只有這兩個是這個
+組合——其餘都寫在 `/opt/homebrew/var/log`，那裡 `rcslmac1` 寫得進去——而它們正好就是
+`bootout` 停不掉的那兩個。兩個缺陷同時在 `106c412`（Replace Docker Desktop with
+Colima）進來。
+
+**這個失敗從外面完全看不見**，這是它能潛伏數週的原因：`bootstrap` 依然回傳 0，因為
+「把 job 載入 domain」確實成功了，失敗的只是 spawn。job 就停在：
+
+```
+active count = 0
+state = spawn scheduled
+```
+
+那麼當時在跑的 VM 和三個 socat 是誰起的？是某次手動 `colima start` 和手動跑那支腳本
+留下來的，脫離終端機之後 reparent 到 PID 1，一直活著。`bootout` 停不掉它們，不是因為
+它們從 launchd 手上跑掉了，而是因為它們從來就不在 launchd 手上。
+
+**已修**（2026-09-09）：兩個 plist 的 `StandardOutPath`／`StandardErrorPath` 都移到
+`/opt/homebrew/var/log/`，與其餘 daemon 一致。
+
+### 修好第一個之後，第二個才現形：colima 找不到 `limactl`
+
+路徑修好、job 終於 spawn 起來的第一件事，是每 10 秒吐一行這個：
+
+```
+lima compatibility error: error checking Lima version:
+exec: "limactl": executable file not found in $PATH
+```
+
+**launchd 給 job 的是最小 PATH**（`/usr/bin:/bin:/usr/sbin:/sbin`），而 `colima` 只是
+一個 wrapper，真正做事的 `limactl` 在 `/opt/homebrew/bin`。`KeepAlive=true` 於是把它
+變成一個十秒一次的無限失敗迴圈。已在 plist 加上：
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+</dict>
+```
+
+`socat-forwards` 不需要這一項：那支腳本對 `socat` 和 `ifconfig` 都用絕對路徑，其餘用到
+的 `awk`／`date`／`sleep` 都在最小 PATH 裡。
+
+**這兩個缺陷互相遮蔽，這是整件事最值得記住的地方。** 日誌路徑不可寫，spawn 在程式執行
+前就失敗，所以永遠看不到 PATH 的錯誤；而在終端機手動 `colima start` 一定會成功，因為
+操作者的 shell 有 Homebrew 在 PATH 上。**兩個缺陷都只在 launchd 底下發作，而且要修好
+第一個，第二個才看得見。** 修好之後 `bootout`／`bootstrap` 對六個都成立，2026-09-09
+復機時驗證過：`launchctl print` 的 `active count = 1`，日誌最後一行是
+`keeping Colima in the foreground`。
+
+### 這一節留下來的通則
+
+修掉根因不代表這一節可以刪。**每次停機都要回頭看程序，不要看 `bootout` 的回傳值**——
+`bootstrap`／`bootout` 的結束碼講的是 domain 登記，不是程序生死，這一點跟這個 bug 修
+不修無關。
+
+診斷一個「回傳 0 但什麼都沒發生」的 job，看這兩個欄位：
+
+```sh
+sudo launchctl print system/online.rcsl.<label> | grep -E 'active count|state ='
+```
+
+`active count = 0` 配上 `state = spawn scheduled`，就是 launchd 想 spawn 而 spawn 不
+起來——第一個要查的是 `StandardOutPath` 的目錄，該 job 的 `UserName` 有沒有權限建檔。
+
 順帶一提，`sudo -n launchctl print system/<label>` 在這台需要密碼，非互動的檢查
-拿不到 job 狀態——所以「還在不在」這個問題，程序面是唯一可靠的答案。
+拿不到 job 狀態——所以在沒有密碼的情境下，「還在不在」這個問題，程序面仍是唯一可靠的
+答案。
 
 ---
 
@@ -131,7 +205,11 @@ volume；[`first-deploy.md`](./first-deploy.md) 是從零開始安裝，這份�
   > `refresh-geolite2` 不在名單裡，這是刻意的。它是每週三 05:30 跑一次的資料更新，
   > 不服務任何流量，停機期間讓它自己跑或不跑都無所謂。
 
-- [ ] **收掉 `bootout` 沒能收掉的兩個**（第 2 節）
+- [ ] **回頭確認那兩個真的停了**（第 2 節）
+
+  2026-09-09 修掉根因之後，`bootout` 對六個都成立，這一步預期會是空的。但**還是要
+  跑**：這是驗證，不是修補，而且如果有人在 launchd 之外手動起過 colima 或那支腳本，
+  留下的程序仍然只能用下面的方式收。
 
   ```sh
   # socat：kill supervisor shell，它的 trap 會收掉三個 socat 子程序
@@ -238,6 +316,15 @@ enable 它是無害的，但會讓下一個讀日誌的人以為當初 disable �
   Colima 的 VM 啟動是整個復機最慢的一步。在它就緒前跑任何 `docker compose`
   都會失敗，而失敗訊息會像是 compose 的問題，不像是時序的問題。
 
+  > **這個等待迴圈一定要用操作者的身分跑。** `colima start` 會建立並切換到
+  > `colima` 這個 docker context（endpoint 是 `~/.colima/default/docker.sock`），
+  > 而 context 的選擇存在 `$HOME/.docker`。在 root 的 shell 裡用
+  > `sudo -u rcslmac1 docker info` 檢查會拿到 root 的 `$HOME`，於是落回 `default`
+  > context 的 `/var/run/docker.sock`——那個 symlink 指向 Docker Desktop 時代的
+  > `~/.docker/run/docker.sock`，早就不存在了。結果是 VM 明明起來了，檢查卻永遠
+  > 判失敗。要 `sudo -u rcslmac1 -H`，或直接用 rcslmac1 的 shell 跑。
+  > 2026-09-09 復機時第一支腳本就是這樣白等了 180 秒。
+
 - [ ] **起其餘的主機層 daemon**
 
   ```sh
@@ -311,6 +398,8 @@ tail -20 /opt/homebrew/var/log/nexus-health.log          # 期望：下一次執
 | tailnet 位址沒有監聽埠，但服務都在跑 | `socat-forwards` 等 `tailscaled` 逾時放棄 | `tailscale status` 確認位址回來了，再 bootout / bootstrap 一次 socat-forwards |
 | `bootstrap` 回報 `Bootstrap failed: 5: Input/output error` | 該 job 已經載入 | 先 `bootout` 再 `bootstrap`，不要重複 bootstrap |
 | `bootstrap` 沒有效果、job 沒起來 | 停機時 `disable` 過 | 先 `enable`（第 5 節），再 bootstrap |
+| `bootstrap` 回傳 0，但程序始終不出現、日誌檔連建都沒建 | launchd spawn 不起來，最常見是 `StandardOutPath` 的目錄該 job 的 `UserName` 不能寫 | `sudo launchctl print system/<label>` 看 `active count = 0` / `state = spawn scheduled`，再查日誌路徑的權限（第 2 節） |
+| 等 docker 就緒的迴圈永遠不過，但 `colima status` 說在跑 | 檢查是在 root 的 `$HOME` 下跑的，docker context 落回 `default` | 用 `sudo -u rcslmac1 -H`（第 6 節的註） |
 | 服務起來了但少幾個 | compose 檔或映像有變 | 讀 `migrate` 的日誌，不要讀應用的日誌——應用會在 migrate 上 gate（README「Running the stack」） |
 | 什麼都不想修，只想回到線上 | — | `sudo reboot`。第 5 節說明了為什麼這會讓平台自己回來，前提是沒有 `disable` 過 |
 

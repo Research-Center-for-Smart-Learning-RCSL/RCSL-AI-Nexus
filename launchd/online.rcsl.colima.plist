@@ -4,6 +4,21 @@
 <dict>
     <key>Label</key>
     <string>online.rcsl.colima</string>
+    <!-- launchd hands a job a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin), and
+         `colima` is a wrapper that shells out to `limactl` — which lives in
+         /opt/homebrew/bin and is therefore invisible to it. Without this the
+         job spawns, fails with `lima compatibility error: ... exec:
+         "limactl": executable file not found in $PATH`, and KeepAlive retries
+         it every ten seconds forever. An interactive `colima start` works
+         because the operator's shell has Homebrew on PATH, so this defect is
+         invisible from a terminal and only appears under launchd — which is
+         why it survived alongside the log-path defect below: neither could be
+         seen until the other was fixed. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
     <key>ProgramArguments</key>
     <array>
         <string>/opt/homebrew/bin/colima</string>
@@ -27,9 +42,22 @@
     <true/>
     <key>UserName</key>
     <string>rcslmac1</string>
+    <!-- /opt/homebrew/var/log rather than /var/log, and this is load-bearing.
+         launchd opens StandardOutPath as the job's *UserName*, not as root, so
+         a path this account cannot create a file in makes the spawn fail before
+         the program ever runs. /var/log is root:wheel drwxr-xr-x and `rcslmac1`
+         gets EACCES there. The failure is invisible from the outside:
+         `bootstrap` still returns 0 because loading the job into the domain
+         succeeded, and the job then sits at `state = spawn scheduled` with
+         `active count = 0` forever. This and online.rcsl.socat-forwards were the
+         only two jobs with this combination, and they are exactly the two that
+         2026-09-08's shutdown found `bootout` could not stop — because launchd
+         had never spawned them, so those processes were never its children.
+         Every other nexus daemon already logs here; see
+         docs/runbooks/planned-shutdown.md section 2. -->
     <key>StandardOutPath</key>
-    <string>/var/log/nexus-colima.log</string>
+    <string>/opt/homebrew/var/log/nexus-colima.log</string>
     <key>StandardErrorPath</key>
-    <string>/var/log/nexus-colima.log</string>
+    <string>/opt/homebrew/var/log/nexus-colima.log</string>
 </dict>
 </plist>

@@ -36,6 +36,13 @@ separately at the end, marked as superseded.
 
 ### September 2026
 
+**[2026-09-09](./progress/2026-09-09.md)**
+- 復機時發現：那兩個 daemon 從來沒有被 launchd 起過
+- 修好第一個缺陷，第二個才現形：兩個缺陷互相遮蔽
+- 復機路上的第二個坑：等 docker 就緒的檢查要用誰的身分跑
+- 順帶記下一個容易誤讀的訊號
+- 這次復機的最終狀態
+
 **[2026-09-08](./progress/2026-09-08.md)**
 - Took the platform down on purpose, and two of the six daemons did not go
 

@@ -14,9 +14,22 @@
     <true/>
     <key>UserName</key>
     <string>rcslmac1</string>
+    <!-- /opt/homebrew/var/log rather than /var/log, and this is load-bearing.
+         launchd opens StandardOutPath as the job's *UserName*, not as root, so
+         a path this account cannot create a file in makes the spawn fail before
+         the program ever runs. /var/log is root:wheel drwxr-xr-x and `rcslmac1`
+         gets EACCES there. The failure is invisible from the outside:
+         `bootstrap` still returns 0 because loading the job into the domain
+         succeeded, and the job then sits at `state = spawn scheduled` with
+         `active count = 0` forever. This and online.rcsl.colima were the
+         only two jobs with this combination, and they are exactly the two that
+         2026-09-08's shutdown found `bootout` could not stop — because launchd
+         had never spawned them, so those processes were never its children.
+         Every other nexus daemon already logs here; see
+         docs/runbooks/planned-shutdown.md section 2. -->
     <key>StandardOutPath</key>
-    <string>/var/log/nexus-socat-forwards.log</string>
+    <string>/opt/homebrew/var/log/nexus-socat-forwards.log</string>
     <key>StandardErrorPath</key>
-    <string>/var/log/nexus-socat-forwards.log</string>
+    <string>/opt/homebrew/var/log/nexus-socat-forwards.log</string>
 </dict>
 </plist>
