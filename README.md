@@ -114,6 +114,11 @@ if it exits non-zero, read its log rather than the application logs, because the
 applications gate on it. Account and database names must be lower-case
 (`[a-z_][a-z0-9_]*`); the defaults already are.
 
+Taking the platform down on purpose, and bringing it back, is
+[`docs/runbooks/planned-shutdown.md`](./docs/runbooks/planned-shutdown.md).
+It covers the two daemons that `launchctl bootout` does not actually stop, and
+why a shutdown followed by a reboot is a restore rather than a shutdown.
+
 Model runtimes are deliberately **not** in Compose. Containers on macOS
 cannot reach the GPU, so a containerised Ollama would be CPU-only and MLX
 would not run at all. Install them natively on the host, bound to

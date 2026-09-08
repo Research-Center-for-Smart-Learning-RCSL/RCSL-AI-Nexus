@@ -36,6 +36,9 @@ separately at the end, marked as superseded.
 
 ### September 2026
 
+**[2026-09-08](./progress/2026-09-08.md)**
+- Took the platform down on purpose, and two of the six daemons did not go
+
 **[2026-09-07](./progress/2026-09-07.md)**
 - Asked whether the platform draws, and the answer turned out to be about the GPU rather than about the code
 - Verified the five plans against the tree, and three of them were describing a repository that no longer exists
