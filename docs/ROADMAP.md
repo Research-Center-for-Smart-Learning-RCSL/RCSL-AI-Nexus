@@ -11,7 +11,14 @@ which is a paragraph carrying what was decided and why. A phase is the unit the
 plan is discussed in and the unit its items are grouped by, so it is the unit
 the files use. No reference anywhere depended on a heading anchor.
 
-## Phases
+## Cross-cutting implementation plans
+
+- [Image generation on a time-shared host](./plans/image-generation.md): proposed,
+  not implemented. Temporary text-service suspension is an accepted product
+  trade-off; durable jobs, shared admission and verified text restoration precede
+  live generation. A second node is optional rather than a first-release requirement.
+
+## Phase milestones
 
 **[Phase 0: Base Infrastructure (on the Mac Studio, mostly outside this repository)](./roadmap/phase-0-base-infrastructure.md)**
 

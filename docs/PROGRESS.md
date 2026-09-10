@@ -36,6 +36,9 @@ separately at the end, marked as superseded.
 
 ### September 2026
 
+**[2026-09-10](./progress/2026-09-10.md)**
+- Planned image generation around a time-shared host; documentation only
+
 **[2026-09-09](./progress/2026-09-09.md)**
 - 復機時發現：那兩個 daemon 從來沒有被 launchd 起過
 - 修好第一個缺陷，第二個才現形：兩個缺陷互相遮蔽
