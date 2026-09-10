@@ -349,6 +349,20 @@ Detailed internal design:
 
 ## 5. Decisions
 
+### Proposed image-generation extension
+
+The [image-generation construction plan](./plans/image-generation.md) is a
+documentation-only proposal verified against `main` on 2026-09-10. The accepted
+product direction is internal-first generation for teaching/presentation images,
+with approved-content-only external use and temporary suspension of some text
+services permitted. It proposes shared-host admission, bounded mode transitions,
+durable jobs and private image assets. None of these image features is implemented;
+the capability and module inventory above continues to describe existing code.
+See its [baseline corrections](./plans/image-generation/verified-baseline.md)
+before interpreting registry-level multi-node support as working remote dispatch.
+
+### Existing Phase 1 decisions
+
 No open decisions block Phase 1.
 
 Settled:

@@ -1,5 +1,13 @@
 # Plan: Image Capabilities, and Why Drawing Is a Node Problem
 
+> **Historical survey; recommendations superseded in part on 2026-09-10.**
+> The [construction plan](./image-generation.md) incorporates the accepted
+> trade-off of pausing text services while generating images on the existing
+> host. Its [verified baseline](./image-generation/verified-baseline.md) corrects
+> this survey's claims about enforced egress, multi-node readiness, port/registry
+> coupling, image metering and the scope of vision work. The original findings
+> below describe the stated commit, not today's deployment or an approved design.
+
 **Status: survey, nothing decided and nothing implemented.** Written 2026-09-07
 against `main` at `32b7648`. Everything in section 2 was established by reading
 the tree at that commit and each claim names the file it came from; section 3
