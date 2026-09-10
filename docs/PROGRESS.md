@@ -36,6 +36,14 @@ separately at the end, marked as superseded.
 
 ### September 2026
 
+**[2026-09-10](./progress/2026-09-10.md)**
+- 修好 spawn 的那個 commit，也讓 `KeepAlive` 第一次真的生效
+- 第二件事比較嚴重，而且它動到的是資料
+- 一句沒有證據支撐的話，要先拿掉
+- 順帶一個會讓人卡住的迴圈
+- 哪些是驗過的，哪些不是
+- 這一份是怎麼來的
+
 **[2026-09-09](./progress/2026-09-09.md)**
 - 復機時發現：那兩個 daemon 從來沒有被 launchd 起過
 - 修好第一個缺陷，第二個才現形：兩個缺陷互相遮蔽
