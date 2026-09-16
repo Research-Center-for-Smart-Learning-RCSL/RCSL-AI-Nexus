@@ -195,32 +195,19 @@ No open decisions block Phase 1.
   platform tells a caller, not to which model serves them ([PROGRESS.md](../PROGRESS.md)
   2026-08-15).
 
-- **The context ceiling now costs more time than the transport allows, and
-  nothing raised the ceiling to do it.** Raised 2026-09-02 by measuring the
-  worst case for the first time. `MAX_CONTEXT_LENGTH` is 122880 and
-  `REQUEST_TIMEOUT_SECONDS` is 1200, which reaches the adapter as
-  `httpx.Timeout(read=1200)`; prompt evaluation sends no bytes, so the read
-  timeout is what bounds it. Measured on the model actually serving:
-  **121,892 tokens at 88.4 prompt tok/s is 1,379 seconds**, and the crossing is
-  near 110,000 tokens. The ceiling was set on 2026-08-17 against
-  `qwen36-35b-a3b-q8`'s 711 tok/s (`122880 / 711 = 173 s`); on 2026-08-21 both
-  policies went back to a dense model without the ceiling being revisited, which
-  is the same unrecorded move the item below now carries. Four ways out and they
-  are not equivalent: **lower the ceiling** to what the serving model can
-  evaluate in 1200 s, which takes back the room three separate raises were made
-  to give agent clients; **raise `REQUEST_TIMEOUT_SECONDS`**, which lengthens how
-  long one caller can hold a concurrency slot doing nothing visible — 4 slots
-  exist; **change the serving model**, since `qwen3.8:27b-mlx` measures 250
-  prompt tok/s flat against this model's 88.4 at depth — **and that option was
-  priced on 2026-09-02 and is dearer than it looked**: the same build scored
-  84.9% against the incumbent's 93.4% on the eighteen-task set, so this way out
-  costs 8.5 points of capability to buy back a guardrail, which is a trade the
-  other three do not ask for; or **decide the combination is unreachable in
-  practice** and say so, which needs the estimate calibration below to be
-  trustworthy and it currently is not. Nothing here is
-  urgent — the deployment served no request at all in the 48 hours before the
-  measurement — but it is a guardrail that no longer holds, rather than one that
-  is merely conservative. Evidence in [PROGRESS.md](../PROGRESS.md) 2026-09-02.
+- **~~The context ceiling now costs more time than the transport allows, and
+  nothing raised the ceiling to do it.~~** Raised 2026-09-02, **resolved
+  2026-09-16 by raising `REQUEST_TIMEOUT_SECONDS` from 1200 to 1500**.
+  Lowering `MAX_CONTEXT_LENGTH` was the other viable option; it would have
+  taken back room three separate raises bought for agent clients. The cost
+  of the raise: a hung runtime holds one of 4 concurrency slots for 25
+  minutes instead of 20. `proxyTimeout` in `next.config.js` moved with it
+  (2160s → 2460s); `test_proxy_and_body_limits.py` enforces the ordering.
+  The coupling rule in the `max_context_length` docstring stands:
+  **whichever of the three moves, the other two are re-derived.**
+  Original measurement: 121,892 tokens at 88.4 prompt tok/s = 1,379
+  seconds on `gemma4:31b-it-q8_0`. Evidence in
+  [PROGRESS.md](../PROGRESS.md) 2026-09-02.
 
 - **The estimate that decides the refusal is calibrated against a model that
   stopped serving.** Raised 2026-09-02, and it is why the item above cannot be

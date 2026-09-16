@@ -305,7 +305,7 @@ class RuntimeSettings(BaseSettings):
       timeout stopped being the binding constraint when the dense model was
       replaced, and nothing had gone back to check.
 
-      **It stopped being unbinding four days later, and this is now broken.**
+      **It stopped being unbinding four days later.**
       On 2026-08-21 `chat` and `code` both went back to
       `gemma4:31b-it-q8_0` and nothing revisited the ceiling that had been
       raised for the model they left. Measured 2026-09-02 at the ceiling
@@ -313,17 +313,17 @@ class RuntimeSettings(BaseSettings):
 
           121892 tokens at 88.4 tok/s = 1379 seconds
 
-      against the same 1200 second read timeout, crossing near 110000 tokens.
       **Every earlier figure in this paragraph was taken shallow, and the rate
       is not flat**: on this model prompt evaluation runs at 209 tok/s over the
-      first 10k tokens, 172 at 25k, 105 at 93k. So a request this ceiling admits
-      cannot complete, and the guardrail whose whole purpose is to refuse before
-      the transport kills is the thing letting it through. Nothing raised the
-      ceiling to cause it — the throughput underneath it was lowered — which is
-      a direction this docstring had no rule for and now does: **whichever of
-      the three moves, the other two are re-derived.** Options and what each
-      costs are in `docs/roadmap/decisions.md`; nothing is changed here yet
-      because each one gives back something a previous decision bought.
+      first 10k tokens, 172 at 25k, 105 at 93k. Nothing raised the ceiling to
+      cause this — the throughput underneath it was lowered — which is a
+      direction this docstring had no rule for and now does: **whichever of
+      the three moves, the other two are re-derived.**
+
+      **Resolved 2026-09-16 by raising `request_timeout_seconds` to 1500.**
+      Lowering this ceiling was the other option; it would have taken back
+      room three separate raises bought for agent clients. The cost of the
+      raise is a hung runtime holding a slot for 25 minutes instead of 20.
 
     This is one of the six resource guardrails security.md section 4.3 counts
     on, so raising it costs something real: context is superlinear on unified
@@ -334,29 +334,28 @@ class RuntimeSettings(BaseSettings):
     tool calls are counted too.
     """
 
-    request_timeout_seconds: int = 1200
+    request_timeout_seconds: int = 1500
     """Per-read HTTP timeout on a runtime call: the longest gap between bytes.
 
     **This is what bounds prompt evaluation**, because a runtime reading a long
     prompt sends nothing at all while it does so. Sized from `max_context_length`
-    above, with room over the 932 seconds a full context cost when it was set;
-    the two move together or the larger one is unreachable.
+    above; the two move together or the larger one is unreachable.
 
-    **They are not in step as of 2026-09-02 and this is the smaller half.** A
-    full `max_context_length` prompt measures 1379 seconds against this 1200,
-    so the larger one is currently unreachable — the case this docstring names
-    and had never been measured at. See `max_context_length` above.
-
-    300 → 600 on 2026-08-05 with the context ceiling, and 600 → 1200 on
-    2026-08-14 with it again. The cost is paid by a *hung* runtime rather than a
-    busy one, since a stream that is producing resets this on every chunk: a
-    runtime that has stopped answering now holds one of
-    `max_concurrent_inference` slots for twenty minutes instead of ten.
+    300 → 600 on 2026-08-05 with the context ceiling, 600 → 1200 on
+    2026-08-14 with it again, and 1200 → 1500 on 2026-09-16 because the
+    model that now serves (`gemma4:31b-it-q8_0`) evaluates a full context in
+    1379 seconds — measured 2026-09-02 at 121892 tokens, 88.4 tok/s — which
+    exceeded the 1200 that was sized against the MoE's 711 tok/s. Lowering
+    `max_context_length` was the alternative; raising this is cheaper because
+    the cost is paid by a *hung* runtime rather than a busy one, since a
+    stream that is producing resets this on every chunk: a runtime that has
+    stopped answering now holds one of `max_concurrent_inference` slots for
+    twenty-five minutes instead of twenty.
 
     That cost is worth naming, because the case it buys is the cold one. A
     conversation an agent is part way through prefills in seconds — the runtime
     holds its prefix — and only the first turn of a long one, or the first after
-    an eviction, pays the full 932 seconds. Sizing this to the warm case would
+    an eviction, pays the full 1379 seconds. Sizing this to the warm case would
     make the cold one unreachable rather than slow.
     """
 
@@ -374,16 +373,16 @@ class RuntimeSettings(BaseSettings):
     bounds a stream that keeps *producing* too slowly to finish, and a runtime
     evaluating a long prompt produces nothing while it does so, so counting from
     the request charged the answer's budget for reading the question. At the
-    context ceiling above that is most of it: 556 seconds of prompt evaluation
-    against 900 here, leaving a stream to be cut on its first token and report
-    `finish_reason: "length"` — telling a client the model talked too much when
-    it had not yet started. Prompt evaluation is bounded by
+    context ceiling above that is most of it: 1379 seconds of prompt evaluation
+    (measured 2026-09-02 on the model actually serving) against 900 here, so
+    charging the answer for the question would leave negative time and report
+    `finish_reason: "length"` on the first token. Prompt evaluation is bounded by
     `request_timeout_seconds` instead, which is the limit designed for "no bytes
     for the interval".
 
     So the two compose rather than overlap, and one request's worst case is
-    their sum: ten minutes reading plus fifteen writing, which is the longest
-    one caller can hold one of `max_concurrent_inference` slots.
+    their sum: twenty-five minutes reading plus fifteen writing, which is the
+    longest one caller can hold one of `max_concurrent_inference` slots.
 
     Zero or negative disables it. The stream is cut with
     `finish_reason=length`, the honest signal to an OpenAI client that the model
