@@ -63,13 +63,18 @@ export function TaskHeatmap({ report }: { report: EvaluationReport }) {
   }, CELL_GAP);
 
   function onKeyDown(event: React.KeyboardEvent<SVGSVGElement>) {
-    const r = hover?.row ?? 0;
-    const c = hover?.col ?? 0;
+    if (!hover) {
+      if (['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+        setHover({ row: 0, col: 0 });
+        event.preventDefault();
+      }
+      return;
+    }
     switch (event.key) {
-      case 'ArrowRight': setHover({ row: r, col: Math.min(models.length - 1, c + 1) }); break;
-      case 'ArrowLeft': setHover({ row: r, col: Math.max(0, c - 1) }); break;
-      case 'ArrowDown': setHover({ row: Math.min(tasks.length - 1, r + 1), col: c }); break;
-      case 'ArrowUp': setHover({ row: Math.max(0, r - 1), col: c }); break;
+      case 'ArrowRight': setHover({ row: hover.row, col: Math.min(models.length - 1, hover.col + 1) }); break;
+      case 'ArrowLeft': setHover({ row: hover.row, col: Math.max(0, hover.col - 1) }); break;
+      case 'ArrowDown': setHover({ row: Math.min(tasks.length - 1, hover.row + 1), col: hover.col }); break;
+      case 'ArrowUp': setHover({ row: Math.max(0, hover.row - 1), col: hover.col }); break;
       case 'Home': setHover({ row: 0, col: 0 }); break;
       case 'End': setHover({ row: tasks.length - 1, col: models.length - 1 }); break;
       case 'Escape': setHover(null); return;
@@ -157,7 +162,6 @@ export function TaskHeatmap({ report }: { report: EvaluationReport }) {
                 className={cn(
                   'transition-opacity',
                   isHovered && 'stroke-foreground',
-                  hover && !inRow && !inCol && 'opacity-40',
                 )}
                 strokeWidth={isHovered ? 1.5 : 0}
                 fill="currentColor"

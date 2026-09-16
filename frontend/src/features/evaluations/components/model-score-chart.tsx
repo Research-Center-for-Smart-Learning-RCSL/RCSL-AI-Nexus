@@ -4,11 +4,10 @@ import { useRef, useState } from 'react';
 
 import { cn } from '@/lib/utils';
 import {
+  barPlotArea,
   categoricalBarRects,
-  plotArea,
-  scaleY,
-  yTicks,
 } from '@/components/composed/chart-geometry';
+import { YGridlines } from '@/components/composed/y-gridlines';
 import {
   formatScore,
   shortModelLabel,
@@ -32,10 +31,8 @@ export function ModelScoreChart({ report }: { report: EvaluationReport }) {
   const best = sorted[0]?.score ?? 0;
   const items = sorted.map((m) => ({ label: shortModelLabel(m.model_ref), v: (m.score ?? 0) * 100 }));
 
-  const dummySeries = [{ label: '', points: [{ t: '0', v: 0 }, { t: '1', v: 100 }] }];
-  const plot = { ...plotArea(dummySeries, VIEW_W, VIEW_H, MARGIN), axisMax: 100 };
+  const plot = barPlotArea(VIEW_W, VIEW_H, MARGIN, 100);
   const bars = categoricalBarRects(items, plot, 8);
-  const ticks = yTicks(100);
 
   function onMove(event: React.PointerEvent<SVGSVGElement>) {
     const svg = svgRef.current;
@@ -84,27 +81,7 @@ export function ModelScoreChart({ report }: { report: EvaluationReport }) {
           onKeyDown={onKeyDown}
           onBlur={() => setHoverIdx(null)}
         >
-          {ticks.map((v) => {
-            const y = scaleY(v, plot);
-            const isEndpoint = v === 0 || v === 100;
-            return (
-              <g key={v}>
-                <line
-                  x1={plot.x0} x2={plot.x1} y1={y} y2={y}
-                  className={isEndpoint ? 'stroke-border' : 'stroke-border/50'}
-                  strokeWidth={1}
-                  strokeDasharray={isEndpoint ? undefined : '2 4'}
-                />
-                <text
-                  x={plot.x0 - 6} y={y}
-                  textAnchor="end" dominantBaseline="middle"
-                  className="fill-muted-foreground text-[10px]"
-                >
-                  {v}%
-                </text>
-              </g>
-            );
-          })}
+          <YGridlines plot={plot} formatValue={(v) => `${v}%`} />
 
           {bars.map((bar, i) => {
             const isBest = best > 0 && Math.abs((sorted[i].score ?? 0) - best) < 0.001;
