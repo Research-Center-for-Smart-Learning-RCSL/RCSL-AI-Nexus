@@ -15,6 +15,12 @@ class OperationsSettings(BaseSettings):
     machine's. Optional infrastructure — an unreachable agent makes the panel
     say "not reporting" rather than failing a request."""
 
+    snapshot_interval_seconds: int = 3600
+    """How often platform entity counts are recorded for dashboard sparklines.
+
+    One hour: enough resolution for a 48-hour trend line without accumulating
+    rows. Zero or negative disables the recorder."""
+
     retention_sweep_interval_seconds: int = 24 * 3600
     """How often stored retention windows are applied.
 

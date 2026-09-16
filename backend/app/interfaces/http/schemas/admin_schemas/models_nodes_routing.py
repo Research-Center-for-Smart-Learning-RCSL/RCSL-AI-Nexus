@@ -223,6 +223,16 @@ class GatewayInfoResponse(BaseModel):
     on a key but will answer `no_available_model` until a policy names it."""
 
 
+class DashboardTrendPointResponse(BaseModel):
+    t: str
+    models_loaded: int
+    models_total: int
+    nodes_online: int
+    nodes_total: int
+    api_keys_active: int
+    users_total: int
+
+
 class DashboardResponse(BaseModel):
     models_total: int
     models_loaded: int
@@ -232,3 +242,4 @@ class DashboardResponse(BaseModel):
     users_total: int
     requests_last_24h: int
     tokens_last_24h: int
+    trends: list[DashboardTrendPointResponse] = []
