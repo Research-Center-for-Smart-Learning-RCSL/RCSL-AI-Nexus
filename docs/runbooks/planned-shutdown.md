@@ -207,9 +207,14 @@ sudo launchctl print system/online.rcsl.<label> | grep -E 'active count|state ='
 
 - [ ] **回頭確認那兩個真的停了**（第 2 節）
 
-  2026-09-09 修掉根因之後，`bootout` 對六個都成立，這一步預期會是空的。但**還是要
-  跑**：這是驗證，不是修補，而且如果有人在 launchd 之外手動起過 colima 或那支腳本，
-  留下的程序仍然只能用下面的方式收。
+  2026-09-09 修掉根因之後，`bootout` 對六個都能送出 SIGTERM。但 **`bootout` 對一個
+  launchd 真的持有的 colima 做到乾淨的 `colima stop` 序列，到目前為止還沒有被驗證
+  過**——2026-09-09 驗過的是 `bootstrap`（啟動），不是 `bootout`（停止）。plist 的
+  `ExitTimeOut` 已設為 120 秒，高於 `colima stop` 的觀察耗時，但在第一次刻意的停機
+  演練確認之前，這一步不能省。
+
+  即使 bootout 正確地停掉了 colima，**手動起過的程序仍然只能用下面的方式收**——
+  launchd 不曾 spawn 的東西，bootout 也不會停。
 
   ```sh
   # socat：kill supervisor shell，它的 trap 會收掉三個 socat 子程序
@@ -310,7 +315,15 @@ enable 它是無害的，但會讓下一個讀日誌的人以為當初 disable �
   然後**等到這一行有回應才往下**，不要用固定秒數的 sleep 猜：
 
   ```sh
-  until docker info >/dev/null 2>&1; do sleep 2; done; echo "docker 就緒"
+  elapsed=0
+  until docker info >/dev/null 2>&1; do
+    sleep 2; elapsed=$((elapsed + 2))
+    if [ $elapsed -ge 180 ]; then
+      echo "等了 180 秒仍未就緒"; echo "查看 /opt/homebrew/var/log/nexus-colima.log"
+      sudo launchctl print system/online.rcsl.colima | grep -E 'active count|state ='
+      break
+    fi
+  done && echo "docker 就緒"
   ```
 
   Colima 的 VM 啟動是整個復機最慢的一步。在它就緒前跑任何 `docker compose`

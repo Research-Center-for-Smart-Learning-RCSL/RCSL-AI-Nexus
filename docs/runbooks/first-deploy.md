@@ -1066,10 +1066,10 @@ security: ... User interaction is not allowed.
   colima status                                        # VM 跑了沒
   ```
 
-  手動補救：
+  手動補救（`KeepAlive=true`，不要用 bare `colima start`——launchd 會搶）：
 
   ```sh
-  colima start    # 若 VM 沒起來
+  sudo launchctl bootstrap system /Library/LaunchDaemons/online.rcsl.colima.plist   # 若 VM 沒起來
   docker compose up -d
   ```
 - **Mac 上容器碰不到 GPU**：所以 Ollama 一定要原生跑，別想放進 Docker。

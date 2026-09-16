@@ -81,9 +81,17 @@ mounts:
     writable: false
 ```
 
-Changing it needs `colima stop` and `colima start`, which stops every container.
-Named volumes live in the VM's disk image and survive that; only `colima delete`
-destroys them.
+Changing it needs a VM restart, which stops every container. Named volumes live
+in the VM's disk image and survive that; only `colima delete` destroys them.
+Because `KeepAlive=true` in the plist, a bare `colima stop` will be restarted by
+launchd within ten seconds — and Colima rewrites `colima.yaml` on start, so the
+edit is lost. Use `bootout`/`bootstrap` instead:
+
+```sh
+sudo launchctl bootout system/online.rcsl.colima
+# edit ~/.colima/default/colima.yaml
+sudo launchctl bootstrap system /Library/LaunchDaemons/online.rcsl.colima.plist
+```
 
 **[Updated 2026-09-05] The credential helper problem below is resolved.** The migration from Docker Desktop to Colima on 2026-09-05 replaced `credsStore: desktop` with `osxkeychain`, eliminating `docker-credential-desktop` from the registry path entirely. The workaround is no longer needed and the throwaway `DOCKER_CONFIG` trick is retired. The history is preserved because the diagnostic method — test the credential helper directly, expect an answer in milliseconds — applies to any credential store.
 
@@ -201,7 +209,7 @@ The recovery is `launchd/reconcile-port-bindings.sh`, installed as a LaunchDaemo
 
 **The read-back gets its own 120 seconds rather than what is left of the run's.** The deadline is absolute and one of the two ways into the repair branch is the settle loop timing out — the 19:10 boot's exact path — which leaves nothing. With nothing left, the first sample, taken in the gap between `up -d` returning and Compose reporting the container as running, prints `FATAL: still not running` about a stack that is starting. Reproduced with one injected lagging sample: without the fix, the FATAL is logged in the same second as `Container ... Started`; with it, one retry and `stack up: all expected services running`. A repair whose failure report is a race is not one anyone can act on.
 
-**[Updated 2026-09-05] Under Colima, `colima stop && colima start` has the same container-loss behaviour described below — `restart: unless-stopped` still means an explicit stop is not retried. The reconciler now covers this at boot because Colima runs as a LaunchDaemon (`online.rcsl.colima`), and `check-platform-health.sh` still covers a mid-session restart on its five-minute interval.**
+**[Updated 2026-09-05] Under Colima, a VM restart has the same container-loss behaviour described below — `restart: unless-stopped` still means an explicit stop is not retried. The reconciler now covers this at boot because Colima runs as a LaunchDaemon (`online.rcsl.colima`), and `check-platform-health.sh` still covers a mid-session restart on its five-minute interval. [Updated 2026-09-16] The plist now carries `KeepAlive=true`, so a bare `colima stop` is restarted by launchd within ten seconds; use `bootout`/`bootstrap` to restart the VM (see the `mounts:` paragraph above).**
 
 **Restarting Docker Desktop reached the same state and no reconciler covered it.** On 2026-08-25 `docker desktop restart` stopped all twelve containers cleanly — eleven `Exited (0)`, `qdrant` `Exited (143)` — and restored none, leaving the platform entirely down until `docker compose up -d` was run by hand. `restart: unless-stopped` was not at fault and was not a second chance here: a restart stops containers *explicitly*, which is exactly the "unless", so the daemon had no event to act on when it returned. The state was the 19:10 boot's, but the trigger was not a boot, and everything written for that state was boot-shaped — the reconciler was a LaunchDaemon that ran at startup, and both injectors that rehearsed it worked by rebooting. An operator restarting Docker Desktop mid-session therefore got no reconciler at all. What did cover it was `check-platform-health.sh` on its five-minute interval, which bounds the outage at five minutes plus however long the mail takes to be read; that is the only net under this case, which the port-binding reconciler's name rather obscures.
 
