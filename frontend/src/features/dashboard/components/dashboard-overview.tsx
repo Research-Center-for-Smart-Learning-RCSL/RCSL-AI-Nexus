@@ -25,9 +25,6 @@ export function DashboardOverview() {
     return <ErrorState error={error} onRetry={() => void refetch()} />;
   }
 
-  const requestPoints = usage.data?.totals.map((p) => ({ t: p.t, v: p.requests }));
-  const tokenPoints = usage.data?.totals.map((p) => ({ t: p.t, v: p.tokens }));
-
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -64,14 +61,14 @@ export function DashboardOverview() {
         <StatCard
           label="Requests (24h)"
           value={data?.requests_last_24h?.toLocaleString() ?? '—'}
-          sparkline={requestPoints && <Sparkline points={requestPoints} label="Request trend, last 24 hours" className="text-chart-1" />}
+          sparkline={requests && <Sparkline points={requests[0].points} label="Request trend, last 24 hours" className="text-chart-1" />}
           icon={<ActivityIcon className="size-4" />}
           isLoading={isLoading || usage.isLoading}
         />
         <StatCard
           label="Tokens (24h)"
           value={data?.tokens_last_24h?.toLocaleString() ?? '—'}
-          sparkline={tokenPoints && <Sparkline points={tokenPoints} label="Token trend, last 24 hours" className="text-chart-2" />}
+          sparkline={tokens && <Sparkline points={tokens[0].points} label="Token trend, last 24 hours" className="text-chart-2" />}
           icon={<HashIcon className="size-4" />}
           isLoading={isLoading || usage.isLoading}
         />

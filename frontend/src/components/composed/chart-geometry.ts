@@ -79,12 +79,17 @@ export function scaleY(v: number, plot: Plot): number {
 }
 
 type XY = { x: number; y: number };
+type TV = { t: number; v: number };
 
-function projected(points: ChartPoint[], plot: Plot): XY[] {
+function parseSortPoints(points: ChartPoint[]): TV[] {
   return points
     .map((p) => ({ t: Date.parse(p.t), v: p.v }))
     .filter((p) => !Number.isNaN(p.t))
-    .sort((a, b) => a.t - b.t)
+    .sort((a, b) => a.t - b.t);
+}
+
+function projected(points: ChartPoint[], plot: Plot): XY[] {
+  return parseSortPoints(points)
     .map((p) => ({ x: scaleX(p.t, plot), y: scaleY(p.v, plot) }));
 }
 
@@ -135,10 +140,7 @@ export function yTicks(axisMax: number): number[] {
 export type SparkPlot = { width: number; height: number; minV: number; maxV: number };
 
 function sparkProject(points: ChartPoint[], spark: SparkPlot): XY[] {
-  const sorted = points
-    .map((p) => ({ t: Date.parse(p.t), v: p.v }))
-    .filter((p) => !Number.isNaN(p.t))
-    .sort((a, b) => a.t - b.t);
+  const sorted = parseSortPoints(points);
   if (sorted.length === 0) return [];
   const minT = sorted[0].t;
   const maxT = sorted[sorted.length - 1].t;
@@ -164,6 +166,23 @@ export function sparklineArea(points: ChartPoint[], spark: SparkPlot): string {
   const last = xy[xy.length - 1];
   const h = spark.height.toFixed(2);
   return `M${first.x.toFixed(2)},${h} ${line} L${last.x.toFixed(2)},${h} Z`;
+}
+
+/** A plot area for a categorical chart where the X axis is labels, not time. */
+export function barPlotArea(
+  width: number,
+  height: number,
+  margin: { top: number; right: number; bottom: number; left: number },
+  axisMax: number,
+): Plot {
+  return {
+    x0: margin.left,
+    y0: height - margin.bottom,
+    x1: width - margin.right,
+    y1: margin.top,
+    extent: { minT: 0, maxT: 0, maxV: axisMax },
+    axisMax: niceCeil(axisMax),
+  };
 }
 
 // ---------------------------------------------------------------------------
