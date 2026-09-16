@@ -2,13 +2,19 @@ import { describe, expect, it } from 'vitest';
 
 import {
   areaPath,
+  categoricalBarRects,
   extentOf,
+  heatmapGrid,
   linePath,
   niceCeil,
   plotArea,
   scaleX,
   scaleY,
+  sparklineArea,
+  sparklinePath,
+  yTicks,
   type ChartSeries,
+  type SparkPlot,
 } from '@/components/composed/chart-geometry';
 
 const MARGIN = { top: 10, right: 10, bottom: 20, left: 40 };
@@ -105,5 +111,120 @@ describe('paths', () => {
   it('is empty for a series with no points', () => {
     expect(linePath([], plot)).toBe('');
     expect(areaPath([], plot)).toBe('');
+  });
+});
+
+describe('yTicks', () => {
+  it('always includes 0 and the axis max', () => {
+    for (const max of [1, 2, 5, 10, 50, 100, 200, 500]) {
+      const ticks = yTicks(max);
+      expect(ticks[0]).toBe(0);
+      expect(ticks[ticks.length - 1]).toBe(max);
+    }
+  });
+
+  it('produces at least 3 ticks for non-trivial values', () => {
+    expect(yTicks(10).length).toBeGreaterThanOrEqual(3);
+    expect(yTicks(50).length).toBeGreaterThanOrEqual(3);
+    expect(yTicks(100).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('returns [0] for zero or negative input', () => {
+    expect(yTicks(0)).toEqual([0]);
+    expect(yTicks(-5)).toEqual([0]);
+  });
+
+  it('produces evenly spaced values', () => {
+    const ticks = yTicks(100);
+    const step = ticks[1] - ticks[0];
+    for (let i = 2; i < ticks.length; i++) {
+      expect(ticks[i] - ticks[i - 1]).toBeCloseTo(step);
+    }
+  });
+});
+
+describe('sparkline', () => {
+  const spark: SparkPlot = { width: 80, height: 24, minV: 0, maxV: 10 };
+
+  it('draws a line starting with M', () => {
+    const d = sparklinePath(
+      [{ t: '2026-07-25T10:00:00Z', v: 0 }, { t: '2026-07-25T12:00:00Z', v: 10 }],
+      spark,
+    );
+    expect(d.startsWith('M')).toBe(true);
+    expect(d).toContain('L');
+  });
+
+  it('closes the area path with Z', () => {
+    const d = sparklineArea(
+      [{ t: '2026-07-25T10:00:00Z', v: 0 }, { t: '2026-07-25T12:00:00Z', v: 10 }],
+      spark,
+    );
+    expect(d.endsWith('Z')).toBe(true);
+  });
+
+  it('returns empty for no points', () => {
+    expect(sparklinePath([], spark)).toBe('');
+    expect(sparklineArea([], spark)).toBe('');
+  });
+
+  it('handles a single point without dividing by zero', () => {
+    const d = sparklinePath([{ t: '2026-07-25T10:00:00Z', v: 5 }], spark);
+    expect(d.startsWith('M')).toBe(true);
+    expect(d).not.toContain('NaN');
+  });
+
+  it('handles all-same values with a horizontal line', () => {
+    const d = sparklinePath(
+      [{ t: '2026-07-25T10:00:00Z', v: 5 }, { t: '2026-07-25T12:00:00Z', v: 5 }],
+      { width: 80, height: 24, minV: 5, maxV: 5 },
+    );
+    expect(d).not.toContain('NaN');
+  });
+});
+
+describe('categoricalBarRects', () => {
+  const p = plotArea([series([['2026-07-25T10:00:00Z', 100]])], 200, 120, MARGIN);
+
+  it('produces one rect per item', () => {
+    const bars = categoricalBarRects(
+      [{ label: 'A', v: 50 }, { label: 'B', v: 100 }],
+      p,
+    );
+    expect(bars).toHaveLength(2);
+  });
+
+  it('bars stay within the plot area', () => {
+    const bars = categoricalBarRects(
+      [{ label: 'A', v: 50 }, { label: 'B', v: 100 }, { label: 'C', v: 75 }],
+      p,
+    );
+    for (const bar of bars) {
+      expect(bar.x).toBeGreaterThanOrEqual(p.x0 - 0.01);
+      expect(bar.x + bar.width).toBeLessThanOrEqual(p.x1 + 0.01);
+    }
+  });
+
+  it('returns empty for no items', () => {
+    expect(categoricalBarRects([], p)).toEqual([]);
+  });
+});
+
+describe('heatmapGrid', () => {
+  it('produces rows * cols cells', () => {
+    const cells = heatmapGrid(3, 4, { x0: 0, y0: 0, width: 200, height: 120 });
+    expect(cells).toHaveLength(12);
+  });
+
+  it('assigns correct row and col indices', () => {
+    const cells = heatmapGrid(2, 3, { x0: 0, y0: 0, width: 100, height: 50 });
+    expect(cells[0]).toMatchObject({ row: 0, col: 0 });
+    expect(cells[2]).toMatchObject({ row: 0, col: 2 });
+    expect(cells[3]).toMatchObject({ row: 1, col: 0 });
+  });
+
+  it('returns empty for zero dimensions', () => {
+    expect(heatmapGrid(0, 5, { x0: 0, y0: 0, width: 100, height: 50 })).toEqual([]);
+    expect(heatmapGrid(3, 0, { x0: 0, y0: 0, width: 100, height: 50 })).toEqual([]);
   });
 });

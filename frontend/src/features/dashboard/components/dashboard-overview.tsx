@@ -1,7 +1,8 @@
 'use client';
 
-import { BoxIcon, CpuIcon, KeyIcon, UsersIcon } from 'lucide-react';
+import { ActivityIcon, BoxIcon, CpuIcon, HashIcon, KeyIcon, UsersIcon } from 'lucide-react';
 
+import { Sparkline } from '@/components/composed/sparkline';
 import { StatCard } from '@/components/composed/stat-card';
 import { MetricChart, type MetricSeries } from '@/components/composed/metric-chart';
 import { ErrorState } from '@/components/composed/error-state';
@@ -24,9 +25,12 @@ export function DashboardOverview() {
     return <ErrorState error={error} onRetry={() => void refetch()} />;
   }
 
+  const requestPoints = usage.data?.totals.map((p) => ({ t: p.t, v: p.requests }));
+  const tokenPoints = usage.data?.totals.map((p) => ({ t: p.t, v: p.tokens }));
+
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <StatCard
           label="Models loaded"
           value={
@@ -56,6 +60,20 @@ export function DashboardOverview() {
           hint="Invitation only"
           icon={<UsersIcon className="size-4" />}
           isLoading={isLoading}
+        />
+        <StatCard
+          label="Requests (24h)"
+          value={data?.requests_last_24h?.toLocaleString() ?? '—'}
+          sparkline={requestPoints && <Sparkline points={requestPoints} label="Request trend, last 24 hours" className="text-chart-1" />}
+          icon={<ActivityIcon className="size-4" />}
+          isLoading={isLoading || usage.isLoading}
+        />
+        <StatCard
+          label="Tokens (24h)"
+          value={data?.tokens_last_24h?.toLocaleString() ?? '—'}
+          sparkline={tokenPoints && <Sparkline points={tokenPoints} label="Token trend, last 24 hours" className="text-chart-2" />}
+          icon={<HashIcon className="size-4" />}
+          isLoading={isLoading || usage.isLoading}
         />
       </div>
 
