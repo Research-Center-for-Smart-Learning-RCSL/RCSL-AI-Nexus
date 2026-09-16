@@ -1,18 +1,24 @@
 'use client';
 
+import { useMemo } from 'react';
+
 import { ActivityIcon, BoxIcon, CpuIcon, HashIcon, KeyIcon, UsersIcon } from 'lucide-react';
 
 import { Sparkline } from '@/components/composed/sparkline';
 import { StatCard } from '@/components/composed/stat-card';
 import { MetricChart, type MetricSeries } from '@/components/composed/metric-chart';
 import { ErrorState } from '@/components/composed/error-state';
+import type { ChartPoint } from '@/components/composed/chart-geometry';
 import { useDashboardSummary } from '@/features/dashboard/hooks/use-dashboard';
+import type { DashboardTrendPoint } from '@/features/dashboard/schema';
 import { useUsage } from '@/features/usage/hooks/use-usage';
+
+function trendPoints(trends: DashboardTrendPoint[], key: keyof Omit<DashboardTrendPoint, 't'>): ChartPoint[] {
+  return trends.map((p) => ({ t: p.t, v: p[key] }));
+}
 
 export function DashboardOverview() {
   const { data, isLoading, error, refetch } = useDashboardSummary();
-  // The charts read the usage-analytics endpoint directly; the stat tiles keep
-  // their own 24h totals from /dashboard.
   const usage = useUsage('24h');
   const requests: MetricSeries[] | undefined = usage.data
     ? [{ label: 'Requests', points: usage.data.totals.map((p) => ({ t: p.t, v: p.requests })) }]
@@ -20,6 +26,7 @@ export function DashboardOverview() {
   const tokens: MetricSeries[] | undefined = usage.data
     ? [{ label: 'Tokens', points: usage.data.totals.map((p) => ({ t: p.t, v: p.tokens })) }]
     : undefined;
+  const trends = useMemo(() => data?.trends ?? [], [data]);
 
   if (error) {
     return <ErrorState error={error} onRetry={() => void refetch()} />;
@@ -33,6 +40,7 @@ export function DashboardOverview() {
           value={
             data ? `${data.models_loaded} / ${data.models_total}` : '—'
           }
+          sparkline={trends.length > 0 ? <Sparkline points={trendPoints(trends, 'models_loaded')} label="Models loaded trend" className="text-chart-1" /> : undefined}
           hint="Registered as loaded — Models shows where the runtime disagrees, and routing follows the runtime"
           icon={<BoxIcon className="size-4" />}
           isLoading={isLoading}
@@ -40,6 +48,7 @@ export function DashboardOverview() {
         <StatCard
           label="Nodes online"
           value={data ? `${data.nodes_online} / ${data.nodes_total}` : '—'}
+          sparkline={trends.length > 0 ? <Sparkline points={trendPoints(trends, 'nodes_online')} label="Nodes online trend" className="text-chart-1" /> : undefined}
           hint="From the node heartbeat"
           icon={<CpuIcon className="size-4" />}
           isLoading={isLoading}
@@ -47,6 +56,7 @@ export function DashboardOverview() {
         <StatCard
           label="Active API keys"
           value={data?.api_keys_active ?? '—'}
+          sparkline={trends.length > 0 ? <Sparkline points={trendPoints(trends, 'api_keys_active')} label="API keys trend" className="text-chart-1" /> : undefined}
           hint="Excludes revoked and expired"
           icon={<KeyIcon className="size-4" />}
           isLoading={isLoading}
@@ -54,6 +64,7 @@ export function DashboardOverview() {
         <StatCard
           label="Users"
           value={data?.users_total ?? '—'}
+          sparkline={trends.length > 0 ? <Sparkline points={trendPoints(trends, 'users_total')} label="Users trend" className="text-chart-1" /> : undefined}
           hint="Invitation only"
           icon={<UsersIcon className="size-4" />}
           isLoading={isLoading}

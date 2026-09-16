@@ -40,6 +40,7 @@ from app.infrastructure.di import (
 )
 from app.infrastructure.heartbeat import run_heartbeat
 from app.infrastructure.retention_sweep import run_retention_sweep
+from app.infrastructure.snapshot_recorder import run_snapshot_recorder
 from app.interfaces.http.middleware.geo_filter import build_geo_filter
 from app.interfaces.http.routers import (
     admin_chat,
@@ -154,10 +155,14 @@ async def admin_lifespan(app: FastAPI, *, run_node_heartbeat: bool = True) -> As
             run_retention_sweep(app, settings.retention_sweep_interval_seconds)
         )
 
+    snapshot: asyncio.Task[None] | None = None
+    if run_node_heartbeat and settings.snapshot_interval_seconds > 0:
+        snapshot = asyncio.create_task(run_snapshot_recorder(settings.snapshot_interval_seconds))
+
     try:
         yield
     finally:
-        for task in (heartbeat, retention):
+        for task in (heartbeat, retention, snapshot):
             if task is None:
                 continue
             task.cancel()

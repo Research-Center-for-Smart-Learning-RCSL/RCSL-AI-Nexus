@@ -1808,6 +1808,28 @@ export interface components {
             requests_last_24h: number;
             /** Tokens Last 24H */
             tokens_last_24h: number;
+            /**
+             * Trends
+             * @default []
+             */
+            trends: components["schemas"]["DashboardTrendPointResponse"][];
+            /** Users Total */
+            users_total: number;
+        };
+        /** DashboardTrendPointResponse */
+        DashboardTrendPointResponse: {
+            /** Api Keys Active */
+            api_keys_active: number;
+            /** Models Loaded */
+            models_loaded: number;
+            /** Models Total */
+            models_total: number;
+            /** Nodes Online */
+            nodes_online: number;
+            /** Nodes Total */
+            nodes_total: number;
+            /** T */
+            t: string;
             /** Users Total */
             users_total: number;
         };

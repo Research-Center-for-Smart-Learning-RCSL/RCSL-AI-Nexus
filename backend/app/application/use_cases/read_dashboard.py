@@ -28,9 +28,21 @@ from app.domain.ports.repositories import (
     UserRepositoryPort,
 )
 from app.domain.ports.security_ports import AuthorizationPort
+from app.infrastructure.snapshot_recorder import recent_snapshots
 from app.shared.clock import Clock
 
 WINDOW = timedelta(hours=24)
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardTrendPoint:
+    t: str
+    models_loaded: int
+    models_total: int
+    nodes_online: int
+    nodes_total: int
+    api_keys_active: int
+    users_total: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +55,7 @@ class DashboardSummary:
     users_total: int
     requests_last_24h: int
     tokens_last_24h: int
+    trends: list[DashboardTrendPoint]
 
 
 class ReadDashboard:
@@ -76,15 +89,28 @@ class ReadDashboard:
         users = await self._users.list_all()
         requests, tokens = await self._usage.totals_since(now - WINDOW)
 
+        snapshots = await recent_snapshots(hours=48)
+        trends = [
+            DashboardTrendPoint(
+                t=s.t,
+                models_loaded=s.models_loaded,
+                models_total=s.models_total,
+                nodes_online=s.nodes_online,
+                nodes_total=s.nodes_total,
+                api_keys_active=s.api_keys_active,
+                users_total=s.users_total,
+            )
+            for s in snapshots
+        ]
+
         return DashboardSummary(
             models_total=len(models),
             models_loaded=sum(1 for m in models if m.state is ModelState.LOADED),
             nodes_online=sum(1 for n in nodes if n.status is NodeStatus.ONLINE),
             nodes_total=len(nodes),
-            # Active means usable right now: neither revoked nor expired. A
-            # count of rows would include keys that stopped working months ago.
             api_keys_active=sum(1 for k in keys if k.is_active(now)),
             users_total=len(users),
             requests_last_24h=requests,
             tokens_last_24h=tokens,
+            trends=trends,
         )

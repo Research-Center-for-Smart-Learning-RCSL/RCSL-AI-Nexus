@@ -272,3 +272,16 @@ class RefusalRow(Base):
         Index("ix_refusals_tenant_at", "tenant_id", "at"),
         Index("ix_refusals_actor_at", "actor_id", "at"),
     )
+
+
+class PlatformSnapshotRow(Base):
+    __tablename__ = "platform_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    models_loaded: Mapped[int] = mapped_column(Integer)
+    models_total: Mapped[int] = mapped_column(Integer)
+    nodes_online: Mapped[int] = mapped_column(Integer)
+    nodes_total: Mapped[int] = mapped_column(Integer)
+    api_keys_active: Mapped[int] = mapped_column(Integer)
+    users_total: Mapped[int] = mapped_column(Integer)
