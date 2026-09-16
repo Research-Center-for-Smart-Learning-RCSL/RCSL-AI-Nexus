@@ -22,6 +22,7 @@ import {
   plotArea,
   scaleX,
   scaleY,
+  yTicks,
   type ChartSeries,
 } from '@/components/composed/chart-geometry';
 
@@ -204,9 +205,11 @@ export function MetricChart({
               onKeyDown={onKeyDown}
               onBlur={() => setHover(null)}
             >
-              {/* Baseline and the top gridline, with their value labels. */}
-              {[0, plot.axisMax].map((v) => {
+              {/* Y-axis gridlines with value labels. Endpoints (0 and max) are
+                  solid; intermediate lines are dashed for visual hierarchy. */}
+              {yTicks(plot.axisMax).map((v) => {
                 const y = scaleY(v, plot);
+                const isEndpoint = v === 0 || v === plot.axisMax;
                 return (
                   <g key={v}>
                     <line
@@ -214,8 +217,9 @@ export function MetricChart({
                       x2={plot.x1}
                       y1={y}
                       y2={y}
-                      className="stroke-border"
+                      className={isEndpoint ? 'stroke-border' : 'stroke-border/50'}
                       strokeWidth={1}
+                      strokeDasharray={isEndpoint ? undefined : '2 4'}
                     />
                     <text
                       x={plot.x0 - 6}

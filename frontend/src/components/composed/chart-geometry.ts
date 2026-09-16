@@ -103,3 +103,118 @@ export function areaPath(points: ChartPoint[], plot: Plot): string {
   const last = xy[xy.length - 1];
   return `M${first.x.toFixed(2)},${plot.y0.toFixed(2)} ${line} L${last.x.toFixed(2)},${plot.y0.toFixed(2)} Z`;
 }
+
+// ---------------------------------------------------------------------------
+// Y-axis ticks
+// ---------------------------------------------------------------------------
+
+/** Intermediate Y-axis values between 0 and `axisMax`, always including both
+ *  endpoints. Because `axisMax` comes from `niceCeil` (1/2/5 × 10^n), simple
+ *  division into halves, quarters, or fifths always produces clean numbers. */
+export function yTicks(axisMax: number): number[] {
+  if (axisMax <= 0) return [0];
+  let step: number;
+  const mag = 10 ** Math.floor(Math.log10(axisMax));
+  const norm = axisMax / mag;
+  if (norm <= 1) step = mag / 5;
+  else if (norm <= 2) step = mag / 2;
+  else step = mag;
+  if (step <= 0) return [0, axisMax];
+  const ticks: number[] = [];
+  for (let v = 0; v <= axisMax + step * 0.01; v += step) {
+    ticks.push(Math.round(v * 1e10) / 1e10);
+  }
+  if (ticks[ticks.length - 1] !== axisMax) ticks.push(axisMax);
+  return ticks;
+}
+
+// ---------------------------------------------------------------------------
+// Sparkline geometry (no margins, no axes)
+// ---------------------------------------------------------------------------
+
+export type SparkPlot = { width: number; height: number; minV: number; maxV: number };
+
+function sparkProject(points: ChartPoint[], spark: SparkPlot): XY[] {
+  const sorted = points
+    .map((p) => ({ t: Date.parse(p.t), v: p.v }))
+    .filter((p) => !Number.isNaN(p.t))
+    .sort((a, b) => a.t - b.t);
+  if (sorted.length === 0) return [];
+  const minT = sorted[0].t;
+  const maxT = sorted[sorted.length - 1].t;
+  const rangeT = maxT - minT || 1;
+  const rangeV = spark.maxV - spark.minV || 1;
+  return sorted.map((p) => ({
+    x: ((p.t - minT) / rangeT) * spark.width,
+    y: spark.height - ((p.v - spark.minV) / rangeV) * spark.height,
+  }));
+}
+
+export function sparklinePath(points: ChartPoint[], spark: SparkPlot): string {
+  const xy = sparkProject(points, spark);
+  if (xy.length === 0) return '';
+  return xy.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
+}
+
+export function sparklineArea(points: ChartPoint[], spark: SparkPlot): string {
+  const xy = sparkProject(points, spark);
+  if (xy.length === 0) return '';
+  const line = xy.map((p) => `L${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
+  const first = xy[0];
+  const last = xy[xy.length - 1];
+  const h = spark.height.toFixed(2);
+  return `M${first.x.toFixed(2)},${h} ${line} L${last.x.toFixed(2)},${h} Z`;
+}
+
+// ---------------------------------------------------------------------------
+// Categorical bar chart geometry
+// ---------------------------------------------------------------------------
+
+export type CategoricalPoint = { label: string; v: number };
+export type BarRect = { x: number; y: number; width: number; height: number; label: string; v: number };
+
+export function categoricalBarRects(
+  items: CategoricalPoint[],
+  plot: Plot,
+  gap = 4,
+): BarRect[] {
+  if (items.length === 0) return [];
+  const totalW = plot.x1 - plot.x0;
+  const barW = Math.max(1, (totalW - gap * (items.length - 1)) / items.length);
+  return items.map((item, i) => {
+    const x = plot.x0 + i * (barW + gap);
+    const yTop = scaleY(item.v, plot);
+    return { x, y: yTop, width: barW, height: plot.y0 - yTop, label: item.label, v: item.v };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Heatmap grid geometry
+// ---------------------------------------------------------------------------
+
+export type HeatCell = { x: number; y: number; width: number; height: number; row: number; col: number };
+
+export function heatmapGrid(
+  rows: number,
+  cols: number,
+  area: { x0: number; y0: number; width: number; height: number },
+  gap = 2,
+): HeatCell[] {
+  if (rows <= 0 || cols <= 0) return [];
+  const cellW = Math.max(1, (area.width - gap * (cols - 1)) / cols);
+  const cellH = Math.max(1, (area.height - gap * (rows - 1)) / rows);
+  const cells: HeatCell[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      cells.push({
+        x: area.x0 + c * (cellW + gap),
+        y: area.y0 + r * (cellH + gap),
+        width: cellW,
+        height: cellH,
+        row: r,
+        col: c,
+      });
+    }
+  }
+  return cells;
+}

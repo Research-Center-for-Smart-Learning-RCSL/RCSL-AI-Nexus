@@ -8,6 +8,7 @@ export type StatCardProps = {
   value: ReactNode;
   hint?: string;
   icon?: ReactNode;
+  sparkline?: ReactNode;
   isLoading?: boolean;
   className?: string;
 };
@@ -25,6 +26,7 @@ export function StatCard({
   value,
   hint,
   icon,
+  sparkline,
   isLoading,
   className,
 }: StatCardProps) {
@@ -42,6 +44,7 @@ export function StatCard({
         ) : (
           <span className="text-2xl font-semibold tabular-nums">{value}</span>
         )}
+        {sparkline ? <div className="h-6 w-full">{sparkline}</div> : null}
         {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
       </CardContent>
     </Card>
