@@ -40,6 +40,16 @@
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <!-- colima stop unmounts the disk image, stops VZ and stops hostagent;
+         that sequence routinely exceeds launchd's 20-second default.
+         A SIGKILL before it finishes can leave the disk image un-flushed,
+         which holds every named volume (Postgres, Redis).
+         120 seconds is comfortably above the observed shutdown duration.
+         Without this key, bootout and macOS shutdown both send SIGTERM
+         followed by SIGKILL at 20 s — the data-loss path 2026-09-10
+         identified. -->
+    <key>ExitTimeOut</key>
+    <integer>120</integer>
     <key>UserName</key>
     <string>rcslmac1</string>
     <!-- /opt/homebrew/var/log rather than /var/log, and this is load-bearing.

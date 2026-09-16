@@ -36,6 +36,9 @@ separately at the end, marked as superseded.
 
 ### September 2026
 
+**[2026-09-16](./progress/2026-09-16.md)**
+- `ExitTimeOut` 設上去了，三段會跟 `KeepAlive` 打架的程序也修了
+
 **[2026-09-10](./progress/2026-09-10.md)**
 - 修好 spawn 的那個 commit，也讓 `KeepAlive` 第一次真的生效
 - 第二件事比較嚴重，而且它動到的是資料
