@@ -209,31 +209,17 @@ No open decisions block Phase 1.
   seconds on `gemma4:31b-it-q8_0`. Evidence in
   [PROGRESS.md](../PROGRESS.md) 2026-09-02.
 
-- **The estimate that decides the refusal is calibrated against a model that
-  stopped serving.** Raised 2026-09-02, and it is why the item above cannot be
-  closed by arithmetic. `MAX_CONTEXT_LENGTH` is enforced against an estimate
-  from character widths, and `gemma4:31b-it-q8_0` cannot be counted exactly —
-  it declares `tokenizer.ggml.pre = gemma4`, which is not in
-  `KNOWN_PRE_TOKENIZERS`, so `GgufTokenCounter.prepare` refuses it and the
-  gateway has been estimating for `chat` and `code` since 2026-08-21. The
-  divisors in use (4.40 English, 1.49 Traditional Chinese) were measured against
-  `qwen36-35b-a3b-q8`. So where the refusal boundary falls in real tokens is
-  unknown in both directions, and the 2026-08-18 exact-counting work applies to
-  `assist` and to the `chat` fallback but not to the capability it was built for.
-  Three ways out: **measure the divisors** against the model that serves, which
-  is cheap and leaves the estimate an estimate; **add `gemma4` to
-  `KNOWN_PRE_TOKENIZERS`** after checking its pre-tokeniser against the
-  platform's pattern, which is what the allowlist exists to gate and is not a
-  one-line change; or **serve a model that is already countable** —
-  `qwen3.8:27b-q4_K_M` declares `qwen35` and prepares exactly with no code
-  change, while `qwen3.8:27b-mlx` is safetensors and cannot be counted at all.
-  **The third way out is now the expensive one.** Measured 2026-09-02,
-  `qwen3.8:27b-q4_K_M` scores 89.1% against the incumbent's 93.4% and takes 39.0
-  seconds per task against 33.3, so serving it to get exact counting costs 4.3
-  points of capability *and* is slower to an answer. The first way out — measure
-  the divisors against the model that serves — is still cheap, still leaves the
-  estimate an estimate, and is now the only one of the three that does not
-  change what the platform serves.
+- **~~The estimate that decides the refusal is calibrated against a model that
+  stopped serving.~~** Raised 2026-09-02, **resolved 2026-09-05/09-07.**
+  `gemma4` was added to `KNOWN_PRE_TOKENIZERS` on 2026-09-05
+  (`1a64410`), and measured at 1.00x against the runtime's own
+  `prompt_eval_count` on prose on 2026-09-07 — the Unigram vocabulary fix
+  (`0a22b5a`) and tool-counting fix (`c505a00`) were part of the same day's
+  work. The gateway now counts `chat` and `code` exactly with the model's
+  own vocabulary rather than estimating from character widths. The character
+  estimate remains only as the fallback for models whose pre-tokeniser is
+  not in the allowlist. See `runtime.py`'s `token_counter_cache_size`
+  docstring and [PROGRESS.md](../PROGRESS.md) 2026-09-07.
 
 Settled:
 
