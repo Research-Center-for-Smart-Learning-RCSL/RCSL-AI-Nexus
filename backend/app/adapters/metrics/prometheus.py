@@ -42,6 +42,7 @@ from prometheus_client.registry import Collector
 from app.domain.entities.usage import (
     BucketUnit,
     CompactionSummary,
+    LatencyStats,
     UsageBucket,
     UsageRecord,
 )
@@ -303,3 +304,6 @@ class MeteredUsageRepository:
             since=since,
             until=until,
         )
+
+    async def latency_stats_since(self, since: datetime) -> LatencyStats | None:
+        return await self._inner.latency_stats_since(since)

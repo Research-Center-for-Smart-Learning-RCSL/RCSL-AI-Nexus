@@ -104,3 +104,16 @@ class UsageRecord:
     caller asked the hardware to do both halves of the work. Charging for
     output alone meant a context-filling prompt cost nothing, on a machine
     where prompt evaluation is most of the wait."""
+
+
+@dataclass(frozen=True, slots=True)
+class LatencyStats:
+    """Percentile summary over a time window, for the dashboard.
+
+    Computed from completed requests only: an incomplete request's latency is
+    the moment the client disconnected, not how long the answer took."""
+
+    count: int
+    avg_ms: int
+    p50_ms: int
+    p95_ms: int

@@ -11,6 +11,7 @@ from app.domain.entities.refusal import Refusal
 from app.domain.entities.usage import (
     BucketUnit,
     CompactionSummary,
+    LatencyStats,
     UsageBucket,
     UsageRecord,
 )
@@ -172,6 +173,14 @@ class UsageRepositoryPort(Protocol):
 
     async def totals_since(self, since: datetime) -> tuple[int, int]:
         """`(requests, tokens)` across all callers, for the dashboard."""
+        ...
+
+    async def latency_stats_since(self, since: datetime) -> LatencyStats | None:
+        """Percentile summary of inference latency for completed requests.
+
+        ``None`` when no completed request exists in the window, so the
+        dashboard can show "—" rather than zeros that look like zero latency.
+        """
         ...
 
     async def list_records(

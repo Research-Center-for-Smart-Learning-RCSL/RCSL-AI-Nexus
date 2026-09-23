@@ -1796,6 +1796,8 @@ export interface components {
         DashboardResponse: {
             /** Api Keys Active */
             api_keys_active: number;
+            host_memory?: components["schemas"]["app__interfaces__http__schemas__admin_schemas__models_nodes_routing__HostMemoryResponse"] | null;
+            latency?: components["schemas"]["LatencyStatsResponse"] | null;
             /** Models Loaded */
             models_loaded: number;
             /** Models Total */
@@ -2025,19 +2027,10 @@ export interface components {
             /** Volume */
             volume: string | null;
         };
-        /** HostMemoryResponse */
-        HostMemoryResponse: {
-            /** Available Gb */
-            available_gb: number | null;
-            /** Swap Used Gb */
-            swap_used_gb: number | null;
-            /** Total Gb */
-            total_gb: number | null;
-        };
         /** HostStatusResponse */
         HostStatusResponse: {
             disk: components["schemas"]["HostDiskResponse"];
-            memory: components["schemas"]["HostMemoryResponse"];
+            memory: components["schemas"]["app__interfaces__http__schemas__admin_schemas__host_status__HostMemoryResponse"];
             /** Reporting */
             reporting: boolean;
             system: components["schemas"]["HostSystemResponse"];
@@ -2199,6 +2192,17 @@ export interface components {
         KnowledgeSearchResponse: {
             /** Passages */
             passages: components["schemas"]["RetrievedPassageResponse"][];
+        };
+        /** LatencyStatsResponse */
+        LatencyStatsResponse: {
+            /** Avg Ms */
+            avg_ms: number;
+            /** Count */
+            count: number;
+            /** P50 Ms */
+            p50_ms: number;
+            /** P95 Ms */
+            p95_ms: number;
         };
         /** MeResponse */
         MeResponse: {
@@ -2793,6 +2797,22 @@ export interface components {
             role: string;
             /** Tailscale Login */
             tailscale_login: string | null;
+        };
+        /** HostMemoryResponse */
+        app__interfaces__http__schemas__admin_schemas__host_status__HostMemoryResponse: {
+            /** Available Gb */
+            available_gb: number | null;
+            /** Swap Used Gb */
+            swap_used_gb: number | null;
+            /** Total Gb */
+            total_gb: number | null;
+        };
+        /** HostMemoryResponse */
+        app__interfaces__http__schemas__admin_schemas__models_nodes_routing__HostMemoryResponse: {
+            /** Available Gb */
+            available_gb: number;
+            /** Total Gb */
+            total_gb: number;
         };
     };
     responses: never;
