@@ -7,6 +7,7 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
+from app.adapters.http.metrics_port import HttpMetricsAdapter
 from app.adapters.metrics.prometheus import MeteredUsageRepository
 from app.adapters.persistence.model_state import ModelStateCommitter
 from app.adapters.persistence.repositories import (
@@ -257,6 +258,7 @@ def build_manage_models(
         # here is warm for the requests that follow. A per-request instance
         # would build a vocabulary and then throw it away.
         tokens=getattr(request.app.state, "token_counter", None),
+        metrics=HttpMetricsAdapter(settings.host_metrics_url),
     )
 
 

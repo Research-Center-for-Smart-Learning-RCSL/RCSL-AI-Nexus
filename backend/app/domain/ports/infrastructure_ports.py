@@ -48,7 +48,10 @@ class JobProgressPort(Protocol):
 
 
 class MetricsPort(Protocol):
-    """Phase 2. Until then the memory budget uses static node capacity."""
+    """Live host metrics, read from the launchd host-metrics agent.
+
+    Returns ``None`` when the agent is unreachable or not installed, so the
+    caller falls back to the static budget it has always used."""
 
     async def free_memory_gb(self, node_id: str) -> float | None: ...
 

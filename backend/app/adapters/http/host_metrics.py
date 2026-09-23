@@ -32,22 +32,31 @@ def _i(payload: dict[str, Any], key: str) -> int | None:
     return int(value) if isinstance(value, (int, float)) else None
 
 
+async def fetch_host_metrics(url: str, timeout: float = 2.0) -> dict[str, Any] | None:
+    """Fetch the raw JSON payload from the host-metrics agent.
+
+    Shared by ``HttpHostStatus`` (admin panel) and ``HttpMetricsAdapter``
+    (memory budget), so a change to the agent's response format or error
+    handling is applied once.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            return response.json()  # type: ignore[no-any-return]
+    except (httpx.HTTPError, ValueError):
+        logger.debug("host_metrics_unavailable url=%s", url)
+        return None
+
+
 class HttpHostStatus:
     def __init__(self, base_url: str, timeout_seconds: float = 2.0) -> None:
         self._url = base_url
         self._timeout = timeout_seconds
 
     async def read(self) -> HostStatus | None:
-        try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.get(self._url)
-                response.raise_for_status()
-                payload = response.json()
-        except (httpx.HTTPError, ValueError):
-            # Debug, not warning. On a deployment that never installed the agent
-            # this is the steady state, and a warning per poll would be a log
-            # full of a decision somebody already made.
-            logger.debug("host_metrics_unavailable url=%s", self._url)
+        payload = await fetch_host_metrics(self._url, self._timeout)
+        if payload is None:
             return None
 
         memory = payload.get("memory") or {}

@@ -47,11 +47,26 @@ class ModelLifecycleMixin(ModelRegistryMixin):
         node = await self._require_node(model.node_id)
         runtime = await self._require_runtime(model.runtime)
 
+        live_free_gb: float | None = None
+        if self._metrics is not None:
+            live_free_gb = await self._metrics.free_memory_gb(node.id)
+            if live_free_gb is not None:
+                logger.info(
+                    "live_free_memory node=%s free_gb=%.2f",
+                    node.id,
+                    live_free_gb,
+                )
+
         # Counts LOADING as well as LOADED, because a model mid-load already
         # holds (or is about to hold) its memory. LOADING is then committed
         # independently below, so a second load started moments later sees it
         # in this same count rather than a budget that ignores it.
-        self._budget.assert_can_load(model, node, await self._models.list_occupying_memory(node.id))
+        self._budget.assert_can_load(
+            model,
+            node,
+            await self._models.list_occupying_memory(node.id),
+            live_free_gb=live_free_gb,
+        )
 
         # Committed in its own transaction, not the request's. The request's
         # write would be invisible to a concurrent load until it commits at the
