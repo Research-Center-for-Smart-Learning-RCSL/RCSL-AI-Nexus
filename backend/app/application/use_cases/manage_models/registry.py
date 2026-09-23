@@ -16,6 +16,7 @@ from app.domain.exceptions import (
     NodeNotFoundError,
     RuntimeUnavailableError,
 )
+from app.domain.ports.infrastructure_ports import MetricsPort
 from app.domain.ports.model_runtime_port import ModelRuntimePort
 from app.domain.ports.repositories import (
     ModelRepositoryPort,
@@ -43,6 +44,7 @@ class ModelRegistryMixin:
         authz: AuthorizationPort,
         audit: AuditPort,
         tokens: TokenCounterPort | None = None,
+        metrics: MetricsPort | None = None,
     ) -> None:
         self._models = models
         self._nodes = nodes
@@ -53,10 +55,7 @@ class ModelRegistryMixin:
         self._authz = authz
         self._audit = audit
         self._tokens = tokens
-        """Warmed on load, so the first request to a fresh model is not the one
-            that pays for reading its vocabulary. Optional, as it is on
-            `RouteChatRequest`: a build without it loads models exactly as before.
-            """
+        self._metrics = metrics
 
     async def list_all(self, actor: Actor) -> list[Model]:
         self._authz.require(actor, Scope.MODEL_READ)

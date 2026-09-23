@@ -1,9 +1,16 @@
 """Refuses model loads that would exceed a node's memory budget.
 
-Phase 1 uses static capacity from the database rather than live metrics:
-`MetricsPort` arrives in Phase 2 and this check must not wait for it. On
-unified memory hardware an over-commit does not fail cleanly, it drives the
-machine into swap, so the check is a refusal rather than a warning.
+Two checks run in sequence. The **static** check uses registered profiles
+against the node's configured capacity — unchanged from Phase 1, and still
+the primary guard because it catches a misconfigured profile whether the
+host-metrics agent is reachable or not. The **live** check, when a
+``live_free_gb`` figure is supplied, adds ground truth from the host: if the
+machine has less free memory than the model requires, something the profiles
+do not account for is consuming it, and loading would drive the host into
+swap. ``None`` falls back to the static check alone.
+
+On unified memory hardware an over-commit does not fail cleanly, it drives
+the machine into swap, so both checks are refusals rather than warnings.
 
 **Both sides of the subtraction must be the same kind of number**, and until
 2026-09-07 they were not: the target was charged its declared profile while the
@@ -42,7 +49,14 @@ class MemoryBudgetService:
     def __init__(self, headroom_fraction: float = DEFAULT_HEADROOM_FRACTION) -> None:
         self._headroom = headroom_fraction
 
-    def assert_can_load(self, target: Model, node: Node, already_loaded: Iterable[Model]) -> None:
+    def assert_can_load(
+        self,
+        target: Model,
+        node: Node,
+        already_loaded: Iterable[Model],
+        *,
+        live_free_gb: float | None = None,
+    ) -> None:
         """Refuse `target` when it would not fit beside what is already resident.
 
         **The declared profile is the estimate of resident cost and the observed
@@ -75,6 +89,15 @@ class MemoryBudgetService:
         `code`, whose only candidate it is, had no target at all. The mismatch
         was invisible while the model stayed resident, because `load()` returns
         early on an already-loaded model without reaching this check.
+
+        **``live_free_gb``** is the host's actual available memory right now,
+        read from the host-metrics agent. When present it acts as a second
+        gate: even if the registry-based budget says the model fits, the host
+        having less free memory than the model requires means something the
+        profiles do not account for is consuming it — the VM, the OS, an
+        unregistered process — and loading would drive the machine into swap.
+        ``None`` means the agent is unreachable or not installed, and the
+        static check stands alone as it always has.
         """
         budget = node.total_memory_gb * self._headroom
         in_use = sum(
@@ -87,3 +110,6 @@ class MemoryBudgetService:
 
         if required > available:
             raise InsufficientMemoryError(required_gb=required, available_gb=max(available, 0.0))
+
+        if live_free_gb is not None and required > live_free_gb:
+            raise InsufficientMemoryError(required_gb=required, available_gb=max(live_free_gb, 0.0))

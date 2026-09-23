@@ -138,6 +138,45 @@ def test_a_smaller_headroom_would_strand_the_capability_that_has_one_candidate()
         )
 
 
+def test_live_free_memory_refuses_when_host_lacks_room() -> None:
+    """Static budget says it fits (budget 8, in-use 0, available 8 > required 3),
+    but the host reports only 2 GiB free — something the profiles do not account
+    for is consuming the rest."""
+    budget = MemoryBudgetService()
+    target = _model("incoming", declared_gb=3.0)
+
+    with pytest.raises(InsufficientMemoryError):
+        budget.assert_can_load(target, _node(10.0), [], live_free_gb=2.0)
+
+
+def test_live_free_memory_allows_when_host_has_room() -> None:
+    budget = MemoryBudgetService()
+    target = _model("incoming", declared_gb=3.0)
+
+    budget.assert_can_load(target, _node(10.0), [], live_free_gb=5.0)
+
+
+def test_live_free_memory_none_falls_back_to_static_only() -> None:
+    """An unreachable agent (None) must not change the static outcome."""
+    budget = MemoryBudgetService()
+    target = _model("incoming", declared_gb=3.0)
+
+    budget.assert_can_load(target, _node(10.0), [], live_free_gb=None)
+
+
+def test_static_refuses_before_live_is_checked() -> None:
+    """Even with plenty of live free memory, the static budget gate comes first.
+    This matters when profiles are correct but the live figure is misleading —
+    for example during an unload that has freed host memory but whose registry
+    write has not committed."""
+    budget = MemoryBudgetService()
+    resident = _model("resident", declared_gb=7.0)
+    target = _model("incoming", declared_gb=3.0)
+
+    with pytest.raises(InsufficientMemoryError):
+        budget.assert_can_load(target, _node(10.0), [resident], live_free_gb=50.0)
+
+
 def test_the_shipped_defaults_are_the_deployment_s_own_figures() -> None:
     """Both halves of the product, read off the field declarations.
 
