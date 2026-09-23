@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react';
 
-import { ActivityIcon, BoxIcon, CpuIcon, HashIcon, KeyIcon, UsersIcon } from 'lucide-react';
+import { ActivityIcon, BoxIcon, ClockIcon, CpuIcon, HashIcon, KeyIcon, MemoryStickIcon, UsersIcon } from 'lucide-react';
 
 import { Sparkline } from '@/components/composed/sparkline';
 import { StatCard } from '@/components/composed/stat-card';
@@ -83,6 +83,28 @@ export function DashboardOverview() {
           icon={<HashIcon className="size-4" />}
           isLoading={isLoading || usage.isLoading}
         />
+        <StatCard
+          label="Host memory"
+          value={
+            data?.host_memory
+              ? `${data.host_memory.available_gb.toFixed(1)} / ${data.host_memory.total_gb.toFixed(0)} GB`
+              : '—'
+          }
+          hint={data?.host_memory ? 'Available / total — from the host-metrics agent' : 'Host-metrics agent not reporting'}
+          icon={<MemoryStickIcon className="size-4" />}
+          isLoading={isLoading}
+        />
+        <StatCard
+          label="Latency (24h)"
+          value={
+            data?.latency
+              ? `p50 ${(data.latency.p50_ms / 1000).toFixed(1)}s · p95 ${(data.latency.p95_ms / 1000).toFixed(1)}s`
+              : '—'
+          }
+          hint={data?.latency ? `${data.latency.count.toLocaleString()} completed requests` : 'No completed requests in the last 24 hours'}
+          icon={<ClockIcon className="size-4" />}
+          isLoading={isLoading}
+        />
       </div>
 
       {/* The charts read a second endpoint, and its failure used to be silent:
@@ -108,8 +130,9 @@ export function DashboardOverview() {
       )}
 
       <p className="text-xs text-muted-foreground">
-        Request and token counts come from usage records. Live operational
-        metrics (memory, latency, node health) are in Grafana.
+        Request, token and latency figures come from usage records. Host memory
+        comes from the launchd metrics agent. Detailed time-series are in
+        Grafana.
       </p>
     </div>
   );

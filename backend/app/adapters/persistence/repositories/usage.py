@@ -15,6 +15,7 @@ from app.domain.entities.usage import (
     BucketUnit,
     CompactionSummary,
     CompactionTierCount,
+    LatencyStats,
     UsageBucket,
     UsageRecord,
 )
@@ -124,6 +125,27 @@ class PostgresUsageRepository(_TenantScoped):
             )
         ).one()
         return int(row[0] or 0), int(row[1] or 0)
+
+    async def latency_stats_since(self, since: datetime) -> LatencyStats | None:
+        stmt = self._scope(
+            select(
+                func.count(),
+                func.avg(UsageRecordRow.latency_ms),
+                func.percentile_cont(0.5).within_group(UsageRecordRow.latency_ms),
+                func.percentile_cont(0.95).within_group(UsageRecordRow.latency_ms),
+            ).where(UsageRecordRow.at >= since, UsageRecordRow.completed.is_(True)),
+            UsageRecordRow.tenant_id,
+        )
+        row = (await self._session.execute(stmt)).one()
+        count = int(row[0] or 0)
+        if count == 0:
+            return None
+        return LatencyStats(
+            count=count,
+            avg_ms=int(row[1] or 0),
+            p50_ms=int(row[2] or 0),
+            p95_ms=int(row[3] or 0),
+        )
 
     def _record_filters(
         self,

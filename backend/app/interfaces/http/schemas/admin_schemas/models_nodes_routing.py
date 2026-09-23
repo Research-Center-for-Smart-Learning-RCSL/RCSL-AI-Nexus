@@ -233,6 +233,18 @@ class DashboardTrendPointResponse(BaseModel):
     users_total: int
 
 
+class HostMemoryResponse(BaseModel):
+    total_gb: float
+    available_gb: float
+
+
+class LatencyStatsResponse(BaseModel):
+    count: int
+    avg_ms: int
+    p50_ms: int
+    p95_ms: int
+
+
 class DashboardResponse(BaseModel):
     models_total: int
     models_loaded: int
@@ -243,3 +255,5 @@ class DashboardResponse(BaseModel):
     requests_last_24h: int
     tokens_last_24h: int
     trends: list[DashboardTrendPointResponse] = []
+    host_memory: HostMemoryResponse | None = None
+    latency: LatencyStatsResponse | None = None

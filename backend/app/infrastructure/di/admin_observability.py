@@ -6,6 +6,7 @@ from fastapi import Request
 
 from app.adapters.http.egress_guard import TailnetEgressGuard
 from app.adapters.http.host_metrics import HttpHostStatus
+from app.adapters.http.metrics_port import HttpMetricsAdapter
 from app.adapters.http.node_health import RuntimeNodeHealth
 from app.adapters.persistence.repositories import (
     PostgresApiKeyRepository,
@@ -124,7 +125,7 @@ def build_manage_tenants(
 
 
 def build_read_dashboard(
-    request: Request, session: SessionDep, tenant: TenantIdDep
+    request: Request, session: SessionDep, tenant: TenantIdDep, settings: SettingsDep
 ) -> ReadDashboard:
     return ReadDashboard(
         # Models and nodes are shared infrastructure, so their counts are
@@ -136,6 +137,7 @@ def build_read_dashboard(
         usage=PostgresUsageRepository(session, tenant),
         authz=request.app.state.authz,
         clock=SystemClock(),
+        metrics=HttpMetricsAdapter(settings.host_metrics_url),
     )
 
 

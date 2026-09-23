@@ -1,9 +1,9 @@
 """The overview figures.
 
-Counted from the tables rather than from a metrics system. `MetricsPort` and
-Prometheus arrive in Phase 2 and bring the things a database cannot answer:
-memory in use right now, tokens per second, node temperature. What is here is
-the part the database already knows, and there is no reason for it to wait.
+Entity counts come from the tables. Live host memory comes from the
+host-metrics agent over loopback. Inference latency is a percentile
+aggregate over `usage_records`. The dashboard brings them together so an
+operator can check the platform's state from one screen.
 
 The counts are `len()` over full listings on purpose. Every table involved
 holds tens of rows on this deployment, and five dedicated `COUNT` methods on
@@ -20,6 +20,8 @@ from datetime import timedelta
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.model import ModelState
 from app.domain.entities.node import NodeStatus
+from app.domain.entities.usage import LatencyStats
+from app.domain.ports.infrastructure_ports import MetricsPort
 from app.domain.ports.repositories import (
     ApiKeyRepositoryPort,
     ModelRepositoryPort,
@@ -32,6 +34,12 @@ from app.infrastructure.snapshot_recorder import recent_snapshots
 from app.shared.clock import Clock
 
 WINDOW = timedelta(hours=24)
+
+
+@dataclass(frozen=True, slots=True)
+class HostMemorySummary:
+    total_gb: float
+    available_gb: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +64,8 @@ class DashboardSummary:
     requests_last_24h: int
     tokens_last_24h: int
     trends: list[DashboardTrendPoint]
+    host_memory: HostMemorySummary | None
+    latency: LatencyStats | None
 
 
 class ReadDashboard:
@@ -68,6 +78,7 @@ class ReadDashboard:
         usage: UsageRepositoryPort,
         authz: AuthorizationPort,
         clock: Clock,
+        metrics: MetricsPort | None = None,
     ) -> None:
         self._models = models
         self._nodes = nodes
@@ -76,6 +87,7 @@ class ReadDashboard:
         self._usage = usage
         self._authz = authz
         self._clock = clock
+        self._metrics = metrics
 
     async def execute(self, actor: Actor) -> DashboardSummary:
         # Usage totals are the whole platform's, not the caller's, so this
@@ -88,6 +100,15 @@ class ReadDashboard:
         keys = await self._keys.list_all()
         users = await self._users.list_all()
         requests, tokens = await self._usage.totals_since(now - WINDOW)
+        latency = await self._usage.latency_stats_since(now - WINDOW)
+
+        host_memory: HostMemorySummary | None = None
+        if self._metrics is not None:
+            node_id = nodes[0].id if nodes else ""
+            free = await self._metrics.free_memory_gb(node_id)
+            if free is not None:
+                total = nodes[0].total_memory_gb if nodes else 0.0
+                host_memory = HostMemorySummary(total_gb=total, available_gb=free)
 
         snapshots = await recent_snapshots(hours=48)
         trends = [
@@ -113,4 +134,6 @@ class ReadDashboard:
             requests_last_24h=requests,
             tokens_last_24h=tokens,
             trends=trends,
+            host_memory=host_memory,
+            latency=latency,
         )
