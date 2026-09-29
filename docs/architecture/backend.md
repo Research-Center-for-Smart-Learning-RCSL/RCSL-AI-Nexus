@@ -274,7 +274,7 @@ Ports the domain defines, and what implements them:
 | `KnowledgeRepositoryPort` | `PostgresKnowledgeRepository` | yes, built 2026-07-30 |
 | `EvaluationRepositoryPort` | `PostgresEvaluationRepository` | yes, built 2026-08-17 |
 | `RefusalWriterPort`, `RefusalRepositoryPort` | `PostgresRefusalWriter`, `PostgresRefusalRepository` | yes, built 2026-08-18. Two ports rather than one: the gateway holds only the writer, so it records what it refused without being able to read any of it back — the same split `db_roles.py` enforces at the database |
-| `MetricsPort` | Phase 2 | correctly absent; the memory budget still uses static node capacity |
+| `MetricsPort` | `HttpMetricsAdapter` | yes, built 2026-09-23. Reads live free memory from the launchd host-metrics agent; the budget uses it as a second gate after the static check |
 | `TokenCounterPort` | `GgufTokenCounter` | yes |
 
 **This table said "no adapter" for the four rows above `MetricsPort` until
@@ -578,7 +578,7 @@ It does **not** inject a fixed admin `Actor`, contrary to an earlier version of 
 
 ## 11. Migrations
 
-Alembic. Phase 1 creates `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `invitations`, `recovery_codes`, `usage_records`, and `audit_log`. Phase 2 has added, in migration order, `tenants` (`d4e8f1a2b6c9`), `knowledge_collections` and `knowledge_documents` (`e5f2c8d71a43`), `retention_policies` (`a1b2c3d4e5f6`), `prompt_templates` (`c2f7b90e4a15`), `prompt_logs` (`a1d6e93c7f52`), the three evaluation tables `evaluation_runs`, `evaluation_model_scores` and `evaluation_task_scores` (`d3f5b81a04c7`), and `refusals` (`e7b41c9d0a26`, with `f3c8a15d27be` adding the denormalised actor display) — nineteen tables across sixteen migrations, counted 2026-08-18, head `a4c1e07f2b9d`.
+Alembic. Phase 1 creates `nodes`, `models`, `routing_policies`, `api_keys`, `users`, `invitations`, `recovery_codes`, `usage_records`, and `audit_log`. Phase 2 has added, in migration order, `tenants` (`d4e8f1a2b6c9`), `knowledge_collections` and `knowledge_documents` (`e5f2c8d71a43`), `retention_policies` (`a1b2c3d4e5f6`), `prompt_templates` (`c2f7b90e4a15`), `prompt_logs` (`a1d6e93c7f52`), the three evaluation tables `evaluation_runs`, `evaluation_model_scores` and `evaluation_task_scores` (`d3f5b81a04c7`), and `refusals` (`e7b41c9d0a26`, with `f3c8a15d27be` adding the denormalised actor display) — nineteen tables across sixteen migrations as of 2026-08-18; **twenty migrations as of 2026-09-29**, head `b8d3e5f12a47`, adding evaluation task definitions (`b7e2c94f1a63`), compaction columns (`c1d5f8a3e497`), prompt log compaction tier (`a2f7c31b9e84`) and platform snapshots (`b8d3e5f12a47`).
 
 Migrations run as a **one-shot Compose service** that the application services depend on with `condition: service_completed_successfully`. They are not run from an application entrypoint, because five containers start from the same image — the gateway, the two admin entrances, `parser` and the migration job itself — and the three that open the database would race each other.
 

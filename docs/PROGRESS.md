@@ -36,10 +36,15 @@ separately at the end, marked as superseded.
 
 ### September 2026
 
+**[2026-09-23](./progress/2026-09-23.md)**
+- `MetricsPort` 接上了：live host memory 進入 model-load budget check
+- Dashboard 加了 host memory 和 inference latency
+
 **[2026-09-16](./progress/2026-09-16.md)**
 - `ExitTimeOut` 設上去了，三段會跟 `KeepAlive` 打架的程序也修了
 - 把 read timeout 提到超過 prompt evaluation 的實測耗時
 - `decisions.md` 的 estimate calibration item 其實已經解了
+- 平台計數每小時快照，每張 stat card 加上 sparkline
 
 **[2026-09-10](./progress/2026-09-10.md)**
 - 修好 spawn 的那個 commit，也讓 `KeepAlive` 第一次真的生效

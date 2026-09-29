@@ -4,7 +4,7 @@
 
 No open decisions block Phase 1.
 
-**Open — raised 2026-08-05, nothing changed on the deployment:**
+**Open — raised 2026-08-05; live host memory wired into the budget on 2026-09-23 (`485c189`):**
 
 - **Memory headroom, which turned out to be a question about *when* it is measured.**
   Free memory on this node swings between ~12 GB and ~37 GB of 64: inference
