@@ -196,7 +196,10 @@ A human who can sign in to the management UI. Identity arrives from one of two s
 | `totp_secret` | Encrypted at rest, nullable. **Required whenever `password_hash` is set** |
 | `totp_last_counter` | Replay prevention, see [security.md](./architecture/security.md) §5.3 |
 | `role` | `admin` / `tenant_admin` / `operator` / `curator` / `auditor` / `user`. Not a ladder: `curator` writes knowledge `operator` may not touch, and `operator` restarts a node `tenant_admin` may not. A seventh, `service`, exists in the enum but belongs to an API key rather than a person and never appears in this table (`domain/entities/actor/role.py`) |
+| `tenant_id` | Which tenant this account belongs to (§2.8) |
+| `created_at` | Set by the repository on first write |
 | `debug_logging_until` | Optional timestamp, see [security.md](./architecture/security.md) §9.2 |
+| `disabled_at` | Account suspension, distinct from deletion |
 
 Accounts are **invitation only**; there is no self-registration. A user who only ever works over the tailnet needs no password at all, so both credential columns are nullable. A user who needs the public entrance is issued a single-use invitation link and sets their own password and TOTP; the platform never transmits a credential. See [security.md](./architecture/security.md) §5.3 and §5.4.
 
@@ -223,6 +226,8 @@ class Actor:
     allowed_capabilities: frozenset[str] | None = None
     default_capability: str | None = None         # what serves a capability this key
                                                   #   was not issued for; None refuses
+    compaction_enabled: bool = True               # per-key opt-out from conversation
+                                                  #   compaction; True matches the column
     debug_logging_until: datetime | None = None   # §9.2's window, carried here so the
                                                   #   application layer can read it
 ```
@@ -274,7 +279,7 @@ worse than none. [ROADMAP.md](./ROADMAP.md) and
 
 | Module | Backend resource | Phase | Built |
 |---|---|---|---|
-| Dashboard | `/admin/dashboard` | 1 (counts), 2 (real metrics) | yes; live metrics wait on hardware producing them |
+| Dashboard | `/admin/dashboard` | 1 (counts), 2 (real metrics) | yes; live host memory and inference latency wired since 2026-09-23 |
 | Model Management | `/admin/models` | 1 | yes, end to end including download progress (`GET /admin/download-jobs/{job_id}`, on the same router that starts the download) |
 | Routing Policy | `/admin/routing-policies` | 1 (API), 2 (UI editor) | yes, both; the capability named is validated against `ROUTABLE_CAPABILITIES`, the wider of the two sets — a policy may be written for something no key can be issued for ([security.md](./architecture/security.md) §7.5.1) |
 | API Keys | `/admin/api-keys` | 1 | yes, end to end: issue, edit, revoke |
@@ -295,6 +300,7 @@ worse than none. [ROADMAP.md](./ROADMAP.md) and
 | Management assistant | `/admin/assistant` | 2 | yes, and **advisory only**: it answers about this deployment's settings and may propose values on the two key forms, never apply them. Routes on `assist`, which is routable but deliberately not issuable ([security.md](./architecture/security.md) §7.5, §7.5.1) |
 | API reference | none; the page is served by the frontend | 2 | yes — the documentation §4.4 promises in exchange for disabling `/openapi.json` in production |
 | Connect an agent | none; the page is served by the frontend | 2 | yes; the setup an agent client needs, alongside [runbooks/connect-an-agent-client.md](./runbooks/connect-an-agent-client.md) |
+| Client tools | `/admin/client-tools` | 2 | yes, built 2026-08-30. `GET /admin/client-tools/windows-codex-app` serves a deterministic zip from the deployed image |
 
 The inference path is complete and tested end to end. The gateway mounts
 `POST /v1/chat/completions`, `POST /v1/responses` and `GET /v1/models`, and
