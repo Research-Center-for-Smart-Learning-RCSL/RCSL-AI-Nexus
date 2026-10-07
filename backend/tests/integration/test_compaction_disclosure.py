@@ -27,7 +27,10 @@ from tests.integration.chat_end_to_end_fixtures import (
     _seed,
 )
 
-pytestmark = pytest.mark.anyio
+pytestmark = [
+    pytest.mark.anyio,
+    pytest.mark.skipif(not TEST_DATABASE_URL, reason="TEST_DATABASE_URL is not set"),
+]
 
 
 # 8 ASCII characters per token at the floor, about 4 at the estimate, so a
