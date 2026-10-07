@@ -263,21 +263,19 @@ fn evict(cache_key: String) -> PyResult<()> {
 
 /// Read GGUF metadata for a file. Returns a dict. Mostly useful for testing.
 #[pyfunction]
-fn read_gguf_metadata(path: String) -> PyResult<HashMap<String, PyObject>> {
+fn read_gguf_metadata(py: Python<'_>, path: String) -> PyResult<HashMap<String, Py<PyAny>>> {
     let metadata = gguf::read_metadata(std::path::Path::new(&path), &|_| true)
         .map_err(|e| PyRuntimeError::new_err(e.0))?;
 
-    Python::with_gil(|py| {
-        let mut result = HashMap::new();
-        for (key, value) in metadata {
-            let py_val = gguf_value_to_py(py, &value)?;
-            result.insert(key, py_val);
-        }
-        Ok(result)
-    })
+    let mut result = HashMap::new();
+    for (key, value) in metadata {
+        let py_val = gguf_value_to_py(py, &value)?;
+        result.insert(key, py_val);
+    }
+    Ok(result)
 }
 
-fn gguf_value_to_py(py: Python<'_>, value: &GgufValue) -> PyResult<PyObject> {
+fn gguf_value_to_py(py: Python<'_>, value: &GgufValue) -> PyResult<Py<PyAny>> {
     match value {
         GgufValue::U8(v) => Ok(v.into_pyobject(py)?.into_any().unbind()),
         GgufValue::I8(v) => Ok(v.into_pyobject(py)?.into_any().unbind()),
