@@ -26,27 +26,31 @@ def main() -> None:
     require_window(args)
 
     with runtime(args) as rt:
-        before = runtime_process()
+        before = runtime_process(args.ollama)
         rec = Recorder(
             "reset_evidence", args.out, {"runtime_process": before, "version": rt.version()}
         )
         rec.emit("before", process=before, resident=rt.resident())
         print("restart the runtime now; waiting for a new process", flush=True)
         deadline = time.monotonic() + args.wait_seconds
+
+        def identity(found: dict[str, object]) -> tuple[object, object] | None:
+            return (found["pid"], found["started"]) if found.get("status") == "bound" else None
+
         after = before
         while time.monotonic() < deadline:
             time.sleep(1)
-            after = runtime_process()
-            if (
-                after
-                and before
-                and (after["pid"], after["started"]) != (before["pid"], before["started"])
-            ):
+            after = runtime_process(args.ollama)
+            # While the runtime restarts nothing listens; keep waiting for a
+            # bound owner rather than reading the gap as a result.
+            if identity(after) and identity(before) and identity(after) != identity(before):
                 break
-        changed = bool(
-            after
-            and before
-            and (after["pid"], after["started"]) != (before["pid"], before["started"])
+        # True only when both ends are tied to the endpoint's listener and
+        # differ; None when either end is inconclusive (review on #26).
+        restarted = (
+            None
+            if not (identity(before) and identity(after))
+            else identity(after) != identity(before)
         )
         api = None
         for _ in range(60):
@@ -55,7 +59,7 @@ def main() -> None:
                 break
             except Exception:  # noqa: BLE001 - the runtime is coming back up
                 time.sleep(1)
-        rec.emit("after", process=after, restarted=changed, api=api)
+        rec.emit("after", process=after, restarted=restarted, api=api)
 
 
 if __name__ == "__main__":

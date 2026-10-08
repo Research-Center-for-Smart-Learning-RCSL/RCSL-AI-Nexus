@@ -4,41 +4,169 @@
         --i-own-the-window --model qwen2.5:7b --num-ctx 32768 --allow-unload
 
 The final spec (#24 §3, §12) refuses to treat a closed connection as proof that
-remote work stopped, because nothing had measured it. Three experiments:
+remote work stopped, because nothing had measured it. Three experiments, each
+of which reports a conclusion only from evidence tied to its own request, and
+`None` (inconclusive) otherwise (review on #26):
 
-- **generation**: stream a long answer, read a few chunks, close. Then time a
-  one-token request to the same model. With NUM_PARALLEL=1 a generation that
-  kept running delays it; the slot log shows where the runtime stopped.
-- **load**: with the model unloaded, request a load with a client timeout far
-  shorter than the load, then watch `/api/ps`. If the model becomes resident
-  anyway, an abandoned load still completes.
-- **truncated body**: with the model unloaded, send a request whose body is
-  shorter than its `Content-Length` and close. If the model becomes resident,
-  a partial request was acted on.
+- **generation**: stream a long answer, read a few chunks, close. The slot log
+  must show a cancellation after the close for `cancelled_at_close: true`, or
+  the task running far past it for `false`. The timing of a follow-up request
+  is recorded as an observation and never decides the outcome: a slow
+  follow-up can be a reload or ordinary variance.
+- **load**: with the model verified absent, request a load with a client
+  timeout far shorter than the load. Only a request that actually timed out
+  tests abandonment; one that completed in time is reported as untested.
+- **truncated body**: with the model verified absent, send a body shorter than
+  its `Content-Length` and close; residency afterwards means it was acted on.
 
-`load` and `truncated body` unload the model first (`--allow-unload`), so the
-capability it serves is unavailable until the probe reloads it at the end.
+`load` and `truncated body` unload the model first (`--allow-unload`), so its
+capability is unavailable until the probe reloads it. If anything fails part
+way, the probe issues no further lifecycle commands into an uncertain state: it
+records `recovery_required` with the residency it found and the residency to
+restore (largest model first), and exits non-zero.
 """
 
 from __future__ import annotations
 
 import json
 import socket
+import sys
 import time
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from _common import LogTail, Recorder, fingerprint, parser, require_window, runtime
+from _common import (
+    LogTail,
+    Recorder,
+    Runtime,
+    answered,
+    fingerprint,
+    parser,
+    require_window,
+    runtime,
+)
 
 
-def wait_resident(rt, model: str, seconds: float) -> float | None:  # type: ignore[no-untyped-def]
-    deadline = time.monotonic() + seconds
+def wait_until(rt: Runtime, model: str, *, resident: bool, seconds: float) -> float | None:
+    """Seconds until the model's residency equals `resident`, or None."""
     started = time.monotonic()
-    while time.monotonic() < deadline:
-        if any(m["name"] == model for m in rt.resident()):
+    while time.monotonic() - started < seconds:
+        if any(m["name"] == model for m in rt.resident()) == resident:
             return round(time.monotonic() - started, 2)
         time.sleep(0.5)
     return None
+
+
+def generation(rt: Runtime, rec: Recorder, log: LogTail, args: Any) -> None:
+    short = [{"role": "user", "content": "Say ok."}]
+    baseline = answered(rt.chat(args.model, short, args.num_ctx))["wall_s"]
+    body = {
+        "model": args.model,
+        "messages": [{"role": "user", "content": "Count from 1 to 5000, one number per line."}],
+        "stream": True,
+        "think": False,
+        "keep_alive": -1,
+        "options": {"num_ctx": args.num_ctx, "num_predict": 4000},
+    }
+    log.mark()
+    read = 0
+    with httpx.Client(base_url=args.ollama, timeout=60) as streaming:
+        with streaming.stream("POST", "/api/chat", json=body) as response:
+            for _ in response.iter_lines():
+                read += 1
+                if read >= args.chunks:
+                    break
+    follow_up = answered(rt.chat(args.model, short, args.num_ctx))
+    lines = log.lines()
+    # The streamed task is the first released after the mark; its own cancel or
+    # release line is the evidence, never the follow-up's timing.
+    cancels = [line for line in lines if "cancel task" in line]
+    released = [line for line in lines if "stop processing" in line and "n_tokens =" in line]
+    verdict: bool | None = None
+    if cancels:
+        verdict = True
+    elif released:
+        tokens = int(released[0].split("n_tokens =")[1].split(",")[0])
+        if tokens > 4 * (read + 64):
+            verdict = False
+    rec.emit(
+        "generation",
+        model=args.model,
+        chunks_read=read,
+        cancelled_at_close=verdict,
+        evidence=(cancels + released)[:3],
+        observation={"baseline_wall_s": baseline, "follow_up_wall_s": follow_up["wall_s"]},
+    )
+
+
+def abandoned_load(rt: Runtime, rec: Recorder, log: LogTail, args: Any) -> None:
+    rt.unload(args.model)
+    if wait_until(rt, args.model, resident=False, seconds=30) is None:
+        rec.emit("load", model=args.model, tested=False, reason="the model never became absent")
+        return
+    log.mark()
+    try:
+        with httpx.Client(base_url=args.ollama, timeout=0.3) as impatient:
+            impatient.post(
+                "/api/generate",
+                json={
+                    "model": args.model,
+                    "prompt": "",
+                    "keep_alive": -1,
+                    "options": {"num_ctx": args.num_ctx},
+                },
+            )
+        timed_out = False
+    except httpx.TimeoutException:
+        timed_out = True
+    if not timed_out:
+        rec.emit(
+            "load",
+            model=args.model,
+            tested=False,
+            reason="the load completed before the client timeout; abandonment was not tested",
+        )
+        return
+    after = wait_until(rt, args.model, resident=True, seconds=60)
+    rec.emit(
+        "load",
+        model=args.model,
+        tested=True,
+        load_completed_after_close=after is not None,
+        resident_after_s=after,
+        evidence=[ln for ln in log.lines() if "Load failed" in ln or "loading model" in ln][-3:],
+    )
+
+
+def truncated_body(rt: Runtime, rec: Recorder, log: LogTail, args: Any) -> None:
+    rt.unload(args.model)
+    if wait_until(rt, args.model, resident=False, seconds=30) is None:
+        rec.emit(
+            "truncated_body", model=args.model, tested=False, reason="the model never became absent"
+        )
+        return
+    payload = json.dumps(
+        {"model": args.model, "prompt": "", "keep_alive": -1, "options": {"num_ctx": args.num_ctx}}
+    ).encode()
+    url = urlsplit(args.ollama)
+    log.mark()
+    with socket.create_connection((url.hostname or "127.0.0.1", url.port or 80), timeout=5) as raw:
+        raw.sendall(
+            b"POST /api/generate HTTP/1.1\r\nHost: probe\r\nContent-Type: application/json\r\n"
+            + f"Content-Length: {len(payload)}\r\n\r\n".encode()
+            + payload[: len(payload) // 2]
+        )
+    acted = wait_until(rt, args.model, resident=True, seconds=30)
+    rec.emit(
+        "truncated_body",
+        model=args.model,
+        tested=True,
+        sent_bytes=len(payload) // 2,
+        declared_bytes=len(payload),
+        acted_on=acted is not None,
+        evidence=log.lines()[-3:],
+    )
 
 
 def main() -> None:
@@ -54,108 +182,33 @@ def main() -> None:
     log = LogTail(args.ollama_log)
 
     with runtime(args) as rt:
+        before = rt.resident()
         rec = Recorder("disconnect", args.out, fingerprint(rt, [args.model]))
-        short = [{"role": "user", "content": "Say ok."}]
-
-        rt.load(args.model, args.num_ctx)
-        baseline = rt.chat(args.model, short, args.num_ctx)["wall_s"]
-        log.mark()
-        body = {
-            "model": args.model,
-            "messages": [{"role": "user", "content": "Count from 1 to 5000, one number per line."}],
-            "stream": True,
-            "think": False,
-            "keep_alive": -1,
-            "options": {"num_ctx": args.num_ctx, "num_predict": 4000},
-        }
-        read = 0
-        with httpx.Client(base_url=args.ollama, timeout=60) as streaming:
-            with streaming.stream("POST", "/api/chat", json=body) as response:
-                for _ in response.iter_lines():
-                    read += 1
-                    if read >= args.chunks:
-                        break
-        closed_at = time.monotonic()
-        follow_up = rt.chat(args.model, short, args.num_ctx)
-        rec.emit(
-            "generation",
-            model=args.model,
-            chunks_read=read,
-            baseline_wall_s=baseline,
-            follow_up_wall_s=follow_up["wall_s"],
-            follow_up_delay_s=round(time.monotonic() - closed_at - follow_up["wall_s"], 2),
-            continued_after_close=follow_up["wall_s"] > baseline + 2.0,
-            log=log.lines()[-8:],
-        )
-
-        if not args.allow_unload:
-            rec.emit("skipped", cases=["load", "truncated_body"], reason="--allow-unload not given")
-            return
-
-        rt.unload(args.model)
-        wait_gone = time.monotonic() + 30
-        while any(m["name"] == args.model for m in rt.resident()) and time.monotonic() < wait_gone:
-            time.sleep(0.5)
-        log.mark()
         try:
-            with httpx.Client(base_url=args.ollama, timeout=0.3) as impatient:
-                impatient.post(
-                    "/api/generate",
-                    json={
-                        "model": args.model,
-                        "prompt": "",
-                        "keep_alive": -1,
-                        "options": {"num_ctx": args.num_ctx},
-                    },
+            rt.load(args.model, args.num_ctx)
+            generation(rt, rec, log, args)
+            if not args.allow_unload:
+                rec.emit(
+                    "skipped", cases=["load", "truncated_body"], reason="--allow-unload not given"
                 )
-            client_outcome = "completed before the timeout"
-        except httpx.TimeoutException:
-            client_outcome = "client timed out and closed"
-        became_resident_after = wait_resident(rt, args.model, 60)
-        rec.emit(
-            "load",
-            model=args.model,
-            client=client_outcome,
-            resident_after_s=became_resident_after,
-            load_completed_after_close=became_resident_after is not None,
-            log=log.lines()[-8:],
-        )
-
-        rt.unload(args.model)
-        wait_gone = time.monotonic() + 30
-        while any(m["name"] == args.model for m in rt.resident()) and time.monotonic() < wait_gone:
-            time.sleep(0.5)
-        payload = json.dumps(
-            {
-                "model": args.model,
-                "prompt": "",
-                "keep_alive": -1,
-                "options": {"num_ctx": args.num_ctx},
-            }
-        ).encode()
-        url = urlsplit(args.ollama)
-        log.mark()
-        with socket.create_connection(
-            (url.hostname or "127.0.0.1", url.port or 80), timeout=5
-        ) as raw:
-            raw.sendall(
-                b"POST /api/generate HTTP/1.1\r\nHost: probe\r\nContent-Type: application/json\r\n"
-                + f"Content-Length: {len(payload)}\r\n\r\n".encode()
-                + payload[: len(payload) // 2]
+                return
+            abandoned_load(rt, rec, log, args)
+            truncated_body(rt, rec, log, args)
+            rt.load(args.model, args.num_ctx)
+            rec.emit("restored", model=args.model, num_ctx=args.num_ctx, resident=rt.resident())
+        except Exception as exc:
+            try:
+                found: list[dict[str, Any]] | None = rt.resident()
+            except Exception:  # noqa: BLE001 - the runtime may be what failed
+                found = None
+            rec.emit(
+                "recovery_required",
+                error=repr(exc)[:300],
+                resident_now=found,
+                restore_to=before,
+                order="largest model first, then the rest",
             )
-        acted_after = wait_resident(rt, args.model, 30)
-        rec.emit(
-            "truncated_body",
-            model=args.model,
-            sent_bytes=len(payload) // 2,
-            declared_bytes=len(payload),
-            acted_on=acted_after is not None,
-            resident_after_s=acted_after,
-            log=log.lines()[-8:],
-        )
-
-        rt.load(args.model, args.num_ctx)
-        rec.emit("restored", model=args.model, num_ctx=args.num_ctx, resident=rt.resident())
+            sys.exit(1)
 
 
 if __name__ == "__main__":

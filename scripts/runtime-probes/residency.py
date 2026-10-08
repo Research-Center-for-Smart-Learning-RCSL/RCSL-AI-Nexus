@@ -18,7 +18,9 @@ left all three resident.
 
 from __future__ import annotations
 
-from _common import LogTail, Recorder, fingerprint, parser, require_window, runtime
+import sys
+
+from _common import LogTail, Recorder, answered, fingerprint, parser, require_window, runtime
 
 LONG_PROMPT = "Summarise this code.\n" + ("def f(x):\n    return x * 2  # double\n" * 2500)
 
@@ -51,35 +53,56 @@ def main() -> None:
             if embedder and embedder[0] not in resident:
                 rt.load_embedder(*embedder)
 
-        for ctx in [int(c) for c in args.contexts.split(",")]:
-            ensure_siblings()
-            before = rt.resident()
-            log.mark()
-            load_s = rt.load(args.large, ctx)
-            after_load = rt.resident()
-            prediction = [line for line in log.lines() if "predicted" in line or "evict" in line]
-            generation = rt.chat(
-                args.large, [{"role": "user", "content": LONG_PROMPT}], ctx, num_predict=16
-            )
-            after_generation = rt.resident()
-            rec.emit(
-                "load",
-                model=args.large,
-                num_ctx=ctx,
-                load_s=load_s,
-                resident_before=before,
-                resident_after_load=after_load,
-                resident_after_generation=after_generation,
-                siblings_after_load=sorted(
-                    m["name"] for m in after_load if m["name"] != args.large
-                ),
-                prediction=prediction[-4:],
-                generation=generation,
-            )
+        initial = rt.resident()
+        try:
+            for ctx in [int(c) for c in args.contexts.split(",")]:
+                ensure_siblings()
+                before = rt.resident()
+                log.mark()
+                load_s = rt.load(args.large, ctx)
+                after_load = rt.resident()
+                prediction = [
+                    line for line in log.lines() if "predicted" in line or "evict" in line
+                ]
+                generation = answered(
+                    rt.chat(
+                        args.large, [{"role": "user", "content": LONG_PROMPT}], ctx, num_predict=16
+                    )
+                )
+                after_generation = rt.resident()
+                rec.emit(
+                    "load",
+                    model=args.large,
+                    num_ctx=ctx,
+                    load_s=load_s,
+                    resident_before=before,
+                    resident_after_load=after_load,
+                    resident_after_generation=after_generation,
+                    siblings_after_load=sorted(
+                        m["name"] for m in after_load if m["name"] != args.large
+                    ),
+                    prediction=prediction[-4:],
+                    generation=generation,
+                )
 
-        rt.load(args.large, args.restore_ctx)
-        ensure_siblings()
-        rec.emit("restored", order="large first, then siblings", resident=rt.resident())
+            rt.load(args.large, args.restore_ctx)
+            ensure_siblings()
+            rec.emit("restored", order="large first, then siblings", resident=rt.resident())
+        except Exception as exc:
+            # No further lifecycle commands into an uncertain state: report
+            # what is resident and what to restore, and stop (review on #26).
+            try:
+                found = rt.resident()
+            except Exception:  # noqa: BLE001 - the runtime may be what failed
+                found = None
+            rec.emit(
+                "recovery_required",
+                error=repr(exc)[:300],
+                resident_now=found,
+                restore_to=initial,
+                order="largest model first, then the rest",
+            )
+            sys.exit(1)
 
 
 if __name__ == "__main__":

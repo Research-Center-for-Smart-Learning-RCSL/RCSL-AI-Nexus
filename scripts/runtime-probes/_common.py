@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -99,7 +100,11 @@ class Runtime:
         *,
         num_predict: int = 1,
         tools: Sequence[dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
+        truncate: bool | None = None,
+    ) -> dict[str, Any] | None:
+        """One non-streaming chat. With `truncate=False` the runtime refuses a
+        prompt that does not fit instead of shortening it; that refusal returns
+        None, never a count, so a caller cannot mistake it for one."""
         body: dict[str, Any] = {
             "model": model,
             "messages": list(messages),
@@ -115,8 +120,12 @@ class Runtime:
         }
         if tools:
             body["tools"] = list(tools)
+        if truncate is not None:
+            body["truncate"] = truncate
         started = time.monotonic()
         reply = self.client.post("/api/chat", json=body)
+        if reply.status_code == 400 and "exceed_context" in reply.text:
+            return None
         reply.raise_for_status()
         data = reply.json()
         return {
@@ -168,7 +177,7 @@ def fingerprint(rt: Runtime, models: Sequence[str]) -> dict[str, Any]:
         "version": rt.version(),
         "digests": {m: digests.get(m) for m in models},
         "resident": rt.resident(),
-        "runtime_process": runtime_process(),
+        "runtime_process": runtime_process(str(rt.client.base_url)),
     }
 
 
@@ -206,36 +215,72 @@ class LogTail:
         ]
 
 
-def runtime_process() -> dict[str, Any] | None:
-    """The serving process's PID and start time, read from the host.
+def runtime_process(endpoint: str) -> dict[str, Any]:
+    """The process serving `endpoint`, identified by the socket it listens on.
 
-    The evidence the plan's "verified runtime reset" needs: a different start
-    time is a restart; a request issued before it cannot still be running in
-    it. Read with `ps`, so only meaningful when the probe runs on the runtime's
-    own host. None anywhere else, rather than a guess.
+    The evidence the spec's "verified runtime reset" needs (#24 §3): a changed
+    PID or start time **of the process that owns the endpoint's listening
+    socket** is a restart of that endpoint. Matching processes by name could
+    pick an unrelated one, or the first of several (review on #26), so the
+    owner is read from `netstat -anv`, which names the PID listening on each
+    socket and, unlike `lsof`, sees sockets of other users without root.
+
+    Only an endpoint on this host's loopback can be tied to a local process.
+    Anything else, no listener, or more than one is `inconclusive`, never a
+    guess.
     """
+    url = urlsplit(endpoint)
+    host, port = url.hostname or "", url.port or 80
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        return {"status": "inconclusive", "reason": f"{host} is not this host's loopback"}
     try:
-        pids = subprocess.run(  # noqa: S603 - fixed argv, no input
-            ["/usr/bin/pgrep", "-f", "ollama serve"], capture_output=True, text=True, timeout=5
-        ).stdout.split()
-        if not pids:
-            return None
-        pid = pids[0]
-        started = subprocess.run(  # noqa: S603 - argv is a PID pgrep printed
-            ["/bin/ps", "-o", "lstart=", "-p", str(int(pid))],
+        table = subprocess.run(  # noqa: S603 - fixed argv, no input
+            ["/usr/sbin/netstat", "-anv", "-p", "tcp"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"status": "inconclusive", "reason": f"netstat failed: {exc}"}
+    owners = set()
+    for line in table.splitlines():
+        fields = line.split()
+        if len(fields) > 5 and "LISTEN" in fields and fields[3].endswith(f".{port}"):
+            owner = next((f for f in fields if re.fullmatch(r"[^:\s]+:\d+", f)), None)
+            if owner:
+                owners.add(owner)
+    if len(owners) != 1:
+        return {
+            "status": "inconclusive",
+            "reason": f"{len(owners)} listeners on port {port}: {sorted(owners)}",
+        }
+    name, _, pid = next(iter(owners)).rpartition(":")
+    try:
+        detail = subprocess.run(  # noqa: S603 - argv is a PID netstat printed
+            ["/bin/ps", "-o", "user=,lstart=", "-p", str(int(pid))],
             capture_output=True,
             text=True,
             timeout=5,
-        ).stdout.strip()
-        return {"pid": int(pid), "started": started, "host": os.uname().nodename}
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return None
+        ).stdout.split(maxsplit=1)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        return {"status": "inconclusive", "reason": f"ps failed: {exc}"}
+    if len(detail) != 2:
+        return {"status": "inconclusive", "reason": f"process {pid} vanished"}
+    return {
+        "status": "bound",
+        "endpoint": f"{host}:{port}",
+        "process": name,
+        "pid": int(pid),
+        "user": detail[0],
+        "started": detail[1].strip(),
+        "host": os.uname().nodename,
+    }
 
 
 def size_to_runtime_count(
     target: int,
     build: Callable[[int], Any],
-    count: Callable[[Any], int],
+    count: Callable[[Any], int | None],
     *,
     first_guess: int,
     max_steps: int = 16,
@@ -249,11 +294,16 @@ def size_to_runtime_count(
     above it. It never claims an exact hit it did not get: callers record the
     count returned, not the target.
 
-    `count` must see the whole prompt. A runtime truncates prompts at its
-    context, so size over-limit payloads against a larger context than the one
-    under test.
+    `count` must see the whole prompt or say it could not: it returns None when
+    the runtime refused the payload as too large (`truncate: false`), which
+    the search treats as an overshoot with no count. A count the runtime
+    produced by shortening the prompt must never reach this function, which is
+    why sizing requests carry `truncate: false` (review on #26).
     """
-    base = count(build(0))
+    first = count(build(0))
+    if first is None:
+        raise ValueError("the empty payload does not fit the sizing context")
+    base = first
     lo_n, lo_c = 0, base
     best: tuple[Any, int] = (build(0), base)
     if lo_c >= target:
@@ -262,7 +312,16 @@ def size_to_runtime_count(
     n = max(first_guess, 1)
     for _ in range(max_steps):
         payload = build(n)
-        got = count(payload)
+        counted = count(payload)
+        if counted is None:
+            # Refused as too large: above the target, count unknown. Bracket it
+            # without a count and bisect towards the last value that fitted.
+            hi = (n, target + 1)
+            if hi[0] - lo_n <= 1:
+                break
+            n = lo_n + max(1, (hi[0] - lo_n) // 2)
+            continue
+        got = counted
         if got == target:
             return payload, got
         if got < target:
@@ -294,3 +353,24 @@ def prefix_counts_are_complete(prefix_counts: Sequence[int], full_count: int) ->
     """
     sequence = [*prefix_counts, full_count]
     return len(sequence) >= 2 and all(a < b for a, b in zip(sequence, sequence[1:], strict=False))
+
+
+def answered(result: dict[str, Any] | None) -> dict[str, Any]:
+    """A chat result from a request that could not be refused (default truncation)."""
+    if result is None:
+        raise RuntimeError("the runtime refused a request sent without truncate=false")
+    return result
+
+
+def server_num_parallel(log_path: Path) -> str | None:
+    """`OLLAMA_NUM_PARALLEL` as the server printed it at its last start."""
+    if not log_path.exists():
+        return None
+    with log_path.open("rb") as handle:
+        handle.seek(max(0, log_path.stat().st_size - 50_000_000))
+        text = handle.read().decode(errors="replace")
+    starts = [line for line in text.splitlines() if 'msg="server config"' in line]
+    if not starts:
+        return None
+    match = re.search(r"OLLAMA_NUM_PARALLEL:(\S+)", starts[-1])
+    return match.group(1) if match else None

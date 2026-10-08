@@ -80,3 +80,26 @@ def test_rising_prefixes_are_not_a_certificate() -> None:
     100, and 30 < 60 < 100 still rises. So the check is a diagnostic; the
     recorder certifies completeness by `truncate: false` instead."""
     assert prefix_counts_are_complete([30, 60], 100)
+
+
+def test_a_refused_overshoot_is_never_taken_as_a_count() -> None:
+    """The review's case on #26: sizing at a 256-token context, an overshooting
+    guess is 488 tokens. With default truncation the runtime counted what it
+    kept (80) and the probe recorded 80 as the full prompt. Sized with
+    `truncate: false`, the runtime refuses instead (None), and the search
+    treats that as "too large" and keeps looking below it."""
+    size_ctx = 256
+
+    def count(n: int) -> int | None:
+        full = _fake_count(n)
+        return None if full >= size_ctx else full
+
+    payload, got = size_to_runtime_count(200, lambda n: n, count, first_guess=1600)
+
+    assert got == _fake_count(payload) <= 200
+    assert got >= 195, got
+
+
+def test_an_empty_payload_that_does_not_fit_is_an_error() -> None:
+    with pytest.raises(ValueError):
+        size_to_runtime_count(10, lambda n: n, lambda n: None, first_guess=5)
