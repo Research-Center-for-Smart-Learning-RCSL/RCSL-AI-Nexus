@@ -6,10 +6,12 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
+from app.adapters.runtime.tool_support import should_send_tools
 from app.domain.entities.chat import (
     Message,
     MessageRole,
     SamplingOptions,
+    ToolChoice,
     ToolDefinition,
 )
 from app.domain.exceptions import (
@@ -158,3 +160,82 @@ def message_payload(message: Message) -> dict[str, Any]:
         if message.tool_call_id:
             payload["tool_call_id"] = message.tool_call_id
     return payload
+
+
+def chat_payload(
+    ref: str,
+    messages: Sequence[Message],
+    *,
+    max_tokens: int | None,
+    thinking: bool,
+    tools: Sequence[ToolDefinition],
+    tool_choice: ToolChoice | None,
+    sampling: SamplingOptions | None,
+    context_length: int | None,
+    keep_alive: str | int,
+) -> dict[str, Any]:
+    """The `/api/chat` body for one generation.
+
+    Shared by the adapter and the node agent, which builds the same body from
+    the same arguments on its own side of the wire (PR4a on #24), so the two
+    can never disagree about what a request asks the runtime for.
+    """
+    options: dict[str, Any] = {}
+    _set_num_ctx(options, context_length)
+    if max_tokens is not None:
+        # Stopping at the source beats counting chunks and cutting the
+        # stream: the model stops generating rather than producing tokens
+        # nobody reads.
+        options["num_predict"] = max_tokens
+    options.update(_sampling_options(sampling))
+
+    payload: dict[str, Any] = {
+        "model": ref,
+        "messages": [message_payload(m) for m in messages],
+        "stream": True,
+    }
+    if options:
+        payload["options"] = options
+    # Consulted before the emptiness check, not after it. Short-circuiting
+    # on `tools` meant a `tool_choice` the runtime cannot honour went
+    # unrefused whenever the caller sent no tools with it, which is 200 and
+    # prose where every piece of documentation promises a 400.
+    send_tools = should_send_tools(tool_choice, "ollama")
+    if tools and send_tools:
+        payload["tools"] = tool_payload(tools)
+    # Sent on generation as well as on load. Ollama applies its own default
+    # to any request that omits it, so a generate without this silently
+    # overwrites whatever `load` asked for — which is how a 10-minute
+    # setting became a 5-minute one nobody had chosen.
+    payload["keep_alive"] = keep_alive
+    if not thinking:
+        # Only ever sent as `false`. Ollama refuses `think: true` for a
+        # model that does not support it — `"qwen2.5:7b" does not support
+        # thinking` — so a registry holding both kinds cannot ask for
+        # thinking at all. `True` here therefore means "send nothing and
+        # let the model do what it does", not "ask it to think". That
+        # asymmetry is what makes it safe for a caller to send `think: true`
+        # over the wire: it never reaches the runtime as a demand.
+        #
+        # The other direction was checked rather than assumed, because the
+        # asymmetry above gives no reason to expect it: `think: false`
+        # against `qwen2.5:7b`, which has no thinking capability, returns a
+        # normal completion rather than the error `true` earns. So a request
+        # that suppresses thinking is safe whichever model routing picks,
+        # including the non-thinking fallback.
+        #
+        # Graded values are not offered because they do not work: Ollama
+        # accepts `think: "low"` for this model without error and the
+        # behaviour is identical to the default — measured at 8192 tokens,
+        # same token count, same 228s, same empty answer.
+        payload["think"] = False
+    return payload
+
+
+def embed_payload(ref: str, texts: Sequence[str], *, keep_alive: str | int) -> dict[str, Any]:
+    """The `/api/embed` body for one batch; shared like `chat_payload`.
+
+    `keep_alive` travels with every batch, for the reason the adapter's
+    `embed` gives: Ollama applies its own five-minute default otherwise.
+    """
+    return {"model": ref, "input": list(texts), "keep_alive": keep_alive}
