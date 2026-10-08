@@ -149,6 +149,17 @@ class GgufTokenCounter:
         is therefore sized for the misses a form produces rather than for
         memory, which is what a cache of integers should be sized for.
         """
+        self._fallback_template: set[str] = set()
+        """References counted with `_CHATML_FALLBACK` because their GGUF carries
+        no chat template.
+
+        The fallback is a stand-in, not the runtime's format, and it renders no
+        assistant tool call at all: neither the function name nor the
+        arguments. A count through it is constant in the arguments' length
+        (verified with an 8- and a 32,768-character argument, review on #24),
+        so on a tool-calling request `count_prompt` adds each call's name and
+        arguments, encoded with the model's own vocabulary.
+        """
         self._lock = asyncio.Lock()
         self._use_native = _HAS_NATIVE
         if self._use_native:
@@ -210,12 +221,34 @@ class GgufTokenCounter:
         vocabulary = await self._vocabulary(ref)
         if vocabulary is None or not vocabulary.has_template:
             return None
+        calls = (
+            [
+                text
+                for m in messages
+                for call in m.tool_calls
+                for text in (call.name, call.arguments)
+            ]
+            if ref in self._fallback_template
+            else []
+        )
         try:
             payload = [message_payload(m) for m in messages]
         except RuntimeCapabilityError:
             return None
         try:
-            return await asyncio.to_thread(vocabulary.count_prompt, payload, tool_payload(tools))
+            counted = await asyncio.to_thread(vocabulary.count_prompt, payload, tool_payload(tools))
+            if counted is None or not calls:
+                return counted
+            # What the fallback leaves out, in the model's own tokens. Not the
+            # runtime's framing, so not exact; but no longer constant in the
+            # arguments' length. Measured on gemma4 against the runtime
+            # (2026-10-08, #24): 12/50/100 tool rounds go from -13/-165/-365 to
+            # +157/+575/+1125, about +11 a round, and +157 at 12 rounds for
+            # results x1, x3 and x9 alike. The profile stays unvalidated until
+            # the counter renders as the runtime does (C6c).
+            return counted + sum(
+                await asyncio.to_thread(lambda: [vocabulary.encode(text) for text in calls])
+            )
         except Exception as exc:  # noqa: BLE001
             logger.info(
                 "could not count %s with its own template, falling back to the estimate: %s",
@@ -338,8 +371,10 @@ class GgufTokenCounter:
         try:
             tokenizer = build_tokenizer_for_model(metadata)
             source = metadata.get(CHAT_TEMPLATE_KEY)
+            self._fallback_template.discard(ref)
             if not isinstance(source, str):
                 source = _CHATML_FALLBACK
+                self._fallback_template.add(ref)
             template = _build_template(source)
         except Exception as exc:  # noqa: BLE001
             logger.warning("could not build a tokeniser for %s from %s: %s", ref, blob.name, exc)
