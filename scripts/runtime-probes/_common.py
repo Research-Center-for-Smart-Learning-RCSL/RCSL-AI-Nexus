@@ -242,10 +242,22 @@ def runtime_process(endpoint: str) -> dict[str, Any]:
         ).stdout
     except (OSError, subprocess.SubprocessError) as exc:
         return {"status": "inconclusive", "reason": f"netstat failed: {exc}"}
+    # The listening row must be able to serve this endpoint: the same local
+    # address, or a wildcard of a compatible family. A listener on another
+    # address with the same port is not this endpoint's (review on #26).
+    families = {"127.0.0.1": ("tcp4", "tcp46"), "::1": ("tcp6", "tcp46")}
+    addresses = ("127.0.0.1", "::1") if host == "localhost" else (host,)
     owners = set()
     for line in table.splitlines():
         fields = line.split()
-        if len(fields) > 5 and "LISTEN" in fields and fields[3].endswith(f".{port}"):
+        if len(fields) <= 5 or "LISTEN" not in fields:
+            continue
+        proto, local = fields[0], fields[3]
+        address, _, local_port = local.rpartition(".")
+        if local_port != str(port):
+            continue
+        serves = any(proto in families[a] and address in (a, "*") for a in addresses)
+        if serves:
             owner = next((f for f in fields if re.fullmatch(r"[^:\s]+:\d+", f)), None)
             if owner:
                 owners.add(owner)
