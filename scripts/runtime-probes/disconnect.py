@@ -48,6 +48,42 @@ from _common import (
     runtime,
 )
 
+_START = re.compile(r"\| task (\d+) \| new prompt")
+_CANCEL = re.compile(r"cancel task, id_task = (\d+)\b")
+_RELEASE = re.compile(r"\| task (\d+) \| stop processing: n_tokens = (\d+)\b")
+
+
+def stream_task(lines: list[str]) -> str | None:
+    """The task id of the only request started since the mark, or None."""
+    started = [m.group(1) for line in lines if (m := _START.search(line))]
+    return started[0] if len(started) == 1 else None
+
+
+def cancellation_verdict(
+    lines: list[str], task: str | None, *, chunks_read: int
+) -> tuple[bool | None, list[str]]:
+    """Whether the runtime cancelled `task` when its client closed.
+
+    Event type and task id are parsed together and the id compared whole, so
+    neither another task's cancellation (`id_task = 1010` for task 101) nor
+    this task's ordinary release counts as its cancellation (reviews on #26).
+    True needs this task's own `cancel task` line; False needs this task's
+    release far past what was read before the close; anything else is None.
+    """
+    if task is None:
+        return None, []
+    cancels = [line for line in lines if (m := _CANCEL.search(line)) and m.group(1) == task]
+    if cancels:
+        return True, cancels[:3]
+    releases = [
+        (line, int(m.group(2)))
+        for line in lines
+        if (m := _RELEASE.search(line)) and m.group(1) == task
+    ]
+    if releases and releases[0][1] > 4 * (chunks_read + 64):
+        return False, [releases[0][0]]
+    return None, [line for line, _ in releases][:3]
+
 
 def wait_until(rt: Runtime, model: str, *, resident: bool, seconds: float) -> float | None:
     """Seconds until the model's residency equals `resident`, or None."""
@@ -83,31 +119,17 @@ def generation(rt: Runtime, rec: Recorder, log: LogTail, args: Any) -> None:
     # the evidence; events of other tasks never count (review on #26).
     time.sleep(1.0)
     stream_lines = log.lines()
-    started = [ln for ln in stream_lines if "new prompt" in ln and "| task " in ln]
-    task = started[0].split("| task ")[1].split("|")[0].strip() if len(started) == 1 else None
+    task = stream_task(stream_lines)
     follow_up = answered(rt.chat(args.model, short, args.num_ctx))
     lines = log.lines() if task else []
-    # Whole task ids, compared as numbers: `id_task = 1010` is not task 101.
-    own_cancel = [
-        ln for ln in lines if (m := re.search(r"id_task = (\d+)\b", ln)) and m.group(1) == task
-    ]
-    own_release = [
-        ln for ln in lines if f"| task {task} | stop processing" in ln and "n_tokens =" in ln
-    ]
-    verdict: bool | None = None
-    if own_cancel:
-        verdict = True
-    elif own_release:
-        tokens = int(own_release[0].split("n_tokens =")[1].split(",")[0])
-        if tokens > 4 * (read + 64):
-            verdict = False
+    verdict, evidence = cancellation_verdict(lines, task, chunks_read=read)
     rec.emit(
         "generation",
         model=args.model,
         chunks_read=read,
         stream_task=task,
         cancelled_at_close=verdict,
-        evidence=(own_cancel + own_release)[:3],
+        evidence=evidence,
         observation={"baseline_wall_s": baseline, "follow_up_wall_s": follow_up["wall_s"]},
     )
 
