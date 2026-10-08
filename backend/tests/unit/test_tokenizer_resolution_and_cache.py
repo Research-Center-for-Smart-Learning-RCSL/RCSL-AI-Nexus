@@ -335,3 +335,39 @@ async def test_a_native_encoding_failure_is_not_counted_as_zero(
     monkeypatch.setattr(adapter._nexus_native, "encode_texts", lambda *args: None)
 
     assert await counter.count_prompt("primary:latest", _a_tool_call('{"path":"a"}'), []) is None
+
+
+async def test_gemma4_without_a_template_is_rendered_as_the_runtime_renders_it(
+    tmp_path: Path,
+) -> None:
+    """Not ChatML: the runtime's own gemma4 format, ported (C6c, #24). The
+    tool call is in the rendering, so its arguments are counted by the
+    format itself rather than added on afterwards."""
+    from app.adapters.tokenizer.gguf_token_counter.gemma4_renderer import Gemma4Renderer
+
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, ref="gemma4:31b-it-q8_0", template=None, architecture="gemma4")
+    counter = GgufTokenCounter(tmp_path)
+
+    vocabulary = await counter._vocabulary("gemma4:31b-it-q8_0")  # noqa: SLF001
+    short = await counter.count_prompt("gemma4:31b-it-q8_0", _a_tool_call('{"path":"a"}'), [])
+    long = await counter.count_prompt(
+        "gemma4:31b-it-q8_0", _a_tool_call('{"path":"' + "abcdefgh" * 512 + '"}'), []
+    )
+
+    assert vocabulary is not None
+    assert isinstance(vocabulary.template, Gemma4Renderer)
+    assert "gemma4:31b-it-q8_0" not in counter._fallback_template  # noqa: SLF001
+    assert short is not None and long is not None
+    assert long - short >= 512, (short, long)
+
+
+async def test_another_architecture_without_a_template_still_falls_back(tmp_path: Path) -> None:
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, template=None, architecture="llama")
+    counter = GgufTokenCounter(tmp_path)
+
+    assert await counter.count_prompt(
+        "primary:latest", [Message(role=MessageRole.USER, content="hello")], []
+    )
+    assert "primary:latest" in counter._fallback_template  # noqa: SLF001
