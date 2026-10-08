@@ -104,16 +104,17 @@ def main() -> None:
         timed = [r for r in results.values() if "ended_s" in r]
         overlap = None
         if len(timed) == 2:
-            first, second = sorted(timed, key=lambda r: r["ended_s"])
-            # Serialised: the later one's evaluation began only after the
-            # earlier ended, so its wall time covers both prefills.
-            overlap = round(first["ended_s"] - second["started_s"], 3)
+            # Time both client requests were open. Client overlap is not server
+            # execution overlap; it bounds it (review on #26).
+            overlap = round(
+                max(0.0, min(r["ended_s"] for r in timed) - max(r["started_s"] for r in timed)), 3
+            )
         rec.emit(
             "concurrent_cold",
             model=args.model,
             server_num_parallel=server_num_parallel(args.ollama_log),
             results=results,
-            observation={"seconds_both_in_flight": overlap},
+            observation={"client_seconds_both_open": overlap},
         )
         for tag in ("C", "D"):
             rec.emit(
