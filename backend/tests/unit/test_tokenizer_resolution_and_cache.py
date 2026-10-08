@@ -294,3 +294,44 @@ async def test_a_model_with_its_own_template_still_counts_tool_calls(store: Path
     )
 
     assert count is not None
+
+
+async def test_a_tool_call_that_cannot_be_encoded_gives_no_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rendered prompt encodes, but one call's arguments do not: the count
+    must be None, not the rendered part alone. The native wrapper's `encode`
+    turned a failure into 0, which made exactly that partial count (review on
+    #28)."""
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, template=None)
+    counter = GgufTokenCounter(tmp_path)
+    assert await counter.count_prompt(
+        "primary:latest", [Message(role=MessageRole.USER, content="hello")], []
+    )
+
+    async def failing_parts(ref: str, texts: object) -> None:
+        return None
+
+    monkeypatch.setattr(counter, "count_parts", failing_parts)
+
+    assert await counter.count_prompt("primary:latest", _a_tool_call('{"path":"a"}'), []) is None
+
+
+async def test_a_native_encoding_failure_is_not_counted_as_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same, through the Rust extension itself: `encode_texts` reports
+    a failed part as None, and that has to reach the caller."""
+    adapter = pytest.importorskip("app.adapters.tokenizer.gguf_token_counter.adapter")
+    if adapter._nexus_native is None:
+        pytest.skip("nexus_native is not installed")
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, template=None)
+    counter = GgufTokenCounter(tmp_path)
+    assert await counter.count_prompt(
+        "primary:latest", [Message(role=MessageRole.USER, content="hello")], []
+    )
+    monkeypatch.setattr(adapter._nexus_native, "encode_texts", lambda *args: None)
+
+    assert await counter.count_prompt("primary:latest", _a_tool_call('{"path":"a"}'), []) is None
