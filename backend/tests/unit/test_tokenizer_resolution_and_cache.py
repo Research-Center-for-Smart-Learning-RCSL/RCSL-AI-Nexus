@@ -448,3 +448,34 @@ async def test_prepare_clears_the_declared_context_too(tmp_path: Path) -> None:
     await counter.prepare("primary:latest")
 
     assert await counter.native_context_length("primary:latest") == 8192
+
+
+async def test_an_unknown_capacity_becomes_known_after_a_same_tag_pull(tmp_path: Path) -> None:
+    """A remembered None is a fact about the weights it was read from, not
+    about the tag: weights that declare no context, replaced under the same
+    tag by weights that do, are read again (review on #31)."""
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, digest="aaa111")
+    counter = GgufTokenCounter(tmp_path)
+    assert await counter.native_context_length("primary:latest") is None
+
+    write_store(tmp_path, digest="bbb222", context_length=8192)
+
+    assert await counter.native_context_length("primary:latest") == 8192
+
+
+async def test_a_known_capacity_is_withdrawn_when_the_new_weights_declare_none(
+    tmp_path: Path,
+) -> None:
+    """The opposite direction: the old window must not outlive the weights that
+    declared it, even when the new weights declare nothing to replace it with,
+    so the guard falls back to the registration rather than a stale figure
+    (review on #31)."""
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, digest="aaa111", context_length=32768)
+    counter = GgufTokenCounter(tmp_path)
+    assert await counter.native_context_length("primary:latest") == 32768
+
+    write_store(tmp_path, digest="bbb222")
+
+    assert await counter.native_context_length("primary:latest") is None
