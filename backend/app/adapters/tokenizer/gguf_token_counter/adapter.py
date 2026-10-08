@@ -314,7 +314,15 @@ class GgufTokenCounter:
                 )
                 return None
         parts = tuple(texts)
-        return await asyncio.to_thread(lambda: [vocabulary.encode(text) for text in parts])
+        try:
+            return await asyncio.to_thread(lambda: [vocabulary.encode(text) for text in parts])
+        except Exception as exc:  # noqa: BLE001
+            # The same contract as the native branch: a part that cannot be
+            # encoded makes the whole result None, never an exception that
+            # stops the guard short of its estimate (review on #29). The
+            # Unigram encoder raises on a character with no piece and no unk.
+            logger.info("count_parts failed for %s, falling back to estimate: %s", ref, exc)
+            return None
 
     async def _vocabulary(self, ref: str) -> _Vocabulary | _NativeVocabulary | None:
         cached = self._cache.get(ref, ...)

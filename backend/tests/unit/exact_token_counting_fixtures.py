@@ -95,6 +95,7 @@ def write_gguf(
     scores: Sequence[float] | None = None,
     token_types_as_int32: bool = True,
     architecture: str = "test",
+    control: Sequence[str] = tuple(CONTROL),
 ) -> Path:
     """A GGUF header carrying only what the counter reads.
 
@@ -103,7 +104,7 @@ def write_gguf(
     write is what let the Rust reader drop every control token unnoticed until
     2026-10-08 (#24). `scores` makes a `model: llama` (SentencePiece) file.
     """
-    types = [3 if t in CONTROL else 1 for t in tokens]
+    types = [3 if t in control else 1 for t in tokens]
     types_array = _int32_array(types) if token_types_as_int32 else _int_array(types)
     entries = [
         _entry("general.architecture", _STRING, _string(architecture)),
