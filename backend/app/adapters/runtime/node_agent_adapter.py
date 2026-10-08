@@ -1,0 +1,329 @@
+"""A runtime reached through its node's agent (PR4a-2 on #24).
+
+Implements `ModelRuntimePort` by calling the agent of one node, so every
+caller that already goes through the port reaches the runtime through the
+agent without changing. Which methods it serves depends on the stage (design
+R4); the rest fail closed with `RuntimeCapabilityError`, never by reaching the
+runtime some other way:
+
+| method | 4a | 4b | 4c |
+|---|---|---|---|
+| `generate`, `embed` | agent | agent | agent |
+| `validate_ref` | in-process grammar | same | same |
+| `health` | agent status | same | same |
+| `load`, `unload`, `pull`, `residency` | refused | agent | agent + reconciler |
+
+The agent relays the runtime's own lines; they are decoded here by the same
+`ChatStreamDecoder` the direct adapter uses. Request identity comes from
+`current_attempt`, set by the caller that bound the request; without one, the
+call is an unbound attempt that no client can repeat.
+
+Transport rules (final spec §5): a connection that could not be made is
+retried once **with the same op id**, which the agent treats idempotently; a
+stream that breaks after the agent accepted it is an interruption, never a
+retry, and never spliced with output from anywhere else.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import AsyncGenerator, Sequence
+from typing import Any
+
+import httpx
+
+from app.adapters.runtime.ollama_adapter import OllamaAdapter
+from app.adapters.runtime.ollama_adapter.decoding import ChatStreamDecoder
+from app.domain.entities.attempt import AttemptIdentity, current_attempt
+from app.domain.entities.chat import (
+    CompletionChunk,
+    Message,
+    SamplingOptions,
+    ToolChoice,
+    ToolDefinition,
+)
+from app.domain.entities.model import PullProgress, RuntimeResidency
+from app.domain.exceptions import (
+    NoAvailableModelError,
+    RuntimeCapabilityError,
+    ServerOverloadedError,
+    StreamInterruptedError,
+)
+from app.node_agent.wire import (
+    EmbeddingRequest,
+    Envelope,
+    GenerationRequest,
+    encode_embedding,
+    encode_generation,
+)
+
+logger = logging.getLogger(__name__)
+
+_NOT_IN_STAGE = "not served by the node agent in this stage (PR4a); see final spec §10"
+
+
+class NodeAgentRuntime:
+    def __init__(
+        self,
+        agent_url: str,
+        token: str,
+        *,
+        timeout_s: float,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._url = agent_url.rstrip("/")
+        self._headers = {"Authorization": f"Bearer {token}"}
+        self._timeout = httpx.Timeout(timeout_s, connect=5.0)
+        self._transport = transport
+        # Grammar only, no I/O: what a reference is does not depend on who sends.
+        self._grammar = OllamaAdapter(base_url="http://unused.invalid")
+
+    def _client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            base_url=self._url,
+            headers=self._headers,
+            timeout=self._timeout,
+            transport=self._transport,
+        )
+
+    @staticmethod
+    def _identity() -> AttemptIdentity:
+        return current_attempt.get() or AttemptIdentity.unbound()
+
+    @staticmethod
+    def _envelope(identity: AttemptIdentity) -> Envelope:
+        return Envelope(
+            op_id=identity.op_id,
+            request_id=identity.request_id,
+            payload_hash=identity.payload_hash,
+            store_output=identity.store_output,
+        )
+
+    # -- generation --------------------------------------------------------
+
+    async def generate(
+        self,
+        ref: str,
+        messages: Sequence[Message],
+        max_tokens: int | None = None,
+        thinking: bool = True,
+        tools: Sequence[ToolDefinition] = (),
+        tool_choice: ToolChoice | None = None,
+        sampling: SamplingOptions | None = None,
+        context_length: int | None = None,
+    ) -> AsyncGenerator[CompletionChunk, None]:
+        self.validate_ref(ref)
+        if not context_length or not max_tokens:
+            # The agent checks the request against its registration and the
+            # output reserve; it is never sent a request that says neither.
+            raise RuntimeCapabilityError(
+                detail=f"{ref}: the node agent needs a registered context and an output bound"
+            )
+        identity = self._identity()
+        body = encode_generation(
+            GenerationRequest(
+                ref=ref,
+                messages=tuple(messages),
+                max_tokens=max_tokens,
+                thinking=thinking,
+                tools=tuple(tools),
+                tool_choice=tool_choice,
+                sampling=sampling,
+                context_length=context_length,
+            ),
+            self._envelope(identity),
+        )
+        decoder = ChatStreamDecoder(ref)
+        emitted = False
+        async with self._client() as client:
+            response = await self._open_stream(client, body, identity.op_id)
+            try:
+                if response.headers.get("content-type", "").startswith("application/json"):
+                    await response.aread()
+                    for replayed in self._replay(ref, response.json()):
+                        yield replayed
+                    return
+                terminal: dict[str, Any] | None = None
+                try:
+                    async for line in response.aiter_lines():
+                        if not line.strip():
+                            continue
+                        event = json.loads(line)
+                        kind = event.get("type")
+                        if kind == "line":
+                            data = event.get("data") or {}
+                            if data.get("error"):
+                                continue  # the terminal event carries the outcome
+                            chunk = decoder.decode(data)
+                            if chunk is not None:
+                                emitted = True
+                                yield chunk
+                        elif kind == "terminal":
+                            terminal = event
+                except (httpx.HTTPError, json.JSONDecodeError) as exc:
+                    raise StreamInterruptedError(
+                        detail=f"node agent stream for {identity.op_id} broke: {exc!r}"
+                    ) from exc
+                self._settle(identity.op_id, terminal, decoder, emitted)
+            finally:
+                await response.aclose()
+
+    async def _open_stream(
+        self, client: httpx.AsyncClient, body: dict[str, Any], op_id: str
+    ) -> httpx.Response:
+        for attempt in (1, 2):
+            try:
+                request = client.build_request("POST", "/v1/inference", json=body)
+                response = await client.send(request, stream=True)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                if attempt == 2:
+                    raise NoAvailableModelError(
+                        detail=f"node agent unreachable for {op_id}: {exc!r}"
+                    ) from exc
+                logger.info("node agent connect failed for %s; resending the same op id", op_id)
+                continue
+            except httpx.HTTPError as exc:
+                # Something may have reached the agent. The same op id is
+                # never sent again from here; the attempt is the caller's to
+                # look up.
+                raise StreamInterruptedError(
+                    detail=f"node agent request for {op_id} failed after sending: {exc!r}"
+                ) from exc
+            if response.status_code == 200:
+                return response
+            await response.aread()
+            await response.aclose()
+            self._raise_for_refusal(response, op_id)
+        raise NoAvailableModelError(detail=f"node agent gave no response for {op_id}")
+
+    def _raise_for_refusal(self, response: httpx.Response, op_id: str) -> None:
+        try:
+            content = response.json()
+        except ValueError:
+            content = {}
+        reason = content.get("refused") or content.get("detail") or response.text[:200]
+        if response.status_code == 503:
+            retry = response.headers.get("retry-after")
+            raise ServerOverloadedError(
+                retry_after_seconds=int(retry) if retry and retry.isdigit() else 60,
+                detail=f"node agent refused {op_id}: {reason}",
+            )
+        if response.status_code == 401:
+            logger.error("node agent rejected this entrance's token")
+        raise NoAvailableModelError(
+            detail=f"node agent answered {response.status_code} for {op_id}: {reason}"
+        )
+
+    def _settle(
+        self,
+        op_id: str,
+        terminal: dict[str, Any] | None,
+        decoder: ChatStreamDecoder,
+        emitted: bool,
+    ) -> None:
+        if terminal is None:
+            raise StreamInterruptedError(detail=f"node agent stream for {op_id} ended early")
+        state = terminal.get("state")
+        if state == "completed" and decoder.saw_done:
+            return
+        if state == "failed":
+            raise NoAvailableModelError(detail=f"runtime failed {op_id}: {terminal.get('reason')}")
+        raise StreamInterruptedError(
+            detail=f"{op_id} ended {state} ({terminal.get('reason')}); output emitted={emitted}"
+        )
+
+    def _replay(self, ref: str, described: dict[str, Any]) -> list[CompletionChunk]:
+        """An existing attempt: its stored result as one chunk, or a refusal.
+
+        Decision Q3: one chunk carrying the whole content, reasoning and tool
+        calls, then the original finish reason and totals.
+        """
+        state = described.get("state")
+        op_id = described.get("op_id")
+        if state == "completed":
+            result = described.get("result")
+            if not isinstance(result, dict):
+                # Decision Q2: nothing was stored without a key. Never run
+                # again; say what happened instead.
+                raise StreamInterruptedError(
+                    detail=f"{op_id} completed but its result was not retained"
+                )
+            decoder = ChatStreamDecoder(ref)
+            chunk = decoder.decode(
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": result.get("content") or "",
+                        "thinking": result.get("thinking") or "",
+                        "tool_calls": result.get("tool_calls") or [],
+                    },
+                    "done": True,
+                    "done_reason": result.get("done_reason"),
+                    "eval_count": result.get("eval_count"),
+                    "prompt_eval_count": result.get("prompt_eval_count"),
+                }
+            )
+            return [chunk] if chunk is not None else []
+        if state == "failed":
+            raise NoAvailableModelError(detail=f"{op_id} failed: {described.get('reason')}")
+        raise StreamInterruptedError(detail=f"{op_id} is {state}; it is not run again")
+
+    # -- embeddings --------------------------------------------------------
+
+    async def embed(self, ref: str, texts: Sequence[str]) -> list[list[float]]:
+        self.validate_ref(ref)
+        identity = self._identity()
+        body = encode_embedding(
+            EmbeddingRequest(ref=ref, texts=tuple(texts)), self._envelope(identity)
+        )
+        async with self._client() as client:
+            response: httpx.Response | None = None
+            for attempt in (1, 2):
+                try:
+                    response = await client.post("/v1/embeddings", json=body)
+                    break
+                except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                    if attempt == 2:
+                        raise NoAvailableModelError(
+                            detail=f"node agent unreachable for {identity.op_id}: {exc!r}"
+                        ) from exc
+                except httpx.HTTPError as exc:
+                    raise StreamInterruptedError(
+                        detail=f"embedding {identity.op_id} failed after sending: {exc!r}"
+                    ) from exc
+        assert response is not None  # noqa: S101 - the loop either breaks or raises
+        if response.status_code != 200:
+            self._raise_for_refusal(response, identity.op_id)
+        described = response.json()
+        vectors = described.get("embeddings")
+        if described.get("state") != "completed" or not isinstance(vectors, list):
+            raise NoAvailableModelError(
+                detail=f"embedding {identity.op_id} is {described.get('state')} with no vectors"
+            )
+        return [[float(v) for v in vector] for vector in vectors]
+
+    # -- the rest of the port ----------------------------------------------
+
+    def validate_ref(self, ref: str) -> None:
+        self._grammar.validate_ref(ref)
+
+    async def health(self) -> bool:
+        try:
+            async with self._client() as client:
+                response = await client.get("/v1/status")
+        except httpx.HTTPError:
+            return False
+        return response.status_code == 200 and response.json().get("gate") == "serving"
+
+    def pull(self, ref: str) -> AsyncGenerator[PullProgress, None]:
+        raise RuntimeCapabilityError(detail=f"pull: {_NOT_IN_STAGE}")
+
+    async def load(self, ref: str, *, context_length: int | None = None) -> None:
+        raise RuntimeCapabilityError(detail=f"load: {_NOT_IN_STAGE}")
+
+    async def unload(self, ref: str) -> None:
+        raise RuntimeCapabilityError(detail=f"unload: {_NOT_IN_STAGE}")
+
+    async def residency(self) -> RuntimeResidency | None:
+        raise RuntimeCapabilityError(detail=f"residency: {_NOT_IN_STAGE}")
