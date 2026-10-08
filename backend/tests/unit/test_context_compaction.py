@@ -827,20 +827,22 @@ async def test_the_summariser_refuses_a_prefix_the_model_cannot_read() -> None:
 
 
 async def test_the_summariser_leaves_room_for_the_summary_itself() -> None:
-    """The bound is the context minus what the answer needs. A prefix that fits
-    the context exactly leaves nowhere to write."""
+    """The bound is the context minus what the answer needs, one token short
+    of the window: the runtime keeps a prompt whole only below it and shifts
+    the context when output reaches it (E1/T1, #24). A prefix that fits the
+    context exactly leaves nowhere to write."""
     runtime = FakeRuntime(chunks=1)
     over = build_summarise_fn(
         runtime,  # type: ignore[arg-type]
         "qwen2.5:7b",
         32768,
-        DeclaringCounter(counted=32_768 - SUMMARY_OUTPUT_TOKENS + 1),
+        DeclaringCounter(counted=32_768 - 1 - SUMMARY_OUTPUT_TOKENS + 1),
     )
     under = build_summarise_fn(
         runtime,  # type: ignore[arg-type]
         "qwen2.5:7b",
         32768,
-        DeclaringCounter(counted=32_768 - SUMMARY_OUTPUT_TOKENS),
+        DeclaringCounter(counted=32_768 - 1 - SUMMARY_OUTPUT_TOKENS),
     )
 
     with pytest.raises(SummaryTooLongError):
@@ -868,3 +870,19 @@ async def test_the_runner_is_sized_by_what_was_asked_for() -> None:
     await summarise([Message(role=MessageRole.USER, content="x")])
 
     assert runtime.seen_context_length == 32768
+
+
+async def test_a_prefix_the_counter_cannot_count_is_not_summarised() -> None:
+    """A counter is present but cannot count this prefix: refused, because
+    Tier 2's input is large by construction and an unchecked one is exactly
+    the prompt the runtime would cut (#24 §6)."""
+    runtime = FakeRuntime(chunks=1)
+    summarise = build_summarise_fn(
+        runtime,  # type: ignore[arg-type]
+        "qwen2.5:7b",
+        32768,
+        DeclaringCounter(counted=None),
+    )
+
+    with pytest.raises(SummaryTooLongError):
+        await summarise([Message(role=MessageRole.USER, content="x")])

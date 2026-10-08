@@ -424,7 +424,7 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
                         basis=basis,
                     )
             await self._refuse_what_this_target_would_truncate(
-                counted, basis, target, actor, messages, tools
+                counted, basis, target, actor, messages, tools, max_tokens
             )
 
             # `aclosing` again, for the same reason it is needed one layer

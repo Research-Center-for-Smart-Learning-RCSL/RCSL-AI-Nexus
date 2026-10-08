@@ -361,3 +361,18 @@ def _floor_composition(messages: Sequence[Message], tools: Sequence[ToolDefiniti
     """
     parts = _composition_parts(messages, tools)
     return _describe_prompt_composition(messages, tools, [int(_floor_tokens(p)) for p in parts])
+
+
+def effective_max_tokens(requested: int | None, ceiling: int) -> int:
+    """The output this request may generate: the caller's figure where it is
+    stricter than ours, ours otherwise.
+
+    One function for the two readers that must agree on it: generation, which
+    sends it to the runtime as `num_predict`, and the context guard, which
+    reserves it in the window before admitting the prompt. If they disagreed,
+    the guard could admit a prompt whose output then overflows the window, which
+    is the loss measured on 2026-10-07 (T1, #24): qwen2.5 shifts the context and
+    discards the system prompt; gemma4 stops with a `length` indistinguishable
+    from `max_tokens`.
+    """
+    return min(requested or ceiling, ceiling)

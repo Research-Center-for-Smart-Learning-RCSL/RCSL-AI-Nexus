@@ -23,6 +23,7 @@ from app.domain.ports.model_runtime_port import ModelRuntimePort
 from app.domain.services.prompt_capture import TranscriptBuffer, should_capture
 
 from .dependencies import RouteChatDependencies
+from .estimates import effective_max_tokens
 from .finalization import finalize_generation
 
 logger = logging.getLogger("app.application.use_cases.route_chat_request")
@@ -58,7 +59,7 @@ class GenerationSessionMixin(RouteChatDependencies):
     ) -> AsyncGenerator[CompletionChunk, None]:
         # The caller's request is honoured only where it is stricter than ours.
         # An unbounded generation is a hardware problem, not a client choice.
-        ceiling = min(max_tokens or self._max_tokens_ceiling, self._max_tokens_ceiling)
+        ceiling = effective_max_tokens(max_tokens, self._max_tokens_ceiling)
 
         # Decided once, here, before the first chunk — never per chunk. A
         # window that expires mid-generation must not produce half a
