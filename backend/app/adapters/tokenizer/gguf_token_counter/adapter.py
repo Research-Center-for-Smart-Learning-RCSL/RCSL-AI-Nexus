@@ -9,6 +9,7 @@ chat template including those using `namespace()` and `macro`).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from collections import OrderedDict
 from collections.abc import Sequence
@@ -17,7 +18,7 @@ from typing import Any
 
 from app.adapters.runtime.ollama_adapter import message_payload, tool_payload
 from app.adapters.tokenizer.gguf import read_metadata
-from app.adapters.tokenizer.ollama_blobs import BlobNotFound, weights_path
+from app.adapters.tokenizer.ollama_blobs import BlobNotFound, manifest_path, weights_path
 from app.domain.entities.chat import Message, ToolDefinition
 from app.domain.exceptions import InvalidModelReferenceError, RuntimeCapabilityError
 
@@ -140,7 +141,7 @@ class GgufTokenCounter:
         self._root = root
         self._cache_size = max(1, cache_size)
         self._cache: OrderedDict[str, _Vocabulary | _NativeVocabulary | None] = OrderedDict()
-        self._native_context: OrderedDict[str, int | None] = OrderedDict()
+        self._native_context: OrderedDict[str, tuple[str | None, int | None]] = OrderedDict()
         """Declared context lengths, bounded separately from the vocabularies.
 
         Sharing `cache_size` with them was wrong and the review that caught it
@@ -154,6 +155,16 @@ class GgufTokenCounter:
         designed around. An entry here is an integer or None. `_NATIVE_CONTEXT_CACHE`
         is therefore sized for the misses a form produces rather than for
         memory, which is what a cache of integers should be sized for.
+        """
+        self._cache_blob: dict[str, str | None] = {}
+        """The weights blob each cached vocabulary was built from.
+
+        Both caches are keyed by reference, and a reference is a tag: pulling a
+        new build under the same tag repoints its manifest at different weights.
+        A cached entry is used only while the manifest still names the blob it
+        came from, so a same-tag replacement rebuilds the vocabulary and rereads
+        the declared context together (review on #24), rather than counting and
+        bounding the new weights with the old ones' figures.
         """
         self._fallback_template: set[str] = set()
         """References counted with `_CHATML_FALLBACK` because their GGUF carries
@@ -175,7 +186,22 @@ class GgufTokenCounter:
     async def prepare(self, ref: str) -> bool:
         async with self._lock:
             self._cache.pop(ref, None)
+            self._cache_blob.pop(ref, None)
+            self._native_context.pop(ref, None)
         return await self._vocabulary(ref) is not None
+
+    def _current_blob(self, ref: str) -> str | None:
+        """The identity of what the reference names now: its manifest's SHA-256.
+
+        The manifest is what a pull under the same tag rewrites, and its digest
+        is the one the runtime reports for the model (`/api/tags`). Hashing it
+        costs a read of a few hundred bytes, never a header scan, and does not
+        depend on the blob still being on disk. None when there is no manifest.
+        """
+        try:
+            return hashlib.sha256(manifest_path(self._root, ref).read_bytes()).hexdigest()
+        except (InvalidModelReferenceError, OSError):
+            return None
 
     async def native_context_length(self, ref: str) -> int | None:
         """The `<family>.context_length` the GGUF header declares.
@@ -193,13 +219,15 @@ class GgufTokenCounter:
         reader has no opinion about; the smallest is taken, because the purpose
         of this number is to bound something.
         """
+        blob = await asyncio.to_thread(self._current_blob, ref)
         async with self._lock:
-            if ref in self._native_context:
+            cached = self._native_context.get(ref)
+            if cached is not None and cached[0] == blob:
                 self._native_context.move_to_end(ref)
-                return self._native_context[ref]
+                return cached[1]
         value = await asyncio.to_thread(self._read_native_context, ref)
         async with self._lock:
-            self._native_context[ref] = value
+            self._native_context[ref] = (blob, value)
             self._native_context.move_to_end(ref)
             while len(self._native_context) > _NATIVE_CONTEXT_CACHE:
                 self._native_context.popitem(last=False)
@@ -325,18 +353,24 @@ class GgufTokenCounter:
             return None
 
     async def _vocabulary(self, ref: str) -> _Vocabulary | _NativeVocabulary | None:
+        blob = await asyncio.to_thread(self._current_blob, ref)
         cached = self._cache.get(ref, ...)
-        if cached is not ...:
+        if cached is not ... and self._cache_blob.get(ref) == blob:
             self._cache.move_to_end(ref)
             return cached
         async with self._lock:
-            if ref in self._cache:
+            if ref in self._cache and self._cache_blob.get(ref) == blob:
                 return self._cache[ref]
+            if ref in self._cache:
+                logger.info("weights behind %s changed; rebuilding its vocabulary", ref)
+                self._fallback_template.discard(ref)
             built = await asyncio.to_thread(self._build, ref)
             self._cache[ref] = built
+            self._cache_blob[ref] = blob
             self._cache.move_to_end(ref)
             while len(self._cache) > self._cache_size:
                 evicted, _ = self._cache.popitem(last=False)
+                self._cache_blob.pop(evicted, None)
                 logger.info(
                     "dropped the cached vocabulary for %s to stay within the cache", evicted
                 )
