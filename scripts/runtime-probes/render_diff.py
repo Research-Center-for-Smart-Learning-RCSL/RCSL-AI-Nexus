@@ -32,7 +32,7 @@ from _common import Recorder, parser, require_window
 from app.adapters.tokenizer.gguf import read_metadata
 from app.adapters.tokenizer.gguf_token_counter.adapter import GgufTokenCounter
 from app.adapters.tokenizer.gguf_token_counter.gemma4_renderer import Gemma4Renderer
-from app.adapters.tokenizer.ollama_blobs import manifest_path, weights_path
+from app.adapters.tokenizer.ollama_blobs import manifest_path, weights_in_manifest
 from tests.unit.runtime_validation_corpus import CASES, wire_payload
 
 
@@ -53,7 +53,10 @@ def main() -> None:
             # Same rule as both count recorders: the server must serve the
             # manifest the local store holds, or a tag mismatch would be
             # reported as a renderer defect of the local profile (review on #26).
-            manifest = hashlib.sha256(manifest_path(args.models_root, ref).read_bytes()).hexdigest()
+            # One read: the blob is resolved from the bytes that were verified
+            # against the server, not from a second read (review on #31).
+            raw = manifest_path(args.models_root, ref).read_bytes()
+            manifest = hashlib.sha256(raw).hexdigest()
             if served.get(ref) != manifest:
                 print(
                     f"refusing: {ref} is served as {served.get(ref)}, not {manifest}",
@@ -61,7 +64,7 @@ def main() -> None:
                 )
                 sys.exit(1)
             counter = GgufTokenCounter(args.models_root)
-            blob = weights_path(args.models_root, ref)
+            blob = weights_in_manifest(args.models_root, ref, raw)
             vocabulary = counter._build_python(ref, blob)  # noqa: SLF001
             # The counter substitutes ChatML when the GGUF carries no template,
             # and `has_template` is then still true, so ask the file itself.
