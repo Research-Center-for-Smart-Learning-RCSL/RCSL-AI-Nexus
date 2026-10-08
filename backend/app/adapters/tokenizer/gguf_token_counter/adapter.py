@@ -22,6 +22,7 @@ from app.domain.entities.chat import Message, ToolDefinition
 from app.domain.exceptions import InvalidModelReferenceError, RuntimeCapabilityError
 
 from .constants import (
+    ARCHITECTURE_KEY,
     BPE_MODEL,
     BPE_REQUIRED_KEYS,
     CHAT_TEMPLATE_KEY,
@@ -31,6 +32,7 @@ from .constants import (
     WANTED_KEYS,
 )
 from .construction import _Vocabulary, build_tokenizer_for_model
+from .gemma4_renderer import Gemma4Renderer, renderer_variant
 from .templates import _build_template
 
 logger = logging.getLogger("app.adapters.tokenizer.gguf_token_counter")
@@ -103,6 +105,10 @@ class _NativeVocabulary:
     def has_template(self) -> bool:
         return self._template is not None
 
+    @property
+    def template(self) -> Any:
+        return self._template
+
     def encode(self, text: str) -> int:
         result: int | None = _nexus_native.encode_text(self._blob_path, self._cache_key, text)
         if result is None:
@@ -151,7 +157,8 @@ class GgufTokenCounter:
         """
         self._fallback_template: set[str] = set()
         """References counted with `_CHATML_FALLBACK` because their GGUF carries
-        no chat template.
+        no chat template and the runtime's own renderer is not ported here.
+        gemma4 is ported (`gemma4_renderer`) and is never in this set.
 
         The fallback is a stand-in, not the runtime's format, and it renders no
         assistant tool call at all: neither the function name nor the
@@ -235,6 +242,8 @@ class GgufTokenCounter:
             payload = [message_payload(m) for m in messages]
         except RuntimeCapabilityError:
             return None
+        if isinstance(vocabulary.template, Gemma4Renderer):
+            return await self._count_gemma4(ref, vocabulary.template, payload, tool_payload(tools))
         try:
             counted = await asyncio.to_thread(vocabulary.count_prompt, payload, tool_payload(tools))
             if counted is None or not calls:
@@ -263,6 +272,34 @@ class GgufTokenCounter:
                 exc,
             )
             return None
+
+    async def _count_gemma4(
+        self,
+        ref: str,
+        renderer: Gemma4Renderer,
+        payload: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> int | None:
+        """The larger of the runtime's two renderings: thinking on and off.
+
+        The runtime renders gemma4 with thinking on unless the request says
+        `think: false`, and the gateway omits the field when its thinking is
+        on. This port does not see that flag, so it renders both and counts the
+        larger; one of the two is byte-equal to what the runtime evaluates
+        (`render_diff.py`, 2026-10-08), so the result is exact or a few tokens
+        over. Encoded through `count_parts`, so any failure is None, never a
+        partial count (#28).
+        """
+        try:
+            texts = [
+                renderer.render(messages=payload, tools=tools, think=think)
+                for think in (None, False)
+            ]
+        except Exception as exc:  # noqa: BLE001
+            logger.info("could not render %s with the gemma4 renderer: %s", ref, exc)
+            return None
+        parts = await self.count_parts(ref, texts)
+        return max(parts) if parts else None
 
     async def count_parts(self, ref: str, texts: Sequence[str]) -> Sequence[int] | None:
         vocabulary = await self._vocabulary(ref)
@@ -341,7 +378,8 @@ class GgufTokenCounter:
     def _build_python(self, ref: str, blob: Path) -> _Vocabulary | None:
         try:
             metadata = read_metadata(
-                blob, lambda key: key in WANTED_KEYS or key == CHAT_TEMPLATE_KEY
+                blob,
+                lambda key: key in WANTED_KEYS or key in (CHAT_TEMPLATE_KEY, ARCHITECTURE_KEY),
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -379,10 +417,17 @@ class GgufTokenCounter:
             tokenizer = build_tokenizer_for_model(metadata)
             source = metadata.get(CHAT_TEMPLATE_KEY)
             self._fallback_template.discard(ref)
-            if not isinstance(source, str):
-                source = _CHATML_FALLBACK
+            template: Any
+            if isinstance(source, str):
+                template = _build_template(source)
+            elif metadata.get(ARCHITECTURE_KEY) == "gemma4":
+                # No template in the weights: the runtime renders gemma4 with a
+                # built-in renderer, ported in `gemma4_renderer` and held to the
+                # runtime's bytes (C6c, #24). ChatML would be another format.
+                template = Gemma4Renderer(large=renderer_variant(ref) == "large")
+            else:
+                template = _build_template(_CHATML_FALLBACK)
                 self._fallback_template.add(ref)
-            template = _build_template(source)
         except Exception as exc:  # noqa: BLE001
             logger.warning("could not build a tokeniser for %s from %s: %s", ref, blob.name, exc)
             return None

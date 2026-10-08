@@ -32,6 +32,10 @@ class _Vocabulary:
     def has_template(self) -> bool:
         return self._template is not None
 
+    @property
+    def template(self) -> Any:
+        return self._template
+
     def encode(self, text: str) -> int:
         return len(self._tokenizer.encode(text, add_special_tokens=False).ids)
 

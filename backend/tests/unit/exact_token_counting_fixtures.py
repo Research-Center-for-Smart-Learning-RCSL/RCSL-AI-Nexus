@@ -94,6 +94,7 @@ def write_gguf(
     context_length: int | None = None,
     scores: Sequence[float] | None = None,
     token_types_as_int32: bool = True,
+    architecture: str = "test",
 ) -> Path:
     """A GGUF header carrying only what the counter reads.
 
@@ -105,7 +106,7 @@ def write_gguf(
     types = [3 if t in CONTROL else 1 for t in tokens]
     types_array = _int32_array(types) if token_types_as_int32 else _int_array(types)
     entries = [
-        _entry("general.architecture", _STRING, _string("test")),
+        _entry("general.architecture", _STRING, _string(architecture)),
         # A key nothing wants, carrying an array large enough that keeping it
         # would be visible: this is what `skip_value` exists to walk past.
         _entry("test.ignored", _ARRAY, _int_array(list(range(1000)))),
