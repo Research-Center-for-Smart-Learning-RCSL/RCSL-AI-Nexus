@@ -77,25 +77,33 @@ def generation(rt: Runtime, rec: Recorder, log: LogTail, args: Any) -> None:
                 read += 1
                 if read >= args.chunks:
                     break
+    # Read the stream's own events before anything else is sent, so the only
+    # task started since the mark is the stream's. Its task id then selects
+    # the evidence; events of other tasks never count (review on #26).
+    time.sleep(1.0)
+    stream_lines = log.lines()
+    started = [ln for ln in stream_lines if "new prompt" in ln and "| task " in ln]
+    task = started[0].split("| task ")[1].split("|")[0].strip() if len(started) == 1 else None
     follow_up = answered(rt.chat(args.model, short, args.num_ctx))
-    lines = log.lines()
-    # The streamed task is the first released after the mark; its own cancel or
-    # release line is the evidence, never the follow-up's timing.
-    cancels = [line for line in lines if "cancel task" in line]
-    released = [line for line in lines if "stop processing" in line and "n_tokens =" in line]
+    lines = log.lines() if task else []
+    own_cancel = [ln for ln in lines if f"cancel task, id_task = {task}" in ln]
+    own_release = [
+        ln for ln in lines if f"| task {task} | stop processing" in ln and "n_tokens =" in ln
+    ]
     verdict: bool | None = None
-    if cancels:
+    if own_cancel:
         verdict = True
-    elif released:
-        tokens = int(released[0].split("n_tokens =")[1].split(",")[0])
+    elif own_release:
+        tokens = int(own_release[0].split("n_tokens =")[1].split(",")[0])
         if tokens > 4 * (read + 64):
             verdict = False
     rec.emit(
         "generation",
         model=args.model,
         chunks_read=read,
+        stream_task=task,
         cancelled_at_close=verdict,
-        evidence=(cancels + released)[:3],
+        evidence=(own_cancel + own_release)[:3],
         observation={"baseline_wall_s": baseline, "follow_up_wall_s": follow_up["wall_s"]},
     )
 
