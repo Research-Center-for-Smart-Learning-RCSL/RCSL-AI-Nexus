@@ -24,7 +24,7 @@ from app.domain.exceptions import (
 )
 
 from .base import OllamaRuntimeBase
-from .decoding import _finish_reason, _parse_tool_calls
+from .decoding import ChatStreamDecoder
 from .encoding import chat_payload, embed_payload
 
 logger = logging.getLogger("app.adapters.runtime.ollama_adapter")
@@ -62,19 +62,7 @@ class OllamaGenerationMixin(OllamaRuntimeBase):
             keep_alive=self._keep_alive,
         )
 
-        counted = 0
-        saw_done = False
-        called_tools = False
-        forwarded_calls: set[tuple[str, str]] = set()
-        """(name, arguments) of every call already yielded, consulted only on
-            the terminal event. On the build this was written against, calls arrive
-            on interim events and the terminal event repeats nothing — but that is
-            observed behaviour, not a contract, and a build that restated the
-            turn's calls in its done event would have an agent execute every one of
-            them twice. Side effects make that the expensive direction to be wrong
-            in, so the terminal event is filtered against what was already sent.
-            Interim events are never filtered: a model that genuinely asks for the
-            same call twice puts both in its own messages, and those go through."""
+        decoder = ChatStreamDecoder(ref)
         # A timeout here is a `DomainError` or it is a 500. Nothing above this
         # layer handles an httpx exception: it escapes the router's handler,
         # which only knows `DomainError`, so before this the honest and
@@ -108,80 +96,13 @@ class OllamaGenerationMixin(OllamaRuntimeBase):
                     if event.get("error"):
                         raise NoAvailableModelError(detail=f"ollama: {event['error']}")
 
-                    message = event.get("message") or {}
-                    delta = message.get("content") or ""
-                    # A thinking model puts its deliberation here and leaves
-                    # `content` empty until it is finished, which for a hard
-                    # question can be the whole generation. Dropping this field
-                    # made the adapter produce nothing at all for 93 seconds on
-                    # a question that used its entire token budget thinking.
-                    reasoning = message.get("thinking") or ""
-                    calls = _parse_tool_calls(message.get("tool_calls"))
-
-                    if event.get("done"):
-                        saw_done = True
-                        repeated = tuple(
-                            c for c in calls if (c.name, c.arguments) in forwarded_calls
-                        )
-                        if repeated:
-                            logger.warning(
-                                "ollama repeated %s already-forwarded tool call(s) "
-                                "in its done event for %s, dropping the repeats",
-                                len(repeated),
-                                ref,
-                            )
-                            calls = tuple(c for c in calls if c not in repeated)
-                        if calls:
-                            called_tools = True
-                        # Ollama reports the authoritative token count only at
-                        # the end. Chunks were counted as one apiece so that a
-                        # disconnect still bills something sensible, so emit
-                        # the difference here rather than the whole figure,
-                        # which would otherwise be counted twice.
-                        eval_count = int(event.get("eval_count") or 0)
-                        correction = eval_count - counted
-                        if correction < 0:
-                            # Chunks outnumbered the model's own token count.
-                            # There is no downward correction to make, so this
-                            # is logged rather than silently over-billed.
-                            logger.info(
-                                "ollama eval_count=%s below chunk count=%s for %s",
-                                eval_count,
-                                counted,
-                                ref,
-                            )
-                            correction = 0
-                        yield CompletionChunk(
-                            delta=delta,
-                            reasoning=reasoning,
-                            tool_calls=calls,
-                            finish_reason=_finish_reason(
-                                event.get("done_reason"), called_tools=called_tools
-                            ),
-                            token_count=correction,
-                            # Reported once, here, for the whole request.
-                            # Ollama has always sent it; nothing read it until
-                            # 2026-08-04, so every prompt was free of quota.
-                            prompt_tokens=int(event.get("prompt_eval_count") or 0),
-                        )
+                    chunk = decoder.decode(event)
+                    if chunk is not None:
+                        yield chunk
+                    if decoder.saw_done:
                         return
 
-                    if delta or reasoning or calls:
-                        # Reasoning counts. Ollama's `eval_count` includes the
-                        # thinking tokens, so excluding them here would make the
-                        # end-of-stream correction re-bill every one of them.
-                        # Tool calls are decoded tokens too, and a generation
-                        # that is nothing but a call would otherwise be counted
-                        # as producing nothing until the terminal correction.
-                        counted += 1
-                        if calls:
-                            called_tools = True
-                            forwarded_calls.update((c.name, c.arguments) for c in calls)
-                        yield CompletionChunk(
-                            delta=delta, reasoning=reasoning, tool_calls=calls, token_count=1
-                        )
-
-                if not saw_done:
+                if not decoder.saw_done:
                     # The stream ended without a terminal event: the model was
                     # evicted, Ollama restarted, or the read timeout fired.
                     # Returning quietly would let the caller record a complete
