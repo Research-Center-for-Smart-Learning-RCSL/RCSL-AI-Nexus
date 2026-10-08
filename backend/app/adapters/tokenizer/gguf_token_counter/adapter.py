@@ -246,9 +246,16 @@ class GgufTokenCounter:
             # +157/+575/+1125, about +11 a round, and +157 at 12 rounds for
             # results x1, x3 and x9 alike. The profile stays unvalidated until
             # the counter renders as the runtime does (C6c).
-            return counted + sum(
-                await asyncio.to_thread(lambda: [vocabulary.encode(text) for text in calls])
-            )
+            #
+            # Through `count_parts`, never `_NativeVocabulary.encode`: that
+            # wrapper turns a failed encoding into 0, which would make this a
+            # partial count the guard accepts as exact. `encode_texts` is None
+            # if any part fails, and the Python path raises (review on #28).
+            parts = await self.count_parts(ref, calls)
+            if parts is None:
+                logger.info("could not encode the tool calls of %s; counting by estimate", ref)
+                return None
+            return counted + sum(parts)
         except Exception as exc:  # noqa: BLE001
             logger.info(
                 "could not count %s with its own template, falling back to the estimate: %s",
