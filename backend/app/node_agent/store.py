@@ -115,16 +115,36 @@ class OperationStore:
             )
 
     @asynccontextmanager
-    async def _owned(self, *, dispatch: bool) -> AsyncIterator[asyncpg.Connection]:
-        async with self._pool.acquire() as conn, conn.transaction():
-            if dispatch:
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock($1, hashtext($2))",
-                    DISPATCH_NAMESPACE,
-                    self.node_id,
-                )
-            await self._prove_ownership(conn)
-            yield conn
+    async def _owned(
+        self, *, dispatch: bool, action: str, op_id: str | None = None
+    ) -> AsyncIterator[asyncpg.Connection]:
+        """A transaction that proves ownership first; a refused write is audited.
+
+        Every refusal is evidence of a superseded owner still trying to act
+        (design R2), so it is recorded whichever write it was, then raised so
+        the caller closes its gate (review on #33).
+        """
+        try:
+            async with self._pool.acquire() as conn, conn.transaction():
+                if dispatch:
+                    await conn.execute(
+                        "SELECT pg_advisory_xact_lock($1, hashtext($2))",
+                        DISPATCH_NAMESPACE,
+                        self.node_id,
+                    )
+                await self._prove_ownership(conn)
+                yield conn
+        except NotOwner as exc:
+            await self.audit(
+                f"stale_{action}",
+                op_id,
+                {
+                    "generation": self.ownership.generation,
+                    "boot_id": self.ownership.boot_id,
+                    "error": str(exc),
+                },
+            )
+            raise
 
     # -- reads -------------------------------------------------------------
 
@@ -174,7 +194,7 @@ class OperationStore:
         A loser of the race only observes the existing attempt; reading
         `accepted` grants nothing (design R3).
         """
-        async with self._owned(dispatch=False) as conn:
+        async with self._owned(dispatch=False, action="insert", op_id=op_id) as conn:
             row = await conn.fetchrow(
                 "INSERT INTO node_operations (node_id, op_id, kind, state, origin_generation, "
                 "origin_boot_id, owner_generation, request_id, payload_hash, store_output) "
@@ -200,7 +220,7 @@ class OperationStore:
         unknown. The in-process gate is checked by the caller, under the barrier
         that block, drain and role loss also take (design S3, T2).
         """
-        async with self._owned(dispatch=True) as conn:
+        async with self._owned(dispatch=True, action="promotion", op_id=op_id) as conn:
             if await conn.fetchval(
                 "SELECT EXISTS (SELECT 1 FROM node_operations "
                 "WHERE node_id = $1 AND state = 'outcome_unknown')",
@@ -226,7 +246,7 @@ class OperationStore:
         POST conflicts with it and only observes it (design S6). Never rewrites
         `running`, unknown or terminal work: those are returned unchanged.
         """
-        async with self._owned(dispatch=True) as conn:
+        async with self._owned(dispatch=True, action="cancel", op_id=op_id) as conn:
             await conn.execute(
                 "INSERT INTO node_operations (node_id, op_id, kind, state, origin_generation, "
                 "origin_boot_id, owner_generation, reason, resolved_at, resolved_by) "
@@ -251,7 +271,7 @@ class OperationStore:
 
     async def mark_unknown(self, op_id: str, reason: str, observed: dict[str, Any]) -> bool:
         """`running → outcome_unknown`, under the dispatch lock (design S3)."""
-        async with self._owned(dispatch=True) as conn:
+        async with self._owned(dispatch=True, action="unknown", op_id=op_id) as conn:
             done = await conn.fetchval(
                 "UPDATE node_operations SET state = 'outcome_unknown', reason = $4, "
                 "observed = $5::jsonb "
@@ -272,7 +292,7 @@ class OperationStore:
         whether the node is blocked. The evidence is kept in the operation's
         provenance and in the audit trail, which outlives the row.
         """
-        async with self._owned(dispatch=True) as conn:
+        async with self._owned(dispatch=True, action="resolution", op_id=op_id) as conn:
             done = await conn.fetchval(
                 "UPDATE node_operations SET state = 'failed', reason = 'resolved_by_reset', "
                 'terminal = \'{"resolution": "operator_reset"}\'::jsonb, resolved_at = now(), '
@@ -295,7 +315,7 @@ class OperationStore:
         return done is not None
 
     async def checkpoint(self, op_id: str, observed: dict[str, Any]) -> None:
-        async with self._owned(dispatch=False) as conn:
+        async with self._owned(dispatch=False, action="checkpoint", op_id=op_id) as conn:
             await conn.execute(
                 "UPDATE node_operations SET observed = $4::jsonb "
                 "WHERE node_id = $1 AND op_id = $2 AND state = 'running' "
@@ -325,41 +345,49 @@ class OperationStore:
         """
         if state not in ("completed", "failed"):
             raise ValueError(f"not a terminal state: {state}")
-        try:
-            async with self._owned(dispatch=False) as conn:
-                done = await conn.fetchval(
-                    "UPDATE node_operations SET state = $4, terminal = $5::jsonb, reason = $6, "
-                    "replay_unavailable = $7, resolved_at = now(), resolved_by = 'runtime' "
-                    "WHERE node_id = $1 AND op_id = $2 AND state = 'running' "
-                    "AND owner_generation = $3 RETURNING op_id",
+        async with self._owned(dispatch=False, action="completion", op_id=op_id) as conn:
+            done = await conn.fetchval(
+                "UPDATE node_operations SET state = $4, terminal = $5::jsonb, reason = $6, "
+                "replay_unavailable = $7, resolved_at = now(), resolved_by = 'runtime' "
+                "WHERE node_id = $1 AND op_id = $2 AND state = 'running' "
+                "AND owner_generation = $3 RETURNING op_id",
+                self.node_id,
+                op_id,
+                self.ownership.generation,
+                state,
+                json.dumps(terminal),
+                reason,
+                replay_unavailable,
+            )
+            if done is not None and result is not None:
+                await conn.execute(
+                    "INSERT INTO attempt_results (node_id, op_id, result) "
+                    "VALUES ($1, $2, $3::jsonb)",
                     self.node_id,
                     op_id,
-                    self.ownership.generation,
-                    state,
-                    json.dumps(terminal),
-                    reason,
-                    replay_unavailable,
+                    json.dumps(result),
                 )
-                if done is not None and result is not None:
-                    await conn.execute(
-                        "INSERT INTO attempt_results (node_id, op_id, result) "
-                        "VALUES ($1, $2, $3::jsonb)",
-                        self.node_id,
-                        op_id,
-                        json.dumps(result),
-                    )
-        except NotOwner as exc:
-            await self.audit(
-                "stale_completion",
+        return done is not None
+
+    async def unsent_after_promotion(self, op_id: str, reason: str) -> bool:
+        """`running → cancelled_unsent` for a promotion whose task never existed.
+
+        Only for a promotion that raised (a database error, or the caller's
+        cancellation) after possibly committing: no task was created, so no
+        byte was sent, and only this process can know that. If the process
+        dies first, takeover makes the row unknown, which is conservative.
+        """
+        async with self._owned(dispatch=True, action="unsent", op_id=op_id) as conn:
+            done = await conn.fetchval(
+                "UPDATE node_operations SET state = 'cancelled_unsent', reason = $4, "
+                "resolved_at = now(), resolved_by = 'promotion' "
+                "WHERE node_id = $1 AND op_id = $2 AND state = 'running' "
+                "AND owner_generation = $3 RETURNING op_id",
+                self.node_id,
                 op_id,
-                {
-                    "state": state,
-                    "generation": self.ownership.generation,
-                    "boot_id": self.ownership.boot_id,
-                    "error": str(exc),
-                },
+                self.ownership.generation,
+                reason,
             )
-            return False
         return done is not None
 
     async def audit(self, event: str, op_id: str | None, detail: dict[str, Any]) -> None:

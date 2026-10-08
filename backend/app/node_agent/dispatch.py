@@ -63,6 +63,7 @@ class Store(Protocol):
     ) -> Operation | None: ...
     async def promote(self, op_id: str, provenance: dict[str, Any]) -> bool: ...
     async def cancel_accepted(self, op_id: str, reason: str) -> Operation | None: ...
+    async def unsent_after_promotion(self, op_id: str, reason: str) -> bool: ...
     async def mark_unknown(self, op_id: str, reason: str, observed: dict[str, Any]) -> bool: ...
     async def checkpoint(self, op_id: str, observed: dict[str, Any]) -> None: ...
     async def finish(
@@ -153,22 +154,37 @@ class Attempt:
         self.op_id = op_id
         self._events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(EVENT_BUFFER)
         self._delivery_open = True
+        self.delivery_lost = False
+        """True once any event was not delivered: the caller's view is
+        incomplete, whatever the attempt's own outcome (review on #33)."""
         self.settled: asyncio.Future[Outcome] = asyncio.get_running_loop().create_future()
 
     def _emit(self, event: dict[str, Any]) -> None:
         if not self._delivery_open:
+            self.delivery_lost = True
             return
         try:
             self._events.put_nowait(event)
         except asyncio.QueueFull:
             # The caller is not reading. Delivery is given up; the drain goes on.
             self._delivery_open = False
+            self.delivery_lost = True
             logger.info("caller of %s stopped reading; delivery abandoned", self.op_id)
 
     def _close(self) -> None:
+        """End the event stream, always.
+
+        A full queue is emptied first: its events are already undeliverable in
+        order, and an end marker that could not be queued would leave the
+        reader waiting forever, holding the response open and the process,
+        and with it the host lock, alive (review on #33).
+        """
         self._delivery_open = False
-        with contextlib.suppress(asyncio.QueueFull):
-            self._events.put_nowait(None)
+        if self._events.full():
+            while not self._events.empty():
+                self._events.get_nowait()
+            self.delivery_lost = True
+        self._events.put_nowait(None)
 
     async def events(self) -> AsyncIterator[dict[str, Any]]:
         while True:
@@ -199,6 +215,9 @@ class _AttemptSink:
             logger.warning("checkpoint of %s failed", self._attempt.op_id, exc_info=True)
 
 
+SETTLE_RETRY_CAP_S = 5.0
+
+
 class Dispatcher:
     def __init__(
         self,
@@ -207,7 +226,10 @@ class Dispatcher:
         max_inflight: int = 4,
         max_queued: int = 4,
         host_lock_held: Callable[[], bool] = lambda: True,
+        settle_retry_s: float = 0.2,
     ) -> None:
+        if max_inflight < 1 or max_queued < 1:
+            raise ValueError("max_inflight and max_queued must be at least 1")
         self._store = store
         self._barrier = asyncio.Lock()
         self._state = GateState.SERVING
@@ -219,6 +241,12 @@ class Dispatcher:
         self._idle.set()
         self._gate_changed = asyncio.Event()
         self._host_lock_held = host_lock_held
+        self._settle_retry_s = settle_retry_s
+        self._uncommitted_unknown: set[str] = set()
+        """Operations this process knows are uncertain but has not yet
+        committed as `outcome_unknown`. The database cannot see them, so
+        `reopen` must (review on #33: a resume between the in-process block
+        and the commit reopened the gate)."""
 
     # -- gate --------------------------------------------------------------
 
@@ -232,12 +260,15 @@ class Dispatcher:
 
     async def _close(self, state: GateState) -> None:
         async with self._barrier:
-            if self._state is GateState.LOST:
-                return
-            if state is GateState.DRAINING and self._state is GateState.BLOCKED:
-                return  # a block outranks a drain; resuming will re-check
-            self._state = state
-            self._gate_changed.set()
+            self._close_locked(state)
+
+    def _close_locked(self, state: GateState) -> None:
+        if self._state is GateState.LOST:
+            return
+        if state is GateState.DRAINING and self._state is GateState.BLOCKED:
+            return  # a block outranks a drain; resuming will re-check
+        self._state = state
+        self._gate_changed.set()
 
     async def block(self) -> None:
         """Close the gate before an unknown is committed (design T2)."""
@@ -254,13 +285,15 @@ class Dispatcher:
         await self._idle.wait()
 
     async def reopen(self) -> GateState:
-        """Serve again, unless an unknown operation or a lost role forbids it."""
+        """Serve again, unless an unknown operation or a lost role forbids it.
+
+        Unknown means committed **or** known here and not yet committed.
+        """
         async with self._barrier:
             if self._state is GateState.LOST:
                 return self._state
-            self._state = (
-                GateState.BLOCKED if await self._store.any_unknown() else GateState.SERVING
-            )
+            blocked = bool(self._uncommitted_unknown) or await self._store.any_unknown()
+            self._state = GateState.BLOCKED if blocked else GateState.SERVING
             self._gate_changed.set()
             return self._state
 
@@ -307,6 +340,12 @@ class Dispatcher:
             except NotOwner:
                 await self.lose_role("not_owner_at_insert")
                 return Refused("node_lost", retry_after=None)
+            except asyncio.CancelledError:
+                # The insert may or may not have committed. A tombstone or a
+                # cancellation of the accepted row covers both, and a late
+                # duplicate then only observes it.
+                await _shielded(self._unsent(op_id, "cancelled_before_send"))
+                raise
             if inserted is None:
                 found = await self._store.observe(op_id)
                 return Existing(found) if found else Refused("conflict", retry_after=1)
@@ -314,57 +353,105 @@ class Dispatcher:
         finally:
             self._queued -= 1
 
-    async def _promote(
-        self, op_id: str, relay: Relay, provenance: dict[str, Any], deadline_s: float
-    ) -> Attempt | Refused:
+    async def _wait_for_slot(self, op_id: str, deadline_s: float) -> str | None:
+        """A held slot (None), or the reason the attempt will not be sent."""
         started = time.monotonic()
         while True:
             remaining = deadline_s - (time.monotonic() - started)
             if remaining <= 0:
-                return await self._unsent(op_id, "deadline_before_send")
+                return "deadline_before_send"
             if self._state is not GateState.SERVING:
-                return await self._unsent(op_id, f"{self._state.value}_before_send")
+                return f"{self._state.value}_before_send"
             self._gate_changed.clear()
             acquire = asyncio.ensure_future(self._slots.acquire())
             changed = asyncio.ensure_future(self._gate_changed.wait())
-            done, _ = await asyncio.wait(
-                {acquire, changed}, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
-            )
-            changed.cancel()
-            if acquire in done:
-                break
-            acquire.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await acquire
-            if acquire.done() and not acquire.cancelled():
-                self._slots.release()  # acquired as it was being cancelled
+            acquired = False
+            try:
+                done, _ = await asyncio.wait(
+                    {acquire, changed}, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+                )
+                acquired = acquire in done
+            finally:
+                # On every exit, this task's own cancellation included: an
+                # acquire left running would take a slot nobody releases
+                # (review on #33). Let it settle, and give back what it took.
+                changed.cancel()
+                if not acquired:
+                    if not acquire.done():
+                        acquire.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.wait({acquire})
+                    if acquire.done() and not acquire.cancelled():
+                        self._slots.release()
+            if acquired:
+                return None
+
+    async def _promote(
+        self, op_id: str, relay: Relay, provenance: dict[str, Any], deadline_s: float
+    ) -> Attempt | Refused:
+        try:
+            waited = await self._wait_for_slot(op_id, deadline_s)
+        except asyncio.CancelledError:
+            await _shielded(self._unsent(op_id, "cancelled_before_send"))
+            raise
+        if waited is not None:
+            return await self._unsent(op_id, waited)
 
         attempt = Attempt(op_id)
-        async with self._barrier:
-            refusal: str | None = None
-            if self._state is not GateState.SERVING:
-                refusal = f"{self._state.value}_before_send"
-            elif not self._host_lock_held():
-                self._state = GateState.LOST
-                refusal = "lost_before_send"
-            else:
-                try:
-                    promoted = await self._store.promote(op_id, provenance)
-                except NotOwner:
+        created = False
+        try:
+            async with self._barrier:
+                if self._state is not GateState.SERVING:
+                    refusal: str | None = f"{self._state.value}_before_send"
+                elif not self._host_lock_held():
                     self._state = GateState.LOST
-                    promoted = False
-                if not promoted:
-                    refusal = (
-                        "lost_before_send" if self._state is GateState.LOST else "node_blocked"
-                    )
+                    refusal = "lost_before_send"
                 else:
-                    self._idle.clear()
-                    task = asyncio.create_task(self._run(attempt, relay))
-                    self._admitted[op_id] = task
-        if refusal is not None:
-            self._slots.release()
-            return await self._unsent(op_id, refusal)
-        return attempt
+                    try:
+                        promoted = await self._store.promote(op_id, provenance)
+                    except NotOwner:
+                        self._state = GateState.LOST
+                        promoted = False
+                    if promoted:
+                        self._idle.clear()
+                        self._admitted[op_id] = asyncio.create_task(self._run(attempt, relay))
+                        created = True
+                        refusal = None
+                    elif self._state is GateState.LOST:
+                        refusal = "lost_before_send"
+                    else:
+                        refusal = "not_promoted"
+        except BaseException:
+            # The promotion's own outcome is unknown here (a database error or
+            # this task's cancellation), but no task exists, so nothing was
+            # sent. Settle the row as unsent whichever state it reached.
+            if not created:
+                self._slots.release()
+                await _shielded(self._unsent_after_failed_promotion(op_id))
+            raise
+        if created:
+            return attempt
+        self._slots.release()
+        if refusal == "not_promoted":
+            # Blocked by an unknown, or cancelled while queued: say which.
+            current = await self._store.observe(op_id)
+            if current is not None and current.state == "cancelled_unsent":
+                return Refused("cancelled", retry_after=None, operation=current)
+            refusal = "node_blocked"
+        return await self._unsent(op_id, refusal or "not_promoted")
+
+    async def _unsent_after_failed_promotion(self, op_id: str) -> None:
+        try:
+            current = await self._store.observe(op_id)
+            if current is None or current.state == "accepted":
+                await self._store.cancel_accepted(op_id, "promotion_failed")
+            elif current.state == "running":
+                await self._store.unsent_after_promotion(op_id, "promotion_failed")
+        except Exception:  # noqa: BLE001 - the row's state is now unknown to us
+            logger.exception("could not settle %s after a failed promotion; blocking", op_id)
+            async with self._barrier:
+                self._uncommitted_unknown.add(op_id)
+                self._close_locked(GateState.BLOCKED)
 
     async def _unsent(self, op_id: str, reason: str) -> Refused:
         try:
@@ -394,7 +481,19 @@ class Dispatcher:
                 self._idle.set()
 
     async def _settle(self, op_id: str, outcome: Outcome) -> None:
-        try:
+        """Commit the outcome, retrying until it is committed or the role is lost.
+
+        A database error never turns into a different outcome (review on
+        #33): an uncertain attempt stays blocking in process until its
+        unknown is committed, and the task, with its slot, is held until the
+        commit, so drain and exit wait for it too.
+        """
+        if isinstance(outcome, Uncertain):
+            async with self._barrier:
+                self._uncommitted_unknown.add(op_id)
+                self._close_locked(GateState.BLOCKED)
+
+        async def commit() -> None:
             if isinstance(outcome, Completed):
                 await self._store.finish(
                     op_id,
@@ -408,10 +507,29 @@ class Dispatcher:
             elif isinstance(outcome, NotSent):
                 await self._store.finish(op_id, "failed", {}, reason=f"not_sent:{outcome.reason}")
             else:
-                await self.block()
                 await self._store.mark_unknown(op_id, outcome.reason, outcome.observed)
-        except NotOwner:
-            await self.lose_role("not_owner_at_settle")
+
+        delay = self._settle_retry_s
+        while True:
+            try:
+                await commit()
+            except NotOwner:
+                await self.lose_role("not_owner_at_settle")
+                return  # the gate stays closed for good; the row is takeover's
+            except Exception:  # noqa: BLE001 - retried, never reinterpreted
+                logger.exception("could not commit the outcome of %s; retrying", op_id)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, SETTLE_RETRY_CAP_S)
+                continue
+            break
+        if isinstance(outcome, Uncertain):
+            self._uncommitted_unknown.discard(op_id)
+
+
+async def _shielded(work: Awaitable[Any]) -> None:
+    """Run cleanup to completion even though the caller is being cancelled."""
+    with contextlib.suppress(Exception):
+        await asyncio.shield(asyncio.ensure_future(work))
 
 
 def _retry_after(state: GateState) -> int | None:

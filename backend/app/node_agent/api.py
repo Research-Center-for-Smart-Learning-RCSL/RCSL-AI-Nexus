@@ -29,7 +29,7 @@ from app.node_agent.guard import GuardRefusal, check_generation, check_pin, regi
 from app.node_agent.resolution import ResolutionRefused
 from app.node_agent.service import Agent, start, stop
 from app.node_agent.settings import AgentSettings
-from app.node_agent.store import Operation
+from app.node_agent.store import NotOwner, Operation
 from app.node_agent.wire import WireError, decode_embedding, decode_generation
 
 MAX_BODY_BYTES = 64 * 1024 * 1024
@@ -51,11 +51,21 @@ async def _authorised(request: Request) -> None:
 
 async def _body(request: Request) -> Any:
     declared = request.headers.get("content-length")
-    if declared is not None and int(declared) > MAX_BODY_BYTES:
-        raise HTTPException(status_code=413, detail="request body too large")
-    raw = await request.body()
-    if len(raw) > MAX_BODY_BYTES:
-        raise HTTPException(status_code=413, detail="request body too large")
+    if declared is not None:
+        if not declared.isdigit():
+            raise HTTPException(status_code=400, detail="bad Content-Length")
+        if int(declared) > MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="request body too large")
+    # Read with the bound applied as it arrives, so a chunked body without a
+    # length is cut off at the cap rather than buffered whole first.
+    parts: list[bytes] = []
+    size = 0
+    async for part in request.stream():
+        size += len(part)
+        if size > MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="request body too large")
+        parts.append(part)
+    raw = b"".join(parts)
     try:
         return json.loads(raw)
     except ValueError as exc:
@@ -246,7 +256,11 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
     @app.post("/v1/attempts/{op_id}/cancel", dependencies=authorised)
     async def cancel(request: Request, op_id: str) -> JSONResponse:
         agent = _agent(request)
-        operation = await agent.store.cancel_accepted(op_id, "cancel_requested")
+        try:
+            operation = await agent.store.cancel_accepted(op_id, "cancel_requested")
+        except NotOwner:
+            await agent.dispatcher.lose_role("not_owner_at_cancel")
+            return JSONResponse(status_code=503, content={"refused": "node_lost"})
         if operation is None:
             raise HTTPException(status_code=500, detail="cancellation left no row")
         return JSONResponse(await _describe(agent, operation))
@@ -303,6 +317,9 @@ async def _stream(agent: Agent, attempt: Attempt) -> AsyncIterator[bytes]:
                 "reason": operation.reason if operation else None,
                 "terminal": operation.terminal if operation else None,
                 "replay_unavailable": operation.replay_unavailable if operation else False,
+                # The runtime's outcome says nothing about what this caller
+                # received; events dropped for a slow reader are said so here.
+                "delivery_complete": not attempt.delivery_lost,
             }
         )
     finally:

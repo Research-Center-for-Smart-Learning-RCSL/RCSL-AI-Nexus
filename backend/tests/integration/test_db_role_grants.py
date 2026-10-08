@@ -190,6 +190,8 @@ async def test_node_agent_account_holds_its_own_tables_and_nothing_else(database
         await _denied(agent, "UPDATE nodes SET name = 'x' WHERE id = :id", id=node)
         await _denied(agent, "INSERT INTO models (id) VALUES ('m')")
         await _denied(agent, "DELETE FROM node_operation_audit")
+        await _denied(agent, "UPDATE node_operation_audit SET event = 'x'")
+        await _denied(agent, "UPDATE attempt_results SET result = '{}'::jsonb")
         await _denied(agent, "DELETE FROM node_operations")
         await _denied(agent, "SELECT 1 FROM api_keys")
         await _denied(agent, "SELECT 1 FROM prompt_logs")
