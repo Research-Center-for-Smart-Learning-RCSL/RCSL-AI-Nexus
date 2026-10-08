@@ -371,3 +371,44 @@ async def test_another_architecture_without_a_template_still_falls_back(tmp_path
         "primary:latest", [Message(role=MessageRole.USER, content="hello")], []
     )
     assert "primary:latest" in counter._fallback_template  # noqa: SLF001
+
+
+async def test_an_unencodable_character_gives_no_count_on_the_python_backend(
+    tmp_path: Path,
+) -> None:
+    """The review on #29: on the Python backend a Unigram vocabulary with no
+    unk piece raises on U+10FFFF, and the gemma4 path let that escape, so the
+    guard aborted instead of using its estimate. It is None now, on every path
+    that encodes through `count_parts`."""
+    control = ["<bos>", "<|turn>", "<turn|>", "<|think|>", "<|channel>", "<channel|>"]
+    words = ["system", "user", "model", "thought", "hello", "\n", "▁"]
+    singles = sorted(set("".join(words)) - {"▁", "\n"})
+    pieces = {**{t: -1.0 for t in control}, **{w: -2.0 for w in words}}
+    pieces |= {c: -8.0 for c in singles}
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(
+        tmp_path,
+        ref="gemma4:31b-it-q8_0",
+        tokens=list(pieces),
+        scores=list(pieces.values()),
+        model="llama",
+        pre="gemma4",
+        merges=(),
+        template=None,
+        architecture="gemma4",
+        control=control,
+    )
+    counter = GgufTokenCounter(tmp_path)
+    counter._use_native = False  # noqa: SLF001 - the Python backend is the subject
+
+    plain = await counter.count_prompt(
+        "gemma4:31b-it-q8_0", [Message(role=MessageRole.USER, content="hello")], []
+    )
+    odd = await counter.count_prompt(
+        "gemma4:31b-it-q8_0", [Message(role=MessageRole.USER, content="hello\U0010ffff")], []
+    )
+    parts = await counter.count_parts("gemma4:31b-it-q8_0", ["hello", "\U0010ffff"])
+
+    assert plain is not None
+    assert odd is None
+    assert parts is None
