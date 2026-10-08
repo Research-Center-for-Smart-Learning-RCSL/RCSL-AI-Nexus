@@ -114,6 +114,13 @@ module = "docx.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+# asyncpg ships no stubs or py.typed. Used directly only by the node agent
+# (app/node_agent), which needs one dedicated connection for its election and
+# explicit transaction locks; every value read is narrowed at the call site.
+module = "asyncpg.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 # nexus_native is a PyO3 Rust extension built with maturin. It ships no stubs;
 # the adapter narrows every return value at the call site.
 module = "nexus_native.*"
