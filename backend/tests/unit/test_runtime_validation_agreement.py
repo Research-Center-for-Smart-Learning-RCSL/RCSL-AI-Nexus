@@ -26,24 +26,19 @@ from tests.unit.runtime_validation_corpus import CASES, RECORDED
 _ROOT = os.environ.get("OLLAMA_MODELS_PATH")
 
 # Measured 2026-10-08 with identical content per round: on gemma4 the gateway's
-# count minus the runtime's is 35 - 4 * rounds (3: +16, 12: -13, 50: -165,
-# 100: -365), independent of tool-result length. The cause is the renderer:
+# count minus the runtime's was 35 - 4 * rounds (3: +16, 12: -13, 50: -165,
+# 100: -365), independent of tool-result length. The cause was the renderer:
 # gemma4 ships no chat template in its GGUF, so the counter falls back to
-# ChatML, while the runtime renders gemma4's own format with a built-in
-# renderer (`render_diff.py` shows the bytes). ChatML renders an assistant tool
-# call as an empty turn, so every round loses its call. Until the counter
-# renders gemma4 as the runtime does (C6c), its tool profile is not valid.
-# qwen2.5 errs the other way (about +6 per round), which is safe.
-KNOWN_DEFICITS = {
-    ("gemma4:31b-it-q8_0", name)
-    for name in (
-        "tool_loop_12",
-        "tool_loop_50",
-        "tool_loop_100",
-        "tool_loop_12_result_x3",
-        "tool_loop_12_result_x9",
-    )
-}
+# ChatML, which renders no assistant tool call at all (`render_diff.py` shows
+# the bytes). Since #28 the counter adds each call's name and arguments in the
+# model's own tokens, and these cases now over-count (+157 / +575 / +1125 at
+# 12 / 50 / 100 rounds).
+#
+# Passing here is P <= U on this corpus, not validation: the counter still
+# renders gemma4 in a format the runtime does not use, so its profiles stay
+# unvalidated until the counter renders as the runtime does (C6c, #24 §6).
+# Any deficit found later goes back in this set as a strict xfail.
+KNOWN_DEFICITS: set[tuple[str, str]] = set()
 
 _CASES = [
     pytest.param(
