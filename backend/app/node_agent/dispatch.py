@@ -264,6 +264,10 @@ class Dispatcher:
             self._gate_changed.set()
             return self._state
 
+    def holds(self, op_id: str) -> bool:
+        """Whether this process still has a task for the operation."""
+        return op_id in self._admitted
+
     async def wait_idle(self) -> None:
         await self._idle.wait()
 
