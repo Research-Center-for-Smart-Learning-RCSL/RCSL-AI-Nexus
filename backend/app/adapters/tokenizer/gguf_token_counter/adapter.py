@@ -14,11 +14,11 @@ import logging
 from collections import OrderedDict
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from app.adapters.runtime.ollama_adapter import message_payload, tool_payload
 from app.adapters.tokenizer.gguf import read_metadata
-from app.adapters.tokenizer.ollama_blobs import BlobNotFound, manifest_path, weights_path
+from app.adapters.tokenizer.ollama_blobs import BlobNotFound, manifest_path, weights_in_manifest
 from app.domain.entities.chat import Message, ToolDefinition
 from app.domain.exceptions import InvalidModelReferenceError, RuntimeCapabilityError
 
@@ -134,6 +134,18 @@ class _NativeVocabulary:
         return result
 
 
+class _Snapshot(NamedTuple):
+    """One read of a reference's manifest: its identity and the blob it named.
+
+    `identity` is None when there is no manifest; `blob` is None when there is
+    no usable weights file, with `reason` saying why.
+    """
+
+    identity: str | None
+    blob: Path | None
+    reason: str | None
+
+
 class GgufTokenCounter:
     """`TokenCounterPort` over the GGUF files an Ollama host already holds."""
 
@@ -157,7 +169,7 @@ class GgufTokenCounter:
         memory, which is what a cache of integers should be sized for.
         """
         self._cache_blob: dict[str, str | None] = {}
-        """The weights blob each cached vocabulary was built from.
+        """The manifest identity each cached vocabulary was built from.
 
         Both caches are keyed by reference, and a reference is a tag: pulling a
         new build under the same tag repoints its manifest at different weights.
@@ -190,18 +202,28 @@ class GgufTokenCounter:
             self._native_context.pop(ref, None)
         return await self._vocabulary(ref) is not None
 
-    def _current_blob(self, ref: str) -> str | None:
-        """The identity of what the reference names now: its manifest's SHA-256.
+    def _resolve(self, ref: str) -> _Snapshot:
+        """What the reference names now, read from one copy of its manifest.
 
-        The manifest is what a pull under the same tag rewrites, and its digest
-        is the one the runtime reports for the model (`/api/tags`). Hashing it
-        costs a read of a few hundred bytes, never a header scan, and does not
-        depend on the blob still being on disk. None when there is no manifest.
+        The identity is the manifest's SHA-256: the manifest is what a pull
+        under the same tag rewrites, and its digest is the one the runtime
+        reports for the model (`/api/tags`). The blob is resolved from the same
+        bytes, never by reading the manifest again, so a cached figure is
+        always labelled with the manifest that chose the weights it was read
+        from (review on #31: a pull between two reads stored one model's window
+        under the other's identity, and it survived a rollback).
         """
         try:
-            return hashlib.sha256(manifest_path(self._root, ref).read_bytes()).hexdigest()
-        except (InvalidModelReferenceError, OSError):
-            return None
+            raw = manifest_path(self._root, ref).read_bytes()
+        except InvalidModelReferenceError as exc:
+            return _Snapshot(None, None, str(exc))
+        except OSError as exc:
+            return _Snapshot(None, None, f"no manifest for {ref} under {self._root}: {exc}")
+        identity = hashlib.sha256(raw).hexdigest()
+        try:
+            return _Snapshot(identity, weights_in_manifest(self._root, ref, raw), None)
+        except BlobNotFound as exc:
+            return _Snapshot(identity, None, str(exc))
 
     async def native_context_length(self, ref: str) -> int | None:
         """The `<family>.context_length` the GGUF header declares.
@@ -219,25 +241,26 @@ class GgufTokenCounter:
         reader has no opinion about; the smallest is taken, because the purpose
         of this number is to bound something.
         """
-        blob = await asyncio.to_thread(self._current_blob, ref)
+        snapshot = await asyncio.to_thread(self._resolve, ref)
         async with self._lock:
             cached = self._native_context.get(ref)
-            if cached is not None and cached[0] == blob:
+            if cached is not None and cached[0] == snapshot.identity:
                 self._native_context.move_to_end(ref)
                 return cached[1]
-        value = await asyncio.to_thread(self._read_native_context, ref)
+        value = await asyncio.to_thread(self._read_native_context, ref, snapshot)
         async with self._lock:
-            self._native_context[ref] = (blob, value)
+            self._native_context[ref] = (snapshot.identity, value)
             self._native_context.move_to_end(ref)
             while len(self._native_context) > _NATIVE_CONTEXT_CACHE:
                 self._native_context.popitem(last=False)
         return value
 
-    def _read_native_context(self, ref: str) -> int | None:
-        try:
-            blob = weights_path(self._root, ref)
-        except (BlobNotFound, InvalidModelReferenceError) as exc:
-            logger.info("no GGUF for %s, cannot read its declared context: %s", ref, exc)
+    def _read_native_context(self, ref: str, snapshot: _Snapshot) -> int | None:
+        blob = snapshot.blob
+        if blob is None:
+            logger.info(
+                "no GGUF for %s, cannot read its declared context: %s", ref, snapshot.reason
+            )
             return None
         try:
             metadata = read_metadata(blob, lambda key: key.endswith(".context_length"))
@@ -353,20 +376,20 @@ class GgufTokenCounter:
             return None
 
     async def _vocabulary(self, ref: str) -> _Vocabulary | _NativeVocabulary | None:
-        blob = await asyncio.to_thread(self._current_blob, ref)
+        snapshot = await asyncio.to_thread(self._resolve, ref)
         cached = self._cache.get(ref, ...)
-        if cached is not ... and self._cache_blob.get(ref) == blob:
+        if cached is not ... and self._cache_blob.get(ref) == snapshot.identity:
             self._cache.move_to_end(ref)
             return cached
         async with self._lock:
-            if ref in self._cache and self._cache_blob.get(ref) == blob:
+            if ref in self._cache and self._cache_blob.get(ref) == snapshot.identity:
                 return self._cache[ref]
             if ref in self._cache:
                 logger.info("weights behind %s changed; rebuilding its vocabulary", ref)
                 self._fallback_template.discard(ref)
-            built = await asyncio.to_thread(self._build, ref)
+            built = await asyncio.to_thread(self._build, ref, snapshot)
             self._cache[ref] = built
-            self._cache_blob[ref] = blob
+            self._cache_blob[ref] = snapshot.identity
             self._cache.move_to_end(ref)
             while len(self._cache) > self._cache_size:
                 evicted, _ = self._cache.popitem(last=False)
@@ -376,11 +399,12 @@ class GgufTokenCounter:
                 )
             return built
 
-    def _build(self, ref: str) -> _Vocabulary | _NativeVocabulary | None:
-        try:
-            blob = weights_path(self._root, ref)
-        except (BlobNotFound, InvalidModelReferenceError) as exc:
-            logger.info("no vocabulary for %s, counting by estimate instead: %s", ref, exc)
+    def _build(self, ref: str, snapshot: _Snapshot) -> _Vocabulary | _NativeVocabulary | None:
+        blob = snapshot.blob
+        if blob is None:
+            logger.info(
+                "no vocabulary for %s, counting by estimate instead: %s", ref, snapshot.reason
+            )
             return None
 
         if self._use_native:
