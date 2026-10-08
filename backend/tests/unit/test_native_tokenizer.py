@@ -227,17 +227,21 @@ def test_both_fallback_templates_are_the_same_text() -> None:
         assert fragment in rust, f"{fragment} missing from the Rust fallback"
 
 
-def test_control_tokens_stored_as_int32_are_still_control_tokens(tmp_path: Path) -> None:
+@pytest.mark.parametrize("as_int32", [True, False], ids=["int32", "uint32"])
+def test_control_tokens_are_control_tokens_in_either_width(tmp_path: Path, as_int32: bool) -> None:
     """Every GGUF on the production host stores token types as INT32.
 
     The Rust reader accepted only UINT32, so it read them as absent and
     registered no control token: `<|im_start|>` was spelled out of six
     ordinary tokens and every chat counted ~22 high on `qwen2.5:7b`, while the
-    Python reader got it right (measured 2026-10-08, #24).
+    Python reader got it right (measured 2026-10-08, #24). UINT32 stays
+    accepted, and is tested here because the fixture now defaults to INT32.
     """
-    blob = write_gguf(tmp_path / "blob", token_types_as_int32=True)
+    blob = write_gguf(tmp_path / "blob", token_types_as_int32=as_int32)
 
-    counts = nexus_native.count_parts(str(blob), "int32-ref", ["<|im_start|>", "<|im_end|>"])
+    counts = nexus_native.count_parts(
+        str(blob), f"width-{as_int32}", ["<|im_start|>", "<|im_end|>"]
+    )
 
     assert counts == [1, 1]
 

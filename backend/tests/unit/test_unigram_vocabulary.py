@@ -175,3 +175,54 @@ def test_a_run_of_spaces_reaches_the_multi_space_pieces() -> None:
     # The last space is the second word's own marker; the other seven take the
     # widest pieces that fit. Split per space, this was ten tokens.
     assert encoded.tokens == ["▁main", "▁▁▁▁", "▁▁", "▁", "▁main"], encoded.tokens
+
+
+def _runtime_style_merge_count(text: str, scores: dict[str, float]) -> int:
+    """How a merge-based SentencePiece tokenizer segments, for comparison.
+
+    The runtime (llama.cpp, and Ollama's own `tokenizer/sentencepiece.go`)
+    starts from single characters and repeatedly merges the adjacent pair whose
+    concatenation is the best-scored vocabulary piece. A long piece is reachable
+    only through pieces that are themselves in the vocabulary.
+    """
+    symbols = list(text.replace(" ", "▁"))
+    while True:
+        best: tuple[float, int] | None = None
+        for i in range(len(symbols) - 1):
+            score = scores.get(symbols[i] + symbols[i + 1])
+            if score is not None and (best is None or score > best[0]):
+                best = (score, i)
+        if best is None:
+            return len(symbols)
+        i = best[1]
+        symbols[i : i + 2] = [symbols[i] + symbols[i + 1]]
+
+
+def test_unigram_can_count_fewer_than_a_merge_tokenizer() -> None:
+    """A known limit of counting with Unigram, kept so it stays visible.
+
+    Unigram picks the best-scored segmentation outright, so with no whitespace
+    split it can use `▁a▁b` directly. The runtime cannot build `▁a▁b`, because
+    neither `▁a▁` nor `▁b` is a piece. Here that is 20 tokens against 60: an
+    under-count, which a framing surplus does not cover. No measured model
+    shows it (the recorded corpus in `runtime_count_corpus.py` agrees on gemma4
+    and qwen2.5), but this is why the context guard is widened per model only
+    after the runtime agreement check, and not on the strength of this fix
+    (review on #25).
+    """
+    scores = {"▁": -10.0, "a": -10.0, "b": -10.0, "▁a": -3.0, "▁a▁b": -1.0}
+    tokenizer = build_tokenizer_for_model(
+        {
+            "tokenizer.ggml.model": "llama",
+            "tokenizer.ggml.tokens": list(scores),
+            "tokenizer.ggml.scores": list(scores.values()),
+            "tokenizer.ggml.token_type": [1] * len(scores),
+        }
+    )
+    text = " a b" * 20
+
+    counted = len(tokenizer.encode(text).tokens)
+    runtime = _runtime_style_merge_count(text, scores)
+
+    assert runtime == 60
+    assert counted < runtime, (counted, runtime)

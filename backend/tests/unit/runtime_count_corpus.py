@@ -54,10 +54,12 @@ CORPUS: dict[str, str] = {
 # `prompt_eval_count` for `[{"role": "user", "content": text}]` with
 # `think: false`, keyed by the first 12 hex digits of the weights blob. The
 # whole prompt, framing included, because that is what the guard compares.
+# `manifest` is the served manifest the recorder verified against the store.
 # Recorded 2026-10-08 on the production host.
 RECORDED_COUNTS: dict[str, dict[str, object]] = {
     "a0feadb736f5": {
         "ref": "gemma4:31b-it-q8_0",
+        "manifest": "53dd8459790f",
         "ollama": "0.33.2",
         "counts": {
             "x": 14,
@@ -80,6 +82,7 @@ RECORDED_COUNTS: dict[str, dict[str, object]] = {
     },
     "2bada8a74506": {
         "ref": "qwen2.5:7b",
+        "manifest": "845dbda0ea48",
         "ollama": "0.33.2",
         "counts": {
             "x": 30,
