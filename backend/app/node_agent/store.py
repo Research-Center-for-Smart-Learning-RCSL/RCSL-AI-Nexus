@@ -265,6 +265,35 @@ class OperationStore:
             )
         return done is not None
 
+    async def resolve_unknown(self, op_id: str, evidence: dict[str, Any]) -> bool:
+        """`outcome_unknown → failed` on ordered reset evidence (design S1, T1).
+
+        Under the dispatch lock, like every other transition that changes
+        whether the node is blocked. The evidence is kept in the operation's
+        provenance and in the audit trail, which outlives the row.
+        """
+        async with self._owned(dispatch=True) as conn:
+            done = await conn.fetchval(
+                "UPDATE node_operations SET state = 'failed', reason = 'resolved_by_reset', "
+                'terminal = \'{"resolution": "operator_reset"}\'::jsonb, resolved_at = now(), '
+                "resolved_by = 'operator', provenance = provenance || $4::jsonb "
+                "WHERE node_id = $1 AND op_id = $2 AND state = 'outcome_unknown' "
+                "AND owner_generation = $3 RETURNING op_id",
+                self.node_id,
+                op_id,
+                self.ownership.generation,
+                json.dumps({"resolution": evidence}),
+            )
+            if done is not None:
+                await conn.execute(
+                    "INSERT INTO node_operation_audit (node_id, op_id, event, detail) "
+                    "VALUES ($1, $2, 'resolved_by_reset', $3::jsonb)",
+                    self.node_id,
+                    op_id,
+                    json.dumps(evidence),
+                )
+        return done is not None
+
     async def checkpoint(self, op_id: str, observed: dict[str, Any]) -> None:
         async with self._owned(dispatch=False) as conn:
             await conn.execute(
