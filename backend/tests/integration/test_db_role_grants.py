@@ -36,6 +36,7 @@ pytestmark = pytest.mark.skipif(not TEST_DATABASE_URL, reason="TEST_DATABASE_URL
 # deployment's `nexus_gateway` / `nexus_admin`.
 GATEWAY = RoleSpec(name="nexus_gateway_test", password="gw-secret", profile="gateway")
 ADMIN = RoleSpec(name="nexus_admin_test", password="admin-secret", profile="admin")
+AGENT = RoleSpec(name="nexus_agent_test", password="agent-secret", profile="agent")
 
 
 def _url_for(owner_url: str, spec: RoleSpec):
@@ -57,7 +58,7 @@ async def _allowed(engine, sql: str, **params) -> None:
 async def _drop_roles(owner_url: str) -> None:
     engine = create_async_engine(owner_url)
     try:
-        for name in (GATEWAY.name, ADMIN.name):
+        for name in (GATEWAY.name, ADMIN.name, AGENT.name):
             # Best effort: a role absent because the test failed early is fine.
             with contextlib.suppress(Exception):
                 async with engine.begin() as conn:
@@ -144,4 +145,58 @@ async def test_gateway_account_is_denied_writes_outside_usage_records(database_u
     finally:
         await gateway.dispose()
         await admin.dispose()
+        await _drop_roles(owner_url)
+
+
+async def test_node_agent_account_holds_its_own_tables_and_nothing_else(database_url) -> None:
+    """PR4a on #24: the agent writes its operations and evidence, reads the
+    registry it checks requests against, may set only a node's lock domain,
+    and can delete nothing. The gateway may not read stored model output."""
+    owner_url = database_url
+    await _drop_roles(owner_url)
+    statements = build_statements([GATEWAY, ADMIN, AGENT], database=make_url(owner_url).database)
+    await apply_statements(owner_url, statements)
+    node = str(uuid.uuid4())
+    owner = create_async_engine(owner_url)
+    async with owner.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO nodes (id, name, address, status, total_memory_gb, runtimes) "
+                "VALUES (:id, :name, '100.64.0.9', 'online', 1, '[]')"
+            ),
+            {"id": node, "name": f"n-{node}"},
+        )
+    await owner.dispose()
+
+    agent = create_async_engine(_url_for(owner_url, AGENT))
+    gateway = create_async_engine(_url_for(owner_url, GATEWAY))
+    try:
+        async with agent.connect() as conn:
+            await conn.execute(text("SELECT 1 FROM models LIMIT 1"))
+        await _allowed(agent, "UPDATE nodes SET lock_domain_id = 'd' WHERE id = :id", id=node)
+        await _allowed(
+            agent,
+            "INSERT INTO node_operations (node_id, op_id, kind, state, origin_generation, "
+            "origin_boot_id, owner_generation) VALUES (:n, 'op', 'inference', 'accepted', 1, "
+            "'b', 1)",
+            n=node,
+        )
+        await _allowed(
+            agent,
+            "INSERT INTO node_operation_audit (node_id, event) VALUES (:n, 'takeover')",
+            n=node,
+        )
+
+        await _denied(agent, "UPDATE nodes SET name = 'x' WHERE id = :id", id=node)
+        await _denied(agent, "INSERT INTO models (id) VALUES ('m')")
+        await _denied(agent, "DELETE FROM node_operation_audit")
+        await _denied(agent, "DELETE FROM node_operations")
+        await _denied(agent, "SELECT 1 FROM api_keys")
+        await _denied(agent, "SELECT 1 FROM prompt_logs")
+        await _denied(agent, "SELECT 1 FROM usage_records")
+
+        await _denied(gateway, "SELECT 1 FROM attempt_results")
+    finally:
+        await agent.dispose()
+        await gateway.dispose()
         await _drop_roles(owner_url)

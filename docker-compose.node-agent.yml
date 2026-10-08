@@ -1,0 +1,109 @@
+# The node agent (PR4a on #24): the only sender to this host's runtime once
+# NODE_AGENT_ENABLED is on, which waits for PR4b's all-senders audit.
+#
+# An override file, not part of docker-compose.yml, so that a routine deploy
+# neither needs the agent's secrets nor starts the agent. Starting it is its
+# own maintainer-approved step:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.node-agent.yml up -d
+#
+# It needs, before the first start:
+#   - secrets/agent_database_url  the `nexus_agent` role, provisioned by migrate
+#   - secrets/node_agent_token    at least 32 characters; later shared with the
+#                                 gateway and admin entrances (PR4a-2)
+#   - NODE_AGENT_NODE_ID in .env  this host's row in `nodes`
+#   - the host runtime witness    scripts/host/runtime_witness.py under a root
+#                                 launchd job, writing RUNTIME_WITNESS_HOST_DIR
+#                                 (without it the agent runs, but no node block
+#                                 can be cleared)
+
+secrets:
+  agent_database_url:
+    file: ./secrets/agent_database_url
+  node_agent_token:
+    file: ./secrets/node_agent_token
+
+networks:
+  # The agent alone reaches the host runtime.
+  agent-egress:
+  # The agent's database segment: postgres and the agent, nothing else.
+  agent-data:
+    internal: true
+  # How the gateway and the admin entrances will reach the agent (PR4a-2).
+  # Two networks, never one: the gateway must share no network with an admin
+  # entrance (the invariant at the top of docker-compose.yml). The agent
+  # spans both, as Prometheus spans the scrape segments, and forwards nothing
+  # between them: it answers its own fixed API and nothing else.
+  agent-gateway:
+    internal: true
+  agent-control:
+    internal: true
+
+volumes:
+  # The host lock (design R1, S2 on #24). Named explicitly so the volume, and
+  # with it the lock file's inode, does not depend on the Compose project name:
+  # the service and the resolve CLI must lock the same file. Never back it up,
+  # restore it or copy it: a cloned domain is the one case the lock cannot
+  # detect by itself.
+  node-agent-lock:
+    name: rcsl-node-agent-lock
+
+services:
+  migrate:
+    # Read so db_roles provisions the agent's account; db_roles skips the
+    # role when this file is absent, which is every deploy without this file.
+    secrets:
+      - agent_database_url
+
+  postgres:
+    networks: [agent-data]
+
+  node-agent:
+    image: rcsl-ai-nexus:latest
+    restart: unless-stopped
+    command:
+      # One worker, no reload: a second worker would be a second process
+      # trying to take the same host lock, and the reloader forks.
+      - uvicorn
+      - app.node_agent.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8100"
+      - --workers
+      - "1"
+    environment:
+      NODE_AGENT_NODE_ID: ${NODE_AGENT_NODE_ID:?set NODE_AGENT_NODE_ID in .env to this host's node id}
+      NODE_AGENT_RUNTIME_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:--1}
+      OLLAMA_MODELS_PATH: /ollama-models
+      NODE_AGENT_WITNESS_ENDPOINT: ${NODE_AGENT_WITNESS_ENDPOINT:-127.0.0.1:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - node-agent-lock:/var/lib/node-agent/lock
+      # Read-only, as for the other backends: the agent counts prompts from
+      # the model store and must never be able to change the weights it serves.
+      - ${OLLAMA_MODELS_HOST_PATH:-./data/ollama-models}:/ollama-models:ro
+      # The witness publishes here and nothing in a container may write it.
+      - ${RUNTIME_WITNESS_HOST_DIR:-./data/runtime-witness}/out:/run/node-agent-witness/out:ro
+      # The one path the agent writes on the host: a 32-hex-character nonce.
+      - ${RUNTIME_WITNESS_HOST_DIR:-./data/runtime-witness}/challenge:/run/node-agent-witness/challenge
+    networks: [agent-egress, agent-data, agent-gateway, agent-control]
+    secrets:
+      - agent_database_url
+      - node_agent_token
+    # Stopping waits for admitted work to reach the runtime's terminal
+    # evidence (design U1), and a generation may legitimately run up to the
+    # request timeout. A shorter grace period would turn every stop during a
+    # long generation into an unknown operation and a node block.
+    stop_grace_period: 26m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8100/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
