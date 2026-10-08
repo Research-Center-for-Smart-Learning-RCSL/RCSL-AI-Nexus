@@ -18,11 +18,13 @@ overflow (system prompt lost), gemma4 stops at `num_ctx - 1` with `length`.
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from _common import (
     LogTail,
     Recorder,
+    answered,
     fingerprint,
     parser,
     require_window,
@@ -85,72 +87,108 @@ def main() -> None:
     with runtime(args) as rt:
         rec = Recorder("boundary", args.out, fingerprint(rt, [args.model]))
 
-        def count(messages: list[dict[str, Any]]) -> int:
-            return int(
-                rt.chat(args.model, messages, args.size_ctx, tools=TOOLS)["prompt_eval_count"]
-            )
+        initial = rt.resident()
+        try:
 
-        # Size everything first, then test: switching `num_ctx` reloads the
-        # runner, and on a large model a reload can evict its siblings (E2).
-        question = "Ignore the file. Count from 1 to 3000 in digits, separated by single spaces."
-        sized_boundary = []
-        for offset in [int(o) for o in args.offsets.split(",")]:
-            target = args.num_ctx + offset
-            messages, full = size_to_runtime_count(
-                target, conversation, count, first_guess=int(target * 3.5)
-            )
-            sized_boundary.append((offset, messages, full))
-        sized_overflow = []
-        for headroom in [int(h) for h in args.overflow_headroom.split(",")]:
-            target = args.num_ctx - headroom
-            messages, full = size_to_runtime_count(
-                target, lambda n: conversation(n, question), count, first_guess=int(target * 3.5)
-            )
-            sized_overflow.append((headroom, messages, full))
+            def count(messages: list[dict[str, Any]]) -> int | None:
+                # `truncate=False`: a payload too large for the sizing context is
+                # refused (None) rather than counted by what was kept (review on #26).
+                sized = rt.chat(args.model, messages, args.size_ctx, tools=TOOLS, truncate=False)
+                return None if sized is None else int(sized["prompt_eval_count"])
 
-        for offset, messages, full in sized_boundary:
-            log.mark()
-            result = rt.chat(args.model, messages, args.num_ctx, tools=TOOLS)
-            evaluated = result["prompt_eval_count"]
-            lines = log.lines()
-            halved = any("truncating input prompt" in line for line in lines)
+            # Size everything first, then test: switching `num_ctx` reloads the
+            # runner, and on a large model a reload can evict its siblings (E2).
+            question = (
+                "Ignore the file. Count from 1 to 3000 in digits, separated by single spaces."
+            )
+            sized_boundary = []
+            for offset in [int(o) for o in args.offsets.split(",")]:
+                target = args.num_ctx + offset
+                messages, full = size_to_runtime_count(
+                    target, conversation, count, first_guess=int(target * 3.5)
+                )
+                sized_boundary.append((offset, messages, full))
+            sized_overflow = []
+            for headroom in [int(h) for h in args.overflow_headroom.split(",")]:
+                target = args.num_ctx - headroom
+                messages, full = size_to_runtime_count(
+                    target,
+                    lambda n: conversation(n, question),
+                    count,
+                    first_guess=int(target * 3.5),
+                )
+                sized_overflow.append((headroom, messages, full))
+
+            for offset, messages, full in sized_boundary:
+                log.mark()
+                # Default truncation on purpose: this is the behaviour under test.
+                result = answered(rt.chat(args.model, messages, args.num_ctx, tools=TOOLS))
+                evaluated = result["prompt_eval_count"]
+                lines = log.lines()
+                halved = any("truncating input prompt" in line for line in lines)
+                if evaluated == full:
+                    outcome = "kept"
+                elif evaluated < full:
+                    # A loss. Halving logs at INFO; leading messages are dropped at
+                    # debug level only, so "unlogged" names the observation, not
+                    # the mechanism.
+                    outcome = "lost_halved" if halved else "lost_unlogged"
+                else:
+                    outcome = "inconsistent_more_than_full"
+                rec.emit(
+                    "boundary",
+                    model=args.model,
+                    num_ctx=args.num_ctx,
+                    target_offset=offset,
+                    full_prompt=full,
+                    evaluated=evaluated,
+                    delta=evaluated - full,
+                    outcome=outcome,
+                    result=result,
+                    log=lines[-6:],
+                )
+
+            for headroom, messages, full in sized_overflow:
+                log.mark()
+                result = rt.chat(  # default truncation; the overflow is the subject
+                    args.model, messages, args.num_ctx, num_predict=headroom * 4, tools=TOOLS
+                )
+                result = answered(result)
+                lines = log.lines()
+                rec.emit(
+                    "output_overflow",
+                    model=args.model,
+                    num_ctx=args.num_ctx,
+                    headroom=headroom,
+                    prompt=full,
+                    generated=result["eval_count"],
+                    done_reason=result["done_reason"],
+                    context_shift=any("context shift" in line for line in lines),
+                    stopped_at_window=any("truncated = 1" in line for line in lines),
+                    result=result,
+                    log=lines[-6:],
+                )
+
+            if args.restore_ctx:
+                rt.load(args.model, args.restore_ctx)
+                rec.emit(
+                    "restored", model=args.model, num_ctx=args.restore_ctx, resident=rt.resident()
+                )
+        except Exception as exc:
+            # The runner was reloaded at other contexts; report rather than
+            # issue more lifecycle commands into an uncertain state.
+            try:
+                found = rt.resident()
+            except Exception:  # noqa: BLE001 - the runtime may be what failed
+                found = None
             rec.emit(
-                "boundary",
-                model=args.model,
-                num_ctx=args.num_ctx,
-                target_offset=offset,
-                full_prompt=full,
-                evaluated=evaluated,
-                kept=evaluated == full,
-                halved=halved,
-                silently_dropped=evaluated != full and not halved,
-                result=result,
-                log=lines[-6:],
+                "recovery_required",
+                error=repr(exc)[:300],
+                resident_now=found,
+                restore_to=initial,
+                order="largest model first, then the rest",
             )
-
-        for headroom, messages, full in sized_overflow:
-            log.mark()
-            result = rt.chat(
-                args.model, messages, args.num_ctx, num_predict=headroom * 4, tools=TOOLS
-            )
-            lines = log.lines()
-            rec.emit(
-                "output_overflow",
-                model=args.model,
-                num_ctx=args.num_ctx,
-                headroom=headroom,
-                prompt=full,
-                generated=result["eval_count"],
-                done_reason=result["done_reason"],
-                context_shift=any("context shift" in line for line in lines),
-                stopped_at_window=any("truncated = 1" in line for line in lines),
-                result=result,
-                log=lines[-6:],
-            )
-
-        if args.restore_ctx:
-            rt.load(args.model, args.restore_ctx)
-            rec.emit("restored", model=args.model, num_ctx=args.restore_ctx, resident=rt.resident())
+            sys.exit(1)
 
 
 if __name__ == "__main__":

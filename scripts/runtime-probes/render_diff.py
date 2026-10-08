@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import sys
 from pathlib import Path
 
 import httpx
@@ -29,7 +30,7 @@ from _common import Recorder, parser, require_window
 
 from app.adapters.tokenizer.gguf import read_metadata
 from app.adapters.tokenizer.gguf_token_counter.adapter import GgufTokenCounter
-from app.adapters.tokenizer.ollama_blobs import weights_path
+from app.adapters.tokenizer.ollama_blobs import manifest_path, weights_path
 from tests.unit.runtime_validation_corpus import CASES, wire_payload
 
 
@@ -44,8 +45,19 @@ def main() -> None:
         rec = Recorder(
             "render_diff", args.out, {"version": client.get("/api/version").json()["version"]}
         )
+        served = {m["name"]: m["digest"] for m in client.get("/api/tags").json()["models"]}
         for spec in args.models:
             ref, _, ctx = spec.partition("=")
+            # Same rule as both count recorders: the server must serve the
+            # manifest the local store holds, or a tag mismatch would be
+            # reported as a renderer defect of the local profile (review on #26).
+            manifest = hashlib.sha256(manifest_path(args.models_root, ref).read_bytes()).hexdigest()
+            if served.get(ref) != manifest:
+                print(
+                    f"refusing: {ref} is served as {served.get(ref)}, not {manifest}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
             counter = GgufTokenCounter(args.models_root)
             blob = weights_path(args.models_root, ref)
             vocabulary = counter._build_python(ref, blob)  # noqa: SLF001
@@ -87,6 +99,11 @@ def main() -> None:
                 rec.emit(
                     "render",
                     model=ref,
+                    manifest=manifest[:12],
+                    weights=blob.name.removeprefix("sha256-")[:12],
+                    num_ctx=int(ctx),
+                    think_on_wire=body.get("think", "omitted"),
+                    tools=len(body.get("tools", [])),
                     case=name,
                     counter_template=template_source,
                     equal=ours == runtime,
