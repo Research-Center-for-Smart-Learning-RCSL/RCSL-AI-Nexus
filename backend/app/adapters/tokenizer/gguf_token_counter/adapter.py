@@ -146,6 +146,18 @@ class _Snapshot(NamedTuple):
     reason: str | None
 
 
+class Measurement(NamedTuple):
+    """A prompt count and a declared window that describe the same weights.
+
+    `identity` is the manifest SHA-256 they were read under, or None when the
+    reference has no manifest; `counted` is None when no exact count exists.
+    """
+
+    identity: str | None
+    counted: int | None
+    declared_context: int | None
+
+
 class GgufTokenCounter:
     """`TokenCounterPort` over the GGUF files an Ollama host already holds."""
 
@@ -241,7 +253,9 @@ class GgufTokenCounter:
         reader has no opinion about; the smallest is taken, because the purpose
         of this number is to bound something.
         """
-        snapshot = await asyncio.to_thread(self._resolve, ref)
+        return await self._declared_context(ref, await asyncio.to_thread(self._resolve, ref))
+
+    async def _declared_context(self, ref: str, snapshot: _Snapshot) -> int | None:
         async with self._lock:
             cached = self._native_context.get(ref)
             if cached is not None and cached[0] == snapshot.identity:
@@ -276,7 +290,32 @@ class GgufTokenCounter:
     async def count_prompt(
         self, ref: str, messages: Sequence[Message], tools: Sequence[ToolDefinition]
     ) -> int | None:
-        vocabulary = await self._vocabulary(ref)
+        return await self._count_prompt_with(ref, await self._vocabulary(ref), messages, tools)
+
+    async def measure(
+        self, ref: str, messages: Sequence[Message], tools: Sequence[ToolDefinition]
+    ) -> Measurement:
+        """Identity, prompt count and declared context, from one manifest read.
+
+        For a check that must not mix revisions (design S5 on #24): separate
+        `count_prompt` and `native_context_length` calls each resolve the tag,
+        so a same-tag pull between them could pair one model's count with
+        another's window. Here all three come from the same snapshot, and the
+        identity says which weights they describe.
+        """
+        snapshot = await asyncio.to_thread(self._resolve, ref)
+        vocabulary = await self._vocabulary(ref, snapshot)
+        declared = await self._declared_context(ref, snapshot)
+        counted = await self._count_prompt_with(ref, vocabulary, messages, tools)
+        return Measurement(identity=snapshot.identity, counted=counted, declared_context=declared)
+
+    async def _count_prompt_with(
+        self,
+        ref: str,
+        vocabulary: _Vocabulary | _NativeVocabulary | None,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+    ) -> int | None:
         if vocabulary is None or not vocabulary.has_template:
             return None
         calls = (
@@ -294,7 +333,9 @@ class GgufTokenCounter:
         except RuntimeCapabilityError:
             return None
         if isinstance(vocabulary.template, Gemma4Renderer):
-            return await self._count_gemma4(ref, vocabulary.template, payload, tool_payload(tools))
+            return await self._count_gemma4(
+                ref, vocabulary, vocabulary.template, payload, tool_payload(tools)
+            )
         try:
             counted = await asyncio.to_thread(vocabulary.count_prompt, payload, tool_payload(tools))
             if counted is None or not calls:
@@ -311,7 +352,7 @@ class GgufTokenCounter:
             # wrapper turns a failed encoding into 0, which would make this a
             # partial count the guard accepts as exact. `encode_texts` is None
             # if any part fails, and the Python path raises (review on #28).
-            parts = await self.count_parts(ref, calls)
+            parts = await self._parts_with(ref, vocabulary, calls)
             if parts is None:
                 logger.info("could not encode the tool calls of %s; counting by estimate", ref)
                 return None
@@ -327,6 +368,7 @@ class GgufTokenCounter:
     async def _count_gemma4(
         self,
         ref: str,
+        vocabulary: _Vocabulary | _NativeVocabulary,
         renderer: Gemma4Renderer,
         payload: list[dict[str, Any]],
         tools: list[dict[str, Any]],
@@ -349,11 +391,18 @@ class GgufTokenCounter:
         except Exception as exc:  # noqa: BLE001
             logger.info("could not render %s with the gemma4 renderer: %s", ref, exc)
             return None
-        parts = await self.count_parts(ref, texts)
+        parts = await self._parts_with(ref, vocabulary, texts)
         return max(parts) if parts else None
 
     async def count_parts(self, ref: str, texts: Sequence[str]) -> Sequence[int] | None:
-        vocabulary = await self._vocabulary(ref)
+        return await self._parts_with(ref, await self._vocabulary(ref), texts)
+
+    async def _parts_with(
+        self,
+        ref: str,
+        vocabulary: _Vocabulary | _NativeVocabulary | None,
+        texts: Sequence[str],
+    ) -> Sequence[int] | None:
         if vocabulary is None:
             return None
         if isinstance(vocabulary, _NativeVocabulary):
@@ -375,8 +424,11 @@ class GgufTokenCounter:
             logger.info("count_parts failed for %s, falling back to estimate: %s", ref, exc)
             return None
 
-    async def _vocabulary(self, ref: str) -> _Vocabulary | _NativeVocabulary | None:
-        snapshot = await asyncio.to_thread(self._resolve, ref)
+    async def _vocabulary(
+        self, ref: str, snapshot: _Snapshot | None = None
+    ) -> _Vocabulary | _NativeVocabulary | None:
+        if snapshot is None:
+            snapshot = await asyncio.to_thread(self._resolve, ref)
         cached = self._cache.get(ref, ...)
         if cached is not ... and self._cache_blob.get(ref) == snapshot.identity:
             self._cache.move_to_end(ref)

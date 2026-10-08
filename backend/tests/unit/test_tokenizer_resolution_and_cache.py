@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -315,10 +316,12 @@ async def test_a_tool_call_that_cannot_be_encoded_gives_no_count(
         "primary:latest", [Message(role=MessageRole.USER, content="hello")], []
     )
 
-    async def failing_parts(ref: str, texts: object) -> None:
+    async def failing_parts(ref: str, vocabulary: object, texts: object) -> None:
         return None
 
-    monkeypatch.setattr(counter, "count_parts", failing_parts)
+    # The internal seam every encoding of parts goes through, `count_parts`
+    # included, so the count and its tool calls use one vocabulary.
+    monkeypatch.setattr(counter, "_parts_with", failing_parts)
 
     assert await counter.count_prompt("primary:latest", _a_tool_call('{"path":"a"}'), []) is None
 
@@ -544,3 +547,24 @@ async def test_a_pull_between_identity_and_build_cannot_mislabel_the_vocabulary(
 
     third = await counter._vocabulary("primary:latest")  # noqa: SLF001
     assert third is not None and _source(third) == "sha256-aaa111"
+
+
+async def test_a_measurement_describes_one_revision_even_across_a_pull(tmp_path: Path) -> None:
+    """Design S5 on #24: the agent's guard takes its count, its window and the
+    identity it records from one manifest read, so a same-tag pull landing
+    mid-measurement cannot pair the old weights' count with the new window."""
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, digest="aaa111", context_length=4096)
+    expected = hashlib.sha256(manifest_path(tmp_path, "primary:latest").read_bytes()).hexdigest()
+    counter = GgufTokenCounter(tmp_path)
+    _replace_after_the_manifest_is_read(counter, tmp_path, digest="bbb222", context_length=32768)
+
+    measured = await counter.measure(
+        "primary:latest", [Message(role=MessageRole.USER, content="hello")], []
+    )
+
+    assert measured.identity == expected
+    assert measured.declared_context == 4096
+    assert measured.counted is not None and measured.counted > 0
+    vocabulary = await counter._vocabulary("primary:latest")  # noqa: SLF001 - B now
+    assert vocabulary is not None and _source(vocabulary) == "sha256-bbb222"
