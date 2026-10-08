@@ -249,26 +249,6 @@ class OperationStore:
             )
         return _operation(row) if row else None
 
-    async def unsent_after_promotion(self, op_id: str, reason: str) -> bool:
-        """`running → cancelled_unsent` for a task the barrier stopped.
-
-        Only this process can know a promoted task never started its send, so
-        only its owner may write this (design T2). If the process dies first,
-        takeover makes the row unknown instead, which is conservative.
-        """
-        async with self._owned(dispatch=True) as conn:
-            done = await conn.fetchval(
-                "UPDATE node_operations SET state = 'cancelled_unsent', reason = $4, "
-                "resolved_at = now(), resolved_by = 'barrier' "
-                "WHERE node_id = $1 AND op_id = $2 AND state = 'running' "
-                "AND owner_generation = $3 RETURNING op_id",
-                self.node_id,
-                op_id,
-                self.ownership.generation,
-                reason,
-            )
-        return done is not None
-
     async def mark_unknown(self, op_id: str, reason: str, observed: dict[str, Any]) -> bool:
         """`running → outcome_unknown`, under the dispatch lock (design S3)."""
         async with self._owned(dispatch=True) as conn:
