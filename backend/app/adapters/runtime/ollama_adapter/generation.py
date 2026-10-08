@@ -5,11 +5,9 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncGenerator, Sequence
-from typing import Any
 
 import httpx
 
-from app.adapters.runtime.tool_support import should_send_tools
 from app.adapters.runtime.transport import timeout_error
 from app.adapters.runtime.validation import assert_valid_model_ref
 from app.domain.entities.chat import (
@@ -27,7 +25,7 @@ from app.domain.exceptions import (
 
 from .base import OllamaRuntimeBase
 from .decoding import _finish_reason, _parse_tool_calls
-from .encoding import _sampling_options, _set_num_ctx, message_payload, tool_payload
+from .encoding import chat_payload, embed_payload
 
 logger = logging.getLogger("app.adapters.runtime.ollama_adapter")
 
@@ -52,55 +50,17 @@ class OllamaGenerationMixin(OllamaRuntimeBase):
         it Ollama keeps generating for someone who has already gone.
         """
         assert_valid_model_ref(ref)
-        options: dict[str, Any] = {}
-        _set_num_ctx(options, context_length)
-        if max_tokens is not None:
-            # Stopping at the source beats counting chunks and cutting the
-            # stream: the model stops generating rather than producing tokens
-            # nobody reads.
-            options["num_predict"] = max_tokens
-        options.update(_sampling_options(sampling))
-
-        payload: dict[str, Any] = {
-            "model": ref,
-            "messages": [message_payload(m) for m in messages],
-            "stream": True,
-        }
-        if options:
-            payload["options"] = options
-        # Consulted before the emptiness check, not after it. Short-circuiting
-        # on `tools` meant a `tool_choice` the runtime cannot honour went
-        # unrefused whenever the caller sent no tools with it, which is 200 and
-        # prose where every piece of documentation promises a 400.
-        send_tools = should_send_tools(tool_choice, "ollama")
-        if tools and send_tools:
-            payload["tools"] = tool_payload(tools)
-        # Sent on generation as well as on load. Ollama applies its own default
-        # to any request that omits it, so a generate without this silently
-        # overwrites whatever `load` asked for — which is how a 10-minute
-        # setting became a 5-minute one nobody had chosen.
-        payload["keep_alive"] = self._keep_alive
-        if not thinking:
-            # Only ever sent as `false`. Ollama refuses `think: true` for a
-            # model that does not support it — `"qwen2.5:7b" does not support
-            # thinking` — so a registry holding both kinds cannot ask for
-            # thinking at all. `True` here therefore means "send nothing and
-            # let the model do what it does", not "ask it to think". That
-            # asymmetry is what makes it safe for a caller to send `think: true`
-            # over the wire: it never reaches the runtime as a demand.
-            #
-            # The other direction was checked rather than assumed, because the
-            # asymmetry above gives no reason to expect it: `think: false`
-            # against `qwen2.5:7b`, which has no thinking capability, returns a
-            # normal completion rather than the error `true` earns. So a request
-            # that suppresses thinking is safe whichever model routing picks,
-            # including the non-thinking fallback.
-            #
-            # Graded values are not offered because they do not work: Ollama
-            # accepts `think: "low"` for this model without error and the
-            # behaviour is identical to the default — measured at 8192 tokens,
-            # same token count, same 228s, same empty answer.
-            payload["think"] = False
+        payload = chat_payload(
+            ref,
+            messages,
+            max_tokens=max_tokens,
+            thinking=thinking,
+            tools=tools,
+            tool_choice=tool_choice,
+            sampling=sampling,
+            context_length=context_length,
+            keep_alive=self._keep_alive,
+        )
 
         counted = 0
         saw_done = False
@@ -254,7 +214,7 @@ class OllamaGenerationMixin(OllamaRuntimeBase):
         async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
             response = await client.post(
                 "/api/embed",
-                json={"model": ref, "input": list(texts), "keep_alive": self._keep_alive},
+                json=embed_payload(ref, texts, keep_alive=self._keep_alive),
             )
             if response.status_code == 404:
                 raise ModelNotFoundError(detail=f"{ref} is not present on this runtime")
