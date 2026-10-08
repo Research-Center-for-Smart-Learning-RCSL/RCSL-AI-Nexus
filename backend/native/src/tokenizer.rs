@@ -77,8 +77,7 @@ fn build_bpe_tokenizer(metadata: &HashMap<String, GgufValue>) -> Result<Tokenize
 
     let types: Vec<u32> = metadata
         .get("tokenizer.ggml.token_type")
-        .and_then(|v| v.as_u32_array())
-        .map(|v| v.to_vec())
+        .and_then(|v| v.as_token_types())
         .unwrap_or_default();
 
     let vocab: AHashMap<String, u32> = tokens
@@ -185,8 +184,7 @@ fn build_unigram_tokenizer(metadata: &HashMap<String, GgufValue>) -> Result<Toke
 
     let types: Vec<u32> = metadata
         .get("tokenizer.ggml.token_type")
-        .and_then(|v| v.as_u32_array())
-        .map(|v| v.to_vec())
+        .and_then(|v| v.as_token_types())
         .unwrap_or_default();
 
     let log_probs = scores_to_log_probabilities(scores)?;
@@ -197,10 +195,16 @@ fn build_unigram_tokenizer(metadata: &HashMap<String, GgufValue>) -> Result<Toke
 
     let mut tokenizer = Tokenizer::new(unigram);
 
+    // `split: false`, because the runtime does not split on spaces either.
+    // llama.cpp's SentencePiece path segments the whole marker-substituted
+    // string, so a run of spaces reaches the vocabulary's multi-space pieces
+    // (`▁▁▁▁`) as one span. Splitting first made every space its own
+    // pre-token: 64 spaces counted as 64 here against 4 at the runtime, and
+    // indented code as 1.5-2x (measured 2026-10-07, #24).
     let metaspace = Metaspace::new(
         '▁',
         tokenizers::pre_tokenizers::metaspace::PrependScheme::Always,
-        true,
+        false,
     );
     tokenizer.with_pre_tokenizer(Some(PreTokenizerWrapper::Metaspace(metaspace.clone())));
     tokenizer.with_decoder(Some(DecoderWrapper::Metaspace(metaspace)));

@@ -225,3 +225,45 @@ def test_both_fallback_templates_are_the_same_text() -> None:
     ):
         assert fragment in _CHATML_FALLBACK, fragment
         assert fragment in rust, f"{fragment} missing from the Rust fallback"
+
+
+def test_control_tokens_stored_as_int32_are_still_control_tokens(tmp_path: Path) -> None:
+    """Every GGUF on the production host stores token types as INT32.
+
+    The Rust reader accepted only UINT32, so it read them as absent and
+    registered no control token: `<|im_start|>` was spelled out of six
+    ordinary tokens and every chat counted ~22 high on `qwen2.5:7b`, while the
+    Python reader got it right (measured 2026-10-08, #24).
+    """
+    blob = write_gguf(tmp_path / "blob", token_types_as_int32=True)
+
+    counts = nexus_native.count_parts(str(blob), "int32-ref", ["<|im_start|>", "<|im_end|>"])
+
+    assert counts == [1, 1]
+
+
+def test_a_run_of_spaces_counts_the_same_in_both_backends(tmp_path: Path) -> None:
+    """The Unigram path, which takes the same `split` flag in both languages."""
+    from app.adapters.tokenizer.gguf_token_counter.construction import build_tokenizer_for_model
+
+    pieces = {"▁main": 100, "▁▁▁▁": 200, "▁▁": 300}
+    singles = {c: 400 + i for i, c in enumerate("ain▁m")}
+    tokens = [*pieces, *singles]
+    scores = [float(r) for r in [*pieces.values(), *singles.values()]]
+    blob = write_gguf(tmp_path / "blob", tokens=tokens, model="llama", scores=scores, merges=())
+    text = "main" + " " * 8 + "main"
+
+    native = nexus_native.count_parts(str(blob), "unigram-ref", [text])
+    python = build_tokenizer_for_model(
+        {
+            "tokenizer.ggml.model": "llama",
+            "tokenizer.ggml.tokens": tokens,
+            "tokenizer.ggml.scores": scores,
+            "tokenizer.ggml.token_type": [1] * len(tokens),
+        }
+    ).encode(text)
+
+    # Five, against ten when every space was its own pre-token. The order of
+    # `▁▁` and `▁` is a tie in a vocabulary this small, so it is not asserted.
+    assert len(python.tokens) == 5 and "▁▁▁▁" in python.tokens, python.tokens
+    assert native == [len(python.tokens)], (native, python.tokens)

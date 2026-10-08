@@ -143,3 +143,35 @@ def test_a_placeholder_array_is_refused_rather_than_guessed_at() -> None:
         scores_to_log_probabilities([-1000.0] * 8)
     with pytest.raises(UnusableScores):
         scores_to_log_probabilities([])
+
+
+# Multi-space pieces, as a real SentencePiece vocabulary carries them. Gemma's
+# holds runs up to 31 spaces; two widths are enough to show a run is segmented
+# as one span rather than one pre-token per space.
+_SPACE_RUNS = {"▁▁▁▁": 200, "▁▁": 300}
+
+
+def _metadata_with_space_runs() -> dict[str, object]:
+    metadata = _metadata()
+    tokens = list(metadata["tokenizer.ggml.tokens"])  # type: ignore[arg-type]
+    scores = list(metadata["tokenizer.ggml.scores"])  # type: ignore[arg-type]
+    for piece, rank in _SPACE_RUNS.items():
+        tokens[rank] = piece
+        scores[rank] = float(rank)
+    return {**metadata, "tokenizer.ggml.tokens": tokens, "tokenizer.ggml.scores": scores}
+
+
+def test_a_run_of_spaces_reaches_the_multi_space_pieces() -> None:
+    """The runtime segments the whole string, so a run reaches `▁▁▁▁`.
+
+    Splitting on spaces first made each one its own pre-token, which no
+    multi-space piece can span: 64 spaces counted 64 against the runtime's 4,
+    and indented code came out 1.5-2x high (measured 2026-10-07, #24).
+    """
+    tokenizer = build_tokenizer_for_model(_metadata_with_space_runs())
+
+    encoded = tokenizer.encode("main" + " " * 8 + "main")
+
+    # The last space is the second word's own marker; the other seven take the
+    # widest pieces that fit. Split per space, this was ten tokens.
+    assert encoded.tokens == ["▁main", "▁▁▁▁", "▁▁", "▁", "▁main"], encoded.tokens

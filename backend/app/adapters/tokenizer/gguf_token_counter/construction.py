@@ -203,8 +203,13 @@ def _build_unigram_tokenizer(metadata: dict[str, Any]) -> Any:
     vocab = list(zip(tokens, scores_to_log_probabilities(scores), strict=False))
     tokenizer = Tokenizer(Unigram(vocab))
 
-    tokenizer.pre_tokenizer = pre_tokenizers.Metaspace(replacement="▁")
-    tokenizer.decoder = decoders.Metaspace(replacement="▁")
+    # `split=False` to match the runtime, which segments the whole string: a
+    # run of spaces has to reach the vocabulary's multi-space pieces as one
+    # span. The default splits first and counts every space as a token, which
+    # over-counted indented code 1.5-2x (measured 2026-10-07, #24). The Rust
+    # builder in `native/src/tokenizer.rs` carries the same flag.
+    tokenizer.pre_tokenizer = pre_tokenizers.Metaspace(replacement="▁", split=False)
+    tokenizer.decoder = decoders.Metaspace(replacement="▁", split=False)
     _add_special_tokens(tokenizer, tokens, types)
     return tokenizer
 
