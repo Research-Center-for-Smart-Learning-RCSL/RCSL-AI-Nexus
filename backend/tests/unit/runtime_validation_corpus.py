@@ -16,7 +16,9 @@ weights digest; changing a case invalidates its counts.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
+from app.adapters.runtime.ollama_adapter.encoding import message_payload, tool_payload
 from app.domain.entities.chat import Message, MessageRole, ToolCall, ToolDefinition
 
 U, A, T, S = MessageRole.USER, MessageRole.ASSISTANT, MessageRole.TOOL, MessageRole.SYSTEM
@@ -47,10 +49,33 @@ _CODE = (
 class Case:
     messages: tuple[Message, ...]
     tools: tuple[ToolDefinition, ...] = ()
-    think: bool = False
+    # The gateway's own flag. The adapter sends `think: false` when it is off
+    # and *omits* the field when it is on (`generation.py:83`), so that is what
+    # `wire_payload` sends. `explicit_think` is a separate runtime experiment,
+    # `think: true` on the wire, which the gateway never sends.
+    thinking: bool = False
+    explicit_think: bool = False
     # Only for models whose context admits the case; near-boundary cases are
     # sized for one model and skipped on the rest.
     only: tuple[str, ...] = field(default=())
+
+
+def wire_payload(ref: str, case: Case, num_ctx: int) -> dict[str, Any]:
+    """The `/api/chat` body the Ollama adapter would send for this case."""
+    body: dict[str, Any] = {
+        "model": ref,
+        "messages": [message_payload(m) for m in case.messages],
+        "stream": False,
+        "keep_alive": -1,
+        "options": {"num_ctx": num_ctx, "num_predict": 1},
+    }
+    if case.tools:
+        body["tools"] = tool_payload(case.tools)
+    if case.explicit_think:
+        body["think"] = True
+    elif not case.thinking:
+        body["think"] = False
+    return body
 
 
 def _tool_loop(turns: int, result: str) -> tuple[Message, ...]:
@@ -78,10 +103,20 @@ CASES: dict[str, Case] = {
             Message(U, "And a routing policy?"),
         )
     ),
+    # Rounds varied with identical content per round, then content varied at a
+    # fixed round count, so renderer overhead per round and content
+    # segmentation can be told apart (review on #24).
     "tool_loop_3": Case(_tool_loop(3, _CODE), TOOLS),
-    "tool_loop_12": Case(_tool_loop(12, _CODE * 3), TOOLS),
-    "think_on": Case((Message(U, "Why might a prefix cache miss?"),), think=True),
-    "think_on_tools": Case(_tool_loop(2, _CODE), TOOLS, think=True),
+    "tool_loop_12": Case(_tool_loop(12, _CODE), TOOLS),
+    "tool_loop_50": Case(_tool_loop(50, _CODE), TOOLS),
+    "tool_loop_100": Case(_tool_loop(100, _CODE), TOOLS),
+    "tool_loop_12_result_x3": Case(_tool_loop(12, _CODE * 3), TOOLS),
+    "tool_loop_12_result_x9": Case(_tool_loop(12, _CODE * 9), TOOLS),
+    "thinking_gateway": Case((Message(U, "Why might a prefix cache miss?"),), thinking=True),
+    "thinking_gateway_tools": Case(_tool_loop(2, _CODE), TOOLS, thinking=True),
+    "think_true_on_wire": Case(
+        (Message(U, "Why might a prefix cache miss?"),), explicit_think=True
+    ),
     # Repetition is where a segmentation deficit compounds: Unigram may reach
     # pieces a merge tokenizer cannot, once per repeat (#25 review).
     "repeat_short_words": Case((Message(U, " a b" * 2000),)),
@@ -95,20 +130,116 @@ CASES: dict[str, Case] = {
     "near_boundary_qwen_16k": Case((Message(U, _CODE * 320),), only=("qwen2.5:7b",)),
 }
 
-# Recorded 2026-10-08 on the production host (Ollama 0.33.2).
+# Recorded 2026-10-08 on the production host (Ollama 0.33.2), each with
+# runtime-side completeness evidence (strictly increasing prefixes).
 RECORDED: dict[str, dict[str, object]] = {
     "2bada8a74506": {
-        "counts": {
-            "near_boundary_qwen_16k": 16029,
-            "near_boundary_qwen_32k": 32029,
-            "repeat_arrows": 5430,
-            "repeat_cjk_pairs": 4030,
-            "repeat_indent_runs": 6029,
-            "repeat_short_words": 4029,
-            "system_multiturn": 44,
-            "tool_loop_12": 2486,
-            "tool_loop_3": 465,
-            "tools_plain": 190,
+        "cases": {
+            "near_boundary_qwen_16k": {
+                "completeness": "3 strictly increasing prefixes",
+                "count": 16029,
+                "payload_sha256": "b3e8443b9d171694",
+                "prefix_counts": [4029, 8029, 12029],
+                "think_on_wire": False,
+            },
+            "near_boundary_qwen_32k": {
+                "completeness": "3 strictly increasing prefixes",
+                "count": 32029,
+                "payload_sha256": "afa2b32d351413fd",
+                "prefix_counts": [8029, 16029, 24029],
+                "think_on_wire": False,
+            },
+            "repeat_arrows": {
+                "completeness": "3 strictly increasing prefixes",
+                "count": 5430,
+                "payload_sha256": "2c9d611c91e5160e",
+                "prefix_counts": [1380, 2730, 4080],
+                "think_on_wire": False,
+            },
+            "repeat_cjk_pairs": {
+                "completeness": "3 strictly increasing prefixes",
+                "count": 4030,
+                "payload_sha256": "3eed8da879e83097",
+                "prefix_counts": [1030, 2030, 3030],
+                "think_on_wire": False,
+            },
+            "repeat_indent_runs": {
+                "completeness": "3 strictly increasing prefixes",
+                "count": 6029,
+                "payload_sha256": "e5232f51fa47577e",
+                "prefix_counts": [1529, 3029, 4529],
+                "think_on_wire": False,
+            },
+            "repeat_short_words": {
+                "completeness": "3 strictly increasing prefixes",
+                "count": 4029,
+                "payload_sha256": "b843c4760d08bb7e",
+                "prefix_counts": [1029, 2029, 3029],
+                "think_on_wire": False,
+            },
+            "system_multiturn": {
+                "completeness": "3 strictly increasing prefixes",
+                "count": 44,
+                "payload_sha256": "0563955bf4513e1e",
+                "prefix_counts": [12, 22, 29],
+                "think_on_wire": False,
+            },
+            "thinking_gateway": {
+                "completeness": "3 strictly increasing prefixes",
+                "count": 36,
+                "payload_sha256": "7ea35f5b4ccb2080",
+                "prefix_counts": [31, 33, 34],
+                "think_on_wire": "omitted",
+            },
+            "thinking_gateway_tools": {
+                "completeness": "6 strictly increasing prefixes",
+                "count": 374,
+                "payload_sha256": "ef29099309783b20",
+                "prefix_counts": [170, 180, "...", 362],
+                "think_on_wire": "omitted",
+            },
+            "tool_loop_100": {
+                "completeness": "202 strictly increasing prefixes",
+                "count": 9382,
+                "payload_sha256": "8442b3b1ed2cf49b",
+                "prefix_counts": [170, 180, "...", 9370],
+                "think_on_wire": False,
+            },
+            "tool_loop_12": {
+                "completeness": "26 strictly increasing prefixes",
+                "count": 1286,
+                "payload_sha256": "1fdaf3244542ab2d",
+                "prefix_counts": [170, 180, "...", 1274],
+                "think_on_wire": False,
+            },
+            "tool_loop_12_result_x3": {
+                "completeness": "26 strictly increasing prefixes",
+                "count": 2486,
+                "payload_sha256": "1ab1d3f641f77c5c",
+                "prefix_counts": [170, 180, "...", 2474],
+                "think_on_wire": False,
+            },
+            "tool_loop_12_result_x9": {
+                "completeness": "26 strictly increasing prefixes",
+                "count": 6086,
+                "payload_sha256": "2880f0cf54359918",
+                "prefix_counts": [170, 180, "...", 6074],
+                "think_on_wire": False,
+            },
+            "tool_loop_3": {
+                "completeness": "8 strictly increasing prefixes",
+                "count": 465,
+                "payload_sha256": "1a3a66e6545557a0",
+                "prefix_counts": [170, 180, "...", 453],
+                "think_on_wire": False,
+            },
+            "tool_loop_50": {
+                "completeness": "102 strictly increasing prefixes",
+                "count": 4782,
+                "payload_sha256": "3dc57b2131bdda09",
+                "prefix_counts": [170, 180, "...", 4770],
+                "think_on_wire": False,
+            },
         },
         "manifest": "845dbda0ea48",
         "num_ctx": 32768,
@@ -116,17 +247,105 @@ RECORDED: dict[str, dict[str, object]] = {
         "ref": "qwen2.5:7b",
     },
     "a0feadb736f5": {
-        "counts": {
-            "repeat_arrows": 5413,
-            "repeat_cjk_pairs": 3213,
-            "repeat_indent_runs": 9008,
-            "repeat_short_words": 4013,
-            "system_multiturn": 49,
-            "think_on": 23,
-            "think_on_tools": 324,
-            "tool_loop_12": 2800,
-            "tool_loop_3": 422,
-            "tools_plain": 112,
+        "cases": {
+            "repeat_arrows": {
+                "completeness": "3 strictly increasing prefixes",
+                "count": 5413,
+                "payload_sha256": "d43c5068e17d7a88",
+                "prefix_counts": [1363, 2713, 4063],
+                "think_on_wire": False,
+            },
+            "repeat_cjk_pairs": {
+                "completeness": "3 strictly increasing prefixes",
+                "count": 3213,
+                "payload_sha256": "0e3218ed9af9cd1d",
+                "prefix_counts": [813, 1613, 2413],
+                "think_on_wire": False,
+            },
+            "repeat_indent_runs": {
+                "completeness": "3 strictly increasing prefixes",
+                "count": 9008,
+                "payload_sha256": "34428b47876f786b",
+                "prefix_counts": [2258, 4508, 6758],
+                "think_on_wire": False,
+            },
+            "repeat_short_words": {
+                "completeness": "3 strictly increasing prefixes",
+                "count": 4013,
+                "payload_sha256": "2cf783dac22a6bef",
+                "prefix_counts": [1013, 2013, 3013],
+                "think_on_wire": False,
+            },
+            "system_multiturn": {
+                "completeness": "3 strictly increasing prefixes",
+                "count": 49,
+                "payload_sha256": "a6dd2fc4d39e3378",
+                "prefix_counts": [17, 27, 39],
+                "think_on_wire": False,
+            },
+            "think_true_on_wire": {
+                "completeness": "3 strictly increasing prefixes",
+                "count": 23,
+                "payload_sha256": "2bfe8b18e00ba983",
+                "prefix_counts": [18, 20, 21],
+                "think_on_wire": True,
+            },
+            "thinking_gateway": {
+                "completeness": "3 strictly increasing prefixes",
+                "count": 23,
+                "payload_sha256": "821820f57de5cf78",
+                "prefix_counts": [18, 20, 21],
+                "think_on_wire": "omitted",
+            },
+            "thinking_gateway_tools": {
+                "completeness": "6 strictly increasing prefixes",
+                "count": 324,
+                "payload_sha256": "5637e71f99ad9201",
+                "prefix_counts": [106, 116, "...", 311],
+                "think_on_wire": "omitted",
+            },
+            "tool_loop_100": {
+                "completeness": "202 strictly increasing prefixes",
+                "count": 9824,
+                "payload_sha256": "09f942f71e488e8d",
+                "prefix_counts": [108, 118, "...", 9804],
+                "think_on_wire": False,
+            },
+            "tool_loop_12": {
+                "completeness": "26 strictly increasing prefixes",
+                "count": 1288,
+                "payload_sha256": "f90e13f9f092ee9d",
+                "prefix_counts": [108, 118, "...", 1268],
+                "think_on_wire": False,
+            },
+            "tool_loop_12_result_x3": {
+                "completeness": "26 strictly increasing prefixes",
+                "count": 2800,
+                "payload_sha256": "28fe8b42dbf51009",
+                "prefix_counts": [108, 118, "...", 2780],
+                "think_on_wire": False,
+            },
+            "tool_loop_12_result_x9": {
+                "completeness": "26 strictly increasing prefixes",
+                "count": 7336,
+                "payload_sha256": "289fb20073af3a25",
+                "prefix_counts": [108, 118, "...", 7316],
+                "think_on_wire": False,
+            },
+            "tool_loop_3": {
+                "completeness": "8 strictly increasing prefixes",
+                "count": 422,
+                "payload_sha256": "d86896de95127d2f",
+                "prefix_counts": [108, 118, "...", 402],
+                "think_on_wire": False,
+            },
+            "tool_loop_50": {
+                "completeness": "102 strictly increasing prefixes",
+                "count": 4974,
+                "payload_sha256": "dbb69b7d5633b990",
+                "prefix_counts": [108, 118, "...", 4954],
+                "think_on_wire": False,
+            },
         },
         "manifest": "53dd8459790f",
         "num_ctx": 262144,

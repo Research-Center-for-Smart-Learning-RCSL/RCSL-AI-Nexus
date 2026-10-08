@@ -52,3 +52,23 @@ def test_a_target_below_the_empty_payload_returns_the_empty_payload() -> None:
     payload, got = size_to_runtime_count(10, lambda n: n, _fake_count, first_guess=100)
 
     assert (payload, got) == (0, 40)
+
+
+prefix_counts_are_complete = _common.prefix_counts_are_complete
+
+
+def test_a_truncated_full_count_is_not_complete() -> None:
+    """The review's case: the full prompt is 200 tokens in a 128 context, so
+    the runtime keeps 50 and reports 50. The prefixes that fitted counted
+    more, which is the evidence it lost content. A gateway count of 80 is
+    irrelevant here: the counter is what is being tested."""
+    assert not prefix_counts_are_complete([30, 90, 120], 50)
+
+
+def test_strictly_increasing_prefixes_and_a_larger_whole_are_complete() -> None:
+    assert prefix_counts_are_complete([30, 90, 120], 160)
+
+
+def test_a_flat_step_is_not_evidence() -> None:
+    assert not prefix_counts_are_complete([30, 30], 60)
+    assert not prefix_counts_are_complete([], 60)
