@@ -17,7 +17,14 @@ from app.adapters.tokenizer.gguf_token_counter.gemma4_renderer import (
     Gemma4Renderer,
     renderer_variant,
 )
-from tests.unit.gemma4_render_goldens import CASES, RENDERED, TOOLS
+from tests.unit.gemma4_render_goldens import (
+    CASES,
+    MESSAGES_UNIONS_AND_NUMBERS,
+    RENDERED,
+    RENDERED_UNIONS_AND_NUMBERS,
+    TOOLS,
+    TOOLS_UNIONS_AND_NUMBERS,
+)
 
 _RENDERER = Gemma4Renderer(large=True)
 
@@ -46,3 +53,17 @@ def test_the_variant_follows_the_runtimes_names_and_defaults_large() -> None:
     assert renderer_variant("gemma4:31b-it-q8_0") == "large"
     # Undecided: the runtime picks small; large only adds tokens.
     assert renderer_variant("my-gemma") == "large"
+
+
+@pytest.mark.parametrize("key", sorted(RENDERED_UNIONS_AND_NUMBERS))
+def test_unions_and_numbers_render_as_the_runtime_does(key: str) -> None:
+    """The review on #29: an anyOf branch with an empty description or an
+    undecoded `title` is still a bare type upstream; `1e19` is beyond int64 so
+    it prints with `%v` as `1e+19`; `%v` turns to exponent form at 1e6."""
+    think = None if key.endswith("=omitted") else False
+
+    rendered = _RENDERER.render(
+        messages=MESSAGES_UNIONS_AND_NUMBERS, tools=TOOLS_UNIONS_AND_NUMBERS, think=think
+    )
+
+    assert rendered == RENDERED_UNIONS_AND_NUMBERS[key]
