@@ -71,8 +71,24 @@ async def claim(
             await conn.execute(
                 "SELECT pg_advisory_xact_lock($1, hashtext($2))", DISPATCH_NAMESPACE, node_id
             )
+            # `node_agents` before `nodes`, and `nodes` only FOR NO KEY UPDATE:
+            # a superseded owner's insert holds `node_agents` FOR SHARE and then
+            # takes FOR KEY SHARE on `nodes` through its foreign key, so the
+            # opposite order could deadlock (review on #33).
+            if not await conn.fetchval("SELECT 1 FROM nodes WHERE id = $1", node_id):
+                raise ElectionRefused(f"node {node_id} is not registered")
+            await conn.execute(
+                "INSERT INTO node_agents (node_id) VALUES ($1) ON CONFLICT DO NOTHING", node_id
+            )
+            previous = await conn.fetchrow(
+                "SELECT generation, boot_id, kernel_boot_id FROM node_agents "
+                "WHERE node_id = $1 FOR UPDATE",
+                node_id,
+            )
+            if previous is None:  # inserted above, under the same transaction
+                raise ElectionRefused(f"node {node_id} has no agent row")
             bound = await conn.fetchrow(
-                "SELECT lock_domain_id FROM nodes WHERE id = $1 FOR UPDATE", node_id
+                "SELECT lock_domain_id FROM nodes WHERE id = $1 FOR NO KEY UPDATE", node_id
             )
             if bound is None:
                 raise ElectionRefused(f"node {node_id} is not registered")
@@ -88,16 +104,6 @@ async def claim(
                     f"not {domain_id}; moving a node between domains is an operator action"
                 )
 
-            await conn.execute(
-                "INSERT INTO node_agents (node_id) VALUES ($1) ON CONFLICT DO NOTHING", node_id
-            )
-            previous = await conn.fetchrow(
-                "SELECT generation, boot_id, kernel_boot_id FROM node_agents "
-                "WHERE node_id = $1 FOR UPDATE",
-                node_id,
-            )
-            if previous is None:  # inserted above, under the same transaction
-                raise ElectionRefused(f"node {node_id} has no agent row")
             if (
                 previous["kernel_boot_id"] is not None
                 and kernel_boot_id != previous["kernel_boot_id"]

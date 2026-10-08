@@ -55,28 +55,46 @@ class Agent:
     _watchdog: asyncio.Task[None] | None = None
 
     async def watch(self) -> None:
-        while True:
-            await asyncio.sleep(self.settings.watchdog_s)
-            if not self.host_lock.still_held():
-                await self._lost("host lock file unlinked or replaced")
-                return
-            if not await still_elected(self.election_conn, self.elected.backend_pid):
-                await self._lost("election session lost")
-                return
+        try:
+            while True:
+                await asyncio.sleep(self.settings.watchdog_s)
+                if not self.host_lock.still_held():
+                    await self._lost("host lock file unlinked or replaced")
+                    return
+                if not await still_elected(self.election_conn, self.elected.backend_pid):
+                    await self._lost("election session lost")
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # An unsupervised agent is worse than a stopped one.
+            logger.exception("watchdog failed; treating the role as lost")
+            await self._lost("watchdog failed")
 
     async def _lost(self, reason: str) -> None:
-        await self.dispatcher.lose_role(reason)
-        await self.store.audit(
-            "role_lost",
-            None,
-            {
-                "reason": reason,
-                "generation": self.elected.ownership.generation,
-                "boot_id": self.elected.ownership.boot_id,
-                "admitted": self.dispatcher.admitted,
-            },
-        )
-        self.terminate()
+        """Close the gate and end the process, whatever else fails.
+
+        The role is usually lost because the database went away, which is
+        exactly when the audit write fails; it must not stop the exit, or the
+        process would keep the host lock with a closed gate forever (review
+        on #33).
+        """
+        try:
+            await self.dispatcher.lose_role(reason)
+            await self.store.audit(
+                "role_lost",
+                None,
+                {
+                    "reason": reason,
+                    "generation": self.elected.ownership.generation,
+                    "boot_id": self.elected.ownership.boot_id,
+                    "admitted": self.dispatcher.admitted,
+                },
+            )
+        except Exception:
+            logger.exception("could not record the lost role (%s)", reason)
+        finally:
+            self.terminate()
 
 
 async def start(settings: AgentSettings) -> Agent:

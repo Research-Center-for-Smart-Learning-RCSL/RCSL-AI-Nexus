@@ -47,7 +47,7 @@ class AgentSettings(BaseSettings):
     loopback, and the VM reaches it through Colima's forwarding."""
 
     max_inflight: int = Field(default=4, alias="NODE_AGENT_MAX_INFLIGHT", ge=1)
-    max_queued: int = Field(default=4, alias="NODE_AGENT_MAX_QUEUED", ge=0)
+    max_queued: int = Field(default=4, alias="NODE_AGENT_MAX_QUEUED", ge=1)
     request_timeout_s: float = Field(default=1500.0, alias="REQUEST_TIMEOUT_SECONDS", gt=0)
     queue_deadline_s: float = Field(default=30.0, alias="NODE_AGENT_QUEUE_DEADLINE", gt=0)
     watchdog_s: float = Field(default=2.0, alias="NODE_AGENT_WATCHDOG_SECONDS", gt=0)
