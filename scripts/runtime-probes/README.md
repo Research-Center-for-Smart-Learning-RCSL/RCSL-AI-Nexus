@@ -22,6 +22,19 @@ PYTHONPATH=$PWD uv run python ../scripts/runtime-probes/<probe>.py --i-own-the-w
 | `prefix_cache.py` | Do repeats, appends and interleaved conversations keep their prefix | occupies the model |
 | `disconnect.py` | Does the runtime keep working after the client leaves; does it act on a truncated body | with `--allow-unload`, the model is unavailable for up to ~2 min |
 | `reset_evidence.py` | What changes across a runtime restart (PID, start time) | waits for **you** to restart the runtime |
+| `record_validation_counts.py` | The runtime's count of whole gateway-shaped payloads (`truncate: false`), for profile validation | nothing beyond the requests |
+| `render_diff.py` | Whether the counter renders the same prompt bytes as the runtime (`_debug_render_only`) | nothing beyond the requests |
+
+**Two ways a probe request reloads a production runner, and with it can
+evict the models beside it (E2).** Both happened on 2026-10-08:
+
+- a `num_ctx` that differs from the model's production context;
+- a runner option such as `shift: false` (which also changed `num_batch`).
+
+Probes that are not meant to reload send the production `num_ctx`,
+`keep_alive: -1`, and no runner options. `truncate: false` is a request
+option and does not reload. If something is evicted anyway, restore the
+largest model first, then the rest.
 
 Every result line carries a fingerprint: runtime version, model digests, what
 was resident, and the serving process's PID and start time. Results from a
