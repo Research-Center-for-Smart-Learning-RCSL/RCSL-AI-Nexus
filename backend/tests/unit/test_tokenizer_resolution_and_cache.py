@@ -7,7 +7,7 @@ import pytest
 
 from app.adapters.tokenizer.gguf_token_counter import GgufTokenCounter
 from app.adapters.tokenizer.ollama_blobs import BlobNotFound, manifest_path, weights_path
-from app.domain.entities.chat import Message, MessageRole, ToolDefinition
+from app.domain.entities.chat import Message, MessageRole, ToolCall, ToolDefinition
 from app.domain.exceptions import (
     InvalidModelReferenceError,
 )
@@ -121,10 +121,11 @@ async def test_an_unmeasured_pre_tokeniser_falls_back_rather_than_splitting_by_g
 async def test_a_model_with_no_chat_template_uses_the_chatml_fallback(
     tmp_path: Path,
 ) -> None:
-    """A model without an embedded chat template falls back to ChatML, which
-    is the template Ollama applies via ``--chat-template chatml`` for models
-    like gemma4. The fallback means the framing overhead IS counted, so the
-    previous concern about under-counting without framing no longer applies."""
+    """A model without an embedded chat template is counted through ChatML, so
+    some framing is counted rather than none. It is a stand-in, not the
+    runtime's format: gemma4 is rendered by a built-in renderer in its own
+    format (`render_diff.py`, 2026-10-08, #24), and the counts agree on plain
+    messages only approximately."""
     (tmp_path / "blobs").mkdir(parents=True)
     write_store(tmp_path, template=None)
 
@@ -241,3 +242,55 @@ async def test_the_declared_context_cache_is_not_sized_for_vocabularies(
     # Still remembered, without going back to disk: the blob is gone.
     (tmp_path / "blobs" / "sha256-abc123").unlink()
     assert await counter.native_context_length("primary:latest") == 32768
+
+
+def _a_tool_call(arguments: str) -> list[Message]:
+    return [
+        Message(role=MessageRole.USER, content="read it"),
+        Message(
+            role=MessageRole.ASSISTANT,
+            content="",
+            tool_calls=(ToolCall("call_1", "read_file", arguments),),
+        ),
+        Message(role=MessageRole.TOOL, content="x = 1", tool_call_id="call_1", name="read_file"),
+    ]
+
+
+async def test_the_fallback_template_counts_tool_call_arguments(tmp_path: Path) -> None:
+    """ChatML renders no assistant tool call, so through it the count was the
+    same for an 8- and a 32,768-character argument: an under-count of unknown
+    size, presented as exact (review on #24). The calls are now encoded and
+    added, so the count grows with the arguments."""
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, template=None)
+    counter = GgufTokenCounter(tmp_path)
+
+    short = await counter.count_prompt("primary:latest", _a_tool_call('{"path":"a"}'), [])
+    long = await counter.count_prompt(
+        "primary:latest", _a_tool_call('{"path":"' + "abcdefgh" * 4096 + '"}'), []
+    )
+
+    assert short is not None and long is not None
+    assert long - short >= 4096, (short, long)
+
+
+async def test_the_fallback_template_still_counts_turns_without_tool_calls(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, template=None)
+
+    count = await GgufTokenCounter(tmp_path).count_prompt(
+        "primary:latest", [Message(role=MessageRole.USER, content="hello")], []
+    )
+
+    assert count is not None and count > 0
+
+
+async def test_a_model_with_its_own_template_still_counts_tool_calls(store: Path) -> None:
+    """Only the fallback declines; a template from the GGUF renders the calls."""
+    count = await GgufTokenCounter(store).count_prompt(
+        "primary:latest", _a_tool_call('{"path":"a"}'), []
+    )
+
+    assert count is not None
