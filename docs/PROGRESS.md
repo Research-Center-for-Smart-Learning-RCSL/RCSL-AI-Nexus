@@ -34,6 +34,11 @@ separately at the end, marked as superseded.
 
 ## The log
 
+### October 2026
+
+**[2026-10-08](./progress/2026-10-08.md)**
+- 精確計數與 runtime 對齊：Unigram 不再逐空白切分，Rust 讀得到 INT32 的 control token
+
 ### September 2026
 
 **[2026-09-23](./progress/2026-09-23.md)**

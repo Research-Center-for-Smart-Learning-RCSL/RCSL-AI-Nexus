@@ -63,9 +63,22 @@ impl GgufValue {
         }
     }
 
-    pub fn as_u32_array(&self) -> Option<&[u32]> {
+    /// `tokenizer.ggml.token_type`, whichever integer width the file used.
+    ///
+    /// The spec's enum is small and non-negative, but every GGUF this host
+    /// holds stores it as INT32. Accepting only UINT32 read those as absent, so
+    /// no control token was registered: a BPE vocabulary then spelled
+    /// `<|im_start|>` out of six ordinary tokens and every chat counted ~22
+    /// high (measured 2026-10-08 on `qwen2.5:7b`, #24). The Python reader never
+    /// had the problem, which is why the two backends disagreed.
+    pub fn as_token_types(&self) -> Option<Vec<u32>> {
         match self {
-            GgufValue::ArrayU32(v) => Some(v),
+            GgufValue::ArrayU32(v) => Some(v.clone()),
+            GgufValue::ArrayI32(v) => Some(
+                v.iter()
+                    .map(|&t| u32::try_from(t).unwrap_or(u32::MAX))
+                    .collect(),
+            ),
             _ => None,
         }
     }
@@ -332,4 +345,28 @@ pub fn read_metadata(
         }
     }
     Ok(found)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GgufValue;
+
+    /// Every GGUF on the production host stores token types as INT32. Reading
+    /// only UINT32 dropped them, and with them every control token.
+    #[test]
+    fn token_types_are_read_from_either_integer_width() {
+        let signed = GgufValue::ArrayI32(vec![1, 3, 4]);
+        let unsigned = GgufValue::ArrayU32(vec![1, 3, 4]);
+
+        assert_eq!(signed.as_token_types(), Some(vec![1, 3, 4]));
+        assert_eq!(unsigned.as_token_types(), Some(vec![1, 3, 4]));
+        assert_eq!(GgufValue::ArrayF32(vec![1.0]).as_token_types(), None);
+    }
+
+    /// Out of the spec's range rather than silently aliased onto a real type.
+    #[test]
+    fn a_negative_token_type_matches_no_known_type() {
+        let got = GgufValue::ArrayI32(vec![-1]).as_token_types().unwrap();
+        assert_eq!(got, vec![u32::MAX]);
+    }
 }

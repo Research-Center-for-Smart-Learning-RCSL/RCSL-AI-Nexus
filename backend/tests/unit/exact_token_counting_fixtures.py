@@ -24,7 +24,7 @@ import pytest
 
 from app.adapters.tokenizer.ollama_blobs import manifest_path
 
-_STRING, _ARRAY, _UINT32 = 8, 9, 4
+_STRING, _ARRAY, _UINT32, _INT32, _FLOAT32 = 8, 9, 4, 5, 6
 
 ALPHABET = [chr(c) for c in range(33, 127)] + ["Ġ", "Ċ"]
 
@@ -65,6 +65,22 @@ def _int_array(values: Sequence[int]) -> bytes:
     )
 
 
+def _int32_array(values: Sequence[int]) -> bytes:
+    return (
+        struct.pack("<I", _INT32)
+        + _u64(len(values))
+        + b"".join(struct.pack("<i", v) for v in values)
+    )
+
+
+def _float_array(values: Sequence[float]) -> bytes:
+    return (
+        struct.pack("<I", _FLOAT32)
+        + _u64(len(values))
+        + b"".join(struct.pack("<f", v) for v in values)
+    )
+
+
 def write_gguf(
     path: Path,
     *,
@@ -76,8 +92,18 @@ def write_gguf(
     version: int = 3,
     magic: bytes = b"GGUF",
     context_length: int | None = None,
+    scores: Sequence[float] | None = None,
+    token_types_as_int32: bool = True,
 ) -> Path:
+    """A GGUF header carrying only what the counter reads.
+
+    Token types are written as INT32 by default because that is what every
+    real file on the production host carries; the UINT32 this fixture used to
+    write is what let the Rust reader drop every control token unnoticed until
+    2026-10-08 (#24). `scores` makes a `model: llama` (SentencePiece) file.
+    """
     types = [3 if t in CONTROL else 1 for t in tokens]
+    types_array = _int32_array(types) if token_types_as_int32 else _int_array(types)
     entries = [
         _entry("general.architecture", _STRING, _string("test")),
         # A key nothing wants, carrying an array large enough that keeping it
@@ -87,8 +113,10 @@ def write_gguf(
         _entry("tokenizer.ggml.pre", _STRING, _string(pre)),
         _entry("tokenizer.ggml.tokens", _ARRAY, _string_array(tokens)),
         _entry("tokenizer.ggml.merges", _ARRAY, _string_array(merges)),
-        _entry("tokenizer.ggml.token_type", _ARRAY, _int_array(types)),
+        _entry("tokenizer.ggml.token_type", _ARRAY, types_array),
     ]
+    if scores is not None:
+        entries.append(_entry("tokenizer.ggml.scores", _ARRAY, _float_array(scores)))
     if template is not None:
         entries.append(_entry("tokenizer.chat_template", _STRING, _string(template)))
     if context_length is not None:
