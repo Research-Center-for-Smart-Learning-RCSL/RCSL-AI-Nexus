@@ -36,7 +36,7 @@ from typing import Any
 import httpx
 from _common import prefix_counts_are_complete
 
-from app.adapters.tokenizer.ollama_blobs import manifest_path, weights_path
+from app.adapters.tokenizer.ollama_blobs import manifest_path, weights_in_manifest
 from tests.unit.runtime_validation_corpus import CASES, wire_payload
 
 
@@ -75,7 +75,10 @@ def main() -> int:
         for spec in args.models:
             ref, _, ctx_text = spec.partition("=")
             ctx = int(ctx_text)
-            manifest = hashlib.sha256(manifest_path(args.models_root, ref).read_bytes()).hexdigest()
+            # One read: the blob is resolved from the bytes that were verified
+            # against the server, not from a second read (review on #31).
+            raw = manifest_path(args.models_root, ref).read_bytes()
+            manifest = hashlib.sha256(raw).hexdigest()
             if served.get(ref) != manifest:
                 print(
                     f"refusing: {ref} is served as {served.get(ref)}, not {manifest}",
@@ -113,7 +116,9 @@ def main() -> int:
                     ),
                 }
                 print(f"{ref} {name} {full}", file=sys.stderr)
-            digest = weights_path(args.models_root, ref).name.removeprefix("sha256-")[:12]
+            digest = weights_in_manifest(args.models_root, ref, raw).name.removeprefix("sha256-")[
+                :12
+            ]
             recorded[digest] = {
                 "ref": ref,
                 "manifest": manifest[:12],

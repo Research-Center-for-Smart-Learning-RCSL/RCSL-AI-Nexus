@@ -479,3 +479,68 @@ async def test_a_known_capacity_is_withdrawn_when_the_new_weights_declare_none(
     write_store(tmp_path, digest="bbb222")
 
     assert await counter.native_context_length("primary:latest") is None
+
+
+def _replace_after_the_manifest_is_read(
+    counter: GgufTokenCounter, store: Path, **replacement: object
+) -> None:
+    """Repoint the tag once, between the counter's manifest read and its use.
+
+    The interleaving the review on #31 reproduced: a same-tag pull landing after
+    the identity was taken and before the weights were read."""
+    resolve = counter._resolve  # noqa: SLF001
+    fired = False
+
+    def resolve_then_pull(ref: str):  # type: ignore[no-untyped-def]
+        nonlocal fired
+        snapshot = resolve(ref)
+        if not fired:
+            fired = True
+            write_store(store, **replacement)  # type: ignore[arg-type]
+        return snapshot
+
+    counter._resolve = resolve_then_pull  # type: ignore[method-assign]  # noqa: SLF001
+
+
+def _source(vocabulary: object) -> str:
+    """The blob file a vocabulary was built from, on either backend."""
+    return Path(getattr(vocabulary, "blob", None) or vocabulary._blob_path).name  # type: ignore[attr-defined]  # noqa: SLF001
+
+
+async def test_a_pull_between_identity_and_read_cannot_mislabel_the_capacity(
+    tmp_path: Path,
+) -> None:
+    """The window is read from the blob the identified manifest names, so a pull
+    in between cannot store the new weights' window under the old identity.
+    Rolling the tag back then finds the old window, not the replacement's
+    (review on #31: 32768 was returned for a 4096-token model)."""
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, digest="aaa111", context_length=4096)
+    counter = GgufTokenCounter(tmp_path)
+    _replace_after_the_manifest_is_read(counter, tmp_path, digest="bbb222", context_length=32768)
+
+    assert await counter.native_context_length("primary:latest") == 4096, "A's own window"
+    assert await counter.native_context_length("primary:latest") == 32768, "B, once seen"
+
+    write_store(tmp_path, digest="aaa111", context_length=4096)  # rollback
+
+    assert await counter.native_context_length("primary:latest") == 4096
+
+
+async def test_a_pull_between_identity_and_build_cannot_mislabel_the_vocabulary(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, digest="aaa111")
+    counter = GgufTokenCounter(tmp_path)
+    _replace_after_the_manifest_is_read(counter, tmp_path, digest="bbb222")
+
+    first = await counter._vocabulary("primary:latest")  # noqa: SLF001
+    assert first is not None and _source(first) == "sha256-aaa111"
+    second = await counter._vocabulary("primary:latest")  # noqa: SLF001
+    assert second is not None and _source(second) == "sha256-bbb222"
+
+    write_store(tmp_path, digest="aaa111")  # rollback
+
+    third = await counter._vocabulary("primary:latest")  # noqa: SLF001
+    assert third is not None and _source(third) == "sha256-aaa111"

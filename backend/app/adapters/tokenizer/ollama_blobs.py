@@ -68,6 +68,19 @@ def weights_path(root: Path, ref: str) -> Path:
         raw = manifest.read_bytes()
     except OSError as exc:
         raise BlobNotFound(f"no manifest for {ref} under {root}: {exc}") from exc
+    return weights_in_manifest(root, ref, raw)
+
+
+def weights_in_manifest(root: Path, ref: str, raw: bytes) -> Path:
+    """The GGUF blob a manifest's bytes name, or `BlobNotFound`.
+
+    Separate from reading the manifest so that a caller which has already read
+    it resolves the blob from those same bytes. Reading the file twice, once to
+    identify it and once to resolve it, lets a same-tag pull land in between and
+    pair one manifest's identity with another's weights (review on #31). Blobs
+    are content-addressed, so the path this returns names those weights for as
+    long as it exists, whatever the tag points at afterwards.
+    """
     if len(raw) > MAX_MANIFEST_BYTES:
         raise BlobNotFound(f"manifest for {ref} is {len(raw)} bytes, which is not a manifest")
     try:

@@ -33,7 +33,7 @@ from pathlib import Path
 
 import httpx
 
-from app.adapters.tokenizer.ollama_blobs import manifest_path, weights_path
+from app.adapters.tokenizer.ollama_blobs import manifest_path, weights_in_manifest
 from tests.unit.runtime_count_corpus import CORPUS
 
 
@@ -56,9 +56,10 @@ def main() -> int:
         served = {m["name"]: m["digest"] for m in client.get("/api/tags").json()["models"]}
         for spec in args.models:
             ref, _, ctx = spec.partition("=")
-            local_manifest = hashlib.sha256(
-                manifest_path(args.models_root, ref).read_bytes()
-            ).hexdigest()
+            # One read: the blob is resolved from the bytes that were verified
+            # against the server, not from a second read (review on #31).
+            raw = manifest_path(args.models_root, ref).read_bytes()
+            local_manifest = hashlib.sha256(raw).hexdigest()
             if served.get(ref) != local_manifest:
                 print(
                     f"refusing: {ref} served as manifest {served.get(ref)} "
@@ -66,7 +67,8 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 return 1
-            digest = weights_path(args.models_root, ref).name.removeprefix("sha256-")[:12]
+            blob = weights_in_manifest(args.models_root, ref, raw)
+            digest = blob.name.removeprefix("sha256-")[:12]
             counts: dict[str, int] = {}
             for name, text in CORPUS.items():
                 response = client.post(
