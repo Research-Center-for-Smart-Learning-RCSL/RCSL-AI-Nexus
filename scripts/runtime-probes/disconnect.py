@@ -29,6 +29,7 @@ restore (largest model first), and exits non-zero.
 from __future__ import annotations
 
 import json
+import re
 import socket
 import sys
 import time
@@ -86,7 +87,10 @@ def generation(rt: Runtime, rec: Recorder, log: LogTail, args: Any) -> None:
     task = started[0].split("| task ")[1].split("|")[0].strip() if len(started) == 1 else None
     follow_up = answered(rt.chat(args.model, short, args.num_ctx))
     lines = log.lines() if task else []
-    own_cancel = [ln for ln in lines if f"cancel task, id_task = {task}" in ln]
+    # Whole task ids, compared as numbers: `id_task = 1010` is not task 101.
+    own_cancel = [
+        ln for ln in lines if (m := re.search(r"id_task = (\d+)\b", ln)) and m.group(1) == task
+    ]
     own_release = [
         ln for ln in lines if f"| task {task} | stop processing" in ln and "n_tokens =" in ln
     ]
