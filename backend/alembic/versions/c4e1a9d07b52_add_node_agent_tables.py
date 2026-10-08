@@ -166,7 +166,11 @@ def upgrade() -> None:
             ["tenant_id", "request_id"],
             ["request_bindings.tenant_id", "request_bindings.request_id"],
         ),
-        sa.UniqueConstraint("node_id", "op_id", name="uq_request_attempts_node_op"),
+        # An attempt's identity is its op id, a UUID minted by the gateway and
+        # unique platform-wide; `usage_records.attempt_id` holds that same
+        # value. Unique here so that no reconciliation keyed by it can ever
+        # reach another attempt (review on #24, revision 6).
+        sa.UniqueConstraint("op_id", name="uq_request_attempts_op_id"),
     )
 
     # Exactly-once usage per attempt, and where its figures came from
