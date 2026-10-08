@@ -25,7 +25,7 @@ from app.domain.exceptions import (
     NoAvailableModelError,
 )
 from app.domain.ports.infrastructure_ports import ConcurrencyLimiterPort
-from app.domain.ports.model_runtime_port import ModelRuntimePort
+from app.domain.ports.model_runtime_port import ModelRuntimePort, runtime_for
 from app.domain.ports.repositories import (
     ModelRepositoryPort,
     NodeRepositoryPort,
@@ -313,7 +313,8 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
             nodes = {n.id: n for n in await self._nodes.list_all()}
             target = self._routing.select(policy, models, nodes)
 
-            runtime = self._runtimes.get(target.runtime)
+            # By the selected node, not the kind alone (final spec §1 on #24).
+            runtime = runtime_for(self._runtimes, nodes.get(target.node_id), target.runtime)
             if runtime is None:
                 raise NoAvailableModelError(detail=f"no adapter for runtime={target.runtime}")
 
