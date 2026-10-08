@@ -12,12 +12,15 @@ serves the manifest the local store holds.
 
 **Completeness comes from the runtime, never from the counter under test.**
 The runtime reports only what it kept, so a truncated prompt can return a
-small, plausible count (review on #24). Each case is therefore also counted
-prefix by prefix; a case is recorded only if every longer prefix counts
-strictly more and the full payload counts more than all of them, and the full
-count is below `num_ctx - 1` (where the runtime keeps a prompt whole, E1).
-A single-message case is cut at 25/50/75% of its content instead.
-Each record keeps the payload hash, options and counting context.
+small, plausible count (review on #24). Every count is therefore requested
+with `truncate: false`: the runtime then refuses a prompt
+that does not fit (400, `exceed_context_size_error`) instead of dropping
+leading messages, so a count it returns is a count of the whole payload
+(verified on Ollama 0.33.2, 2026-10-08). A refusal is a rejected measurement.
+Strictly increasing prefix counts are kept only as a diagnostic: they cannot
+certify completeness, because the runtime drops leading messages and keeps
+the last (review on #24). Each record keeps the payload hash, options and
+counting context.
 """
 
 from __future__ import annotations
@@ -38,7 +41,11 @@ from tests.unit.runtime_validation_corpus import CASES, wire_payload
 
 
 def _count(client: httpx.Client, body: dict[str, Any]) -> int | str:
-    reply = client.post("/api/chat", json=body)
+    # `truncate: false` only. `shift: false` is a runner option: sending it
+    # reloaded the runner (num_batch changed), and on gemma4 a reload evicts
+    # its siblings (E2). It governs output overflow, which a count with
+    # num_predict 1 never reaches (observed 2026-10-08, #24).
+    reply = client.post("/api/chat", json={**body, "truncate": False})
     if reply.status_code == 400:
         return reply.text[:160]
     reply.raise_for_status()
@@ -51,6 +58,11 @@ def main() -> int:
     p.add_argument("--models-root", type=Path, required=True)
     p.add_argument("--ollama", default="http://127.0.0.1:11434")
     p.add_argument("--i-own-the-window", action="store_true")
+    p.add_argument(
+        "--prefix-diagnostic",
+        action="store_true",
+        help="also count message prefixes (diagnostic only; slow on long loops)",
+    )
     args = p.parse_args()
     if not args.i_own_the_window:
         print("refusing: this occupies the runtime; pass --i-own-the-window", file=sys.stderr)
@@ -77,49 +89,28 @@ def main() -> int:
                 body = wire_payload(ref, case, ctx)
                 full = _count(client, body)
                 if isinstance(full, str):
-                    print(f"unsupported {ref}/{name}: {full}", file=sys.stderr)
+                    kind = "overflow, rejected" if "exceed_context" in full else "unsupported"
+                    print(f"{kind} {ref}/{name}: {full}", file=sys.stderr)
                     continue
-                messages = body["messages"]
-                if len(messages) > 1:
-                    partials = [{**body, "messages": messages[:k]} for k in range(1, len(messages))]
-                else:
-                    # One message has no message prefixes, so its content is
-                    # cut instead. A runtime that halved the prompt reports no
-                    # more than the 50% cut, which fails the strict check.
-                    text = messages[0]["content"]
-                    partials = [
-                        {
-                            **body,
-                            "messages": [{**messages[0], "content": text[: len(text) * q // 4]}],
-                        }
-                        for q in (1, 2, 3)
-                    ]
                 prefixes: list[int] = []
-                for partial_body in partials:
-                    partial = _count(client, partial_body)
-                    if isinstance(partial, str):
-                        break
-                    prefixes.append(partial)
-                complete = (
-                    len(prefixes) == len(partials)
-                    and full < ctx - 1
-                    and prefix_counts_are_complete(prefixes, full)
-                )
-                if not complete:
-                    print(
-                        f"not recorded {ref}/{name}: full {full}, prefixes {prefixes[-3:]}",
-                        file=sys.stderr,
-                    )
-                    continue
+                if args.prefix_diagnostic:
+                    messages = body["messages"]
+                    for k in range(1, len(messages)):
+                        partial = _count(client, {**body, "messages": messages[:k]})
+                        if isinstance(partial, str):
+                            break
+                        prefixes.append(partial)
                 payload_hash = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
                 cases[name] = {
                     "count": full,
                     "payload_sha256": payload_hash[:16],
                     "think_on_wire": body.get("think", "omitted"),
-                    "completeness": f"{len(prefixes)} strictly increasing prefixes",
-                    "prefix_counts": prefixes
-                    if len(prefixes) <= 4
-                    else [*prefixes[:2], "...", prefixes[-1]],
+                    "completeness": "truncate:false accepted",
+                    **(
+                        {"prefix_diagnostic_monotone": prefix_counts_are_complete(prefixes, full)}
+                        if prefixes
+                        else {}
+                    ),
                 }
                 print(f"{ref} {name} {full}", file=sys.stderr)
             digest = weights_path(args.models_root, ref).name.removeprefix("sha256-")[:12]

@@ -72,3 +72,11 @@ def test_strictly_increasing_prefixes_and_a_larger_whole_are_complete() -> None:
 def test_a_flat_step_is_not_evidence() -> None:
     assert not prefix_counts_are_complete([30, 30], 60)
     assert not prefix_counts_are_complete([], 60)
+
+
+def test_rising_prefixes_are_not_a_certificate() -> None:
+    """The review's second case: a 128 context, messages of 30 and 30 tokens,
+    then a final message of 100. The runtime drops the first two and reports
+    100, and 30 < 60 < 100 still rises. So the check is a diagnostic; the
+    recorder certifies completeness by `truncate: false` instead."""
+    assert prefix_counts_are_complete([30, 60], 100)
