@@ -131,9 +131,15 @@ def write_gguf(
     return path
 
 
-def write_store(root: Path, ref: str = "primary:latest", **kwargs: object) -> Path:
-    """A model store shaped the way Ollama's is: a manifest naming a blob."""
-    blob = write_gguf(root / "blobs" / "sha256-abc123", **kwargs)  # type: ignore[arg-type]
+def write_store(
+    root: Path, ref: str = "primary:latest", digest: str = "abc123", **kwargs: object
+) -> Path:
+    """A model store shaped the way Ollama's is: a manifest naming a blob.
+
+    `digest` places the blob and names it in the manifest, so a test can
+    repoint a tag at different weights, which is what a same-tag pull does.
+    """
+    blob = write_gguf(root / "blobs" / f"sha256-{digest}", **kwargs)  # type: ignore[arg-type]
     manifest = manifest_path(root, ref)
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(
@@ -141,7 +147,10 @@ def write_store(root: Path, ref: str = "primary:latest", **kwargs: object) -> Pa
             {
                 "layers": [
                     {"mediaType": "application/vnd.ollama.image.license", "digest": "sha256:zzz"},
-                    {"mediaType": "application/vnd.ollama.image.model", "digest": "sha256:abc123"},
+                    {
+                        "mediaType": "application/vnd.ollama.image.model",
+                        "digest": f"sha256:{digest}",
+                    },
                 ]
             }
         )

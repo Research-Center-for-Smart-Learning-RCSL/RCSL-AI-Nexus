@@ -139,16 +139,21 @@ async def test_a_model_with_no_chat_template_uses_the_chatml_fallback(
     assert count is not None and count > 0
 
 
-async def test_a_failed_resolution_is_remembered_rather_than_retried(store: Path) -> None:
+async def test_a_failed_resolution_is_remembered_until_the_reference_changes(
+    store: Path,
+) -> None:
     """Retrying means reading a header of tens of megabytes on every request to
-    a model that will never have one."""
+    a model that will never have one, so a failure is remembered while the
+    reference still names the same thing. Once a manifest appears, the
+    reference names something new and is resolved again, without waiting for
+    `prepare` (review on #24: caches follow the weights, not the tag)."""
     counter = GgufTokenCounter(store)
     assert await counter.prepare("absent:latest") is False
+    assert await counter.count_prompt("absent:latest", [], []) is None, "remembered"
 
     write_store(store, "absent:latest")
 
-    assert await counter.count_prompt("absent:latest", [], []) is None, "cached, not retried"
-    assert await counter.prepare("absent:latest") is True, "prepare is what clears it"
+    assert await counter.count_prompt("absent:latest", [], []) is not None, "re-resolved"
 
 
 async def test_the_cache_holds_only_what_it_was_sized_for(tmp_path: Path) -> None:
@@ -412,3 +417,34 @@ async def test_an_unencodable_character_gives_no_count_on_the_python_backend(
     assert plain is not None
     assert odd is None
     assert parts is None
+
+
+async def test_a_same_tag_replacement_rereads_capacity_and_vocabulary(tmp_path: Path) -> None:
+    """A pull under the same tag repoints its manifest at other weights. The
+    declared context and the vocabulary are both read again for the new
+    weights, together: bounding new weights with the old ones' window is what
+    the guard would otherwise do (review on #24, reproduced there by mocking
+    the metadata reader: 32768 kept after the weights declared 4096)."""
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, digest="aaa111", context_length=32768)
+    counter = GgufTokenCounter(tmp_path)
+    assert await counter.native_context_length("primary:latest") == 32768
+    before = await counter._vocabulary("primary:latest")  # noqa: SLF001
+
+    write_store(tmp_path, digest="bbb222", context_length=4096)
+
+    assert await counter.native_context_length("primary:latest") == 4096
+    after = await counter._vocabulary("primary:latest")  # noqa: SLF001
+    assert after is not None and after is not before
+
+
+async def test_prepare_clears_the_declared_context_too(tmp_path: Path) -> None:
+    (tmp_path / "blobs").mkdir(parents=True)
+    write_store(tmp_path, context_length=32768)
+    counter = GgufTokenCounter(tmp_path)
+    assert await counter.native_context_length("primary:latest") == 32768
+
+    write_store(tmp_path, context_length=8192)  # same manifest, rewritten weights
+    await counter.prepare("primary:latest")
+
+    assert await counter.native_context_length("primary:latest") == 8192
