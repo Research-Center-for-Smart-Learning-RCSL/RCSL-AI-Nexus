@@ -280,3 +280,18 @@ def size_to_runtime_count(
             fraction = (target - lo_c) / max(hi[1] - lo_c, 1)
             n = lo_n + max(1, min(hi[0] - lo_n - 1, round(fraction * (hi[0] - lo_n))))
     return best
+
+
+def prefix_counts_are_complete(prefix_counts: Sequence[int], full_count: int) -> bool:
+    """Whether the runtime evaluated the whole payload, by its own evidence.
+
+    `prefix_counts[k]` is the runtime's count for the first `k + 1` messages
+    and `full_count` its count for all of them. The runtime reports only what
+    it kept, so its count of a truncated prompt can be smaller and still look
+    plausible. Removing leading messages or halving the prompt cannot make
+    each longer prefix count strictly more than the last *and* leave the full
+    payload counting more than every prefix, so that pattern is required.
+    The gateway's own count is never used here: it is what is under test.
+    """
+    sequence = [*prefix_counts, full_count]
+    return len(sequence) >= 2 and all(a < b for a, b in zip(sequence, sequence[1:], strict=False))

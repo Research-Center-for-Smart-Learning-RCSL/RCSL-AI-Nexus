@@ -6,31 +6,43 @@
         gemma4:31b-it-q8_0=262144 qwen2.5:7b=32768
 
 Sends each case in `tests/unit/runtime_validation_corpus.py` exactly as the
-Ollama adapter would encode it (`message_payload`, `tool_payload`, `think`)
+Ollama adapter would (`wire_payload`: its encoders and its `think` semantics)
 and prints a `RECORDED` literal. Before measuring, it checks that the server
-serves the manifest the local store holds, as `record_prompt_counts.py` does.
-A case the runtime may not have kept whole is reported and not recorded, since
-its count would validate nothing. The runtime drops leading messages silently
-once a prompt exceeds its context, which makes the count *smaller*, so a case
-the gateway itself counts at or over `num_ctx` is not recorded. Below that the
-runtime keeps the prompt whole, and whatever it counts is recorded, including
-counts above the gateway's, the deficit this corpus exists to find.
+serves the manifest the local store holds.
+
+**Completeness comes from the runtime, never from the counter under test.**
+The runtime reports only what it kept, so a truncated prompt can return a
+small, plausible count (review on #24). Each case is therefore also counted
+prefix by prefix; a case is recorded only if every longer prefix counts
+strictly more and the full payload counts more than all of them, and the full
+count is below `num_ctx - 1` (where the runtime keeps a prompt whole, E1).
+A single-message case is cut at 25/50/75% of its content instead.
+Each record keeps the payload hash, options and counting context.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import pprint
 import sys
 from pathlib import Path
+from typing import Any
 
 import httpx
+from _common import prefix_counts_are_complete
 
-from app.adapters.runtime.ollama_adapter.encoding import message_payload, tool_payload
-from app.adapters.tokenizer.gguf_token_counter.adapter import GgufTokenCounter
 from app.adapters.tokenizer.ollama_blobs import manifest_path, weights_path
-from tests.unit.runtime_validation_corpus import CASES
+from tests.unit.runtime_validation_corpus import CASES, wire_payload
+
+
+def _count(client: httpx.Client, body: dict[str, Any]) -> int | str:
+    reply = client.post("/api/chat", json=body)
+    if reply.status_code == 400:
+        return reply.text[:160]
+    reply.raise_for_status()
+    return int(reply.json()["prompt_eval_count"])
 
 
 def main() -> int:
@@ -49,58 +61,74 @@ def main() -> int:
         version = client.get("/api/version").json()["version"]
         served = {m["name"]: m["digest"] for m in client.get("/api/tags").json()["models"]}
         for spec in args.models:
-            ref, _, ctx = spec.partition("=")
+            ref, _, ctx_text = spec.partition("=")
+            ctx = int(ctx_text)
             manifest = hashlib.sha256(manifest_path(args.models_root, ref).read_bytes()).hexdigest()
             if served.get(ref) != manifest:
                 print(
-                    f"refusing: {ref} is served as {served.get(ref)}, the store holds {manifest}",
+                    f"refusing: {ref} is served as {served.get(ref)}, not {manifest}",
                     file=sys.stderr,
                 )
                 return 1
-            counts: dict[str, int] = {}
-            counter = GgufTokenCounter(args.models_root)
-            vocabulary = counter._build_python(ref, weights_path(args.models_root, ref))  # noqa: SLF001
+            cases: dict[str, dict[str, object]] = {}
             for name, case in CASES.items():
                 if case.only and ref not in case.only:
                     continue
-                body: dict[str, object] = {
-                    "model": ref,
-                    "messages": [message_payload(m) for m in case.messages],
-                    "stream": False,
-                    "think": case.think,
-                    "keep_alive": -1,
-                    "options": {"num_ctx": int(ctx), "num_predict": 1},
-                }
-                if case.tools:
-                    body["tools"] = tool_payload(case.tools)
-                reply = client.post("/api/chat", json=body)
-                if reply.status_code == 400:
-                    # A shape the model does not support (thinking on a model
-                    # without it): not a profile the gateway can route there.
-                    print(f"unsupported {ref}/{name}: {reply.text[:120]}", file=sys.stderr)
+                body = wire_payload(ref, case, ctx)
+                full = _count(client, body)
+                if isinstance(full, str):
+                    print(f"unsupported {ref}/{name}: {full}", file=sys.stderr)
                     continue
-                reply.raise_for_status()
-                count = int(reply.json()["prompt_eval_count"])
-                ours = (
-                    vocabulary.count_prompt(body["messages"], body.get("tools", []))
-                    if vocabulary
-                    else None
+                messages = body["messages"]
+                if len(messages) > 1:
+                    partials = [{**body, "messages": messages[:k]} for k in range(1, len(messages))]
+                else:
+                    # One message has no message prefixes, so its content is
+                    # cut instead. A runtime that halved the prompt reports no
+                    # more than the 50% cut, which fails the strict check.
+                    text = messages[0]["content"]
+                    partials = [
+                        {
+                            **body,
+                            "messages": [{**messages[0], "content": text[: len(text) * q // 4]}],
+                        }
+                        for q in (1, 2, 3)
+                    ]
+                prefixes: list[int] = []
+                for partial_body in partials:
+                    partial = _count(client, partial_body)
+                    if isinstance(partial, str):
+                        break
+                    prefixes.append(partial)
+                complete = (
+                    len(prefixes) == len(partials)
+                    and full < ctx - 1
+                    and prefix_counts_are_complete(prefixes, full)
                 )
-                if count >= int(ctx) - 1 or (ours is not None and ours >= int(ctx)):
+                if not complete:
                     print(
-                        f"skipping {ref}/{name}: evaluated {count}, gateway {ours}, num_ctx {ctx}",
+                        f"not recorded {ref}/{name}: full {full}, prefixes {prefixes[-3:]}",
                         file=sys.stderr,
                     )
                     continue
-                counts[name] = count
-                print(f"{ref} {name} {count}", file=sys.stderr)
+                payload_hash = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+                cases[name] = {
+                    "count": full,
+                    "payload_sha256": payload_hash[:16],
+                    "think_on_wire": body.get("think", "omitted"),
+                    "completeness": f"{len(prefixes)} strictly increasing prefixes",
+                    "prefix_counts": prefixes
+                    if len(prefixes) <= 4
+                    else [*prefixes[:2], "...", prefixes[-1]],
+                }
+                print(f"{ref} {name} {full}", file=sys.stderr)
             digest = weights_path(args.models_root, ref).name.removeprefix("sha256-")[:12]
             recorded[digest] = {
                 "ref": ref,
                 "manifest": manifest[:12],
                 "ollama": version,
-                "num_ctx": int(ctx),
-                "counts": counts,
+                "num_ctx": ctx,
+                "cases": cases,
             }
     print("RECORDED: dict[str, dict[str, object]] = " + pprint.pformat(recorded, width=96))
     return 0
