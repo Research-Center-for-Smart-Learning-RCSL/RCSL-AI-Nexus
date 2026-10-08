@@ -200,3 +200,85 @@ async def test_the_tool_share_is_never_more_than_the_whole(caplog) -> None:
     assert lines, "a payload that is almost entirely tool definitions should say so"
     share = float(lines[0].getMessage().split("about ")[1].split("%")[0])
     assert 0 < share <= 100
+
+
+async def test_the_output_this_request_may_generate_is_reserved_in_the_window() -> None:
+    """The runtime keeps a prompt whole only below the window, and output that
+    reaches it shifts the context away on qwen2.5, system prompt first
+    (E1/T1, #24). With a 6000-token output ceiling an 8192 window holds a
+    2191-token prompt, not half the window."""
+    counter = FakeCounter(total=3000)
+    use_case, _, _ = build(
+        FakeRuntime(chunks=1),
+        ceiling=6000,
+        max_context_tokens=100_000,
+        context_length=8192,
+        tokens=counter,
+    )
+
+    with pytest.raises(ContextTooLongError) as caught:
+        await _drain(use_case, [Message(role=MessageRole.USER, content="short")])
+
+    assert caught.value.limit == 8192 - 1 - 6000
+    assert "6000 output tokens" in caught.value.detail
+
+
+async def test_a_smaller_max_tokens_reserves_less() -> None:
+    """The reserve is the request's own output ceiling, the figure generation
+    sends as num_predict; here half the window is the tighter bound again."""
+    counter = FakeCounter(total=3000)
+    use_case, _, _ = build(
+        FakeRuntime(chunks=1),
+        ceiling=6000,
+        max_context_tokens=100_000,
+        context_length=8192,
+        tokens=counter,
+    )
+
+    await _drain(use_case, [Message(role=MessageRole.USER, content="short")], max_tokens=500)
+
+
+@pytest.mark.parametrize(("total", "admitted"), [(2191, True), (2192, False)])
+async def test_the_reserve_bound_is_exact(total: int, admitted: bool) -> None:
+    use_case, _, _ = build(
+        FakeRuntime(chunks=1),
+        ceiling=6000,
+        max_context_tokens=100_000,
+        context_length=8192,
+        tokens=FakeCounter(total=total),
+    )
+
+    if admitted:
+        await _drain(use_case, [Message(role=MessageRole.USER, content="short")])
+    else:
+        with pytest.raises(ContextTooLongError):
+            await _drain(use_case, [Message(role=MessageRole.USER, content="short")])
+
+
+async def test_a_registration_above_the_declared_context_is_judged_by_the_declared() -> None:
+    """The runtime clamps an over-registration to what the weights declare
+    (qwen7b at 262144 against 32768, until 2026-09-07), so that is the window."""
+    counter = FakeCounter(total=3000, declared=4096)
+    use_case, _, _ = build(
+        FakeRuntime(chunks=1), max_context_tokens=100_000, context_length=8192, tokens=counter
+    )
+
+    with pytest.raises(ContextTooLongError) as caught:
+        await _drain(use_case, [Message(role=MessageRole.USER, content="short")])
+
+    assert caught.value.limit == 4096 // 2
+
+
+async def test_an_unreadable_declared_context_leaves_the_registration_standing() -> None:
+    class Unreadable(FakeCounter):
+        async def native_context_length(self, ref: str) -> int | None:
+            raise OSError("header unreadable")
+
+    use_case, _, _ = build(
+        FakeRuntime(chunks=1),
+        max_context_tokens=100_000,
+        context_length=8192,
+        tokens=Unreadable(total=3000),
+    )
+
+    await _drain(use_case, [Message(role=MessageRole.USER, content="short")])

@@ -341,14 +341,20 @@ def _cjk(chars: int) -> str:
 class FakeCounter:
     """A counter with an opinion, and a record of whether it was consulted."""
 
-    def __init__(self, total: int | None, parts: list[int] | None = None) -> None:
+    def __init__(
+        self, total: int | None, parts: list[int] | None = None, declared: int | None = None
+    ) -> None:
         self._total = total
         self._parts = parts
+        self._declared = declared
         self.asked: list[str] = []
         self.parts_asked = 0
 
     async def prepare(self, ref: str) -> bool:
         return self._total is not None
+
+    async def native_context_length(self, ref: str) -> int | None:
+        return self._declared
 
     async def count_prompt(self, ref, messages, tools) -> int | None:
         self.asked.append(ref)

@@ -24,6 +24,7 @@ from .estimates import (
     _describe_prompt_composition,
     _estimated_prompt_tokens,
     _estimated_tokens,
+    effective_max_tokens,
 )
 
 logger = logging.getLogger("app.application.use_cases.route_chat_request")
@@ -82,6 +83,27 @@ class PromptGuardrailsMixin(RouteChatDependencies):
             counts = [_estimated_tokens(part) for part in parts]
         return _describe_prompt_composition(messages, tools, counts)
 
+    async def _effective_window(self, target: Model) -> int:
+        """The context this target can actually hold: its registration, bounded
+        by the context its weights declare.
+
+        A registration above the declared figure is clamped by the runtime
+        (the qwen7b row registered at 262144 against 32768, until 2026-09-07),
+        so judging against it would admit prompts the runtime then cuts. The
+        declared figure is read from the GGUF the counter already resolved;
+        where it is unavailable the registration stands, as before.
+        """
+        registered = target.resource_profile.context_length
+        declared = None
+        if self._tokens is not None:
+            try:
+                declared = await self._tokens.native_context_length(target.ref)
+            except Exception:  # noqa: BLE001 - an unreadable header is not a refusal
+                declared = None
+        if declared and registered > 0:
+            return min(registered, declared)
+        return registered
+
     async def _refuse_what_this_target_would_truncate(
         self,
         counted: int,
@@ -90,6 +112,7 @@ class PromptGuardrailsMixin(RouteChatDependencies):
         actor: Actor,
         messages: Sequence[Message],
         tools: Sequence[ToolDefinition],
+        max_tokens: int | None = None,
     ) -> None:
         """The input ceiling again, against the model that will actually serve it.
 
@@ -129,8 +152,20 @@ class PromptGuardrailsMixin(RouteChatDependencies):
         """
         if target.runtime is not RuntimeKind.OLLAMA:
             return
-        servable = target.resource_profile.context_length // 2
-        if servable <= 0 or counted <= servable:
+        window = await self._effective_window(target)
+        if window <= 0:
+            return
+        output = effective_max_tokens(max_tokens, self._max_tokens_ceiling)
+        # Two bounds, and the tighter one decides (#24 final spec §6, PR2a).
+        # Half the window is the legacy rule, kept until a profile is shown to
+        # be counted exactly enough to drop it (PR2b). The second is new and is
+        # what the runtime actually does (E1/T1, 2026-10-07): a prompt is kept
+        # whole only below the window, and output that reaches the window
+        # shifts the context on qwen2.5, discarding the system prompt. So the
+        # prompt and the output this request may generate must both fit, one
+        # token short of the window.
+        servable = min(window // 2, window - 1 - output)
+        if counted <= servable:
             return
         # The alias is named to the operator and not to the caller. A refusal
         # that named it would disclose the model inventory to anyone who could
@@ -154,7 +189,8 @@ class PromptGuardrailsMixin(RouteChatDependencies):
         raise ContextTooLongError(
             detail=(
                 f"{_counted_phrase(basis, counted)} exceeds the {servable} the model "
-                f"serving this capability can read: {composition}"
+                f"serving this capability can read while leaving room for {output} "
+                f"output tokens: {composition}"
             ),
             estimated=counted,
             limit=servable,

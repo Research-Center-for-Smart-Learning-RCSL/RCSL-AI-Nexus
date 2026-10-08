@@ -275,8 +275,19 @@ def build_summarise_fn(
         ]
         if counter is not None and context_length:
             counted = await counter.count_prompt(ref, prompt, [])
-            budget = context_length - SUMMARY_OUTPUT_TOKENS
-            if counted is not None and counted > budget:
+            # The same boundary the request guard uses (#24 §6): prompt and
+            # output both fit, one token short of the window, because the
+            # runtime keeps a prompt whole only below it and shifts the context
+            # when output reaches it. A prefix this counter cannot count is
+            # refused rather than sent unchecked, since Tier 2's input is large
+            # by construction.
+            budget = context_length - 1 - SUMMARY_OUTPUT_TOKENS
+            if counted is None:
+                raise SummaryTooLongError(
+                    f"could not count the prefix to summarise for {ref}; refusing "
+                    "rather than sending a prompt of unknown size"
+                )
+            if counted > budget:
                 raise SummaryTooLongError(
                     f"the {counted} tokens to summarise exceed the {budget} "
                     f"{ref} can read; refusing rather than summarising a prompt "
