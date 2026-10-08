@@ -36,6 +36,9 @@ separately at the end, marked as superseded.
 
 ### October 2026
 
+**[2026-10-09](./progress/2026-10-09.md)**
+- Node agent（PR4a-1）落地但未接上：主機鎖、選舉與 fencing、send barrier、只認 runtime 終態證據、有序重設證據才能解除封鎖
+
 **[2026-10-08](./progress/2026-10-08.md)**
 - 精確計數與 runtime 對齊：Unigram 不再逐空白切分，Rust 讀得到 INT32 的 control token
 

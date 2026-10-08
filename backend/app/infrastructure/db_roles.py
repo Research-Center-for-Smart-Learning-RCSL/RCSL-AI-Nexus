@@ -84,13 +84,31 @@ GATEWAY_WRITABLE_TABLES: tuple[str, ...] = ("usage_records", "prompt_logs", "ref
 # exposed to the internet, which is a map of who is doing what and where their
 # clients break. The gateway writes a row and has no use for any row: the read
 # path is on the admin entrances, so revoking this removes nothing it does.
-GATEWAY_DENIED_READ_TABLES: tuple[str, ...] = ("prompt_logs", "refusals")
+#
+# `attempt_results` joined with the node agent (PR4a on #24): it stores model
+# output for requests that carried an idempotency key, which is the same kind
+# of content as `prompt_logs`. The gateway receives results from the agent over
+# its API and never reads them here.
+GATEWAY_DENIED_READ_TABLES: tuple[str, ...] = ("prompt_logs", "refusals", "attempt_results")
+
+# The node agent's account (PR4a on #24): the tables it owns, read access to
+# the registry it checks requests against, and one column of `nodes`, the lock
+# domain it binds on first claim. No DELETE anywhere: an operation, a stored
+# result or an audit row is evidence, and nothing the agent does removes one.
+AGENT_READ_TABLES: tuple[str, ...] = ("nodes", "models")
+AGENT_WRITABLE_TABLES: tuple[str, ...] = (
+    "node_agents",
+    "node_operations",
+    "attempt_results",
+    "node_operation_audit",
+)
 
 # Where the migrate service sees the other services' connection URLs. Each holds
 # the same content that service reads as `/run/secrets/database_url`; mounted
 # here under a distinct name so this job can learn their account names.
 GATEWAY_URL_FILE = Path("/run/secrets/gateway_database_url")
 ADMIN_URL_FILE = Path("/run/secrets/admin_database_url")
+AGENT_URL_FILE = Path("/run/secrets/agent_database_url")
 
 _IDENT = re.compile(r"^[a-z_][a-z0-9_]*$")
 
@@ -111,7 +129,7 @@ def _quote_literal(value: str) -> str:
 class RoleSpec:
     name: str
     password: str
-    profile: str  # "gateway" | "admin"
+    profile: str  # "gateway" | "admin" | "agent"
 
 
 def _spec_from_url(url: str, profile: str) -> RoleSpec:
@@ -171,6 +189,16 @@ $do$;""",
         # point of this file.
         for table in GATEWAY_DENIED_READ_TABLES:
             statements.append(f"REVOKE SELECT ON {_quote_ident(table)} FROM {ident};")
+    elif spec.profile == "agent":
+        statements.append(f"REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {ident};")
+        for table in AGENT_READ_TABLES:
+            statements.append(f"GRANT SELECT ON {_quote_ident(table)} TO {ident};")
+        for table in AGENT_WRITABLE_TABLES:
+            statements.append(f"GRANT SELECT, INSERT, UPDATE ON {_quote_ident(table)} TO {ident};")
+        statements += [
+            f"GRANT UPDATE (lock_domain_id) ON {_quote_ident('nodes')} TO {ident};",
+            f"GRANT USAGE, SELECT ON SEQUENCE node_operation_audit_id_seq TO {ident};",
+        ]
     elif spec.profile == "admin":
         statements += [
             f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {ident};",
@@ -227,6 +255,12 @@ async def provision_roles() -> None:
         _spec_from_url(_read_url_file(GATEWAY_URL_FILE, "gateway"), "gateway"),
         _spec_from_url(_read_url_file(ADMIN_URL_FILE, "admin"), "admin"),
     ]
+    # Optional until the node agent is deployed: its secret exists only on a
+    # host that runs one, and every other deployment provisions as before.
+    if AGENT_URL_FILE.is_file():
+        specs.append(_spec_from_url(_read_url_file(AGENT_URL_FILE, "agent"), "agent"))
+    else:
+        logger.info("no agent database URL mounted; the node agent role is not provisioned")
     database = make_url(settings.database_url).database
     if not database:
         raise ValueError("owner DATABASE_URL has no database name")

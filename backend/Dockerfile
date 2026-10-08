@@ -62,8 +62,12 @@ ENV PATH="/app/.venv/bin:$PATH"
 # volume initialization copies that ownership onto the fresh `documents`
 # volume. Without this the volume comes up root-owned and every upload dies
 # with EACCES, because nothing else in a rootless service can chown it.
+# /var/lib/node-agent/lock is the node agent's host-lock volume (PR4a on
+# #24), seeded the same way: a named volume first mounted here takes this
+# directory's owner, so the agent can create its lock file without root.
 RUN useradd --create-home --uid 10001 nexus && chown -R nexus:nexus /app \
-    && mkdir -p /var/lib/nexus/documents && chown -R nexus:nexus /var/lib/nexus
+    && mkdir -p /var/lib/nexus/documents && chown -R nexus:nexus /var/lib/nexus \
+    && mkdir -p /var/lib/node-agent/lock && chown -R nexus:nexus /var/lib/node-agent
 USER nexus
 
 EXPOSE 8000
