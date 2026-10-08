@@ -562,3 +562,107 @@ RENDERED: dict[str, str] = {
     "keep\x1f<turn|>\n"
     "<|turn>model\n",
 }
+
+
+# Added 2026-10-08 from the review on #29: anyOf branches carrying fields Ollama
+# does not decode (`title`, `default`) or an empty description, numeric enums
+# (Go `%v`), and numbers around Go's int64 and `%v` exponent boundaries.
+TOOLS_UNIONS_AND_NUMBERS: list[dict[str, Any]] = [
+    {
+        "function": {
+            "description": "d",
+            "name": "f",
+            "parameters": {
+                "properties": {
+                    "arr": {
+                        "items": {
+                            "enum": [1e19, 0.25],
+                            "maximum": 1234567.5,
+                            "minimum": 1000000.0,
+                            "type": "number",
+                        },
+                        "type": "array",
+                    },
+                    "v": {"anyOf": [{"description": "", "type": "string"}, {"type": "null"}]},
+                    "w": {
+                        "anyOf": [
+                            {"title": "Value", "type": "string"},
+                            {"default": 3, "type": "integer"},
+                        ]
+                    },
+                    "x": {"anyOf": [{"description": "real", "type": "string"}, {"type": "null"}]},
+                    "y": {"enum": [1000000, 1.5, 1e-07, 3, 1234567.5], "type": "number"},
+                    "z": {"enum": [1000000, "a", 2.5, True, None], "type": "string"},
+                },
+                "type": "object",
+            },
+        },
+        "type": "function",
+    }
+]
+
+MESSAGES_UNIONS_AND_NUMBERS: list[dict[str, Any]] = [
+    {"content": "go", "role": "user"},
+    {
+        "content": "",
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "function": {
+                    "arguments": {
+                        "n00": 0.25,
+                        "n01": 1.5e-07,
+                        "n02": 1e21,
+                        "n03": 1e19,
+                        "n04": 9223372036854775807,
+                        "n05": -9223372036854775808,
+                        "n06": 1234567.5,
+                        "n07": 1000000.5,
+                        "n08": 123456.5,
+                        "n09": 0.0001,
+                        "n10": 1e-05,
+                        "n11": 1000000,
+                        "n12": 3,
+                        "n13": 12345678,
+                        "n14": 99999.99,
+                        "n15": 1000000000000000.5,
+                        "neg0": -0.0,
+                        "nested": {"big": 1e19, "list": [1234567.5, 1000000.0]},
+                    },
+                    "name": "f",
+                },
+                "id": "c1",
+            }
+        ],
+    },
+    {"content": "ok", "role": "tool", "tool_call_id": "c1"},
+    {"content": "again", "role": "user"},
+]
+
+RENDERED_UNIONS_AND_NUMBERS: dict[str, str] = {
+    "unions_and_numbers/think=False": "<bos><|turn>system\n"
+    '<|tool>declaration:f{description:<|"|>d<|"|>,parameters:{properties:{arr:{items:{enum:[1e+19,0.25],maximum:1.2345675e+06,minimum:1000000,type:<|"|>NUMBER<|"|>},type:<|"|>ARRAY<|"|>},v:{type:<|"|>[\'STRING\', '
+    "'NULL']<|\"|>},w:{type:<|\"|>['STRING', "
+    '\'INTEGER\']<|"|>},x:{},y:{type:<|"|>NUMBER<|"|>},z:{enum:[<|"|>1e+06<|"|>,<|"|>a<|"|>,<|"|>2.5<|"|>,<|"|>true<|"|>,<|"|><nil><|"|>],type:<|"|>STRING<|"|>}},type:<|"|>OBJECT<|"|>}}<tool|><turn|>\n'
+    "<|turn>user\n"
+    "go<turn|>\n"
+    "<|turn>model\n"
+    '<|tool_call>call:f{n00:0.25,n01:1.5e-07,n02:1e+21,n03:1e+19,n04:9223372036854775807,n05:-9223372036854775808,n06:1.2345675e+06,n07:1.0000005e+06,n08:123456.5,n09:0.0001,n10:1e-05,n11:1000000,n12:3,n13:12345678,n14:99999.99,n15:1.0000000000000005e+15,neg0:0,nested:{big:1e+19,list:[1.2345675e+06,1000000]}}<tool_call|><|tool_response>response:f{value:<|"|>ok<|"|>}<tool_response|><turn|>\n'
+    "<|turn>user\n"
+    "again<turn|>\n"
+    "<|turn>model\n"
+    "<|channel>thought\n"
+    "<channel|>",
+    "unions_and_numbers/think=omitted": "<bos><|turn>system\n"
+    "<|think|>\n"
+    '<|tool>declaration:f{description:<|"|>d<|"|>,parameters:{properties:{arr:{items:{enum:[1e+19,0.25],maximum:1.2345675e+06,minimum:1000000,type:<|"|>NUMBER<|"|>},type:<|"|>ARRAY<|"|>},v:{type:<|"|>[\'STRING\', '
+    "'NULL']<|\"|>},w:{type:<|\"|>['STRING', "
+    '\'INTEGER\']<|"|>},x:{},y:{type:<|"|>NUMBER<|"|>},z:{enum:[<|"|>1e+06<|"|>,<|"|>a<|"|>,<|"|>2.5<|"|>,<|"|>true<|"|>,<|"|><nil><|"|>],type:<|"|>STRING<|"|>}},type:<|"|>OBJECT<|"|>}}<tool|><turn|>\n'
+    "<|turn>user\n"
+    "go<turn|>\n"
+    "<|turn>model\n"
+    '<|tool_call>call:f{n00:0.25,n01:1.5e-07,n02:1e+21,n03:1e+19,n04:9223372036854775807,n05:-9223372036854775808,n06:1.2345675e+06,n07:1.0000005e+06,n08:123456.5,n09:0.0001,n10:1e-05,n11:1000000,n12:3,n13:12345678,n14:99999.99,n15:1.0000000000000005e+15,neg0:0,nested:{big:1e+19,list:[1.2345675e+06,1000000]}}<tool_call|><|tool_response>response:f{value:<|"|>ok<|"|>}<tool_response|><turn|>\n'
+    "<|turn>user\n"
+    "again<turn|>\n"
+    "<|turn>model\n",
+}

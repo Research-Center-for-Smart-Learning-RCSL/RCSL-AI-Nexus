@@ -187,26 +187,66 @@ def _tool_response_name(message: Mapping[str, Any], calls: Sequence[Mapping[str,
     return str(name)
 
 
+def _go_g(value: float) -> str:
+    """Go's `%v` for a float64: `strconv.FormatFloat(v, 'g', -1, 64)`.
+
+    The shortest round-tripping digits (Python's `repr` finds the same ones),
+    in exponent form when the exponent is below -4 or at least 6, which is
+    where Go switches and Python does not: `1234567.5` is `1.2345675e+06` in
+    Go and `1234567.5` in Python (review on #29).
+    """
+    if value == 0:
+        return "-0" if math.copysign(1.0, value) < 0 else "0"
+    sign = "-" if value < 0 else ""
+    digits_text, _, exp_text = repr(abs(value)).partition("e")
+    whole, _, frac = digits_text.partition(".")
+    digits = (whole + frac).lstrip("0")
+    point = len(whole) + (int(exp_text) if exp_text else 0)  # digits before the point
+    leading_zeros = len(whole + frac) - len((whole + frac).lstrip("0"))
+    point -= leading_zeros
+    digits = digits.rstrip("0") or "0"
+    exponent = point - 1
+    if exponent < -4 or exponent >= 6:
+        mantissa = digits[0] + ("." + digits[1:] if len(digits) > 1 else "")
+        return f"{sign}{mantissa}e{'-' if exponent < 0 else '+'}{abs(exponent):02d}"
+    if point <= 0:
+        return f"{sign}0.{'0' * -point}{digits}"
+    if point >= len(digits):
+        return f"{sign}{digits}{'0' * (point - len(digits))}"
+    return f"{sign}{digits[:point]}.{digits[point:]}"
+
+
+_INT64_MAX = 2**63 - 1
+_INT64_MIN = -(2**63)
+
+
+def _go_float(value: float) -> str:
+    """`if v == float64(int64(v)) { %d } else { %v }`, as `formatArgValue` does.
+
+    The conversion is Go on arm64 (this host): out-of-range values saturate to
+    the int64 limits, so only exactly +/-2**63 round-trip, and everything else
+    beyond int64 falls through to `%v`: `1e19` is `1e+19` (review on #29).
+    """
+    if not math.isfinite(value):
+        return _go_g(value)
+    if -(2.0**63) <= value < 2.0**63:
+        as_int = int(value)
+    else:
+        as_int = _INT64_MAX if value > 0 else _INT64_MIN
+    if float(as_int) == value:
+        return str(as_int)
+    return _go_g(value)
+
+
 def _go_v(value: Any) -> str:
-    """Go's `%v` for a JSON-decoded value (numbers decode as float64)."""
+    """Go's `%v` for a JSON-decoded value; numbers decode as float64."""
     if isinstance(value, bool):
         return "true" if value else "false"
     if value is None:
         return "<nil>"
     if isinstance(value, int | float):
-        return _go_float(float(value))
+        return _go_g(float(value))
     return str(value)
-
-
-def _go_float(value: float) -> str:
-    if math.isfinite(value) and value == int(value) and abs(value) < 1e21:
-        return str(int(value))
-    text = repr(value)
-    if "e" in text:
-        mantissa, exponent = text.split("e")
-        sign = "-" if exponent.startswith("-") else "+"
-        return f"{mantissa}e{sign}{abs(int(exponent)):02d}"
-    return text
 
 
 def _arg_value(value: Any) -> str:
@@ -264,13 +304,34 @@ def _upstream_type(types: Sequence[str]) -> str:
     return "[" + ", ".join(f"'{t.upper()}'" for t in types) + "]"
 
 
+def _is_bare_type(branch: Any) -> bool:
+    """`isBareTypeOnlyToolProperty`, on the fields Ollama decodes.
+
+    Ollama decodes a branch into `api.ToolProperty` first, which drops fields
+    it does not model (`title`, `default`, ...) and reads an absent and an
+    empty description alike, so `{"type": "string", "description": "",
+    "title": "x"}` is still a bare type branch upstream (review on #29).
+    """
+    if not isinstance(branch, Mapping):
+        return False
+    return bool(
+        branch.get("type")
+        and not branch.get("anyOf")
+        and branch.get("items") is None
+        and not branch.get("description")
+        and not branch.get("enum")
+        and branch.get("properties") is None
+        and not branch.get("required")
+    )
+
+
 def _simple_any_of(prop: Mapping[str, Any]) -> list[str] | None:
     branches = prop.get("anyOf")
     if not isinstance(branches, list) or not branches:
         return None
     out: list[str] = []
     for branch in branches:
-        if not isinstance(branch, Mapping) or set(branch) - {"type"} or not branch.get("type"):
+        if not _is_bare_type(branch):
             return None
         for t in [branch["type"]] if isinstance(branch["type"], str) else list(branch["type"]):
             if t not in out:
