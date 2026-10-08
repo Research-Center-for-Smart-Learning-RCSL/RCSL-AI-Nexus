@@ -27,11 +27,13 @@ _ROOT = os.environ.get("OLLAMA_MODELS_PATH")
 
 # Measured 2026-10-08 with identical content per round: on gemma4 the gateway's
 # count minus the runtime's is 35 - 4 * rounds (3: +16, 12: -13, 50: -165,
-# 100: -365), and at 12 rounds it is -13 whatever the tool-result length (x1,
-# x3, x9). So each tool round renders 4 tokens longer at the runtime than
-# through the GGUF template: the renderer, not the tokenizer. Until the counter
-# renders tool turns as the runtime does (C6c), gemma4's tool profile is not
-# valid. qwen2.5 errs the other way (about +6 per round), which is safe.
+# 100: -365), independent of tool-result length. The cause is the renderer:
+# gemma4 ships no chat template in its GGUF, so the counter falls back to
+# ChatML, while the runtime renders gemma4's own format with a built-in
+# renderer (`render_diff.py` shows the bytes). ChatML renders an assistant tool
+# call as an empty turn, so every round loses its call. Until the counter
+# renders gemma4 as the runtime does (C6c), its tool profile is not valid.
+# qwen2.5 errs the other way (about +6 per round), which is safe.
 KNOWN_DEFICITS = {
     ("gemma4:31b-it-q8_0", name)
     for name in (
