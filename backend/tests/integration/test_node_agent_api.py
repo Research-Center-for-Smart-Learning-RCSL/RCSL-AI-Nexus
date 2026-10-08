@@ -269,3 +269,54 @@ async def test_a_lost_election_session_closes_the_gate_and_ends_the_process(
     assert agent.dispatcher.state is GateState.LOST
     refused = await client["http"].post("/v1/inference", json=_generation("op-9"), headers=AUTH)
     assert refused.status_code == 503 and refused.json()["refused"] == "node_lost"
+
+
+async def test_the_terminal_event_says_whether_delivery_was_complete(
+    client: dict[str, Any],
+) -> None:
+    async with client["http"].stream(
+        "POST", "/v1/inference", json=_generation("op-d"), headers=AUTH
+    ) as response:
+        events = await _events(response)
+
+    assert events[-1]["delivery_complete"] is True
+
+
+async def test_malformed_lengths_are_refused_before_any_work(client: dict[str, Any]) -> None:
+    """Review of #33, finding 11: these were 500s."""
+    bad_length = await client["http"].post(
+        "/v1/inference",
+        content=b"{}",
+        headers={**AUTH, "content-length": "abc", "content-type": "application/json"},
+    )
+    long_op = await client["http"].post("/v1/inference", json=_generation("x" * 37), headers=AUTH)
+
+    assert bad_length.status_code == 400
+    assert long_op.status_code == 400
+    assert client["ollama"].chats == 0
+
+
+async def test_a_lost_role_ends_the_process_even_when_its_audit_fails(
+    client: dict[str, Any],
+) -> None:
+    """Review of #33, finding 5: the role is usually lost because the database
+    went away, which is when the audit write fails; the exit must not depend
+    on it."""
+    agent = client["agent"]
+
+    async def failing_audit(*args: Any, **kwargs: Any) -> None:
+        raise OSError("database unreachable")
+
+    agent.store.audit = failing_audit
+    killer = await asyncpg.connect(client["dsn"])
+    try:
+        await killer.execute("SELECT pg_terminate_backend($1)", agent.elected.backend_pid)
+    finally:
+        await killer.close()
+    for _ in range(100):
+        if client["terminated"]:
+            break
+        await asyncio.sleep(0.02)
+
+    assert client["terminated"] == [True]
+    assert agent.dispatcher.state is GateState.LOST

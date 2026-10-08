@@ -159,13 +159,23 @@ def decode_embedding(body: Any) -> tuple[EmbeddingRequest, Envelope]:
     return EmbeddingRequest(ref=_str(data, "ref"), texts=tuple(texts)), _decode_envelope(data)
 
 
+# The column widths these land in (`node_operations`); longer is a 400 here,
+# not a database error later (review on #33).
+_MAX_LENGTHS = {"op_id": 36, "request_id": 128, "payload_hash": 80}
+
+
 def _decode_envelope(data: dict[str, Any]) -> Envelope:
-    return Envelope(
+    envelope = Envelope(
         op_id=_str(data, "op_id"),
         request_id=_optional_str(data, "request_id"),
         payload_hash=_optional_str(data, "payload_hash"),
         store_output=_bool(data, "store_output"),
     )
+    for key, limit in _MAX_LENGTHS.items():
+        value = getattr(envelope, key)
+        if value is not None and len(value) > limit:
+            raise WireError(f"{key} is longer than {limit} characters")
+    return envelope
 
 
 def _decode_message(raw: Any) -> Message:

@@ -96,12 +96,10 @@ GATEWAY_DENIED_READ_TABLES: tuple[str, ...] = ("prompt_logs", "refusals", "attem
 # domain it binds on first claim. No DELETE anywhere: an operation, a stored
 # result or an audit row is evidence, and nothing the agent does removes one.
 AGENT_READ_TABLES: tuple[str, ...] = ("nodes", "models")
-AGENT_WRITABLE_TABLES: tuple[str, ...] = (
-    "node_agents",
-    "node_operations",
-    "attempt_results",
-    "node_operation_audit",
-)
+AGENT_WRITABLE_TABLES: tuple[str, ...] = ("node_agents", "node_operations")
+# Append-only: a stored result and an audit row are written once and never
+# changed by the account whose conduct they record (review on #33).
+AGENT_APPEND_ONLY_TABLES: tuple[str, ...] = ("attempt_results", "node_operation_audit")
 
 # Where the migrate service sees the other services' connection URLs. Each holds
 # the same content that service reads as `/run/secrets/database_url`; mounted
@@ -195,6 +193,8 @@ $do$;""",
             statements.append(f"GRANT SELECT ON {_quote_ident(table)} TO {ident};")
         for table in AGENT_WRITABLE_TABLES:
             statements.append(f"GRANT SELECT, INSERT, UPDATE ON {_quote_ident(table)} TO {ident};")
+        for table in AGENT_APPEND_ONLY_TABLES:
+            statements.append(f"GRANT SELECT, INSERT ON {_quote_ident(table)} TO {ident};")
         statements += [
             f"GRANT UPDATE (lock_domain_id) ON {_quote_ident('nodes')} TO {ident};",
             f"GRANT USAGE, SELECT ON SEQUENCE node_operation_audit_id_seq TO {ident};",

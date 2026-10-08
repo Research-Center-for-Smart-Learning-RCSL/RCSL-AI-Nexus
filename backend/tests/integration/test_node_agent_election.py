@@ -156,7 +156,8 @@ async def test_a_superseded_owner_cannot_write_anything(
     await _die(lock, conn)
     lock_b, conn_b, b = await _elect(dsn, directory)
 
-    assert not await store_a.finish("op", "completed", {"eval_count": 3}, result={"content": "x"})
+    with pytest.raises(NotOwner):
+        await store_a.finish("op", "completed", {"eval_count": 3}, result={"content": "x"})
 
     store_b = OperationStore(pool, b.ownership)
     op = await store_b.observe("op")
@@ -171,6 +172,10 @@ async def test_a_superseded_owner_cannot_write_anything(
         await store_a.insert_accepted(
             "new", "inference", request_id=None, payload_hash=None, store_output=False
         )
+    stale = await pool.fetch(
+        "SELECT event FROM node_operation_audit WHERE op_id = 'new' ORDER BY id"
+    )
+    assert [e["event"] for e in stale] == ["stale_insert"], "every refused write is audited"
     await _die(lock_b, conn_b)
 
 
