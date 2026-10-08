@@ -39,6 +39,7 @@ def node_to_domain(row: NodeRow) -> Node:
         status=NodeStatus(row.status),
         total_memory_gb=row.total_memory_gb,
         runtimes=frozenset(RuntimeKind(r) for r in row.runtimes or []),
+        agent_url=row.agent_url,
     )
 
 
@@ -50,6 +51,7 @@ def node_to_row(node: Node) -> NodeRow:
         status=node.status.value,
         total_memory_gb=node.total_memory_gb,
         runtimes=sorted(r.value for r in node.runtimes),
+        agent_url=node.agent_url,
     )
 
 

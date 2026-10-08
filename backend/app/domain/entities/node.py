@@ -30,3 +30,6 @@ class Node:
     status: NodeStatus
     total_memory_gb: float
     runtimes: frozenset[RuntimeKind] = field(default_factory=frozenset)
+    agent_url: str | None = None
+    """Where this node's agent is reached (PR4a on #24). None for a node with
+    no agent, which the agent path refuses rather than reaching around."""

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from typing import Protocol
 
 from app.domain.entities.chat import (
@@ -10,7 +10,8 @@ from app.domain.entities.chat import (
     ToolChoice,
     ToolDefinition,
 )
-from app.domain.entities.model import PullProgress, RuntimeResidency
+from app.domain.entities.model import PullProgress, RuntimeKind, RuntimeResidency
+from app.domain.entities.node import Node
 
 
 class ModelRuntimePort(Protocol):
@@ -151,3 +152,22 @@ class ModelRuntimePort(Protocol):
         is a positive claim that nothing is loaded.
         """
         ...
+
+
+def runtime_for(
+    runtimes: Mapping[RuntimeKind, ModelRuntimePort], node: Node | None, kind: RuntimeKind
+) -> ModelRuntimePort | None:
+    """The runtime that serves `kind` **on `node`**, the node routing selected.
+
+    Final spec §1 on #24: selecting a node and then looking the adapter up by
+    kind alone sends to whichever host the kind's one adapter points at, which
+    with two nodes is the wrong one half the time. A mapping that can resolve
+    per node (`RuntimeDirectory`) is asked by node; a plain mapping, which is
+    what every single-node composition and test passes, answers by kind as
+    before.
+    """
+    resolve = getattr(runtimes, "for_node", None)
+    if callable(resolve):
+        resolved: ModelRuntimePort | None = resolve(node, kind)
+        return resolved
+    return runtimes.get(kind)

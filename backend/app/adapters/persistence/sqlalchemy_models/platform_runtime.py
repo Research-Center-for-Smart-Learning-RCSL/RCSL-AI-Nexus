@@ -40,6 +40,9 @@ class NodeRow(Base):
     status: Mapped[str] = mapped_column(String(16))
     total_memory_gb: Mapped[float] = mapped_column(Float)
     runtimes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # Mapped both ways so a read-then-save keeps it. `lock_domain_id` is left
+    # unmapped on purpose: only the node agent writes it, once.
+    agent_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class ModelRow(Base):
