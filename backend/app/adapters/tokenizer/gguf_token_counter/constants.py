@@ -37,3 +37,6 @@ PRE_TOKENIZER_PATTERN = (
 
 
 KNOWN_PRE_TOKENIZERS = frozenset({"qwen2", "qwen35", "gemma4"})
+
+
+ARCHITECTURE_KEY = "general.architecture"
