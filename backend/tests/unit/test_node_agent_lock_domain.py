@@ -6,6 +6,7 @@ import ast
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -105,9 +106,23 @@ def test_half_a_domain_is_refused_rather_than_repaired(tmp_path: Path, keep: str
             os.unlink(tmp_path / name)
 
     with pytest.raises(LockDomainError):
-        initialise(tmp_path)
+        initialise(tmp_path, settle_s=0.1)
     with pytest.raises(LockDomainError):
         read_domain(tmp_path)
+
+
+def test_the_loser_of_a_first_start_reads_the_winners_domain(tmp_path: Path) -> None:
+    """Review of #33's branch: a start that found the winner's lock file before
+    its domain file was refused instead of reading it."""
+    winner = initialise(tmp_path)
+    domain = (tmp_path / DOMAIN_NAME).read_text()
+    os.unlink(tmp_path / DOMAIN_NAME)
+    writer = threading.Timer(0.2, (tmp_path / DOMAIN_NAME).write_text, args=(domain,))
+    writer.start()
+    try:
+        assert initialise(tmp_path, settle_s=5) == winner
+    finally:
+        writer.join()
 
 
 def test_a_separate_domain_is_a_different_identity(tmp_path: Path) -> None:

@@ -62,7 +62,7 @@ class Store(Protocol):
         store_output: bool,
     ) -> Operation | None: ...
     async def promote(self, op_id: str, provenance: dict[str, Any]) -> bool: ...
-    async def cancel_accepted(self, op_id: str, reason: str) -> Operation | None: ...
+    async def cancel_accepted(self, op_id: str, reason: str, *, kind: str) -> Operation | None: ...
     async def unsent_after_promotion(self, op_id: str, reason: str) -> bool: ...
     async def mark_unknown(self, op_id: str, reason: str, observed: dict[str, Any]) -> bool: ...
     async def checkpoint(self, op_id: str, observed: dict[str, Any]) -> None: ...
@@ -344,12 +344,12 @@ class Dispatcher:
                 # The insert may or may not have committed. A tombstone or a
                 # cancellation of the accepted row covers both, and a late
                 # duplicate then only observes it.
-                await _shielded(self._unsent(op_id, "cancelled_before_send"))
+                await _shielded(self._unsent(op_id, kind, "cancelled_before_send"))
                 raise
             if inserted is None:
                 found = await self._store.observe(op_id)
                 return Existing(found) if found else Refused("conflict", retry_after=1)
-            return await self._promote(op_id, relay, provenance or {}, deadline_s)
+            return await self._promote(op_id, kind, relay, provenance or {}, deadline_s)
         finally:
             self._queued -= 1
 
@@ -387,15 +387,20 @@ class Dispatcher:
                 return None
 
     async def _promote(
-        self, op_id: str, relay: Relay, provenance: dict[str, Any], deadline_s: float
+        self,
+        op_id: str,
+        kind: str,
+        relay: Relay,
+        provenance: dict[str, Any],
+        deadline_s: float,
     ) -> Attempt | Refused:
         try:
             waited = await self._wait_for_slot(op_id, deadline_s)
         except asyncio.CancelledError:
-            await _shielded(self._unsent(op_id, "cancelled_before_send"))
+            await _shielded(self._unsent(op_id, kind, "cancelled_before_send"))
             raise
         if waited is not None:
-            return await self._unsent(op_id, waited)
+            return await self._unsent(op_id, kind, waited)
 
         attempt = Attempt(op_id)
         created = False
@@ -427,7 +432,7 @@ class Dispatcher:
             # sent. Settle the row as unsent whichever state it reached.
             if not created:
                 self._slots.release()
-                await _shielded(self._unsent_after_failed_promotion(op_id))
+                await _shielded(self._unsent_after_failed_promotion(op_id, kind))
             raise
         if created:
             return attempt
@@ -438,13 +443,13 @@ class Dispatcher:
             if current is not None and current.state == "cancelled_unsent":
                 return Refused("cancelled", retry_after=None, operation=current)
             refusal = "node_blocked"
-        return await self._unsent(op_id, refusal or "not_promoted")
+        return await self._unsent(op_id, kind, refusal or "not_promoted")
 
-    async def _unsent_after_failed_promotion(self, op_id: str) -> None:
+    async def _unsent_after_failed_promotion(self, op_id: str, kind: str) -> None:
         try:
             current = await self._store.observe(op_id)
             if current is None or current.state == "accepted":
-                await self._store.cancel_accepted(op_id, "promotion_failed")
+                await self._store.cancel_accepted(op_id, "promotion_failed", kind=kind)
             elif current.state == "running":
                 await self._store.unsent_after_promotion(op_id, "promotion_failed")
         except Exception:  # noqa: BLE001 - the row's state is now unknown to us
@@ -453,9 +458,9 @@ class Dispatcher:
                 self._uncommitted_unknown.add(op_id)
                 self._close_locked(GateState.BLOCKED)
 
-    async def _unsent(self, op_id: str, reason: str) -> Refused:
+    async def _unsent(self, op_id: str, kind: str, reason: str) -> Refused:
         try:
-            operation = await self._store.cancel_accepted(op_id, reason)
+            operation = await self._store.cancel_accepted(op_id, reason, kind=kind)
         except NotOwner:
             await self.lose_role("not_owner_at_cancel")
             operation = None
@@ -464,8 +469,16 @@ class Dispatcher:
     async def _run(self, attempt: Attempt, relay: Relay) -> None:
         op_id = attempt.op_id
         outcome: Outcome
+        cancelled: asyncio.CancelledError | None = None
         try:
             outcome = await relay(_AttemptSink(self, attempt))
+        except asyncio.CancelledError as exc:
+            # Cancelled after promotion, so bytes may have gone out: unknown,
+            # and settled like any other outcome before the cancellation goes
+            # on, or the slot, the stream and drain would wait for ever
+            # (review of #33's branch).
+            outcome = Uncertain(reason="relay_cancelled")
+            cancelled = exc
         except Exception as exc:  # noqa: BLE001 - a relay bug is not terminal evidence
             logger.exception("relay for %s raised", op_id)
             outcome = Uncertain(reason=f"relay_error:{type(exc).__name__}")
@@ -479,6 +492,8 @@ class Dispatcher:
             self._admitted.pop(op_id, None)
             if not self._admitted:
                 self._idle.set()
+        if cancelled is not None:
+            raise cancelled
 
     async def _settle(self, op_id: str, outcome: Outcome) -> None:
         """Commit the outcome, retrying until it is committed or the role is lost.
