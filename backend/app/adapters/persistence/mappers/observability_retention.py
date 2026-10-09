@@ -53,6 +53,10 @@ def usage_to_row(usage: UsageRecord) -> UsageRecordRow:
         compaction_tier=usage.compaction_tier,
         tokens_before_compaction=usage.tokens_before_compaction,
         tokens_after_compaction=usage.tokens_after_compaction,
+        attempt_id=usage.attempt_id,
+        totals_source=usage.totals_source,
+        prompt_tokens_basis=usage.prompt_tokens_basis,
+        runtime_completed=usage.runtime_completed,
     )
 
 
@@ -79,6 +83,10 @@ def usage_row_to_domain(row: UsageRecordRow) -> UsageRecord:
         compaction_tier=row.compaction_tier,
         tokens_before_compaction=row.tokens_before_compaction,
         tokens_after_compaction=row.tokens_after_compaction,
+        attempt_id=row.attempt_id,
+        totals_source=row.totals_source,
+        prompt_tokens_basis=row.prompt_tokens_basis,
+        runtime_completed=row.runtime_completed,
     )
 
 

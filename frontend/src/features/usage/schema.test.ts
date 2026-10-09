@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { usageAnalyticsSchema } from '@/features/usage/schema';
+import { usageAnalyticsSchema, usageRecordSchema } from '@/features/usage/schema';
 
 describe('usageAnalyticsSchema', () => {
   it('parses totals and per-capability series', () => {
@@ -48,6 +48,57 @@ describe('usageAnalyticsSchema', () => {
         until: '2026-07-25T12:00:00Z',
         totals: [],
         by_capability: [],
+      }),
+    ).toThrow();
+  });
+});
+
+describe('usageRecordSchema', () => {
+  const row = {
+    id: 'u1',
+    at: '2026-10-09T00:00:00Z',
+    actor_id: 'a1',
+    api_key_id: null,
+    capability: 'chat',
+    requested_capability: null,
+    model_alias: 'qwen7b',
+    tokens: 0,
+    prompt_tokens: 40,
+    latency_ms: 0,
+    completed: false,
+    compaction_tier: null,
+    tokens_before_compaction: null,
+    tokens_after_compaction: null,
+  };
+
+  it('reads a direct-path row as having no source', () => {
+    const data = usageRecordSchema.parse({
+      ...row,
+      totals_source: null,
+      prompt_tokens_basis: null,
+      runtime_completed: null,
+    });
+    expect(data.totals_source).toBeNull();
+  });
+
+  it('keeps where an agent-billed figure came from', () => {
+    const data = usageRecordSchema.parse({
+      ...row,
+      totals_source: 'unavailable',
+      prompt_tokens_basis: 'estimate',
+      runtime_completed: false,
+    });
+    expect(data.totals_source).toBe('unavailable');
+    expect(data.prompt_tokens_basis).toBe('estimate');
+  });
+
+  it('rejects a source the backend never writes', () => {
+    expect(() =>
+      usageRecordSchema.parse({
+        ...row,
+        totals_source: 'guessed',
+        prompt_tokens_basis: null,
+        runtime_completed: null,
       }),
     ).toThrow();
   });

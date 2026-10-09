@@ -164,7 +164,7 @@ async def admin_lifespan(app: FastAPI, *, run_node_heartbeat: bool = True) -> As
     # node agents are disabled, because nothing is bound then.
     usage_sweeper: asyncio.Task[None] | None = None
     if run_node_heartbeat and app.state.runtimes.agents_enabled:
-        usage_sweeper = asyncio.create_task(run_usage_sweeper())
+        usage_sweeper = asyncio.create_task(run_usage_sweeper(app.state.metrics))
 
     try:
         yield

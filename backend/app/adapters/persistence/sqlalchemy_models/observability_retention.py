@@ -69,6 +69,13 @@ class UsageRecordRow(Base):
     tokens_before_compaction: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_after_compaction: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Written only for agent-backed attempts (migration `c4e1a9d07b52`), by
+    # `PostgresUsageSettlement`; null on every row the direct path writes.
+    attempt_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    totals_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    prompt_tokens_basis: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    runtime_completed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
     __table_args__ = (
         # The quota reads by key over a time window, so the composite is what
         # that query actually needs.
