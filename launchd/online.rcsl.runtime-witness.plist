@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>online.rcsl.runtime-witness</string>
+
+	<!-- The host-side witness of which Ollama process serves 127.0.0.1:11434
+	     (design S4 and T1 on #24, approved by the maintainer). The node agent
+	     runs in a Linux VM and cannot see this Mac's processes, so a block is
+	     cleared only on this job's answers: a challenge written after the
+	     agent drained, then a different (pid, start time) after the restart.
+	     The reasoning is at the top of runtime_witness.py. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>-I</string>
+		<string>/Users/rcslmac1/dev/RCSL-AI-Nexus/scripts/host/runtime_witness.py</string>
+		<string>--endpoint</string>
+		<string>http://127.0.0.1:11434</string>
+		<string>--out</string>
+		<string>/Users/rcslmac1/dev/RCSL-AI-Nexus/data/runtime-witness/out</string>
+		<string>--challenge</string>
+		<string>/Users/rcslmac1/dev/RCSL-AI-Nexus/data/runtime-witness/challenge</string>
+	</array>
+
+	<!-- Root, unlike the other host jobs here, because it is evidence rather
+	     than telemetry: the account that writes the attestation must not be
+	     one a container or the runtime's own account can act as. `out` is
+	     mounted read-only into the agent; `challenge` is the one path the
+	     agent writes, and the witness only ever reads a 32-hex nonce from it.
+	     No UserName key, so launchd runs it as root. -->
+
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+
+	<!-- A restart gives the witness a new incarnation, which makes any
+	     resolution in progress start over; that is the safe direction, and
+	     the throttle only keeps a crash loop from spinning. -->
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<key>StandardOutPath</key>
+	<string>/opt/homebrew/var/log/nexus-runtime-witness.log</string>
+	<key>StandardErrorPath</key>
+	<string>/opt/homebrew/var/log/nexus-runtime-witness.log</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/rcslmac1/dev/RCSL-AI-Nexus/data/runtime-witness</string>
+</dict>
+</plist>
