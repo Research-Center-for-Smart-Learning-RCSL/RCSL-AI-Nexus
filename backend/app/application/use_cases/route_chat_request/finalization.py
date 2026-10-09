@@ -14,6 +14,7 @@ from app.domain.entities.usage import UsageRecord
 from app.domain.ports.repositories import PromptLogWriterPort, UsageRepositoryPort
 from app.domain.ports.request_binding_port import UsageSettlementPort
 from app.domain.services.prompt_capture import TranscriptBuffer
+from app.domain.services.validated_profiles import WidenedAdmission
 from app.shared.clock import Clock
 
 from .diagnostics import _warn_if_prompt_was_truncated
@@ -46,7 +47,7 @@ async def finalize_generation(
     tokens_after_compaction: int | None = None,
     attempt: AttemptIdentity | None = None,
     settlement: UsageSettlementPort | None = None,
-    widened: bool = False,
+    widened: WidenedAdmission | None = None,
 ) -> None:
     """Finalize both records without allowing either failure to hide the other."""
     _warn_if_prompt_was_truncated(

@@ -159,11 +159,12 @@ class PromptGuardrailsMixin(RouteChatDependencies):
         *,
         node: Node | None = None,
         thinking: bool = True,
-    ) -> bool:
+    ) -> validated_profiles.WidenedAdmission | None:
         """The input ceiling again, against the model that will actually serve it.
 
-        Returns whether the request was admitted under a validated profile
-        (PR2b), which the truncation backstop needs to judge it by.
+        Returns what was judged when the request was admitted under a
+        validated profile (PR2b), which the truncation backstop needs; None
+        for every other admission.
 
         `max_context_length` is one number for the whole deployment, and its
         docstring asks an operator to keep it below half the registered
@@ -200,10 +201,10 @@ class PromptGuardrailsMixin(RouteChatDependencies):
         send it for the same reason, and this declines to judge against it.
         """
         if target.runtime is not RuntimeKind.OLLAMA:
-            return False
+            return None
         window = await self._effective_window(target)
         if window <= 0:
-            return False
+            return None
         output = effective_max_tokens(max_tokens, self._max_tokens_ceiling)
         # Two bounds, and the tighter one decides (#24 final spec §6, PR2a).
         # Half the window is the legacy rule, kept until a profile is shown to
@@ -215,7 +216,7 @@ class PromptGuardrailsMixin(RouteChatDependencies):
         # token short of the window.
         servable = validated_profiles.servable(window, output, widened=False)
         if counted <= servable:
-            return False
+            return None
         # PR2b: the half is dropped, the output bound kept, only for a profile
         # shown to be counted at least as high as the runtime evaluates it.
         # Asked only here, where the legacy rule would refuse, so an ordinary
@@ -226,17 +227,20 @@ class PromptGuardrailsMixin(RouteChatDependencies):
             if widened is not None:
                 window_w, counted_w, profile = widened
                 limit = validated_profiles.servable(window_w, output, widened=True)
-                if max(counted, counted_w) <= limit:
+                judged = max(counted, counted_w)
+                if judged <= limit:
                     logger.info(
                         "admitting %s to %s under validated profile %s (%s of %s) request_id=%s",
                         _counted_phrase(basis, counted),
                         target.alias,
                         profile.ref,
-                        max(counted, counted_w),
+                        judged,
                         limit,
                         self._request_id(),
                     )
-                    return True
+                    return validated_profiles.WidenedAdmission(
+                        profile=profile.ref, counted=judged, limit=limit
+                    )
                 servable = limit
         # The alias is named to the operator and not to the caller. A refusal
         # that named it would disclose the model inventory to anyone who could
