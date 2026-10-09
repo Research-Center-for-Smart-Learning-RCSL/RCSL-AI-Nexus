@@ -117,8 +117,9 @@ CASES: dict[str, Case] = {
     "think_true_on_wire": Case(
         (Message(U, "Why might a prefix cache miss?"),), explicit_think=True
     ),
-    # Repetition is where a segmentation deficit compounds: Unigram may reach
-    # pieces a merge tokenizer cannot, once per repeat (#25 review).
+    # Repetition is where a segmentation deficit would compound: Unigram could
+    # reach pieces a merge tokenizer cannot, once per repeat (#25 review). The
+    # counter now merges as the runtime does (C6b); the cases stay as a check.
     "repeat_short_words": Case((Message(U, " a b" * 2000),)),
     "repeat_arrows": Case((Message(U, "x --> y <-- z => w ->> " * 600),)),
     "repeat_cjk_pairs": Case((Message(U, "的 是 在 了 " * 800),)),

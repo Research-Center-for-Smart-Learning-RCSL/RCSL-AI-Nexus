@@ -2,13 +2,12 @@ use std::collections::HashMap;
 
 use ahash::AHashMap;
 use tokenizers::models::bpe::BPE;
-use tokenizers::models::unigram::Unigram;
 use tokenizers::pre_tokenizers::byte_level::ByteLevel;
-use tokenizers::pre_tokenizers::metaspace::Metaspace;
 use tokenizers::pre_tokenizers::sequence::Sequence;
 use tokenizers::pre_tokenizers::split::{Split, SplitPattern};
 use tokenizers::{AddedToken, DecoderWrapper, PreTokenizerWrapper, Tokenizer};
 
+use crate::gemma4_bpe::Gemma4Bpe;
 use crate::gguf::{GgufError, GgufValue};
 
 const CONTROL_TOKEN_TYPE: u32 = 3;
@@ -24,22 +23,35 @@ const PRE_TOKENIZER_PATTERN: &str = concat!(
     r"|\s+",
 );
 
-pub struct Vocabulary {
-    tokenizer: Tokenizer,
+pub enum Vocabulary {
+    Bpe(Box<Tokenizer>),
+    Gemma4(Box<Gemma4Bpe>),
 }
 
 impl Vocabulary {
     pub fn from_tokenizer(tokenizer: Tokenizer) -> Self {
-        Self { tokenizer }
+        Self::Bpe(Box::new(tokenizer))
     }
 
     pub fn encode(&self, text: &str) -> Option<usize> {
-        self.tokenizer
-            .encode(text, false)
-            .ok()
-            .map(|encoding| encoding.get_ids().len())
+        match self {
+            Self::Bpe(tokenizer) => tokenizer
+                .encode(text, false)
+                .ok()
+                .map(|encoding| encoding.get_ids().len()),
+            Self::Gemma4(bpe) => Some(bpe.count(text)),
+        }
     }
 }
+
+/// Whether llama.cpp loads this vocabulary as gemma4's BPE: the converter's
+/// `"gemma4"` model, or Ollama's `"llama"` with the `gemma4` pre-tokenizer,
+/// which its compatibility layer rewrites to `"gemma4"` (see `gemma4_bpe.rs`).
+pub fn is_gemma4(family: &str, scheme: &str) -> bool {
+    family == GEMMA4_MODEL || (family == "llama" && scheme == "gemma4")
+}
+
+pub const GEMMA4_MODEL: &str = "gemma4";
 
 fn add_special_tokens(
     tokenizer: &mut Tokenizer,
@@ -128,147 +140,26 @@ fn build_bpe_tokenizer(metadata: &HashMap<String, GgufValue>) -> Result<Tokenize
     Ok(tokenizer)
 }
 
-/// Convert a GGUF `scores` array into log-probabilities Unigram can segment with.
-///
-/// The array means two different things depending on who wrote the file, and
-/// both arrive under `tokenizer.ggml.model = "llama"`, so the convention is
-/// detected rather than assumed. Read from the deployment on 2026-09-07:
-/// `gemma4:31b-it-q8_0` carries ordinal ranks 0.0 to 262143.0, `gemma4:31b-it-qat`
-/// and `nomic-embed-text` carry -1000.0 in every entry as a placeholder, and
-/// llama-2, Mistral and anything converted from real SentencePiece carry
-/// genuine negative log-probabilities.
-///
-/// Non-negative means ranks, and they are remapped: Unigram maximises the *sum*
-/// over a split, so what decides whether a word stays one token is the size of
-/// the gaps rather than their order. `((n - s) / n).ln()` was used until
-/// 2026-09-07 and crushes the vocabulary against zero — rank 1000 at -0.0038 —
-/// so extra tokens cost nothing and words were split. Measured 2.04x over the
-/// runtime's own `prompt_eval_count` on gemma4; `-ln(rank + 1)` is 1.01x.
-///
-/// Negative and varying means log-probabilities already, and they pass through.
-/// A clamp here would be worse than the crash it avoids: it maps every real
-/// log-probability to one value, which is the uniform vocabulary this function
-/// exists to prevent.
-///
-/// All equal means no information, and that is an error rather than a guess, so
-/// the caller falls back to the character estimate instead of segmenting from a
-/// vocabulary that cannot rank anything.
-///
-/// Kept in step with `construction.scores_to_log_probabilities` on the Python
-/// side, which carries the same measurements.
-fn scores_to_log_probabilities(scores: &[f32]) -> Result<Vec<f64>, GgufError> {
-    let first = *scores
-        .first()
-        .ok_or_else(|| GgufError("the vocabulary carries no scores".into()))?;
-    if scores.iter().all(|&s| s == first) {
-        return Err(GgufError(format!(
-            "every score is {first}, which is a placeholder rather than a distribution"
-        )));
-    }
-    if scores.iter().any(|&s| s < 0.0) {
-        return Ok(scores.iter().map(|&s| s as f64).collect());
-    }
-    Ok(scores.iter().map(|&s| -((s as f64) + 1.0).ln()).collect())
-}
-
-fn build_unigram_tokenizer(metadata: &HashMap<String, GgufValue>) -> Result<Tokenizer, GgufError> {
-    let tokens = metadata
-        .get("tokenizer.ggml.tokens")
-        .and_then(|v| v.as_string_array())
-        .ok_or_else(|| GgufError("missing tokenizer.ggml.tokens".into()))?;
-
-    let scores = metadata
-        .get("tokenizer.ggml.scores")
-        .and_then(|v| v.as_f32_array())
-        .ok_or_else(|| GgufError("missing tokenizer.ggml.scores".into()))?;
-
-    let types: Vec<u32> = metadata
-        .get("tokenizer.ggml.token_type")
-        .and_then(|v| v.as_token_types())
-        .unwrap_or_default();
-
-    let log_probs = scores_to_log_probabilities(scores)?;
-    let vocab: Vec<(String, f64)> = tokens.iter().cloned().zip(log_probs).collect();
-
-    let unigram = Unigram::from(vocab, None, false)
-        .map_err(|e| GgufError(format!("failed to build Unigram: {e}")))?;
-
-    let mut tokenizer = Tokenizer::new(unigram);
-
-    // `split: false`, because the runtime does not split on spaces either.
-    // llama.cpp's SentencePiece path segments the whole marker-substituted
-    // string, so a run of spaces reaches the vocabulary's multi-space pieces
-    // (`▁▁▁▁`) as one span. Splitting first made every space its own
-    // pre-token: 64 spaces counted as 64 here against 4 at the runtime, and
-    // indented code as 1.5-2x (measured 2026-10-07, #24).
-    let metaspace = Metaspace::new(
-        '▁',
-        tokenizers::pre_tokenizers::metaspace::PrependScheme::Always,
-        false,
-    );
-    tokenizer.with_pre_tokenizer(Some(PreTokenizerWrapper::Metaspace(metaspace.clone())));
-    tokenizer.with_decoder(Some(DecoderWrapper::Metaspace(metaspace)));
-
-    add_special_tokens(&mut tokenizer, tokens, &types)?;
-
-    Ok(tokenizer)
-}
-
 pub fn build_vocabulary(metadata: &HashMap<String, GgufValue>) -> Result<Vocabulary, GgufError> {
     let family = metadata
         .get("tokenizer.ggml.model")
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let tokenizer = if family == BPE_MODEL {
-        build_bpe_tokenizer(metadata)?
+    let scheme = metadata
+        .get("tokenizer.ggml.pre")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if family == BPE_MODEL {
+        Ok(Vocabulary::Bpe(Box::new(build_bpe_tokenizer(metadata)?)))
+    } else if is_gemma4(family, scheme) {
+        Ok(Vocabulary::Gemma4(Box::new(Gemma4Bpe::build(metadata)?)))
     } else {
-        build_unigram_tokenizer(metadata)?
-    };
-
-    Ok(Vocabulary { tokenizer })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::scores_to_log_probabilities;
-
-    /// The property the old mapping lost, and the reason this file has a test
-    /// at all: the Rust and Python vocabularies were held in step by a comment,
-    /// which is how a twofold counting error survived in both at once.
-    #[test]
-    fn ranks_are_spread_far_enough_to_prefer_whole_words() {
-        let scores: Vec<f32> = (0..30_000).map(|i| i as f32).collect();
-        let got = scores_to_log_probabilities(&scores).expect("ranks are usable");
-
-        assert!(got[1_000] > got[20_000]);
-        // Nats. The old `((n - s) / n).ln()` put this gap at 0.08.
-        assert!(
-            got[1_000] - got[20_000] > 2.0,
-            "gap was {}",
-            got[1_000] - got[20_000]
-        );
-        assert!(got.iter().all(|v| v.is_finite()));
-    }
-
-    /// A real SentencePiece vocabulary. `-ln(score + 1)` on -12.5 is the
-    /// logarithm of a negative number: NaN here, which `Unigram::from` accepts
-    /// and then segments character by character.
-    #[test]
-    fn real_log_probabilities_pass_through_untouched() {
-        let scores = [-1.5f32, -12.5, -3.25];
-        let got = scores_to_log_probabilities(&scores).expect("log-probabilities are usable");
-
-        assert_eq!(got, vec![-1.5f64, -12.5, -3.25]);
-        assert!(got.iter().all(|v| v.is_finite()));
-    }
-
-    /// `gemma4:31b-it-qat` and `nomic-embed-text` both carry this. Refusing
-    /// sends the caller to the character estimate; guessing would send it to a
-    /// uniform vocabulary, which is the failure being fixed.
-    #[test]
-    fn a_constant_placeholder_is_refused_rather_than_guessed_at() {
-        assert!(scores_to_log_probabilities(&[-1000.0f32; 8]).is_err());
-        assert!(scores_to_log_probabilities(&[]).is_err());
+        // SentencePiece proper is not counted: Unigram can under-count it
+        // (#25), and no model here is served by it to port from (C6b).
+        Err(GgufError(format!(
+            "tokenizer model {family:?} with pre-tokenizer {scheme:?} has no runtime-equivalent encoder"
+        )))
     }
 }

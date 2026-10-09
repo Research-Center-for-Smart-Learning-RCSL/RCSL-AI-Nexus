@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from typing import Any
 
 from app.adapters.tokenizer.gguf import iter_merges
 
-from .constants import BPE_MODEL, CONTROL_TOKEN_TYPE, PRE_TOKENIZER_PATTERN
+from .constants import (
+    BPE_MODEL,
+    CONTROL_TOKEN_TYPE,
+    GEMMA4_MODEL,
+    PRE_TOKENIZER_PATTERN,
+    SENTENCEPIECE_MODEL,
+)
+from .gemma4_bpe import Gemma4Bpe, UnsupportedVocabulary
 
 
 class _Vocabulary:
@@ -92,134 +98,20 @@ def _build_tokenizer(metadata: dict[str, Any]) -> Any:
     return tokenizer
 
 
-class UnusableScores(ValueError):
-    """The `scores` array carries no information a segmenter can use.
-
-    Raised rather than worked around, so the caller falls back to the character
-    estimate — which is wrong by a known band — instead of segmenting from a
-    uniform vocabulary, which is wrong in the way this module was just fixed
-    for: with every score equal, splitting a word costs nothing and the counter
-    reads two to three times high.
-    """
-
-
-def scores_to_log_probabilities(scores: Sequence[float]) -> list[float]:
-    """Convert a GGUF `scores` array into log-probabilities Unigram can use.
-
-    **The array means two different things depending on who wrote the file**,
-    and both arrive under `tokenizer.ggml.model = "llama"`, so the convention
-    has to be detected rather than assumed. Read from this host on 2026-09-07:
-
-    | file | scores |
-    |---|---|
-    | `gemma4:31b-it-q8_0` | 0.0 … 262143.0 — ordinal ranks |
-    | `gemma4:31b-it-qat` | every entry -1000.0 — a placeholder |
-    | `nomic-embed-text` | every entry -1000.0 — a placeholder |
-
-    and llama-2, Mistral and anything converted from real SentencePiece carry
-    the fourth case: genuine negative log-probabilities, already in the units
-    Unigram wants.
-
-    So: **non-negative means ranks** and they are remapped; **negative and
-    varying means log-probabilities** and they are passed through untouched;
-    **all equal means nothing** and this refuses. The first version of this fix
-    handled only ranks, and `-log(rank + 1)` on a real log-probability of -12.5
-    is the logarithm of a negative number — `ValueError` in Python and a silent
-    `NaN` in the Rust extension, which `Unigram::from` accepts and then
-    segments character by character. A clamp would have been worse than either:
-    it maps every real log-probability to the same value, which is the uniform
-    vocabulary this module was just fixed for.
-
-    Kept in step with `native/src/tokenizer.rs`, which has its own copy and its
-    own test.
-    """
-    if not scores:
-        raise UnusableScores("the vocabulary carries no scores")
-    first = scores[0]
-    if all(score == first for score in scores):
-        raise UnusableScores(
-            f"every score is {first}, which is a placeholder rather than a distribution"
-        )
-    if any(score < 0.0 for score in scores):
-        # Real SentencePiece log-probabilities. Nothing to do to them, and
-        # anything done to them would be this module's opinion replacing the
-        # file's measurement.
-        return [float(score) for score in scores]
-    return [rank_to_log_probability(score) for score in scores]
-
-
-def rank_to_log_probability(rank: float) -> float:
-    """Turn a GGUF ordinal rank into a log-probability Unigram can segment with.
-
-    GGUF files with ``model: llama`` store a SentencePiece vocabulary whose
-    ``scores`` are ordinal ranks — ``gemma4:31b-it-q8_0`` carries exactly
-    0.0 to 262143.0 — rather than the log-probabilities SentencePiece itself
-    holds. Something has to map one to the other, and **preserving the order is
-    not enough**, which is the whole content of this function.
-
-    Unigram segments by maximising the *sum* of log-probabilities over a
-    candidate split, so what decides whether "maintenance" stays one token or
-    becomes three is the size of the gaps between scores, not their order. The
-    mapping here until 2026-09-07 was ``log((N - rank) / N)``, which is
-    monotonic and rank-preserving and crushes almost the entire vocabulary
-    against zero: rank 1000 lands at -0.0038 and rank 20000 at -0.079. Summing
-    several values that close to zero is barely worse than summing one, so the
-    segmentation had no reason to prefer whole words and split them.
-
-    Measured that day against the runtime's own ``prompt_eval_count``, on the
-    model this matters for, over three texts:
-
-    | text | Ollama | old mapping | this one |
-    |---|---:|---:|---:|
-    | repetitive prose | 224 | 500 | 220 |
-    | ordinary prose | 142 | 355 | 139 |
-    | Python source | 303 | 420 | 324 |
-
-    **2.04x over on average, against 1.01x.** The old docstring claimed roughly
-    1.4x drift and, worse, claimed the drift under-counted — so a reader
-    reasoning about safety from it would have had the direction backwards. It
-    over-counted, which never lets a truncating prompt through but does refuse
-    callers at a fraction of what the model can read: at a 122880 ceiling the
-    incumbent was refusing prompts of about 55,000 real tokens against a model
-    that reads 262144.
-
-    ``-log(rank + 1)`` is the Zipfian reading of a rank, and it spreads the
-    vocabulary over roughly twelve nats instead of half of one. Scaling or
-    offsetting it changes nothing measurable — four variants were tried and
-    returned identical counts — so the plainest form is the one kept.
-    """
-    return -math.log(rank + 1.0)
-
-
-def _build_unigram_tokenizer(metadata: dict[str, Any]) -> Any:
-    """Build a Unigram (SentencePiece) tokenizer from GGUF metadata.
-
-    The scores need converting first; `rank_to_log_probability` is where that
-    conversion and its measurement live.
-    """
-    from tokenizers import Tokenizer, decoders, pre_tokenizers
-    from tokenizers.models import Unigram
-
-    tokens: list[str] = metadata["tokenizer.ggml.tokens"]
-    scores: list[float] = metadata["tokenizer.ggml.scores"]
-    types: list[int] = metadata.get("tokenizer.ggml.token_type") or []
-
-    vocab = list(zip(tokens, scores_to_log_probabilities(scores), strict=False))
-    tokenizer = Tokenizer(Unigram(vocab))
-
-    # `split=False` to match the runtime, which segments the whole string: a
-    # run of spaces has to reach the vocabulary's multi-space pieces as one
-    # span. The default splits first and counts every space as a token, which
-    # over-counted indented code 1.5-2x (measured 2026-10-07, #24). The Rust
-    # builder in `native/src/tokenizer.rs` carries the same flag.
-    tokenizer.pre_tokenizer = pre_tokenizers.Metaspace(replacement="▁", split=False)
-    tokenizer.decoder = decoders.Metaspace(replacement="▁", split=False)
-    _add_special_tokens(tokenizer, tokens, types)
-    return tokenizer
-
-
 def build_tokenizer_for_model(metadata: dict[str, Any]) -> Any:
     family = str(metadata.get("tokenizer.ggml.model", ""))
+    scheme = str(metadata.get("tokenizer.ggml.pre", "gemma4" if family == GEMMA4_MODEL else ""))
     if family == BPE_MODEL:
         return _build_tokenizer(metadata)
-    return _build_unigram_tokenizer(metadata)
+    if family == GEMMA4_MODEL or (family == SENTENCEPIECE_MODEL and scheme == "gemma4"):
+        return Gemma4Bpe(
+            metadata["tokenizer.ggml.tokens"],
+            metadata["tokenizer.ggml.merges"],
+            metadata.get("tokenizer.ggml.token_type") or [],
+        )
+    # SentencePiece proper is not counted: Unigram can under-count it (#25),
+    # and no model here is served by it to port from (C6b).
+    raise UnsupportedVocabulary(
+        f"tokenizer model {family!r} with pre-tokeniser {scheme!r} has no "
+        "runtime-equivalent encoder"
+    )

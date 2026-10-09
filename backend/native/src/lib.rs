@@ -1,3 +1,4 @@
+mod gemma4_bpe;
 mod gguf;
 mod template;
 mod tokenizer;
@@ -59,7 +60,6 @@ static CACHE: std::sync::LazyLock<Mutex<BoundedCache>> =
 const WANTED_KEYS: &[&str] = &[
     "tokenizer.ggml.tokens",
     "tokenizer.ggml.merges",
-    "tokenizer.ggml.scores",
     "tokenizer.ggml.token_type",
     "tokenizer.ggml.pre",
     "tokenizer.ggml.model",
@@ -67,10 +67,10 @@ const WANTED_KEYS: &[&str] = &[
 const CHAT_TEMPLATE_KEY: &str = "tokenizer.chat_template";
 
 const KNOWN_PRE_TOKENIZERS: &[&str] = &["qwen2", "qwen35", "gemma4"];
-const KNOWN_MODELS: &[&str] = &["gpt2", "llama"];
+const KNOWN_MODELS: &[&str] = &["gpt2", "llama", "gemma4"];
 
 const BPE_REQUIRED: &[&str] = &["tokenizer.ggml.tokens", "tokenizer.ggml.merges"];
-const UNIGRAM_REQUIRED: &[&str] = &["tokenizer.ggml.tokens", "tokenizer.ggml.scores"];
+const GEMMA4_REQUIRED: &[&str] = &["tokenizer.ggml.tokens", "tokenizer.ggml.merges"];
 
 fn wanted(key: &str) -> bool {
     WANTED_KEYS.contains(&key) || key == CHAT_TEMPLATE_KEY
@@ -80,20 +80,23 @@ fn build(blob_path: &str) -> Result<CachedModel, String> {
     let path = std::path::Path::new(blob_path);
     let metadata = gguf::read_metadata(path, &wanted).map_err(|e| e.0)?;
 
-    let scheme = metadata
-        .get("tokenizer.ggml.pre")
+    let family = metadata
+        .get("tokenizer.ggml.model")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    // A converter-written gemma4 GGUF may omit the pre-tokenizer; llama.cpp
+    // then sets `gemma4` itself.
+    let scheme = match metadata.get("tokenizer.ggml.pre").and_then(|v| v.as_str()) {
+        Some(scheme) => scheme,
+        None if family == tokenizer::GEMMA4_MODEL => "gemma4",
+        None => "",
+    };
     if !KNOWN_PRE_TOKENIZERS.contains(&scheme) {
         return Err(format!(
             "pre-tokenizer {scheme:?} has not been measured against this platform's pattern"
         ));
     }
 
-    let family = metadata
-        .get("tokenizer.ggml.model")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
     if !KNOWN_MODELS.contains(&family) {
         return Err(format!(
             "tokenizer model {family:?} is not one of {:?}",
@@ -104,7 +107,7 @@ fn build(blob_path: &str) -> Result<CachedModel, String> {
     let required = if family == tokenizer::BPE_MODEL {
         BPE_REQUIRED
     } else {
-        UNIGRAM_REQUIRED
+        GEMMA4_REQUIRED
     };
     let missing: Vec<&str> = required
         .iter()
@@ -167,7 +170,10 @@ fn prepare(blob_path: String, cache_key: String) -> PyResult<(bool, Option<Strin
 /// `tokenizers.Tokenizer.to_str()` in Python). This guarantees identical
 /// tokenization since the same constructed tokenizer object is shared.
 #[pyfunction]
-fn prepare_from_json(tokenizer_json: String, cache_key: String) -> PyResult<(bool, Option<String>)> {
+fn prepare_from_json(
+    tokenizer_json: String,
+    cache_key: String,
+) -> PyResult<(bool, Option<String>)> {
     let mut cache = CACHE
         .lock()
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
@@ -227,11 +233,7 @@ fn count_parts(
 /// for template rendering (in Python Jinja2, which handles all templates);
 /// this function only tokenizes.
 #[pyfunction]
-fn encode_text(
-    blob_path: String,
-    cache_key: String,
-    text: String,
-) -> PyResult<Option<usize>> {
+fn encode_text(blob_path: String, cache_key: String, text: String) -> PyResult<Option<usize>> {
     with_cached_model(&blob_path, &cache_key, |model| {
         let model = model?;
         model.vocabulary.encode(&text)

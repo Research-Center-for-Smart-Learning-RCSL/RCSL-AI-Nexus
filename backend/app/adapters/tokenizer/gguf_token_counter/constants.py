@@ -5,7 +5,6 @@ from __future__ import annotations
 WANTED_KEYS = (
     "tokenizer.ggml.tokens",
     "tokenizer.ggml.merges",
-    "tokenizer.ggml.scores",
     "tokenizer.ggml.token_type",
     "tokenizer.ggml.pre",
     "tokenizer.ggml.model",
@@ -14,7 +13,7 @@ WANTED_KEYS = (
 
 BPE_REQUIRED_KEYS = ("tokenizer.ggml.tokens", "tokenizer.ggml.merges")
 
-UNIGRAM_REQUIRED_KEYS = ("tokenizer.ggml.tokens", "tokenizer.ggml.scores")
+GEMMA4_REQUIRED_KEYS = ("tokenizer.ggml.tokens", "tokenizer.ggml.merges")
 
 
 CHAT_TEMPLATE_KEY = "tokenizer.chat_template"
@@ -22,9 +21,12 @@ CHAT_TEMPLATE_KEY = "tokenizer.chat_template"
 
 BPE_MODEL = "gpt2"
 
-UNIGRAM_MODEL = "llama"
+SENTENCEPIECE_MODEL = "llama"
+"""What Ollama's gemma4 GGUFs declare. Counted only as gemma4 (`gemma4_bpe`)."""
 
-KNOWN_MODELS = frozenset({BPE_MODEL, UNIGRAM_MODEL})
+GEMMA4_MODEL = "gemma4"
+
+KNOWN_MODELS = frozenset({BPE_MODEL, SENTENCEPIECE_MODEL, GEMMA4_MODEL})
 
 
 CONTROL_TOKEN_TYPE = 3

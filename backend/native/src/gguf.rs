@@ -56,13 +56,6 @@ impl GgufValue {
         }
     }
 
-    pub fn as_f32_array(&self) -> Option<&[f32]> {
-        match self {
-            GgufValue::ArrayF32(v) => Some(v),
-            _ => None,
-        }
-    }
-
     /// `tokenizer.ggml.token_type`, whichever integer width the file used.
     ///
     /// The spec's enum is small and non-negative, but every GGUF this host
@@ -278,7 +271,9 @@ impl<R: Read + Seek> Reader<R> {
             10 => read_typed_array!(ArrayU64, u64),
             11 => read_typed_array!(ArrayI64, i64),
             12 => read_typed_array!(ArrayF64, f64),
-            _ => Err(GgufError(format!("unknown array element type {element_type}"))),
+            _ => Err(GgufError(format!(
+                "unknown array element type {element_type}"
+            ))),
         }
     }
 

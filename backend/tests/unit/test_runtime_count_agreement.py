@@ -13,10 +13,10 @@ it must really be the Rust encoder: `_build_native` falls back to Python when
 the Rust build fails, which would otherwise compare Python with itself.
 
 A pass here is evidence for these weights, this runtime version and this
-corpus, not a general bound. Unigram segments by best total score and the
-runtime merges adjacent pieces, so the two can differ on some vocabularies
-(`test_unigram_vocabulary`); that is why the guard is widened per model only
-after this check.
+corpus. The encoders are ports of the runtime's own (BPE for qwen; for gemma4,
+llama.cpp's gemma4 BPE, held id for id to the runtime in
+`test_gemma4_tokenizer_goldens`, C6b), so what remains to differ is the
+rendering; that is why the guard is widened per model only after this check.
 """
 
 from __future__ import annotations

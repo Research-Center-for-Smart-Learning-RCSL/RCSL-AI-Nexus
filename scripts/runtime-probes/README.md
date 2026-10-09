@@ -24,6 +24,7 @@ PYTHONPATH=$PWD uv run python ../scripts/runtime-probes/<probe>.py --i-own-the-w
 | `reset_evidence.py` | What changes across a runtime restart (PID, start time) | waits for **you** to restart the runtime |
 | `record_validation_counts.py` | The runtime's count of whole gateway-shaped payloads (`truncate: false`), for profile validation | nothing beyond the requests |
 | `render_diff.py` | Whether the counter renders the same prompt bytes as the runtime (`_debug_render_only`) | nothing beyond the requests |
+| `record_tokenizer_goldens.py` | The runtime's own gemma4 token ids (the runner's `/tokenize`), as goldens for the counter | nothing; read-only on the runner |
 
 **Two ways a probe request reloads a production runner, and with it can
 evict the models beside it (E2).** Both happened on 2026-10-08:

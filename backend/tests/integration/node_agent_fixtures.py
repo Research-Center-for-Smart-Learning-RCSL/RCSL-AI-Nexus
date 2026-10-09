@@ -102,6 +102,10 @@ async def running_agent(
         NODE_AGENT_RUNTIME_URL="http://runtime",
         NODE_AGENT_LOCK_DIR=tmp_path / "lock",
         NODE_AGENT_WATCHDOG_SECONDS=0.05,
+        # Explicitly none: the settings also read the environment, and a shell
+        # with `OLLAMA_MODELS_PATH` set for the real-weight tests would point
+        # this agent's guard at the host's model store.
+        OLLAMA_MODELS_PATH=None,
     )
     (tmp_path / "lock").mkdir()
     app = create_app(settings)

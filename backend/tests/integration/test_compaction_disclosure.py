@@ -51,6 +51,9 @@ async def compacting_client(monkeypatch):
     monkeypatch.setenv("API_KEY_PEPPER", PEPPER)
     monkeypatch.setenv("CACHE_BACKEND", "memory")
     monkeypatch.setenv("MAX_CONTEXT_LENGTH", str(CEILING))
+    # These figures are the character estimate's; a shell with the host's model
+    # store set for the real-weight tests would count them exactly instead.
+    monkeypatch.delenv("OLLAMA_MODELS_PATH", raising=False)
     get_settings.cache_clear()
 
     holder: dict = {}
