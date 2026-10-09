@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from app.application.use_cases.list_capabilities import ListCapabilities
 from app.domain.entities.model import RuntimeKind
@@ -19,6 +20,9 @@ from app.domain.ports.security_ports import AuthorizationPort
 from app.domain.ports.token_counter_port import TokenCounterPort
 from app.domain.services.routing_service import RoutingService
 from app.shared.clock import Clock
+
+if TYPE_CHECKING:
+    from .binding import RequestBinder
 
 
 class RouteChatDependencies:
@@ -40,3 +44,4 @@ class RouteChatDependencies:
     _generation_deadline_seconds: int
     _thinking_default: bool
     _monotonic: Callable[[], float]
+    _binder: RequestBinder | None

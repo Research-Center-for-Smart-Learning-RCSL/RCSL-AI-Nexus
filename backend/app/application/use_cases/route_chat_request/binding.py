@@ -41,6 +41,7 @@ from app.domain.ports.request_binding_port import (
     AttemptLedgerPort,
     AttemptView,
     RequestBindingPort,
+    UsageSettlementPort,
 )
 
 HASH_VERSION = "v1"
@@ -86,8 +87,11 @@ class RequestBinder:
         bindings: RequestBindingPort,
         nodes: NodeRepositoryPort,
         runtimes: Mapping[RuntimeKind, ModelRuntimePort],
+        settlement: UsageSettlementPort,
         request_id: Callable[[], str | None] = lambda: None,
     ) -> None:
+        self.settlement = settlement
+        """How a bound attempt's usage is written, exactly once (step (c))."""
         self._bindings = bindings
         self._nodes = nodes
         self._runtimes = runtimes

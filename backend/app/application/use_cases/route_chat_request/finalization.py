@@ -7,10 +7,12 @@ import uuid
 from collections.abc import Callable, Sequence
 
 from app.domain.entities.actor import Actor
+from app.domain.entities.attempt import AttemptIdentity
 from app.domain.entities.chat import Message
 from app.domain.entities.model import Model
 from app.domain.entities.usage import UsageRecord
 from app.domain.ports.repositories import PromptLogWriterPort, UsageRepositoryPort
+from app.domain.ports.request_binding_port import UsageSettlementPort
 from app.domain.services.prompt_capture import TranscriptBuffer
 from app.shared.clock import Clock
 
@@ -42,6 +44,8 @@ async def finalize_generation(
     compaction_tier: int | None = None,
     tokens_before_compaction: int | None = None,
     tokens_after_compaction: int | None = None,
+    attempt: AttemptIdentity | None = None,
+    settlement: UsageSettlementPort | None = None,
 ) -> None:
     """Finalize both records without allowing either failure to hide the other."""
     _warn_if_prompt_was_truncated(
@@ -53,8 +57,11 @@ async def finalize_generation(
         actor=actor.display,
     )
 
-    try:
-        await usage.record(
+    if attempt is not None and settlement is not None:
+        await _settle_attempt(settlement, attempt, completed=completed, actor=actor)
+    else:
+        await _record_usage(
+            usage,
             UsageRecord(
                 id=str(uuid.uuid4()),
                 actor_id=actor.id,
@@ -71,10 +78,9 @@ async def finalize_generation(
                 compaction_tier=compaction_tier,
                 tokens_before_compaction=tokens_before_compaction,
                 tokens_after_compaction=tokens_after_compaction,
-            )
+            ),
+            actor,
         )
-    except Exception:  # noqa: BLE001
-        logger.exception("failed to record usage for actor=%s", actor.display)
 
     if transcript is not None and prompt_logs is not None:
         try:
@@ -97,3 +103,36 @@ async def finalize_generation(
                 actor.display,
                 capability,
             )
+
+
+async def _record_usage(usage: UsageRepositoryPort, record: UsageRecord, actor: Actor) -> None:
+    try:
+        await usage.record(record)
+    except Exception:  # noqa: BLE001
+        logger.exception("failed to record usage for actor=%s", actor.display)
+
+
+async def _settle_attempt(
+    settlement: UsageSettlementPort,
+    attempt: AttemptIdentity,
+    *,
+    completed: bool,
+    actor: Actor,
+) -> None:
+    """An agent-backed attempt: delivery first, then the one usage row.
+
+    No partial row is ever written here (design S6). When the client left
+    while the agent drains to `done`, the attempt is not terminal yet and
+    `settle` writes nothing; the admin sweeper settles it once it is. A
+    failure here loses nothing either: the sweeper finds the attempt
+    unsettled and writes the same row.
+    """
+    try:
+        await settlement.mark_delivery(attempt.op_id, completed)
+        await settlement.settle(attempt.op_id)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "failed to settle usage for attempt=%s actor=%s; the sweeper will",
+            attempt.op_id,
+            actor.display,
+        )

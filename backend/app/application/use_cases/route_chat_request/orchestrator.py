@@ -541,6 +541,7 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
                     tokens_after_compaction=compaction_result.tokens_after
                     if compaction_result
                     else None,
+                    attempt=attempt,
                 )
             ) as generation:
                 try:
