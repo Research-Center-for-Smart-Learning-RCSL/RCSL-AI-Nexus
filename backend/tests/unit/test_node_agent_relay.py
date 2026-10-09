@@ -251,3 +251,94 @@ async def test_an_embedding_without_vectors_is_refused() -> None:
     )(RecordingSink())
 
     assert isinstance(outcome, RuntimeRefused) and outcome.reason == "no_embeddings"
+
+
+# -- lifecycle (PR4b) ---------------------------------------------------------
+
+
+async def test_a_load_carries_the_registered_context_and_falls_back_to_embed() -> None:
+    """The same requests the direct adapter made: an embedding model refuses
+    generate with a 400, and an empty embed moves its weights."""
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(400 if request.url.path == "/api/generate" else 200, json={})
+
+    relay, seen = _relay(handler)
+    outcome = await relay.load("nomic-embed-text", keep_alive=-1, context_length=2048)(
+        RecordingSink()
+    )
+
+    assert seen == ["POST /api/generate", "POST /api/embed"]
+    assert bodies[1] == {
+        "model": "nomic-embed-text",
+        "keep_alive": -1,
+        "options": {"num_ctx": 2048},
+        "input": [],
+    }
+    assert isinstance(outcome, Completed) and outcome.terminal["endpoint"] == "embed"
+
+
+async def test_an_unload_sends_keep_alive_zero_and_sizes_nothing() -> None:
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={})
+
+    relay, _ = _relay(handler)
+    assert isinstance(await relay.unload("qwen2.5:7b")(RecordingSink()), Completed)
+    assert bodies == [{"model": "qwen2.5:7b", "keep_alive": 0}]
+
+
+async def test_a_missing_model_is_a_refusal_named_not_found() -> None:
+    relay, _ = _relay(lambda r: httpx.Response(404, json={"error": "not found"}))
+    outcome = await relay.unload("nope:1b")(RecordingSink())
+    assert isinstance(outcome, RuntimeRefused) and outcome.reason == "not_found"
+
+
+async def test_a_lifecycle_call_that_never_connected_was_not_sent() -> None:
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    relay, _ = _relay(refuse)
+    assert isinstance(await relay.unload("qwen2.5:7b")(RecordingSink()), NotSent)
+
+
+async def test_a_pull_reports_progress_and_completes_only_on_success() -> None:
+    lines = [{"status": "pulling manifest"}, {"status": "x", "completed": 1, "total": 2}]
+    finished = [*lines, {"status": "success"}]
+    sink = RecordingSink()
+
+    relay, _ = _relay(
+        lambda r: httpx.Response(200, content="".join(json.dumps(x) + "\n" for x in finished))
+    )
+    done = await relay.pull("qwen2.5:7b")(sink)
+    relay, _ = _relay(
+        lambda r: httpx.Response(200, content="".join(json.dumps(x) + "\n" for x in lines))
+    )
+    cut = await relay.pull("qwen2.5:7b")(RecordingSink())
+
+    assert isinstance(done, Completed)
+    assert [e["status"] for e in sink.events] == ["pulling manifest", "x", "success"]
+    assert sink.events[1] == {"type": "progress", "status": "x", "completed": 1, "total": 2}
+    assert isinstance(cut, Uncertain) and cut.reason == "eof_without_success"
+
+
+async def test_a_pull_error_line_is_a_refusal() -> None:
+    relay, _ = _relay(
+        lambda r: httpx.Response(200, content=json.dumps({"error": "manifest unknown"}) + "\n")
+    )
+    outcome = await relay.pull("nope:1b")(RecordingSink())
+    assert isinstance(outcome, RuntimeRefused) and outcome.reason == "runtime_error"
+
+
+async def test_residency_is_none_when_the_runtime_cannot_be_asked() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/ps":
+            return httpx.Response(200, json={"models": [{"name": "a:1"}]})
+        return httpx.Response(500)
+
+    relay, _ = _relay(handler)
+    assert await relay.residency() is None

@@ -11,7 +11,7 @@ runtime some other way:
 | `generate`, `embed` | agent | agent | agent |
 | `validate_ref` | in-process grammar | same | same |
 | `health` | agent status | same | same |
-| `load`, `unload`, `pull`, `residency` | refused | agent | agent + reconciler |
+| `load`, `unload`, `pull`, `residency` | refused | agent (this stage) | agent + reconciler |
 
 The agent relays the runtime's own lines; they are decoded here by the same
 `ChatStreamDecoder` the direct adapter uses. Request identity comes from
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from collections.abc import AsyncGenerator, Sequence
 from typing import Any
 
@@ -35,6 +36,7 @@ import httpx
 
 from app.adapters.runtime.ollama_adapter import OllamaAdapter
 from app.adapters.runtime.ollama_adapter.decoding import ChatStreamDecoder
+from app.adapters.runtime.ollama_adapter.lifecycle import residency_from
 from app.domain.entities.attempt import AttemptIdentity, current_attempt
 from app.domain.entities.chat import (
     CompletionChunk,
@@ -45,6 +47,7 @@ from app.domain.entities.chat import (
 )
 from app.domain.entities.model import PullProgress, RuntimeResidency
 from app.domain.exceptions import (
+    ModelNotFoundError,
     NoAvailableModelError,
     RuntimeCapabilityError,
     ServerOverloadedError,
@@ -55,13 +58,13 @@ from app.node_agent.wire import (
     EmbeddingRequest,
     Envelope,
     GenerationRequest,
+    LifecycleRequest,
     encode_embedding,
     encode_generation,
+    encode_lifecycle,
 )
 
 logger = logging.getLogger(__name__)
-
-_NOT_IN_STAGE = "not served by the node agent in this stage (PR4a); see final spec §10"
 
 
 class NodeAgentRuntime:
@@ -350,17 +353,129 @@ class NodeAgentRuntime:
             return False
         return response.status_code == 200 and response.json().get("gate") == "serving"
 
-    def pull(self, ref: str) -> AsyncGenerator[PullProgress, None]:
-        raise RuntimeCapabilityError(detail=f"pull: {_NOT_IN_STAGE}")
+    # -- lifecycle (PR4b) --------------------------------------------------
+
+    async def pull(self, ref: str) -> AsyncGenerator[PullProgress, None]:
+        """The agent's pull, which has the node to itself while it runs.
+
+        Progress arrives as the agent reads it; the terminal event says
+        whether the pull completed, and only then does this return normally.
+        """
+        self.validate_ref(ref)
+        op_id = str(uuid.uuid4())
+        body = encode_lifecycle(LifecycleRequest(op_id=op_id, ref=ref, context_length=None))
+        async with self._client() as client:
+            response = await self._send_lifecycle(client, "pull", body, op_id, stream=True)
+            try:
+                if response.headers.get("content-type", "").startswith("application/json"):
+                    await response.aread()
+                    self._lifecycle_outcome("pull", ref, op_id, response.json())
+                    return
+                terminal: dict[str, Any] | None = None
+                try:
+                    async for line in response.aiter_lines():
+                        if not line.strip():
+                            continue
+                        event = json.loads(line)
+                        if event.get("type") == "progress":
+                            yield PullProgress(
+                                status=str(event.get("status") or ""),
+                                completed_bytes=event.get("completed"),
+                                total_bytes=event.get("total"),
+                            )
+                        elif event.get("type") == "terminal":
+                            terminal = event
+                except (httpx.HTTPError, json.JSONDecodeError) as exc:
+                    raise StreamInterruptedError(
+                        detail=f"node agent pull {op_id} broke: {exc!r}"
+                    ) from exc
+                self._lifecycle_outcome("pull", ref, op_id, terminal)
+            finally:
+                await response.aclose()
 
     async def load(self, ref: str, *, context_length: int | None = None) -> None:
-        raise RuntimeCapabilityError(detail=f"load: {_NOT_IN_STAGE}")
+        await self._lifecycle("load", ref, context_length)
 
     async def unload(self, ref: str) -> None:
-        raise RuntimeCapabilityError(detail=f"unload: {_NOT_IN_STAGE}")
+        await self._lifecycle("unload", ref, None)
 
     async def residency(self) -> RuntimeResidency | None:
-        raise RuntimeCapabilityError(detail=f"residency: {_NOT_IN_STAGE}")
+        """None when the agent or its runtime cannot be asked, never "empty"."""
+        try:
+            async with self._client() as client:
+                response = await client.get("/v1/residency")
+        except httpx.HTTPError:
+            return None
+        if response.status_code != 200:
+            return None
+        try:
+            document = response.json()
+            return residency_from(document["resident"], document["on_disk"])
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return None
+
+    async def _lifecycle(self, action: str, ref: str, context_length: int | None) -> None:
+        self.validate_ref(ref)
+        op_id = str(uuid.uuid4())
+        body = encode_lifecycle(
+            LifecycleRequest(op_id=op_id, ref=ref, context_length=context_length)
+        )
+        async with self._client() as client:
+            response = await self._send_lifecycle(client, action, body, op_id, stream=False)
+            await response.aread()
+        self._lifecycle_outcome(action, ref, op_id, response.json())
+
+    async def _send_lifecycle(
+        self,
+        client: httpx.AsyncClient,
+        action: str,
+        body: dict[str, Any],
+        op_id: str,
+        *,
+        stream: bool,
+    ) -> httpx.Response:
+        """One connect retry with the same op id, which the agent treats as the
+        same operation; nothing after the request may have left is resent."""
+        for attempt in (1, 2):
+            try:
+                request = client.build_request("POST", f"/v1/lifecycle/{action}", json=body)
+                response = await client.send(request, stream=stream)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                if attempt == 2:
+                    raise NoAvailableModelError(
+                        detail=f"node agent unreachable for {action} {op_id}: {exc!r}"
+                    ) from exc
+                continue
+            except httpx.HTTPError as exc:
+                raise StreamInterruptedError(
+                    detail=f"{action} {op_id} failed after sending: {exc!r}"
+                ) from exc
+            if response.status_code in (200, 202, 502):
+                return response
+            await response.aread()
+            await response.aclose()
+            if response.status_code == 422:
+                raise RuntimeCapabilityError(
+                    detail=f"node agent refused {action} {op_id}: {response.text[:200]}"
+                )
+            self._raise_for_refusal(response, op_id)
+        raise NoAvailableModelError(detail=f"node agent gave no response for {op_id}")
+
+    @staticmethod
+    def _lifecycle_outcome(
+        action: str, ref: str, op_id: str, described: dict[str, Any] | None
+    ) -> None:
+        if described is None:
+            raise StreamInterruptedError(detail=f"{action} {op_id} of {ref} ended early")
+        state = described.get("state")
+        if state == "completed":
+            return
+        reason = described.get("reason")
+        if state == "failed" and reason == "not_found":
+            raise ModelNotFoundError(detail=f"{ref} is not present on this runtime")
+        if state == "failed":
+            raise NoAvailableModelError(detail=f"{action} of {ref} failed ({reason}), {op_id}")
+        raise StreamInterruptedError(detail=f"{action} {op_id} of {ref} is {state} ({reason})")
 
 
 def _view(described: dict[str, Any]) -> AttemptView:

@@ -17,7 +17,7 @@ from app.domain.exceptions import (
     RuntimeUnavailableError,
 )
 from app.domain.ports.infrastructure_ports import MetricsPort
-from app.domain.ports.model_runtime_port import ModelRuntimePort
+from app.domain.ports.model_runtime_port import ModelRuntimePort, runtime_for
 from app.domain.ports.repositories import (
     ModelRepositoryPort,
     NodeRepositoryPort,
@@ -263,6 +263,15 @@ class ModelRegistryMixin:
             # produces a row that can never be downloaded or loaded, and the
             # failure would otherwise appear much later as a KeyError.
             raise RuntimeUnavailableError(detail=f"no adapter for runtime {runtime}")
+        return adapter
+
+    def _runtime_on(self, node: Node, runtime: RuntimeKind) -> ModelRuntimePort:
+        """The runtime that holds the model's weights: its node's, never the
+        kind's (final spec §1). With node agents enabled it is that node's
+        agent, which runs the operation with the node to itself (PR4b)."""
+        adapter = runtime_for(self._runtimes, node, runtime)
+        if adapter is None:
+            raise RuntimeUnavailableError(detail=f"no {runtime} runtime on node {node.id}")
         return adapter
 
     async def _referenced_by_policy(self, alias: str) -> bool:

@@ -561,3 +561,117 @@ async def test_a_cancelled_relay_task_still_settles_as_unknown() -> None:
     assert store.ops["x"].state == "outcome_unknown"
     assert dispatcher.state is GateState.BLOCKED
     await asyncio.wait_for(dispatcher.wait_idle(), 1)
+
+
+# -- lifecycle: the node to itself (PR4b) ------------------------------------
+
+
+async def test_a_lifecycle_operation_waits_for_admitted_work_and_refuses_new_work() -> None:
+    """Design S5: the node drains its own tasks, runs the operation, resumes.
+    Nothing is admitted alongside it."""
+    store = MemoryStore()
+    dispatcher = Dispatcher(store)
+    hold = asyncio.Event()
+    running = ScriptedRelay(hold=hold)
+    x = await dispatcher.submit("x", "inference", running)
+    assert isinstance(x, Attempt)
+    await running.started.wait()
+
+    load_relay = ScriptedRelay(Completed(terminal={"status": 200}))
+    load = asyncio.create_task(dispatcher.exclusive("l", "load", load_relay))
+    await asyncio.sleep(0.05)
+    late = ScriptedRelay()
+    refused = await dispatcher.submit("y", "inference", late)
+
+    assert load_relay.sends == 0, "not sent while admitted work runs"
+    assert isinstance(refused, Refused) and refused.reason == "node_draining"
+    hold.set()
+    attempt = await asyncio.wait_for(load, 2)
+    assert isinstance(attempt, Attempt)
+    await asyncio.wait_for(attempt.settled, 2)
+    assert store.ops["l"].state == "completed" and load_relay.sends == 1
+    await asyncio.sleep(0)
+    assert dispatcher.state is GateState.SERVING, "the node serves again"
+
+
+async def test_only_one_lifecycle_operation_holds_the_node() -> None:
+    store = MemoryStore()
+    dispatcher = Dispatcher(store)
+    hold = asyncio.Event()
+    first = await dispatcher.exclusive("p", "pull", ScriptedRelay(hold=hold))
+    second = await dispatcher.exclusive("l", "load", ScriptedRelay())
+
+    assert isinstance(first, Attempt)
+    assert isinstance(second, Refused) and "l" not in store.ops
+    hold.set()
+    await asyncio.wait_for(first.settled, 2)
+
+
+async def test_an_uncertain_lifecycle_operation_fails_and_does_not_block() -> None:
+    """It changes what the runtime holds, which is observed again; it is not
+    output nobody can account for (final spec §3 blocks on inference)."""
+    store = MemoryStore()
+    dispatcher = Dispatcher(store)
+    attempt = await dispatcher.exclusive("l", "load", ScriptedRelay(Uncertain("transport:Read")))
+    assert isinstance(attempt, Attempt)
+    await asyncio.wait_for(attempt.settled, 2)
+    await asyncio.sleep(0)
+
+    assert store.ops["l"].state == "failed"
+    assert store.ops["l"].reason == "uncertain:transport:Read"
+    assert dispatcher.state is GateState.SERVING
+    assert isinstance(await dispatcher.submit("x", "inference", ScriptedRelay()), Attempt)
+
+
+async def test_a_blocked_node_refuses_lifecycle_changes() -> None:
+    store = MemoryStore()
+    dispatcher = Dispatcher(store)
+    unknown = await dispatcher.submit("x", "inference", ScriptedRelay(Uncertain("eof")))
+    assert isinstance(unknown, Attempt)
+    await asyncio.wait_for(unknown.settled, 2)
+
+    refused = await dispatcher.exclusive("l", "load", relay := ScriptedRelay())
+
+    assert isinstance(refused, Refused) and refused.reason == "node_blocked"
+    assert relay.sends == 0
+
+
+async def test_the_follow_up_runs_before_the_node_serves_again() -> None:
+    """A pull's re-pin lands before anything is dispatched against the pin."""
+    store = MemoryStore()
+    dispatcher = Dispatcher(store)
+    seen: list[GateState] = []
+
+    async def after(outcome: Any) -> None:
+        seen.append(dispatcher.state)
+
+    attempt = await dispatcher.exclusive(
+        "p", "pull", ScriptedRelay(Completed(terminal={"status": "success"})), after=after
+    )
+    assert isinstance(attempt, Attempt)
+    await asyncio.wait_for(attempt.settled, 2)
+    await asyncio.sleep(0)
+
+    assert seen == [GateState.DRAINING]
+    assert dispatcher.state is GateState.SERVING
+
+
+async def test_an_operators_drain_outlasts_a_lifecycle_operation() -> None:
+    store = MemoryStore()
+    dispatcher = Dispatcher(store)
+    hold = asyncio.Event()
+    attempt = await dispatcher.exclusive("l", "load", ScriptedRelay(hold=hold))
+    assert isinstance(attempt, Attempt)
+    drained = asyncio.create_task(dispatcher.drain())
+    await asyncio.sleep(0.02)
+    hold.set()
+    await asyncio.wait_for(drained, 2)
+    await asyncio.sleep(0)
+
+    assert dispatcher.state is GateState.DRAINING, "the operator resumes, not the load"
+    assert await dispatcher.reopen() is GateState.SERVING
+
+
+async def test_inference_kinds_are_not_lifecycle_operations() -> None:
+    with pytest.raises(ValueError, match="lifecycle"):
+        await Dispatcher(MemoryStore()).exclusive("x", "inference", ScriptedRelay())

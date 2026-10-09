@@ -41,7 +41,11 @@ from app.domain.services.token_service import TokenService
 from app.infrastructure.concurrency import SemaphoreConcurrencyLimiter
 from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.db import get_session_factory, session_scope
-from app.infrastructure.runtime_directory import MIN_AGENT_TOKEN_LENGTH, RuntimeDirectory
+from app.infrastructure.runtime_directory import (
+    MIN_AGENT_TOKEN_LENGTH,
+    NO_RUNTIME_URL,
+    RuntimeDirectory,
+)
 from app.shared.clock import SystemClock
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -67,14 +71,19 @@ def build_runtimes(settings: Settings) -> RuntimeDirectory:
                 "NODE_AGENT_ENABLED needs the node_agent_token secret, "
                 f"at least {MIN_AGENT_TOKEN_LENGTH} characters"
             )
+    # With agents enabled the by-kind adapters only validate references, so
+    # they are built without the runtime's address at all: this process then
+    # holds no URL that reaches a runtime around its agent (PR4b's audit).
+    ollama_url = NO_RUNTIME_URL if token else settings.ollama_base_url
+    mlx_url = NO_RUNTIME_URL if token else settings.mlx_base_url
     direct: dict[RuntimeKind, ModelRuntimePort] = {
         RuntimeKind.OLLAMA: OllamaAdapter(
-            base_url=settings.ollama_base_url,
+            base_url=ollama_url,
             request_timeout_seconds=settings.request_timeout_seconds,
             keep_alive=settings.ollama_keep_alive,
         ),
         RuntimeKind.MLX: MlxAdapter(
-            base_url=settings.mlx_base_url,
+            base_url=mlx_url,
             request_timeout_seconds=settings.request_timeout_seconds,
             tool_calling_verified=settings.mlx_tool_calling_verified,
         ),

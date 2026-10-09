@@ -65,3 +65,16 @@ def test_health_responses_leak_nothing(app: FastAPI) -> None:
     body = TestClient(app).get("/healthz").text.lower()
     for leak in ("version", "0.1.0", "ollama", "qwen", "postgres://", "rcsl.online"):
         assert leak not in body
+
+
+async def test_a_check_that_answers_false_is_a_failure() -> None:
+    """Until 2026-10-09 a probe counted any return as success, so a runtime
+    whose `health()` answered False still read as ready."""
+    from app.interfaces.http.routers.health import _probe
+
+    async def answers(value: object) -> object:
+        return value
+
+    assert await _probe("runtime", answers(False)) == ("runtime", False)
+    assert await _probe("runtime", answers(True)) == ("runtime", True)
+    assert await _probe("cache", answers(None)) == ("cache", True), "a cache miss is fine"

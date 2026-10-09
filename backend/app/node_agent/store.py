@@ -37,6 +37,12 @@ DISPATCH_NAMESPACE = 0x4E58_0002
 """First key of the transaction advisory lock that orders dispatch decisions."""
 
 
+LIFECYCLE_KINDS = frozenset({"load", "unload", "pull"})
+"""Operations that change what the runtime holds rather than produce output
+anyone is billed or answered with (PR4b). Exclusive with dispatch on the node;
+an uncertain one fails rather than blocks (see `Dispatcher.exclusive`)."""
+
+
 class NotOwner(Exception):  # noqa: N818 - a state, not a failure
     """This process no longer owns the node; its write was not applied."""
 
@@ -399,6 +405,25 @@ class OperationStore:
                 reason,
             )
         return done is not None
+
+    async def repin(self, op_id: str, runtime: str, ref: str, digest: str) -> int:
+        """Set the weights pin of this node's models on `ref` (design S5).
+
+        Only the agent's own completed pull calls this, before its node
+        resumes, so nothing is dispatched between the new weights arriving
+        and the pin naming them. Fenced like every other write.
+        """
+        async with self._owned(dispatch=True, action="repin", op_id=op_id) as conn:
+            moved = await conn.fetchval(
+                "WITH moved AS (UPDATE models SET manifest_digest = $4 "
+                "WHERE node_id = $1 AND runtime = $2 AND ref = $3 RETURNING 1) "
+                "SELECT count(*) FROM moved",
+                self.node_id,
+                runtime,
+                ref,
+                digest,
+            )
+        return int(moved or 0)
 
     async def audit(self, event: str, op_id: str | None, detail: dict[str, Any]) -> None:
         """Unfenced: evidence is recorded whoever wrote it."""
