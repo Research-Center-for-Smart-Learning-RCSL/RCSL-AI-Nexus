@@ -730,11 +730,13 @@ docstring 裡，那是估算器本身所在的地方。
   unload。打開之後 gateway 和 admin 手上沒有任何 runtime 位址（`NO_RUNTIME_URL`）。
 
   ```sh
-  docker compose exec -T postgres psql -U nexus -d nexus -c \
-    "UPDATE nodes SET agent_url = 'http://node-agent:8100' WHERE id = '<NODE_AGENT_NODE_ID>'"
   echo 'NODE_AGENT_ENABLED=true' >> .env
-  docker compose up -d gateway admin-tailnet admin-public
+  docker compose up -d
   ```
+
+  節點的 `agent_url` 由 migrate 的 provision 依 override 裡的 `NODE_AGENT_URL` 寫入，每次部署
+  都會重寫，**不要用 SQL 手動改**：下一次 `up` 就會被清掉（2026-10-09 啟用時就是這樣，所有
+  chat 回 503 `no_available_model`）。
 
   打開後要知道的兩件事：
 
@@ -743,7 +745,7 @@ docstring 裡，那是估算器本身所在的地方。
     `models.manifest_digest` 之後才恢復。大模型的下載可能要好幾分鐘，排在離峰時段。
   - **節點被封鎖時不能 load、unload 或下載**，要先照上面的步驟解除；residency 仍照常回報。
 
-  要關回去：從 `.env` 拿掉那一行，再 `docker compose up -d gateway admin-tailnet admin-public`。
+  要關回去：從 `.env` 拿掉那一行，再 `docker compose up -d`。
 
 - [ ] **裝健康監測的 LaunchDaemon（狀態變了會寄信）。** 開機對帳那個 daemon 修的是開機那一
   刻。它修不好、或者它自己沒跑的時候，狀態會跟 2026-07-26 那次一模一樣：容器 running、
