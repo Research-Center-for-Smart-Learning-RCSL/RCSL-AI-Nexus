@@ -31,6 +31,7 @@ from app.application.use_cases.route_chat_request.compaction_tier2 import (
 )
 from app.domain.entities.chat import Message
 from app.domain.exceptions import NoAvailableModelError
+from app.domain.ports.model_runtime_port import runtime_for
 from app.domain.ports.repositories import UsageRepositoryPort
 from app.domain.services.memory_budget_service import MemoryBudgetService
 from app.domain.services.routing_service import RoutingService
@@ -77,7 +78,7 @@ def build_assist_summariser(
         nodes = {n.id: n for n in await nodes_repo.list_all()}
         target = routing.select(policy, models, nodes)
 
-        runtime = request.app.state.runtimes.get(target.runtime)
+        runtime = runtime_for(request.app.state.runtimes, nodes.get(target.node_id), target.runtime)
         if runtime is None:
             raise NoAvailableModelError(detail=f"no adapter for runtime={target.runtime}")
 

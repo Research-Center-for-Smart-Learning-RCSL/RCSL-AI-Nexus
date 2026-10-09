@@ -296,7 +296,12 @@ class NodeAgentRuntime:
         if response.status_code != 200:
             self._raise_for_refusal(response, identity.op_id)
         described = response.json()
+        # A fresh batch carries its vectors at the top; a repeated op id
+        # carries the stored result under `result` (review of #33's branch).
+        stored = described.get("result")
         vectors = described.get("embeddings")
+        if vectors is None and isinstance(stored, dict):
+            vectors = stored.get("embeddings")
         if described.get("state") != "completed" or not isinstance(vectors, list):
             raise NoAvailableModelError(
                 detail=f"embedding {identity.op_id} is {described.get('state')} with no vectors"
