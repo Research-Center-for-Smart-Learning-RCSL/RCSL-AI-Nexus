@@ -171,6 +171,29 @@ async def observe_models(
     return changed
 
 
+async def observe_runtime_version(
+    runtimes: dict[RuntimeKind, ModelRuntimePort],
+    nodes: NodesSource,
+    write_version: Callable[[str, str | None], Awaitable[None]],
+) -> None:
+    """Stamp each node's Ollama version, through its own runtime (its agent
+    when agents are enabled), for the validated-profile key (PR2b on #24).
+
+    A runtime that cannot say clears the stamp: a version that can no longer
+    be re-read must not keep keying a profile.
+    """
+    for node in await nodes():
+        if RuntimeKind.OLLAMA not in node.runtimes:
+            continue
+        runtime = runtime_for(runtimes, node, RuntimeKind.OLLAMA)
+        read = getattr(runtime, "runtime_version", None)
+        version = await read() if callable(read) else None
+        # Every sweep while it answers, so the stamp stays fresh; once when it
+        # stops, to clear it.
+        if version is not None or node.runtime_version is not None:
+            await write_version(node.id, version)
+
+
 async def run_heartbeat(app: FastAPI, interval_seconds: int) -> None:
     health = RuntimeNodeHealth(app.state.runtimes)
 
@@ -192,6 +215,10 @@ async def run_heartbeat(app: FastAPI, interval_seconds: int) -> None:
         async with session_scope() as session:
             await PostgresModelRepository(session).set_observed(model_id, state, memory_gb)
 
+    async def write_version(node_id: str, version: str | None) -> None:
+        async with session_scope() as session:
+            await PostgresNodeRepository(session).set_runtime_version(node_id, version)
+
     while True:
         await asyncio.sleep(interval_seconds)
         try:
@@ -200,6 +227,12 @@ async def run_heartbeat(app: FastAPI, interval_seconds: int) -> None:
             raise
         except Exception:  # noqa: BLE001 - a failed sweep must not kill the loop
             logger.exception("node heartbeat sweep failed")
+        try:
+            await observe_runtime_version(app.state.runtimes, load_nodes, write_version)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a failed sweep must not kill the loop
+            logger.exception("runtime version sweep failed")
         try:
             local_id = get_settings().node_id
             local = next((n for n in await load_nodes() if n.id == local_id), None)

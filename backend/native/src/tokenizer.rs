@@ -7,10 +7,9 @@ use tokenizers::pre_tokenizers::sequence::Sequence;
 use tokenizers::pre_tokenizers::split::{Split, SplitPattern};
 use tokenizers::{AddedToken, DecoderWrapper, PreTokenizerWrapper, Tokenizer};
 
-use crate::gemma4_bpe::Gemma4Bpe;
+use crate::gemma4_bpe::{Gemma4Bpe, special_texts};
 use crate::gguf::{GgufError, GgufValue};
 
-const CONTROL_TOKEN_TYPE: u32 = 3;
 pub const BPE_MODEL: &str = "gpt2";
 
 const PRE_TOKENIZER_PATTERN: &str = concat!(
@@ -58,12 +57,12 @@ fn add_special_tokens(
     tokens: &[String],
     types: &[u32],
 ) -> Result<(), GgufError> {
-    let special: Vec<AddedToken> = tokens
-        .iter()
-        .zip(types.iter())
-        .filter(|(_, t)| **t == CONTROL_TOKEN_TYPE)
-        .map(|(token, _)| {
-            AddedToken::from(token.clone(), true)
+    // Not only control-type: llama.cpp also splits user-defined tokens and
+    // its end-of-generation texts (`gemma4_bpe::special_texts`, PR2b on #24).
+    let special: Vec<AddedToken> = special_texts(tokens, types)?
+        .into_iter()
+        .map(|token| {
+            AddedToken::from(token, true)
                 .normalized(false)
                 .single_word(false)
         })

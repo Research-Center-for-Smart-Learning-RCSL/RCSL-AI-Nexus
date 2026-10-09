@@ -83,6 +83,18 @@ class OllamaLifecycleMixin(OllamaRuntimeBase):
         except httpx.HTTPError:
             return False
 
+    async def runtime_version(self) -> str | None:
+        """`/api/version`, or None when the runtime cannot be asked (PR2b)."""
+        try:
+            async with httpx.AsyncClient(
+                base_url=self._base_url, timeout=httpx.Timeout(5.0)
+            ) as client:
+                response = await client.get("/api/version")
+            version = response.json().get("version") if response.status_code == 200 else None
+        except (httpx.HTTPError, ValueError, AttributeError):
+            return None
+        return version if isinstance(version, str) and version else None
+
     async def residency(self) -> RuntimeResidency | None:
         """What Ollama is actually holding: `/api/ps` for resident models,
         `/api/tags` for what is on disk.
