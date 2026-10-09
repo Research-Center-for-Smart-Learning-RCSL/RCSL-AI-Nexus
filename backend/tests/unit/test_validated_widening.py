@@ -15,7 +15,7 @@ from app.domain.entities.chat import Message, MessageRole
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.exceptions import ContextTooLongError
 from app.domain.services import validated_profiles
-from app.domain.services.validated_profiles import ValidatedProfile
+from app.domain.services.validated_profiles import ValidatedProfile, WidenedAdmission
 from tests.unit.streaming_contract_fixtures import FakeCounter, FakeRepo, FakeRuntime, _drain, build
 
 pytest_plugins = ("tests.unit.streaming_contract_fixtures",)
@@ -125,26 +125,69 @@ async def test_anything_short_of_the_whole_fingerprint_keeps_the_half(
     assert caught.value.limit == 16384
 
 
-def test_a_widened_request_past_the_half_is_not_called_truncated(caplog) -> None:
-    """Seen in production on the first widened request: 20045 evaluated of
-    20045 counted was reported as reaching num_ctx/2."""
+def _warned(caplog, prompt_tokens: int, widened, *, estimated: int = 20045) -> list[str]:
     from app.application.use_cases.route_chat_request.diagnostics import (
         _warn_if_prompt_was_truncated,
     )
 
-    def warned(prompt_tokens: int, *, widened: bool) -> bool:
-        caplog.clear()
-        _warn_if_prompt_was_truncated(
-            prompt_tokens,
-            32768,
-            estimated=20045,
-            basis="tokenizer",
-            request_id="r",
-            actor="a",
-            widened=widened,
-        )
-        return any("likely truncated" in r.message for r in caplog.records)
+    caplog.clear()
+    _warn_if_prompt_was_truncated(
+        prompt_tokens,
+        32768,
+        estimated=estimated,
+        basis="tokenizer",
+        request_id="r",
+        actor="a",
+        widened=widened,
+    )
+    return [r.message for r in caplog.records if r.levelname == "WARNING"]
 
-    assert not warned(20045, widened=True)
-    assert warned(16384, widened=True), "a cut evaluation is still reported"
-    assert warned(20045, widened=False), "unchanged where the half applies"
+
+ADMITTED = WidenedAdmission(profile="qwen2.5:7b", counted=20045, limit=32751)
+
+
+def test_a_widened_request_past_the_half_is_not_called_truncated(caplog) -> None:
+    """Seen in production on the first widened request: 20045 evaluated of
+    20045 counted was reported as reaching num_ctx/2."""
+    assert _warned(caplog, 20045, ADMITTED) == []
+    assert _warned(caplog, 20045, None), "unchanged where the half applies"
+
+
+def test_a_cut_just_past_the_half_is_caught(caplog) -> None:
+    """Review of #43: a 17000-token request cut to 16384 is 96% of its count,
+    which a ratio of 0.95 let through."""
+    admitted = WidenedAdmission(profile="qwen2.5:7b", counted=17000, limit=32751)
+
+    warnings = _warned(caplog, 16384, admitted, estimated=17000)
+
+    assert len(warnings) == 1 and "truncated" in warnings[0]
+    assert "qwen2.5:7b" in warnings[0], "the profile to withdraw is named"
+
+
+def test_the_runtime_reading_more_than_was_counted_is_reported(caplog) -> None:
+    """The direction that breaks the output reserve, silent before."""
+    warnings = _warned(caplog, 21000, ADMITTED)
+
+    assert len(warnings) == 1 and "under-counted" in warnings[0] and "qwen2.5:7b" in warnings[0]
+
+
+def test_the_count_judged_is_the_one_admitted_not_the_gateways_alone(caplog) -> None:
+    """Admission compares the larger of the gateway's count and the profile's
+    own measure; the backstop must judge against that same figure."""
+    admitted = WidenedAdmission(profile="qwen2.5:7b", counted=18000, limit=32751)
+
+    assert _warned(caplog, 16384, admitted, estimated=17000)
+
+
+async def test_the_guard_hands_on_what_it_judged() -> None:
+    use_case = _use_case(MeasuringCounter(total=20000))
+    from app.domain.entities.actor import Actor, Role, Scope
+
+    actor = Actor(id="a", display="a", role=Role.ADMIN, source="dev", scopes=frozenset(Scope))
+    model = (await use_case._models.list_all())[0]  # noqa: SLF001
+    node = (await use_case._nodes.list_all())[0]  # noqa: SLF001
+    admitted = await use_case._refuse_what_this_target_would_truncate(  # noqa: SLF001
+        20000, "tokenizer", model, actor, MESSAGE, (), 1024, node=node, thinking=False
+    )
+
+    assert admitted == WidenedAdmission(profile="primary:latest", counted=20000, limit=31743)
