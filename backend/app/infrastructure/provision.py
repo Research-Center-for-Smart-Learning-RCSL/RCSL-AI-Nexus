@@ -67,6 +67,9 @@ def build_local_node(settings: Settings) -> Node:
         status=NodeStatus.ONLINE,
         total_memory_gb=settings.node_total_memory_gb,
         runtimes=frozenset({RuntimeKind.OLLAMA}),
+        # From configuration like everything else here, because this row is
+        # rewritten on every deploy: an address set by hand would be cleared.
+        agent_url=settings.node_agent_url or None,
     )
 
 

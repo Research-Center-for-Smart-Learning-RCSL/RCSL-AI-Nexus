@@ -40,6 +40,12 @@ class RuntimeSettings(BaseSettings):
 
     node_name: str = "local"
 
+    node_agent_url: str | None = None
+    """This node's agent, written to `nodes.agent_url` by provisioning (#24,
+    design §3). Set by `docker-compose.node-agent.yml`, the file that deploys
+    the agent. Provisioning rewrites the node row on every deploy, so a value
+    set by hand is lost on the next `up` (found activating PR4b, 2026-10-09)."""
+
     node_total_memory_gb: float = Field(default=64.0, gt=0.0)
     """The node's unified memory, and nothing netted out of it.
 
