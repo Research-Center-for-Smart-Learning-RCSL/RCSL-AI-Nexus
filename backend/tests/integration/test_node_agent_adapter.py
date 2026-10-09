@@ -126,6 +126,22 @@ async def test_embeddings_return_vectors(agent: dict[str, Any]) -> None:
     assert await agent["runtime"].embed("nomic-embed-text", ["a"]) == [[0.5, 0.25]]
 
 
+async def test_a_repeated_embedding_attempt_replays_its_stored_vectors(
+    agent: dict[str, Any],
+) -> None:
+    """Review of #33's branch: a replayed batch's vectors sit under `result`,
+    and the adapter looked only at the top level."""
+    token = current_attempt.set(_keyed("op-embed"))
+    try:
+        first = await agent["runtime"].embed("nomic-embed-text", ["a"])
+        again = await agent["runtime"].embed("nomic-embed-text", ["a"])
+    finally:
+        current_attempt.reset(token)
+
+    assert again == first == [[0.5, 0.25]]
+    assert agent["ollama"].embeds == 1
+
+
 async def test_methods_outside_this_stage_fail_closed(agent: dict[str, Any]) -> None:
     runtime = agent["runtime"]
     with pytest.raises(RuntimeCapabilityError):
