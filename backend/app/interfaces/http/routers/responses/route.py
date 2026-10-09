@@ -14,6 +14,7 @@ from app.infrastructure.di import (
     RouteChatRequestDep,
 )
 from app.interfaces.http import responses_sse, sse
+from app.interfaces.http.idempotency import IdempotencyKeyDep, request_identity
 from app.interfaces.http.middleware.api_key_auth import authenticate_api_key
 from app.interfaces.http.schemas.responses_schemas import (
     ResponsePayload,
@@ -50,6 +51,7 @@ async def create_response(
     ground_chat: GroundChatFactoryDep,
     apply_template: ApplyPromptTemplateFactoryDep,
     response: Response,
+    idempotency_key: IdempotencyKeyDep = None,
 ) -> ResponsePayload | StreamingResponse:
     _assert_no_server_side_tools(body)
 
@@ -72,33 +74,38 @@ async def create_response(
     # of the instructions. Declared in the request schema, so they are
     # implemented here — a field a caller can set and nothing reads is the
     # defect this repository keeps finding.
-    if body.prompt_template:
-        messages = await apply_template(actor.tenant_id).execute(
-            actor, messages, body.prompt_template
-        )
+    #
+    # A repeated `Idempotency-Key` is answered before either (design R6 on #24).
+    identity = request_identity(idempotency_key, "responses", body)
+    generation = await use_case.repeat(actor, body.model, identity)
     passages: list[tuple[str, int]] = []
-    if body.use_knowledge:
-        messages, retrieved = await ground_chat(actor.tenant_id).execute(
-            actor, messages, collection_id=body.knowledge_collection
+    if generation is None:
+        if body.prompt_template:
+            messages = await apply_template(actor.tenant_id).execute(
+                actor, messages, body.prompt_template
+            )
+        if body.use_knowledge:
+            messages, retrieved = await ground_chat(actor.tenant_id).execute(
+                actor, messages, collection_id=body.knowledge_collection
+            )
+            passages = [(p.document_id, p.index) for p in retrieved]
+        generation = use_case.execute(
+            actor,
+            body.model,
+            messages,
+            body.max_output_tokens,
+            body.think,
+            tools,
+            tool_choice,
+            sampling,
+            identity=identity,
         )
-        passages = [(p.document_id, p.index) for p in retrieved]
     headers.update(sse.citation_header(passages))
     # Last of the three, and computed before the generator is primed: once the
     # first frame is written the headers are gone, and a substitution nobody
     # was told about is the silence this key setting was allowed on condition
     # of breaking.
     headers.update(sse.capability_defaulted_header(actor, body.model))
-
-    generation = use_case.execute(
-        actor,
-        body.model,
-        messages,
-        body.max_output_tokens,
-        body.think,
-        tools,
-        tool_choice,
-        sampling,
-    )
 
     if body.stream:
         # Primed before the response object exists, so a routing failure is a

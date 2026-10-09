@@ -15,6 +15,7 @@ from app.infrastructure.di import (
     RouteChatRequestDep,
 )
 from app.interfaces.http import sse
+from app.interfaces.http.idempotency import IdempotencyKeyDep, request_identity
 from app.interfaces.http.middleware.api_key_auth import (
     authenticate_api_key,
     authenticate_api_key_without_quota,
@@ -72,6 +73,7 @@ async def chat_completions(
     ground_chat: GroundChatFactoryDep,
     apply_template: ApplyPromptTemplateFactoryDep,
     response: Response,
+    idempotency_key: IdempotencyKeyDep = None,
 ) -> ChatCompletionResponse | StreamingResponse:
     completion_id = sse.new_completion_id()
     created = sse.created_now()
@@ -89,17 +91,34 @@ async def chat_completions(
     # retrieved passages sit next to the question rather than ahead of the
     # instructions. Both run before the streaming use case; see
     # application/use_cases/apply_prompt_template.py.
-    if body.prompt_template:
-        messages = await apply_template(actor.tenant_id).execute(
-            actor, messages, body.prompt_template
-        )
+    #
+    # A repeated `Idempotency-Key` is answered before either, so a repeat
+    # costs no retrieval and no compaction (design R6 on #24).
+    identity = request_identity(idempotency_key, "chat.completions", body)
+    generation = await use_case.repeat(actor, body.model, identity)
 
     passages: list[tuple[str, int]] = []
-    if body.use_knowledge:
-        messages, retrieved = await ground_chat(actor.tenant_id).execute(
-            actor, messages, collection_id=body.knowledge_collection
+    if generation is None:
+        if body.prompt_template:
+            messages = await apply_template(actor.tenant_id).execute(
+                actor, messages, body.prompt_template
+            )
+        if body.use_knowledge:
+            messages, retrieved = await ground_chat(actor.tenant_id).execute(
+                actor, messages, collection_id=body.knowledge_collection
+            )
+            passages = [(p.document_id, p.index) for p in retrieved]
+        generation = use_case.execute(
+            actor,
+            body.model,
+            messages,
+            body.max_tokens,
+            body.think,
+            tools,
+            tool_choice,
+            sampling,
+            identity=identity,
         )
-        passages = [(p.document_id, p.index) for p in retrieved]
 
     # Both paths carry both headers, so the two cannot answer differently about
     # the same request. `capability_defaulted_header` is empty unless this key
@@ -110,16 +129,6 @@ async def chat_completions(
     }
 
     if body.stream:
-        generation = use_case.execute(
-            actor,
-            body.model,
-            messages,
-            body.max_tokens,
-            body.think,
-            tools,
-            tool_choice,
-            sampling,
-        )
         first = await sse.prime(generation)
         return sse.streaming_response(
             completion_id=completion_id,
@@ -148,19 +157,7 @@ async def chat_completions(
     for name, value in headers.items():
         response.headers[name] = value
 
-    collected = await _collect(
-        completion_id,
-        created,
-        body.model,
-        actor,
-        use_case,
-        messages,
-        body.max_tokens,
-        body.think,
-        tools,
-        tool_choice,
-        sampling,
-    )
+    collected = await _collect(completion_id, created, body.model, generation)
     # After `_collect`, because that is when the use case has run. FastAPI
     # merges this `Response`'s headers when the handler returns, so setting one
     # here still reaches the caller — the constraint the streaming path has,

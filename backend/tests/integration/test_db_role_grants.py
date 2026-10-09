@@ -202,3 +202,45 @@ async def test_node_agent_account_holds_its_own_tables_and_nothing_else(database
         await agent.dispose()
         await gateway.dispose()
         await _drop_roles(owner_url)
+
+
+async def test_gateway_account_binds_requests_but_cannot_rewrite_them(database_url) -> None:
+    """PR4a-2 on #24: the gateway binds and rebinds through its own account,
+    and the columns that identify a request or bill it stay as written."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.adapters.persistence.repositories import PostgresRequestBindings
+
+    owner_url = database_url
+    await apply_statements(
+        owner_url, build_statements([GATEWAY], database=make_url(owner_url).database)
+    )
+    gateway = create_async_engine(_url_for(owner_url, GATEWAY))
+    try:
+        bindings = PostgresRequestBindings(async_sessionmaker(gateway, expire_on_commit=False))
+        bound = await bindings.create(
+            tenant_id=DEFAULT_TENANT_ID,
+            request_id="k:grants",
+            payload_hash="v1:h",
+            hash_version="v1",
+            key_supplied=True,
+            billing={"actor_id": "a"},
+            node_id="n1",
+            op_id=str(uuid.uuid4()),
+        )
+        moved = await bindings.rebind(bound, node_id="n2", op_id=str(uuid.uuid4()))
+        assert moved.seq == 2 and moved.node_id == "n2"
+        await _allowed(
+            gateway,
+            "UPDATE request_attempts SET client_delivery_complete = true WHERE op_id = :op",
+            op=moved.op_id,
+        )
+
+        await _denied(gateway, "UPDATE request_bindings SET payload_hash = 'v1:other'")
+        await _denied(gateway, "UPDATE request_bindings SET billing = '{}'::jsonb")
+        await _denied(gateway, "UPDATE request_attempts SET node_id = 'elsewhere'")
+        await _denied(gateway, "DELETE FROM request_bindings")
+        await _denied(gateway, "DELETE FROM request_attempts")
+    finally:
+        await gateway.dispose()
+        await _drop_roles(owner_url)

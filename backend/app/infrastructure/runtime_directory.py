@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Sequence
 
+import httpx
+
 from app.adapters.runtime.node_agent_adapter import NodeAgentRuntime
 from app.domain.entities.chat import (
     CompletionChunk,
@@ -64,6 +66,7 @@ class RuntimeDirectory(dict[RuntimeKind, ModelRuntimePort]):
         *,
         agent_token: str | None = None,
         timeout_s: float = 1500.0,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         super().__init__(
             direct
@@ -72,6 +75,8 @@ class RuntimeDirectory(dict[RuntimeKind, ModelRuntimePort]):
         )
         self._token = agent_token
         self._timeout_s = timeout_s
+        self._transport = transport
+        """For tests: reach an in-process agent instead of the network."""
         self._agents: dict[str, NodeAgentRuntime] = {}
 
     @property
@@ -85,7 +90,9 @@ class RuntimeDirectory(dict[RuntimeKind, ModelRuntimePort]):
             return None
         agent = self._agents.get(node.agent_url)
         if agent is None:
-            agent = NodeAgentRuntime(node.agent_url, self._token, timeout_s=self._timeout_s)
+            agent = NodeAgentRuntime(
+                node.agent_url, self._token, timeout_s=self._timeout_s, transport=self._transport
+            )
             self._agents[node.agent_url] = agent
         return agent
 

@@ -50,6 +50,7 @@ from app.domain.exceptions import (
     ServerOverloadedError,
     StreamInterruptedError,
 )
+from app.domain.ports.request_binding_port import AttemptView
 from app.node_agent.wire import (
     EmbeddingRequest,
     Envelope,
@@ -234,40 +235,68 @@ class NodeAgentRuntime:
         )
 
     def _replay(self, ref: str, described: dict[str, Any]) -> list[CompletionChunk]:
-        """An existing attempt: its stored result as one chunk, or a refusal.
-
-        Decision Q3: one chunk carrying the whole content, reasoning and tool
-        calls, then the original finish reason and totals.
-        """
-        state = described.get("state")
-        op_id = described.get("op_id")
-        if state == "completed":
-            result = described.get("result")
-            if not isinstance(result, dict):
+        """An existing attempt met by a POST: its stored result, or a refusal."""
+        view = _view(described)
+        if view.state == "completed":
+            if view.result is None:
                 # Decision Q2: nothing was stored without a key. Never run
                 # again; say what happened instead.
                 raise StreamInterruptedError(
-                    detail=f"{op_id} completed but its result was not retained"
+                    detail=f"{view.op_id} completed but its result was not retained"
                 )
-            decoder = ChatStreamDecoder(ref)
-            chunk = decoder.decode(
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": result.get("content") or "",
-                        "thinking": result.get("thinking") or "",
-                        "tool_calls": result.get("tool_calls") or [],
-                    },
-                    "done": True,
-                    "done_reason": result.get("done_reason"),
-                    "eval_count": result.get("eval_count"),
-                    "prompt_eval_count": result.get("prompt_eval_count"),
-                }
-            )
-            return [chunk] if chunk is not None else []
-        if state == "failed":
-            raise NoAvailableModelError(detail=f"{op_id} failed: {described.get('reason')}")
-        raise StreamInterruptedError(detail=f"{op_id} is {state}; it is not run again")
+            return self.replay(ref, view)
+        if view.state == "failed":
+            raise NoAvailableModelError(detail=f"{view.op_id} failed: {view.reason}")
+        raise StreamInterruptedError(detail=f"{view.op_id} is {view.state}; it is not run again")
+
+    # -- the attempt ledger (AttemptLedgerPort) ----------------------------
+
+    async def describe(self, op_id: str) -> AttemptView | None:
+        try:
+            async with self._client() as client:
+                response = await client.get(f"/v1/attempts/{op_id}")
+        except httpx.HTTPError as exc:
+            raise NoAvailableModelError(
+                detail=f"node agent unreachable describing {op_id}: {exc!r}"
+            ) from exc
+        if response.status_code == 404:
+            return None
+        if response.status_code != 200:
+            self._raise_for_refusal(response, op_id)
+        return _view(response.json())
+
+    async def cancel(self, op_id: str, kind: str) -> AttemptView:
+        try:
+            async with self._client() as client:
+                response = await client.post(f"/v1/attempts/{op_id}/cancel", params={"kind": kind})
+        except httpx.HTTPError as exc:
+            raise NoAvailableModelError(
+                detail=f"node agent unreachable cancelling {op_id}: {exc!r}"
+            ) from exc
+        if response.status_code != 200:
+            self._raise_for_refusal(response, op_id)
+        return _view(response.json())
+
+    def replay(self, ref: str, view: AttemptView) -> list[CompletionChunk]:
+        """Decision Q3: one chunk carrying the whole content, reasoning and
+        tool calls, then the original finish reason and totals."""
+        result = view.result or {}
+        decoder = ChatStreamDecoder(ref)
+        chunk = decoder.decode(
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": result.get("content") or "",
+                    "thinking": result.get("thinking") or "",
+                    "tool_calls": result.get("tool_calls") or [],
+                },
+                "done": True,
+                "done_reason": result.get("done_reason"),
+                "eval_count": result.get("eval_count"),
+                "prompt_eval_count": result.get("prompt_eval_count"),
+            }
+        )
+        return [chunk] if chunk is not None else []
 
     # -- embeddings --------------------------------------------------------
 
@@ -332,3 +361,14 @@ class NodeAgentRuntime:
 
     async def residency(self) -> RuntimeResidency | None:
         raise RuntimeCapabilityError(detail=f"residency: {_NOT_IN_STAGE}")
+
+
+def _view(described: dict[str, Any]) -> AttemptView:
+    result = described.get("result")
+    reason = described.get("reason")
+    return AttemptView(
+        op_id=str(described.get("op_id")),
+        state=str(described.get("state")),
+        reason=reason if isinstance(reason, str) else None,
+        result=result if isinstance(result, dict) else None,
+    )

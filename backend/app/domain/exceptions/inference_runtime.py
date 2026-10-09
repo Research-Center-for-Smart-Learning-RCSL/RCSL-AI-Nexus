@@ -252,3 +252,54 @@ class RateLimitedError(DomainError):
     def __init__(self, retry_after_seconds: int = 60) -> None:
         super().__init__(f"retry_after={retry_after_seconds}")
         self.retry_after_seconds = retry_after_seconds
+
+
+class InvalidIdempotencyKeyError(DomainError):
+    code = "invalid_idempotency_key"
+    public_message = "Idempotency-Key must be 1 to 120 visible ASCII characters with no spaces."
+
+
+class IdempotencyKeyReusedError(DomainError):
+    """422 — the key names a different request (final spec §5).
+
+    The key names one generation, so a new request needs a new key; nothing
+    is run under a key whose request differs from the one it was bound to.
+    """
+
+    code = "idempotency_key_reused"
+    public_message = (
+        "This Idempotency-Key was already used for a different request. "
+        "Send a new key for a new request."
+    )
+
+
+class IdempotencyInProgressError(StateConflictError):
+    """409 — the keyed request has an attempt that is not finished, or whose
+    outcome is not known yet. It is never run a second time."""
+
+    code = "idempotency_in_progress"
+    public_message = (
+        "A request with this Idempotency-Key is still being processed or its "
+        "outcome is not yet known. It will not be run again; retry later."
+    )
+
+
+class IdempotencyResultExpiredError(StateConflictError):
+    """409 — the keyed request completed, but its stored result is gone
+    (decision Q2: kept 24 h). It is not run again under the same key."""
+
+    code = "idempotency_result_expired"
+    public_message = (
+        "The request with this Idempotency-Key completed, but its result is no "
+        "longer retained. Send a new key to run it again."
+    )
+
+
+class IdempotencyAttemptFailedError(StateConflictError):
+    """409 — the keyed request failed, and a failure is final for its key."""
+
+    code = "idempotency_attempt_failed"
+    public_message = (
+        "The request with this Idempotency-Key failed and will not be run again "
+        "under the same key. Send a new key to retry it."
+    )

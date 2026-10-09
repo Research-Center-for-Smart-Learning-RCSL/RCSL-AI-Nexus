@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,3 +31,35 @@ class AttemptIdentity:
 
 
 current_attempt: ContextVar[AttemptIdentity | None] = ContextVar("current_attempt", default=None)
+
+
+@dataclass(frozen=True, slots=True)
+class RequestIdentity:
+    """What a client sent, and the key it named it by (final spec §5).
+
+    `body` is the request as the client sent it: fields it omitted are absent,
+    never filled with defaults (decision Q4), so a later change of default
+    cannot make an identical retry look like key reuse. `shape` names the API
+    the body belongs to, so the same JSON sent to two endpoints never hashes
+    alike.
+    """
+
+    key: str | None
+    shape: str
+    body: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class Binding:
+    """A request's current attempt (`request_bindings` and `request_attempts`)."""
+
+    tenant_id: str
+    request_id: str
+    payload_hash: str
+    hash_version: str
+    key_supplied: bool
+    version: int
+    seq: int
+    node_id: str
+    op_id: str
+    billing: dict[str, Any]

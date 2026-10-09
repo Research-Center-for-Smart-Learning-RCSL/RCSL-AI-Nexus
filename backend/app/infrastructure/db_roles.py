@@ -5,7 +5,8 @@ The split this implements: three Postgres accounts, not one.
 - The **owner** (`POSTGRES_USER`) owns the schema and runs migrations. Only the
   `migrate` job connects as it, and this module runs as it.
 - The **gateway** account may read every table and may INSERT into
-  `usage_records`, `prompt_logs` and `refusals`, nothing more. Its read on the
+  `usage_records`, `prompt_logs` and `refusals`; with the node agent it also
+  binds requests, by named column only (`GATEWAY_BINDING_GRANTS`). Its read on the
   last two is revoked again afterwards, so it writes them without being able to
   read them back: the gateway records what it refused and what it captured, and
   a compromise of it cannot enumerate either. It must not be able to write
@@ -91,6 +92,15 @@ GATEWAY_WRITABLE_TABLES: tuple[str, ...] = ("usage_records", "prompt_logs", "ref
 # its API and never reads them here.
 GATEWAY_DENIED_READ_TABLES: tuple[str, ...] = ("prompt_logs", "refusals", "attempt_results")
 
+# What the gateway may change in the request bindings (PR4a-2 on #24), column
+# by column: it binds a request to an attempt and moves the binding only to a
+# new attempt, and it records whether a client received a whole response. It
+# never rewrites a payload hash, a billing snapshot or an attempt's node.
+GATEWAY_BINDING_GRANTS: tuple[tuple[str, str], ...] = (
+    ("request_bindings", "INSERT, UPDATE (current_seq, version)"),
+    ("request_attempts", "INSERT, UPDATE (client_delivery_complete)"),
+)
+
 # The node agent's account (PR4a on #24): the tables it owns, read access to
 # the registry it checks requests against, and one column of `nodes`, the lock
 # domain it binds on first claim. No DELETE anywhere: an operation, a stored
@@ -175,6 +185,8 @@ $do$;""",
         ]
         for table in GATEWAY_WRITABLE_TABLES:
             statements.append(f"GRANT INSERT ON {_quote_ident(table)} TO {ident};")
+        for table, privileges in GATEWAY_BINDING_GRANTS:
+            statements.append(f"GRANT {privileges} ON {_quote_ident(table)} TO {ident};")
         # After the grants, never before: the blanket `GRANT SELECT ON ALL
         # TABLES` above would put the privilege straight back. Declarative like
         # everything else here, so a table added to this tuple is revoked on the
