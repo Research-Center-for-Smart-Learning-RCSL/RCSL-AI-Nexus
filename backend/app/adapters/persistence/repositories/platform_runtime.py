@@ -58,6 +58,16 @@ class PostgresNodeRepository(_Base):
             update(NodeRow).where(NodeRow.id == node_id).values(status=status.value)
         )
 
+    async def set_runtime_version(self, node_id: str, version: str | None) -> None:
+        """What the node's runtime reports itself as, stamped now; None when it
+        could not be asked, which clears the version rather than keeping one
+        that can no longer be re-read."""
+        await self._session.execute(
+            update(NodeRow)
+            .where(NodeRow.id == node_id)
+            .values(runtime_version=version, runtime_version_at=func.now() if version else None)
+        )
+
     async def delete(self, node_id: str) -> None:
         await self._session.execute(delete(NodeRow).where(NodeRow.id == node_id))
 

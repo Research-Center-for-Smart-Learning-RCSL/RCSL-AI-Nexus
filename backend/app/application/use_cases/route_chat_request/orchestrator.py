@@ -457,7 +457,15 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
                         basis=basis,
                     )
             await self._refuse_what_this_target_would_truncate(
-                counted, basis, target, actor, messages, tools, max_tokens
+                counted,
+                basis,
+                target,
+                actor,
+                messages,
+                tools,
+                max_tokens,
+                node=nodes.get(target.node_id),
+                thinking=self._resolve_thinking(thinking, policy),
             )
 
             attempt: AttemptIdentity | None = None

@@ -22,6 +22,7 @@ from app.adapters.tokenizer.ollama_blobs import BlobNotFound, manifest_path, wei
 from app.domain.entities.chat import Message, ToolDefinition
 from app.domain.exceptions import InvalidModelReferenceError, RuntimeCapabilityError
 
+from . import fingerprint
 from .constants import (
     ARCHITECTURE_KEY,
     BPE_MODEL,
@@ -96,12 +97,19 @@ except ImportError:
 class _NativeVocabulary:
     """Wraps a Rust-side tokenizer with a Python-side Jinja2 template."""
 
-    __slots__ = ("_blob_path", "_cache_key", "_template")
+    __slots__ = ("_blob_path", "_cache_key", "_template", "renderer")
 
-    def __init__(self, blob_path: str, cache_key: str, template: Any) -> None:
+    def __init__(
+        self, blob_path: str, cache_key: str, template: Any, renderer: str | None = None
+    ) -> None:
         self._blob_path = blob_path
         self._cache_key = cache_key
         self._template = template
+        self.renderer = renderer
+
+    @property
+    def encoder(self) -> str:
+        return fingerprint.native_encoder(_nexus_native.source_digest())
 
     @property
     def has_template(self) -> bool:
@@ -157,6 +165,10 @@ class Measurement(NamedTuple):
     identity: str | None
     counted: int | None
     declared_context: int | None
+    encoder: str | None = None
+    """Which counting code produced `counted` (`fingerprint`); None for none."""
+    renderer: str | None = None
+    """Which rendering code it counted; None for the ChatML fallback."""
 
 
 class GgufTokenCounter:
@@ -308,7 +320,13 @@ class GgufTokenCounter:
         vocabulary = await self._vocabulary(ref, snapshot)
         declared = await self._declared_context(ref, snapshot)
         counted = await self._count_prompt_with(ref, vocabulary, messages, tools)
-        return Measurement(identity=snapshot.identity, counted=counted, declared_context=declared)
+        return Measurement(
+            identity=snapshot.identity,
+            counted=counted,
+            declared_context=declared,
+            encoder=vocabulary.encoder if vocabulary is not None and counted is not None else None,
+            renderer=vocabulary.renderer if vocabulary is not None else None,
+        )
 
     async def _count_prompt_with(
         self,
@@ -492,7 +510,10 @@ class GgufTokenCounter:
 
         logger.info("counting %s with Rust encoder + Python template from %s", ref, blob.name)
         return _NativeVocabulary(
-            blob_path=str(blob), cache_key=cache_key, template=python_vocab._template
+            blob_path=str(blob),
+            cache_key=cache_key,
+            template=python_vocab._template,
+            renderer=python_vocab.renderer,
         )
 
     def _build_python(self, ref: str, blob: Path) -> _Vocabulary | None:
@@ -540,14 +561,19 @@ class GgufTokenCounter:
             source = metadata.get(CHAT_TEMPLATE_KEY)
             self._fallback_template.discard(ref)
             template: Any
+            renderer: str | None = None
             if isinstance(source, str):
                 template = _build_template(source)
+                renderer = fingerprint.jinja_renderer(source)
             elif metadata.get(ARCHITECTURE_KEY) == "gemma4":
                 # No template in the weights: the runtime renders gemma4 with a
                 # built-in renderer, ported in `gemma4_renderer` and held to the
                 # runtime's bytes (C6c, #24). ChatML would be another format.
-                template = Gemma4Renderer(large=renderer_variant(ref) == "large")
+                variant = renderer_variant(ref)
+                template = Gemma4Renderer(large=variant == "large")
+                renderer = fingerprint.gemma4_renderer(variant)
             else:
+                # A guess at a format: never a renderer a profile can name.
                 template = _build_template(_CHATML_FALLBACK)
                 self._fallback_template.add(ref)
         except Exception as exc:  # noqa: BLE001
@@ -560,4 +586,6 @@ class GgufTokenCounter:
             blob.name,
             scheme,
         )
-        return _Vocabulary(ref=ref, blob=blob.name, tokenizer=tokenizer, template=template)
+        return _Vocabulary(
+            ref=ref, blob=blob.name, tokenizer=tokenizer, template=template, renderer=renderer
+        )

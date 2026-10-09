@@ -147,6 +147,13 @@ fn with_cached_model<T>(
     Ok(result)
 }
 
+/// A digest of the source this extension was built from (`build.rs`): the
+/// encoder's identity in a validated profile (PR2b on #24).
+#[pyfunction]
+fn source_digest() -> &'static str {
+    env!("NEXUS_NATIVE_SOURCE_DIGEST")
+}
+
 /// Prepare the tokenizer for a model reference. Returns True if the vocabulary
 /// was built successfully. Returns the error message as a string on failure
 /// (rather than discarding it) so the caller can log it.
@@ -309,6 +316,7 @@ fn gguf_value_to_py(py: Python<'_>, value: &GgufValue) -> PyResult<Py<PyAny>> {
 #[pymodule]
 fn nexus_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(prepare, m)?)?;
+    m.add_function(wrap_pyfunction!(source_digest, m)?)?;
     m.add_function(wrap_pyfunction!(count_prompt, m)?)?;
     m.add_function(wrap_pyfunction!(count_parts, m)?)?;
     m.add_function(wrap_pyfunction!(prepare_from_json, m)?)?;

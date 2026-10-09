@@ -43,6 +43,13 @@ class NodeRow(Base):
     # Mapped both ways so a read-then-save keeps it. `lock_domain_id` is left
     # unmapped on purpose: only the node agent writes it, once.
     agent_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The heartbeat's observation of the runtime (PR2b on #24). Read into the
+    # entity, never written by `node_to_row`: provisioning merges the node row
+    # on every deploy, and a merge leaves alone what the row was not given.
+    runtime_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    runtime_version_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class ModelRow(Base):

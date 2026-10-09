@@ -11,11 +11,13 @@ from app.domain.entities.chat import (
     ToolDefinition,
 )
 from app.domain.entities.model import Model, RuntimeKind
+from app.domain.entities.node import Node
 from app.domain.exceptions import (
     COUNT_BY_ESTIMATE,
     COUNT_BY_TOKENIZER,
     ContextTooLongError,
 )
+from app.domain.services import validated_profiles
 
 from .dependencies import RouteChatDependencies
 from .estimates import (
@@ -104,6 +106,47 @@ class PromptGuardrailsMixin(RouteChatDependencies):
             return min(registered, declared)
         return registered
 
+    async def _widened_window(
+        self,
+        target: Model,
+        node: Node | None,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+        thinking: bool,
+    ) -> tuple[int, int, validated_profiles.ValidatedProfile] | None:
+        """The window, the count and the profile, all from one snapshot, when
+        this request's whole fingerprint is validated; None otherwise."""
+        measure = getattr(self._tokens, "measure", None)
+        if node is None or not callable(measure):
+            return None
+        version = validated_profiles.fresh_version(
+            node.runtime_version, node.runtime_version_at, self._clock.now()
+        )
+        if version is None:
+            return None
+        measured = await measure(target.ref, messages, tools)
+        if None in (measured.identity, measured.counted, measured.encoder, measured.renderer):
+            return None
+        key = validated_profiles.ProfileKey(
+            node_id=node.id,
+            runtime=target.runtime.value,
+            runtime_version=version,
+            manifest=measured.identity,
+            encoder=measured.encoder,
+            renderer=measured.renderer,
+            tools=bool(tools),
+            thinking=validated_profiles.wire_thinking(thinking),
+        )
+        profile = validated_profiles.is_validated(key)
+        if profile is None:
+            return None
+        window = target.resource_profile.context_length
+        if measured.declared_context:
+            window = (
+                min(window, measured.declared_context) if window > 0 else measured.declared_context
+            )
+        return window, int(measured.counted), profile
+
     async def _refuse_what_this_target_would_truncate(
         self,
         counted: int,
@@ -113,6 +156,9 @@ class PromptGuardrailsMixin(RouteChatDependencies):
         messages: Sequence[Message],
         tools: Sequence[ToolDefinition],
         max_tokens: int | None = None,
+        *,
+        node: Node | None = None,
+        thinking: bool = True,
     ) -> None:
         """The input ceiling again, against the model that will actually serve it.
 
@@ -164,9 +210,31 @@ class PromptGuardrailsMixin(RouteChatDependencies):
         # shifts the context on qwen2.5, discarding the system prompt. So the
         # prompt and the output this request may generate must both fit, one
         # token short of the window.
-        servable = min(window // 2, window - 1 - output)
+        servable = validated_profiles.servable(window, output, widened=False)
         if counted <= servable:
             return
+        # PR2b: the half is dropped, the output bound kept, only for a profile
+        # shown to be counted at least as high as the runtime evaluates it.
+        # Asked only here, where the legacy rule would refuse, so an ordinary
+        # request pays nothing for it. The node agent decides again with the
+        # runtime's version read live; this is the gateway's own view of it.
+        if basis == COUNT_BY_TOKENIZER:
+            widened = await self._widened_window(target, node, messages, tools, thinking)
+            if widened is not None:
+                window_w, counted_w, profile = widened
+                limit = validated_profiles.servable(window_w, output, widened=True)
+                if max(counted, counted_w) <= limit:
+                    logger.info(
+                        "admitting %s to %s under validated profile %s (%s of %s) request_id=%s",
+                        _counted_phrase(basis, counted),
+                        target.alias,
+                        profile.ref,
+                        max(counted, counted_w),
+                        limit,
+                        self._request_id(),
+                    )
+                    return
+                servable = limit
         # The alias is named to the operator and not to the caller. A refusal
         # that named it would disclose the model inventory to anyone who could
         # provoke one, which is the disclosure `NoAvailableModelError` is

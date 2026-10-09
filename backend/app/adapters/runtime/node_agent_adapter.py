@@ -345,6 +345,18 @@ class NodeAgentRuntime:
     def validate_ref(self, ref: str) -> None:
         self._grammar.validate_ref(ref)
 
+    async def runtime_version(self) -> str | None:
+        """The runtime's version as the agent reads it now (PR2b)."""
+        try:
+            async with self._client() as client:
+                response = await client.get("/v1/status")
+        except httpx.HTTPError:
+            return None
+        if response.status_code != 200:
+            return None
+        version = response.json().get("runtime_version")
+        return version if isinstance(version, str) and version else None
+
     async def health(self) -> bool:
         try:
             async with self._client() as client:

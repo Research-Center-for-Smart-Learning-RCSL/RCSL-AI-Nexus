@@ -210,10 +210,18 @@ class OllamaRelay(LifecycleRelay):
         return None
 
     async def health(self) -> bool:
+        return await self.version() is not None
+
+    async def version(self) -> str | None:
+        """What the runtime says it is, read now; None when it cannot say."""
         try:
-            return (await self._client.get("/api/version")).status_code == 200
-        except httpx.HTTPError:
-            return False
+            response = await self._client.get("/api/version", timeout=5.0)
+            if response.status_code != 200:
+                return None
+            version = response.json().get("version")
+        except (httpx.HTTPError, ValueError, AttributeError):
+            return None
+        return version if isinstance(version, str) and version else None
 
     def chat(
         self, payload: dict[str, Any], *, store_output: bool, expected_identity: str | None

@@ -172,7 +172,8 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             "gate": agent.dispatcher.state.value,
             "admitted": agent.dispatcher.admitted,
             "unknown": await agent.store.any_unknown(),
-            "runtime_reachable": await agent.relay.health(),
+            "runtime_version": (version := await agent.relay.version()),
+            "runtime_reachable": version is not None,
         }
 
     @app.post("/v1/inference", dependencies=authorised, response_model=None)
@@ -187,9 +188,18 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             return await _existing(agent, existing, "inference", envelope)
 
         registered = await registration(agent.pool, agent.settings.node_id, RUNTIME, generation.ref)
-        verdict = check_generation(
-            generation, registered, await _measure(agent, generation.ref, generation)
-        )
+        measured = await _measure(agent, generation.ref, generation)
+        verdict = check_generation(generation, registered, measured, node_id=agent.settings.node_id)
+        if isinstance(verdict, GuardRefusal) and verdict.reason == "context_exceeded":
+            # Only where the legacy rule refuses: the runtime's version, read
+            # now, is the last part of a validated profile's key (PR2b).
+            verdict = check_generation(
+                generation,
+                registered,
+                measured,
+                node_id=agent.settings.node_id,
+                runtime_version=await agent.relay.version(),
+            )
         if isinstance(verdict, GuardRefusal):
             return _guard_refused(verdict)
         payload = chat_payload(

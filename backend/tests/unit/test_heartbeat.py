@@ -226,3 +226,39 @@ async def test_another_node_s_models_are_left_unobserved_not_reported_absent() -
     assert changed == 1, "only the local model's observation moved"
     assert writes == [("id-here", ModelState.LOADED, 4.0)]
     assert all(w[0] != "id-there" for w in writes), "a remote model must not be reported absent"
+
+
+async def test_each_node_is_stamped_with_its_runtimes_version_and_cleared_when_silent() -> None:
+    """PR2b: the version keys a validated profile, so one that can no longer
+    be re-read is cleared rather than kept."""
+    from app.domain.entities.node import Node, NodeStatus
+    from app.infrastructure.heartbeat import observe_runtime_version
+
+    class Versioned:
+        def __init__(self, version: str | None) -> None:
+            self.version = version
+
+        async def runtime_version(self) -> str | None:
+            return self.version
+
+    node = Node(
+        id="a",
+        name="a",
+        address="100.64.0.1",
+        status=NodeStatus.ONLINE,
+        total_memory_gb=64.0,
+        runtimes=frozenset({RuntimeKind.OLLAMA}),
+        runtime_version="0.33.2",
+    )
+    written: list[tuple[str, str | None]] = []
+
+    async def nodes() -> list[Node]:
+        return [node]
+
+    async def write(node_id: str, version: str | None) -> None:
+        written.append((node_id, version))
+
+    await observe_runtime_version({RuntimeKind.OLLAMA: Versioned("0.33.2")}, nodes, write)
+    await observe_runtime_version({RuntimeKind.OLLAMA: Versioned(None)}, nodes, write)
+
+    assert written == [("a", "0.33.2"), ("a", None)]

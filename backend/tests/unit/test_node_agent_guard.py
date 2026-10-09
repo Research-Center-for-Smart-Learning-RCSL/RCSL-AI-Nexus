@@ -6,6 +6,7 @@ from dataclasses import replace
 
 from app.adapters.tokenizer.gguf_token_counter.adapter import Measurement
 from app.domain.entities.chat import Message, MessageRole
+from app.domain.services.validated_profiles import ValidatedProfile
 from app.node_agent.guard import GuardPass, GuardRefusal, Registration, check_generation
 from app.node_agent.wire import GenerationRequest
 
@@ -79,3 +80,83 @@ def test_a_pinned_model_must_be_the_measured_revision() -> None:
         check_generation(REQUEST, replace(REGISTERED, manifest_digest="aaa"), _measured()),
         GuardPass,
     )
+
+
+# -- PR2b: a validated profile drops the half -------------------------------
+
+PROFILE = ValidatedProfile(
+    ref="qwen2.5:7b",
+    node_id="local",
+    runtime="ollama",
+    runtime_version="0.33.2",
+    manifest="aaa",
+    encoders=frozenset({"native:e"}),
+    renderer="jinja:r",
+    tools=False,
+    thinking=frozenset({"omitted", "false"}),
+    measured_on="2026-10-09",
+    cases=(),
+)
+
+
+def _fingerprinted(counted: int) -> Measurement:
+    return Measurement(
+        identity="aaa",
+        counted=counted,
+        declared_context=32768,
+        encoder="native:e",
+        renderer="jinja:r",
+    )
+
+
+def test_a_validated_profile_admits_up_to_the_window_less_the_output() -> None:
+    """32768 − 1 − 1024 = 31743, where the half would have refused at 16384."""
+    passed = check_generation(
+        REQUEST,
+        REGISTERED,
+        _fingerprinted(31743),
+        node_id="local",
+        runtime_version="0.33.2",
+        profiles=(PROFILE,),
+    )
+    refused = check_generation(
+        REQUEST,
+        REGISTERED,
+        _fingerprinted(31744),
+        node_id="local",
+        runtime_version="0.33.2",
+        profiles=(PROFILE,),
+    )
+
+    assert isinstance(passed, GuardPass)
+    assert passed.provenance["validated_profile"] == "qwen2.5:7b"
+    assert passed.provenance["servable"] == 31743
+    assert isinstance(refused, GuardRefusal)
+
+
+def test_without_the_live_version_or_on_another_node_the_half_stays() -> None:
+    for node_id, version in (("local", None), ("b", "0.33.2"), ("local", "0.40.2")):
+        result = check_generation(
+            REQUEST,
+            REGISTERED,
+            _fingerprinted(20000),
+            node_id=node_id,
+            runtime_version=version,
+            profiles=(PROFILE,),
+        )
+        assert isinstance(result, GuardRefusal), (node_id, version)
+
+
+def test_tools_are_another_shape() -> None:
+    from app.domain.entities.chat import ToolDefinition
+
+    request = replace(REQUEST, tools=(ToolDefinition(name="f", description="", parameters={}),))
+    result = check_generation(
+        request,
+        REGISTERED,
+        _fingerprinted(20000),
+        node_id="local",
+        runtime_version="0.33.2",
+        profiles=(PROFILE,),
+    )
+    assert isinstance(result, GuardRefusal)

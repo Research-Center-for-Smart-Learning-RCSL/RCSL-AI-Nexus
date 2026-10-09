@@ -248,12 +248,26 @@ fn words(text: &str) -> Vec<&str> {
     out
 }
 
-/// The tokens `tokenizer_st_partition` splits out, longest first.
+/// The tokens `tokenizer_st_partition` splits out, longest first, with ids.
 fn special_tokens(
     tokens: &[String],
     types: &[u32],
     ids: &AHashMap<String, u32>,
 ) -> Result<Vec<(String, u32)>, GgufError> {
+    Ok(special_texts(tokens, types)?
+        .into_iter()
+        .map(|t| {
+            let id = ids[t.as_str()];
+            (t, id)
+        })
+        .collect())
+}
+
+/// The tokens llama.cpp splits out before encoding, longest first: control,
+/// user-defined and unknown types after its load-time rewrites. Shared with
+/// the BPE vocabularies (`tokenizer.rs`), which llama.cpp partitions the same
+/// way (PR2b on #24).
+pub fn special_texts(tokens: &[String], types: &[u32]) -> Result<Vec<String>, GgufError> {
     let mut attrs: Vec<u32> = (0..tokens.len())
         .map(|i| types.get(i).copied().unwrap_or(NORMAL))
         .collect();
@@ -296,7 +310,7 @@ fn special_tokens(
     Ok(lengths
         .into_iter()
         .flat_map(|len| by_length[&len].iter())
-        .map(|t| (t.to_string(), ids[*t]))
+        .map(|t| t.to_string())
         .collect())
 }
 
