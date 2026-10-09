@@ -18,6 +18,7 @@ the phase that runs it with pinned sampling parameters.
 | `run.py` | drives a phase; appends every sample to `results.jsonl` as it completes |
 | `analyse.py` | tables with bootstrap 95% CI, saturation verdicts, cross-phase comparison, JSON export |
 | `bench_throughput.py` | generation and prompt-evaluation rate for one model at a stated depth |
+| `tool_calls.py` | whether a model calls the right tool with the right arguments; written for #27 |
 
 ## Running it
 
