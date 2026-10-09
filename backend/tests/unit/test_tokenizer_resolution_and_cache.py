@@ -384,10 +384,11 @@ async def test_another_architecture_without_a_template_still_falls_back(tmp_path
 async def test_an_unencodable_character_gives_no_count_on_the_python_backend(
     tmp_path: Path,
 ) -> None:
-    """The review on #29: on the Python backend a Unigram vocabulary with no
-    unk piece raises on U+10FFFF, and the gemma4 path let that escape, so the
-    guard aborted instead of using its estimate. It is None now, on every path
-    that encodes through `count_parts`."""
+    """The review on #29: an encoding that raises must give None, never escape
+    and abort the guard. Unigram raised on U+10FFFF; the gemma4 port drops a
+    byte with no token, as the runtime does, so that character now counts. A
+    lone surrogate, which JSON's `\\ud800` decodes to, still cannot be
+    encoded, and it is None on every path that goes through `count_parts`."""
     control = ["<bos>", "<|turn>", "<turn|>", "<|think|>", "<|channel>", "<channel|>"]
     words = ["system", "user", "model", "thought", "hello", "\n", "▁"]
     singles = sorted(set("".join(words)) - {"▁", "\n"})
@@ -412,12 +413,16 @@ async def test_an_unencodable_character_gives_no_count_on_the_python_backend(
     plain = await counter.count_prompt(
         "gemma4:31b-it-q8_0", [Message(role=MessageRole.USER, content="hello")], []
     )
-    odd = await counter.count_prompt(
+    dropped = await counter.count_prompt(
         "gemma4:31b-it-q8_0", [Message(role=MessageRole.USER, content="hello\U0010ffff")], []
     )
-    parts = await counter.count_parts("gemma4:31b-it-q8_0", ["hello", "\U0010ffff"])
+    odd = await counter.count_prompt(
+        "gemma4:31b-it-q8_0", [Message(role=MessageRole.USER, content="hello\ud800")], []
+    )
+    parts = await counter.count_parts("gemma4:31b-it-q8_0", ["hello", "\ud800"])
 
     assert plain is not None
+    assert dropped == plain, "four bytes with no <0xXX> token, dropped as the runtime drops them"
     assert odd is None
     assert parts is None
 

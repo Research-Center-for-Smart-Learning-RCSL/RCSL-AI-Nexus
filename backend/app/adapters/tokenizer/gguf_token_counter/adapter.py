@@ -27,9 +27,10 @@ from .constants import (
     BPE_MODEL,
     BPE_REQUIRED_KEYS,
     CHAT_TEMPLATE_KEY,
+    GEMMA4_MODEL,
+    GEMMA4_REQUIRED_KEYS,
     KNOWN_MODELS,
     KNOWN_PRE_TOKENIZERS,
-    UNIGRAM_REQUIRED_KEYS,
     WANTED_KEYS,
 )
 from .construction import _Vocabulary, build_tokenizer_for_model
@@ -420,7 +421,8 @@ class GgufTokenCounter:
             # The same contract as the native branch: a part that cannot be
             # encoded makes the whole result None, never an exception that
             # stops the guard short of its estimate (review on #29). The
-            # Unigram encoder raises on a character with no piece and no unk.
+            # gemma4 port raises on text that is not valid Unicode, such as the
+            # lone surrogate a JSON `\\ud800` decodes to.
             logger.info("count_parts failed for %s, falling back to estimate: %s", ref, exc)
             return None
 
@@ -505,7 +507,10 @@ class GgufTokenCounter:
             )
             return None
 
-        scheme = str(metadata.get("tokenizer.ggml.pre", ""))
+        family = str(metadata.get("tokenizer.ggml.model", ""))
+        # A converter-written gemma4 GGUF may omit the pre-tokeniser; llama.cpp
+        # then sets `gemma4` itself.
+        scheme = str(metadata.get("tokenizer.ggml.pre", "gemma4" if family == GEMMA4_MODEL else ""))
         if scheme not in KNOWN_PRE_TOKENIZERS:
             logger.warning(
                 "%s declares the %r pre-tokeniser, which has not been measured against this "
@@ -515,7 +520,6 @@ class GgufTokenCounter:
                 ref,
             )
             return None
-        family = str(metadata.get("tokenizer.ggml.model", ""))
         if family not in KNOWN_MODELS:
             logger.warning(
                 "%s declares the %r tokeniser model, which is not one of %s; "
@@ -526,7 +530,7 @@ class GgufTokenCounter:
                 ref,
             )
             return None
-        required = BPE_REQUIRED_KEYS if family == BPE_MODEL else UNIGRAM_REQUIRED_KEYS
+        required = BPE_REQUIRED_KEYS if family == BPE_MODEL else GEMMA4_REQUIRED_KEYS
         missing = [key for key in required if key not in metadata]
         if missing:
             logger.warning("%s carries no %s; counting %s by estimate", blob.name, missing, ref)
