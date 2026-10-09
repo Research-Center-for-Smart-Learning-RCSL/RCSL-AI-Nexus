@@ -30,6 +30,7 @@ def _warn_if_prompt_was_truncated(
     basis: str,
     request_id: str | None,
     actor: str,
+    widened: bool = False,
 ) -> None:
     """The backstop for the estimate above being wrong in the unsafe direction.
 
@@ -61,6 +62,23 @@ def _warn_if_prompt_was_truncated(
         # Zero means the stream never reached its terminal chunk, so there is
         # no figure to judge — not that nothing was read.
         return
+    if widened:
+        # Admitted past half the window under a validated profile (PR2b), so
+        # reaching num_ctx/2 is expected. Such a profile counts what the
+        # runtime evaluates (U − P = 0 on its corpus); the runtime evaluating
+        # clearly fewer is the cut this backstop exists for.
+        if prompt_tokens >= estimated * WIDENED_TRUNCATION_RATIO:
+            return
+        logger.warning(
+            "prompt likely truncated by the runtime: prompt_tokens=%s of %s counted under a "
+            "validated profile request_id=%s actor=%s — the profile no longer holds; "
+            "withdraw it",
+            prompt_tokens,
+            estimated,
+            request_id,
+            actor,
+        )
+        return
     if prompt_tokens < context_length // 2:
         # Only here. Past the boundary `prompt_eval_count` reports what the
         # runtime *evaluated*, which saturates at num_ctx/2, so the ratio below
@@ -83,6 +101,9 @@ def _warn_if_prompt_was_truncated(
         actor,
     )
 
+
+WIDENED_TRUNCATION_RATIO = 0.95
+"""Below this share of the count, a widened request's evaluation was cut."""
 
 ESTIMATE_DRIFT_BAND = (0.9, 1.65)
 """The estimate-to-actual ratios already known to be normal, which are not news.
