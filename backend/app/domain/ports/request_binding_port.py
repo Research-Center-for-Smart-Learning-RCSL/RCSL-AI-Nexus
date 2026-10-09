@@ -72,3 +72,17 @@ class AttemptLedgerPort(Protocol):
     def replay(self, ref: str, view: AttemptView) -> list[CompletionChunk]:
         """A completed attempt's stored result, as one chunk (decision Q3)."""
         ...
+
+
+class UsageSettlementPort(Protocol):
+    """Exactly-once usage for agent-backed attempts (design R6, revision 6)."""
+
+    async def mark_delivery(self, op_id: str, complete: bool) -> None:
+        """What the gateway saw: true once the final chunk was sent, false for
+        a failure it observed itself. Never written when it saw neither."""
+        ...
+
+    async def settle(self, op_id: str) -> bool:
+        """Insert the attempt's usage row once, if it is billable, and
+        reconcile delivery; False while the attempt is not terminal."""
+        ...

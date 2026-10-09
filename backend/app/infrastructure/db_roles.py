@@ -95,10 +95,14 @@ GATEWAY_DENIED_READ_TABLES: tuple[str, ...] = ("prompt_logs", "refusals", "attem
 # What the gateway may change in the request bindings (PR4a-2 on #24), column
 # by column: it binds a request to an attempt and moves the binding only to a
 # new attempt, and it records whether a client received a whole response. It
-# never rewrites a payload hash, a billing snapshot or an attempt's node.
+# never rewrites a payload hash, a billing snapshot, an attempt's node or a
+# usage row's figures.
 GATEWAY_BINDING_GRANTS: tuple[tuple[str, str], ...] = (
     ("request_bindings", "INSERT, UPDATE (current_seq, version)"),
     ("request_attempts", "INSERT, UPDATE (client_delivery_complete)"),
+    # Reconciliation, false to true and nothing else (revision 6): the row
+    # itself is inserted under the grant in `GATEWAY_WRITABLE_TABLES`.
+    ("usage_records", "UPDATE (completed)"),
 )
 
 # The node agent's account (PR4a on #24): the tables it owns, read access to

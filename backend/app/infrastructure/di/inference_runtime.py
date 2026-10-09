@@ -17,6 +17,7 @@ from app.adapters.persistence.repositories import (
     PostgresRequestBindings,
     PostgresRoutingPolicyRepository,
     PostgresUsageRepository,
+    PostgresUsageSettlement,
 )
 from app.application.use_cases.assist_operator import AssistOperator
 from app.application.use_cases.assist_operator.prompt import ASSIST_CAPABILITY
@@ -195,6 +196,7 @@ def build_request_binder(request: Request, session: SessionDep) -> RequestBinder
         bindings=PostgresRequestBindings(get_session_factory()),
         nodes=PostgresNodeRepository(session),
         runtimes=runtimes,
+        settlement=PostgresUsageSettlement(get_session_factory()),
         request_id=current_request_id,
     )
 
