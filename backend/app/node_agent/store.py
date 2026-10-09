@@ -20,12 +20,15 @@ rows. No network I/O happens inside any of these transactions.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
 import asyncpg
+
+logger = logging.getLogger(__name__)
 
 ELECTION_NAMESPACE = 0x4E58_0001
 """First key of the session advisory lock that elects the node's agent."""
@@ -135,15 +138,21 @@ class OperationStore:
                 await self._prove_ownership(conn)
                 yield conn
         except NotOwner as exc:
-            await self.audit(
-                f"stale_{action}",
-                op_id,
-                {
-                    "generation": self.ownership.generation,
-                    "boot_id": self.ownership.boot_id,
-                    "error": str(exc),
-                },
-            )
+            # The audit is best effort: if it fails, NotOwner must still reach
+            # the caller, which closes its gate on it; any other exception is
+            # retried as a database error (review of #33's branch).
+            try:
+                await self.audit(
+                    f"stale_{action}",
+                    op_id,
+                    {
+                        "generation": self.ownership.generation,
+                        "boot_id": self.ownership.boot_id,
+                        "error": str(exc),
+                    },
+                )
+            except Exception:  # noqa: BLE001 - the refusal matters more than its record
+                logger.exception("could not audit stale_%s for %s", action, op_id)
             raise
 
     # -- reads -------------------------------------------------------------
@@ -239,7 +248,7 @@ class OperationStore:
             )
         return claimed is not None
 
-    async def cancel_accepted(self, op_id: str, reason: str) -> Operation | None:
+    async def cancel_accepted(self, op_id: str, reason: str, *, kind: str) -> Operation | None:
         """Make an absent or `accepted` attempt `cancelled_unsent`.
 
         Inserts a tombstone when the op id is unknown here, so a late original
@@ -250,7 +259,7 @@ class OperationStore:
             await conn.execute(
                 "INSERT INTO node_operations (node_id, op_id, kind, state, origin_generation, "
                 "origin_boot_id, owner_generation, reason, resolved_at, resolved_by) "
-                "VALUES ($1, $2, 'inference', 'cancelled_unsent', $3, $4, $3, $5, now(), "
+                "VALUES ($1, $2, $6, 'cancelled_unsent', $3, $4, $3, $5, now(), "
                 "'cancel') "
                 "ON CONFLICT (node_id, op_id) DO UPDATE SET state = 'cancelled_unsent', "
                 "reason = EXCLUDED.reason, resolved_at = now(), resolved_by = 'cancel' "
@@ -261,6 +270,7 @@ class OperationStore:
                 self.ownership.generation,
                 self.ownership.boot_id,
                 reason,
+                kind,
             )
             row = await conn.fetchrow(
                 _SELECT_OPERATION,

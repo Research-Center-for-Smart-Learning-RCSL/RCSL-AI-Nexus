@@ -79,7 +79,7 @@ class MemoryStore:
             return False
         return self._move(op_id, "accepted", "running")
 
-    async def cancel_accepted(self, op_id: str, reason: str) -> Operation | None:
+    async def cancel_accepted(self, op_id: str, reason: str, *, kind: str) -> Operation | None:
         self._fence()
         self._move(op_id, "accepted", "cancelled_unsent", reason=reason)
         return self.ops.get(op_id)
@@ -527,7 +527,7 @@ async def test_a_cancellation_while_queued_is_reported_as_one() -> None:
     queued = asyncio.create_task(dispatcher.submit("q", "inference", ScriptedRelay()))
     await asyncio.sleep(0.05)
 
-    await store.cancel_accepted("q", "cancel_requested")
+    await store.cancel_accepted("q", "cancel_requested", kind="inference")
     hold.set()
     refused = await asyncio.wait_for(queued, 2)
 
@@ -539,3 +539,25 @@ def test_a_zero_queue_is_refused_at_construction() -> None:
     """Finding 10: a zero queue made every request an overload."""
     with pytest.raises(ValueError):
         Dispatcher(MemoryStore(), max_queued=0)
+
+
+async def test_a_cancelled_relay_task_still_settles_as_unknown() -> None:
+    """Review of #33's branch: a cancelled admitted task never closed its
+    attempt, so the stream, the slot and drain waited for ever."""
+    store = MemoryStore()
+    dispatcher = Dispatcher(store, max_inflight=1)
+    relay = ScriptedRelay(hold=asyncio.Event())
+    attempt = await dispatcher.submit("x", "inference", relay)
+    assert isinstance(attempt, Attempt)
+    await relay.started.wait()
+
+    task = dispatcher._admitted["x"]  # noqa: SLF001
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert isinstance(await asyncio.wait_for(attempt.settled, 1), Uncertain)
+    assert [e["type"] for e in await _drain_events(attempt)] == ["chunk"]
+    assert store.ops["x"].state == "outcome_unknown"
+    assert dispatcher.state is GateState.BLOCKED
+    await asyncio.wait_for(dispatcher.wait_idle(), 1)

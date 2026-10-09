@@ -179,6 +179,39 @@ async def test_a_superseded_owner_cannot_write_anything(
     await _die(lock_b, conn_b)
 
 
+async def test_a_failing_audit_still_reports_the_lost_role(
+    dsn: str, pool: asyncpg.Pool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review of #33's branch: an audit error replaced NotOwner, so the caller
+    retried as if the database had failed instead of closing its gate."""
+    directory = _domain(tmp_path)
+    lock, conn, a = await _elect(dsn, directory)
+    store_a = OperationStore(pool, a.ownership)
+    await _die(lock, conn)
+    lock_b, conn_b, _ = await _elect(dsn, directory)
+
+    async def broken_audit(*_: object) -> None:
+        raise ConnectionError("audit insert failed")
+
+    monkeypatch.setattr(store_a, "audit", broken_audit)
+    with pytest.raises(NotOwner):
+        await store_a.insert_accepted(
+            "op", "inference", request_id=None, payload_hash=None, store_output=False
+        )
+    await _die(lock_b, conn_b)
+
+
+async def test_a_tombstone_records_the_kind_it_cancels(
+    dsn: str, pool: asyncpg.Pool, tmp_path: Path
+) -> None:
+    lock, conn, a = await _elect(dsn, _domain(tmp_path))
+    store = OperationStore(pool, a.ownership)
+
+    tombstone = await store.cancel_accepted("late", "cancelled_before_send", kind="embedding_batch")
+    assert tombstone is not None and tombstone.kind == "embedding_batch"
+    await _die(lock, conn)
+
+
 async def test_a_terminated_election_session_is_a_lost_role_not_a_retake(
     dsn: str, pool: asyncpg.Pool, tmp_path: Path
 ) -> None:
@@ -296,7 +329,7 @@ async def test_cancel_tombstones_an_absent_attempt_and_never_rewrites_running(
     lock, conn, a = await _elect(dsn, _domain(tmp_path))
     store = OperationStore(pool, a.ownership)
 
-    absent = await store.cancel_accepted("late", "rebind")
+    absent = await store.cancel_accepted("late", "rebind", kind="inference")
     assert absent is not None and absent.state == "cancelled_unsent"
     assert (
         await store.insert_accepted(
@@ -308,14 +341,14 @@ async def test_cancel_tombstones_an_absent_attempt_and_never_rewrites_running(
     await store.insert_accepted(
         "queued", "inference", request_id=None, payload_hash=None, store_output=False
     )
-    queued = await store.cancel_accepted("queued", "rebind")
+    queued = await store.cancel_accepted("queued", "rebind", kind="inference")
     assert queued is not None and queued.state == "cancelled_unsent"
 
     await store.insert_accepted(
         "sent", "inference", request_id=None, payload_hash=None, store_output=False
     )
     assert await store.promote("sent", {})
-    sent = await store.cancel_accepted("sent", "rebind")
+    sent = await store.cancel_accepted("sent", "rebind", kind="inference")
     assert sent is not None and sent.state == "running"
     await _die(lock, conn)
 

@@ -320,3 +320,50 @@ async def test_a_lost_role_ends_the_process_even_when_its_audit_fails(
 
     assert client["terminated"] == [True]
     assert agent.dispatcher.state is GateState.LOST
+
+
+async def test_an_op_id_reused_for_another_request_is_a_conflict(client: dict[str, Any]) -> None:
+    """Review of #33's branch: an existing op id answered any request with its
+    own state and result, whatever that request was."""
+    async with client["http"].stream(
+        "POST", "/v1/inference", json=_generation("op-c"), headers=AUTH
+    ) as response:
+        await _events(response)
+
+    other_payload = await client["http"].post(
+        "/v1/inference", json=_generation("op-c", payload_hash="v1:other"), headers=AUTH
+    )
+    other_kind = await client["http"].post(
+        "/v1/embeddings",
+        json=encode_embedding(
+            EmbeddingRequest(ref="nomic-embed-text", texts=("a",)),
+            Envelope(op_id="op-c", request_id="r", payload_hash="v1:h", store_output=True),
+        ),
+        headers=AUTH,
+    )
+
+    assert other_payload.status_code == 409 and "result" not in other_payload.json()
+    assert other_kind.status_code == 409
+    assert client["ollama"].chats == 1 and client["ollama"].embeds == 0
+
+
+async def test_a_cancel_before_the_original_tombstones_its_kind(client: dict[str, Any]) -> None:
+    bad = await client["http"].post("/v1/attempts/op-t/cancel?kind=load", headers=AUTH)
+    assert bad.status_code == 400
+
+    cancelled = await client["http"].post(
+        "/v1/attempts/op-t/cancel?kind=embedding_batch", headers=AUTH
+    )
+    assert cancelled.json()["kind"] == "embedding_batch"
+    assert cancelled.json()["state"] == "cancelled_unsent"
+
+    late = await client["http"].post(
+        "/v1/embeddings",
+        json=encode_embedding(
+            EmbeddingRequest(ref="nomic-embed-text", texts=("a",)),
+            Envelope(op_id="op-t", request_id=None, payload_hash="v1:h", store_output=False),
+        ),
+        headers=AUTH,
+    )
+    assert late.status_code == 200 and late.json()["state"] == "cancelled_unsent"
+    assert client["ollama"].embeds == 0
