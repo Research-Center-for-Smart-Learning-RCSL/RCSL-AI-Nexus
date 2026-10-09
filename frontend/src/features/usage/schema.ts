@@ -79,6 +79,10 @@ export const usageRecordSchema = z.object({
   compaction_tier: z.number().int().nonnegative().nullable(),
   tokens_before_compaction: z.number().int().nonnegative().nullable(),
   tokens_after_compaction: z.number().int().nonnegative().nullable(),
+  /** Agent-backed rows only; null on every row the direct path writes. */
+  totals_source: z.enum(['runtime_final', 'estimated_from_chunks', 'unavailable']).nullable(),
+  prompt_tokens_basis: z.enum(['runtime_final', 'exact_counter', 'estimate']).nullable(),
+  runtime_completed: z.boolean().nullable(),
 });
 
 export const usageRecordPageSchema = z.object({

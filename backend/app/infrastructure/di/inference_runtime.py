@@ -196,7 +196,14 @@ def build_request_binder(request: Request, session: SessionDep) -> RequestBinder
         bindings=PostgresRequestBindings(get_session_factory()),
         nodes=PostgresNodeRepository(session),
         runtimes=runtimes,
-        settlement=PostgresUsageSettlement(get_session_factory()),
+        settlement=PostgresUsageSettlement(
+            get_session_factory(),
+            # The same instruments the direct path feeds through
+            # `MeteredUsageRepository`, from the row this process inserts.
+            observe=metrics.observe_inference
+            if (metrics := getattr(request.app.state, "metrics", None))
+            else None,
+        ),
         request_id=current_request_id,
     )
 

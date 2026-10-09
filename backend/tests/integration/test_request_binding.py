@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.adapters.authz.role_authorization import RoleAuthorization
 from app.adapters.persistence.repositories import (
     PostgresRequestBindings,
+    PostgresUsageRepository,
     PostgresUsageSettlement,
 )
 from app.application.use_cases.list_capabilities import ListCapabilities
@@ -34,6 +35,7 @@ from app.domain.entities.model import Model, ModelState, ResourceProfile, Runtim
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.entities.routing_policy import RoutingCandidate, RoutingPolicy
 from app.domain.entities.tenant import DEFAULT_TENANT_ID
+from app.domain.entities.usage import UsageRecord
 from app.domain.exceptions import (
     IdempotencyInProgressError,
     IdempotencyKeyReusedError,
@@ -99,7 +101,10 @@ async def stack(
         nodes = FakeNodes([node])
         bindings = PostgresRequestBindings(async_sessionmaker(engine, expire_on_commit=False))
         usage = RecordingUsage()
-        settlement = PostgresUsageSettlement(async_sessionmaker(engine, expire_on_commit=False))
+        observed: list[UsageRecord] = []
+        settlement = PostgresUsageSettlement(
+            async_sessionmaker(engine, expire_on_commit=False), observe=observed.append
+        )
 
         def use_case() -> RouteChatRequest:
             return RouteChatRequest(
@@ -118,7 +123,12 @@ async def stack(
             )
 
         handles.update(
-            use_case=use_case, bindings=bindings, usage=usage, settlement=settlement, engine=engine
+            use_case=use_case,
+            bindings=bindings,
+            usage=usage,
+            settlement=settlement,
+            observed=observed,
+            engine=engine,
         )
         try:
             yield handles
@@ -314,6 +324,25 @@ async def test_a_delivered_request_is_billed_once_from_the_runtime(stack: dict[s
     assert row["completed"] is True and row["runtime_completed"] is True
 
 
+async def test_a_settled_row_is_read_back_and_counted_with_its_sources(
+    stack: dict[str, Any],
+) -> None:
+    """The usage read shows where the figures came from, and the metrics see
+    the row once, from the writer that inserted it."""
+    await _ask(stack, _identity("key-u0"))
+    await stack["settlement"].sweep()
+
+    sessions = async_sessionmaker(stack["engine"], expire_on_commit=False)
+    async with sessions() as session:
+        [read] = await PostgresUsageRepository.unscoped(session).list_records()
+    assert (read.totals_source, read.prompt_tokens_basis) == ("runtime_final", "runtime_final")
+    assert read.runtime_completed is True and read.attempt_id is not None
+
+    [counted] = stack["observed"]
+    assert (counted.id, counted.attempt_id, counted.tokens) == (read.id, read.attempt_id, 2)
+    assert counted.totals_source == "runtime_final" and counted.completed is True
+
+
 async def test_a_sweep_before_the_delivery_flag_is_reconciled_not_duplicated(
     stack: dict[str, Any],
 ) -> None:
@@ -378,6 +407,7 @@ async def test_racing_writers_leave_one_row(stack: dict[str, Any]) -> None:
     )
 
     assert len(await _usage(stack)) == 1
+    assert len(stack["observed"]) == 1, "only the writer that inserted counts it"
 
 
 async def test_a_client_that_left_is_billed_once_the_agent_finishes(

@@ -127,6 +127,16 @@ class Metrics:
             registry=registry,
         )
 
+        # Agent-backed rows only. `estimated_from_chunks` and `unavailable` are
+        # billed figures the runtime never confirmed, so their share is the
+        # thing to watch; a direct-path row has no source and is not counted.
+        self.usage_settlements = Counter(
+            "nexus_usage_settlements_total",
+            "Agent-backed attempts billed, by capability, model, and output-count source.",
+            ["capability", "model", "totals_source"],
+            registry=registry,
+        )
+
     def observe_http(self, method: str, path: str, status: int, elapsed_seconds: float) -> None:
         self.http_requests.labels(method, path, str(status)).inc()
         self.http_duration.labels(method, path).observe(elapsed_seconds)
@@ -144,6 +154,10 @@ class Metrics:
         # most of them, so this reads as "was anything done" rather than as a
         # tier of zero. Tier 0 is a real tier and `if record.compaction_tier`
         # would have skipped it.
+        if record.totals_source is not None:
+            self.usage_settlements.labels(
+                record.capability, record.model_alias, record.totals_source
+            ).inc()
         if record.compaction_tier is not None:
             self.compactions.labels(
                 record.capability, record.model_alias, str(record.compaction_tier)

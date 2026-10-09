@@ -105,6 +105,23 @@ class UsageRecord:
     output alone meant a context-filling prompt cost nothing, on a machine
     where prompt evaluation is most of the wait."""
 
+    attempt_id: str | None = None
+    """The agent attempt this row bills, once and only once. Null on rows the
+    direct path writes, which is every row while node agents are disabled."""
+
+    totals_source: str | None = None
+    """Where `tokens` came from on an agent-backed row: `runtime_final` (the
+    runtime's own `done`), `estimated_from_chunks` (an observation, not a
+    bound) or `unavailable` (recorded as 0). Null on direct-path rows."""
+
+    prompt_tokens_basis: str | None = None
+    """Where `prompt_tokens` came from: `runtime_final`, `exact_counter` or
+    `estimate`. Null on direct-path rows."""
+
+    runtime_completed: bool | None = None
+    """Whether the runtime reached `done`, which `completed` (the client got
+    everything) does not say. Null on direct-path rows."""
+
 
 @dataclass(frozen=True, slots=True)
 class LatencyStats:

@@ -9,6 +9,7 @@ rates and model names), so they are pinned here rather than left to the deploy.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -211,6 +212,26 @@ async def test_metered_usage_emits_from_the_record_and_still_persists() -> None:
         )
         == 1
     )
+
+
+def test_only_agent_settled_rows_are_counted_by_their_source() -> None:
+    """A direct-path row has no source and adds no series; an agent-backed
+    one is counted under where its output figure came from."""
+    registry = CollectorRegistry()
+    metrics = Metrics(registry)
+
+    metrics.observe_inference(_usage(tokens=5, completed=True))
+    metrics.observe_inference(
+        replace(_usage(tokens=7, completed=False), totals_source="estimated_from_chunks")
+    )
+
+    name = "nexus_usage_settlements_total"
+    labels = {"capability": "chat", "model": "m"}
+    assert registry.get_sample_value(name, {**labels, "totals_source": "runtime_final"}) is None
+    assert (
+        registry.get_sample_value(name, {**labels, "totals_source": "estimated_from_chunks"}) == 1
+    )
+    assert registry.get_sample_value("nexus_inference_tokens_total", labels) == 12
 
 
 async def test_slot_gauge_follows_the_limiter() -> None:
