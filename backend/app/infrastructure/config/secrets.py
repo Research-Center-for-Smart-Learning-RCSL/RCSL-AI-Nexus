@@ -26,3 +26,8 @@ class SecretsSettings(BaseSettings):
     and the whole knowledge base is readable to anything that reaches it. Set
     through `QDRANT__SERVICE__API_KEY` on the service and read from the same
     file secret here, so the two cannot drift."""
+
+    node_agent_token: str = Field(default="")
+    """The bearer token the node agents require, shared with them as a Docker
+    secret. Read only when `node_agent_enabled`, and then at least 32
+    characters, or the process does not start."""

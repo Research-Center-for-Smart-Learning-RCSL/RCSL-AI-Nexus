@@ -9,8 +9,8 @@
 #
 # It needs, before the first start:
 #   - secrets/agent_database_url  the `nexus_agent` role, provisioned by migrate
-#   - secrets/node_agent_token    at least 32 characters; later shared with the
-#                                 gateway and admin entrances (PR4a-2)
+#   - secrets/node_agent_token    at least 32 characters; shared with the
+#                                 gateway and admin entrances below
 #   - NODE_AGENT_NODE_ID in .env  this host's row in `nodes`
 #   - the host runtime witness    scripts/host/runtime_witness.py under a root
 #                                 launchd job, writing RUNTIME_WITNESS_HOST_DIR
@@ -29,7 +29,7 @@ networks:
   # The agent's database segment: postgres and the agent, nothing else.
   agent-data:
     internal: true
-  # How the gateway and the admin entrances will reach the agent (PR4a-2).
+  # How the gateway and the admin entrances reach the agent (PR4a-2).
   # Two networks, never one: the gateway must share no network with an admin
   # entrance (the invariant at the top of docker-compose.yml). The agent
   # spans both, as Prometheus spans the scrape segments, and forwards nothing
@@ -57,6 +57,24 @@ services:
 
   postgres:
     networks: [agent-data]
+
+  # The senders get a path to the agent and its token, and nothing else
+  # changes: they still send directly until NODE_AGENT_ENABLED is set, which
+  # waits for PR4b. Each node's `agent_url` is then `http://node-agent:8100`.
+  gateway:
+    networks: [agent-gateway]
+    secrets:
+      - node_agent_token
+
+  admin-tailnet:
+    networks: [agent-control]
+    secrets:
+      - node_agent_token
+
+  admin-public:
+    networks: [agent-control]
+    secrets:
+      - node_agent_token
 
   node-agent:
     image: rcsl-ai-nexus:latest

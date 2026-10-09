@@ -27,6 +27,15 @@ class RuntimeSettings(BaseSettings):
     Defaults to False because "nobody has checked" is the true state of every
     deployment until somebody has."""
 
+    node_agent_enabled: bool = False
+    """Send every Ollama call through the selected node's agent (#24, PR4).
+
+    Off until PR4b has audited every sender and a maintainer turns it on
+    (design R4). On, a node without an `agent_url` is refused, and any path
+    that still reaches a runtime by kind alone fails closed rather than going
+    around the agent; see `infrastructure/runtime_directory.py`. Requires the
+    `node_agent_token` secret."""
+
     node_id: str = "local"
 
     node_name: str = "local"

@@ -41,20 +41,33 @@ from app.domain.services.token_service import TokenService
 from app.infrastructure.concurrency import SemaphoreConcurrencyLimiter
 from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.db import get_session_factory, session_scope
+from app.infrastructure.runtime_directory import MIN_AGENT_TOKEN_LENGTH, RuntimeDirectory
 from app.shared.clock import SystemClock
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
-def build_runtimes(settings: Settings) -> dict[RuntimeKind, ModelRuntimePort]:
+def build_runtimes(settings: Settings) -> RuntimeDirectory:
     """The one place that knows which runtimes this build serves.
 
     Adding MLX cost one entry here and one adapter file, with no use case and no
     interface touched: the payoff the hexagonal layering was chosen for. vLLM
     would be the same, once there is hardware it runs on. See
     adapters/runtime/mlx_adapter.py.
+
+    With `node_agent_enabled`, the same adapters become refusals and each
+    node's agent is reached through `RuntimeDirectory.for_node`; see
+    `infrastructure/runtime_directory.py`.
     """
-    return {
+    token: str | None = None
+    if settings.node_agent_enabled:
+        token = settings.node_agent_token
+        if len(token) < MIN_AGENT_TOKEN_LENGTH:
+            raise ValueError(
+                "NODE_AGENT_ENABLED needs the node_agent_token secret, "
+                f"at least {MIN_AGENT_TOKEN_LENGTH} characters"
+            )
+    direct: dict[RuntimeKind, ModelRuntimePort] = {
         RuntimeKind.OLLAMA: OllamaAdapter(
             base_url=settings.ollama_base_url,
             request_timeout_seconds=settings.request_timeout_seconds,
@@ -66,6 +79,9 @@ def build_runtimes(settings: Settings) -> dict[RuntimeKind, ModelRuntimePort]:
             tool_calling_verified=settings.mlx_tool_calling_verified,
         ),
     }
+    return RuntimeDirectory(
+        direct, agent_token=token, timeout_s=float(settings.request_timeout_seconds)
+    )
 
 
 def build_token_counter(settings: Settings) -> TokenCounterPort | None:

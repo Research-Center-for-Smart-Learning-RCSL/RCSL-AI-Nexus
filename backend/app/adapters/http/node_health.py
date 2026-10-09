@@ -22,7 +22,7 @@ import logging
 
 from app.domain.entities.model import RuntimeKind
 from app.domain.entities.node import Node, NodeStatus
-from app.domain.ports.model_runtime_port import ModelRuntimePort
+from app.domain.ports.model_runtime_port import ModelRuntimePort, runtime_for
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,10 @@ class RuntimeNodeHealth:
         self._runtimes = runtimes
 
     async def probe(self, node: Node) -> NodeStatus:
-        adapters = [self._runtimes[r] for r in node.runtimes if r in self._runtimes]
+        # Per node, like a request: with node agents enabled this is the
+        # node's agent, and a node without one has nothing to probe.
+        resolved = (runtime_for(self._runtimes, node, r) for r in node.runtimes)
+        adapters = [a for a in resolved if a is not None]
         if not adapters:
             # The node declares no runtime this build can reach, so its health
             # cannot be observed. Conservative rather than optimistic: reporting
