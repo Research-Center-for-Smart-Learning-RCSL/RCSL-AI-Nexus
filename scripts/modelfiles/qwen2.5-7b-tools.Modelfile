@@ -1,0 +1,66 @@
+# qwen2.5:7b with tool definitions rendered as JSON (#27).
+#
+#   ollama create qwen2.5:7b-tools -f scripts/modelfiles/qwen2.5-7b-tools.Modelfile
+#
+# The upstream template writes {{ .Function }}, which Ollama (0.33.2 through at
+# least 0.40.2) prints as a Go struct: the template-side tool type has no JSON
+# String() method (ollama/ollama#18391). json is a template function Ollama
+# provides, so this only changes how the definition is printed. Everything else
+# (weights, system prompt, parameters, licence) is inherited from FROM, and the
+# rest of the template is upstream's byte for byte.
+#
+# Both tags share one runner: Ollama keys a loaded model by its weights path
+# (schedulerModelKey, server/sched.go), so loading this tag costs no memory
+# beside qwen2.5:7b, and unloading EITHER tag unloads both. Observed on
+# production 2026-10-09: keep_alive 0 on this tag evicted qwen2.5:7b.
+FROM qwen2.5:7b
+TEMPLATE """{{- if .Messages }}
+{{- if or .System .Tools }}<|im_start|>system
+{{- if .System }}
+{{ .System }}
+{{- end }}
+{{- if .Tools }}
+
+# Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{{- range .Tools }}
+{"type": "function", "function": {{ json .Function }}}
+{{- end }}
+</tools>
+
+For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{"name": <function-name>, "arguments": <args-json-object>}
+</tool_call>
+{{- end }}<|im_end|>
+{{ end }}
+{{- range $i, $_ := .Messages }}
+{{- $last := eq (len (slice $.Messages $i)) 1 -}}
+{{- if eq .Role "user" }}<|im_start|>user
+{{ .Content }}<|im_end|>
+{{ else if eq .Role "assistant" }}<|im_start|>assistant
+{{ if .Content }}{{ .Content }}
+{{- else if .ToolCalls }}<tool_call>
+{{ range .ToolCalls }}{"name": "{{ .Function.Name }}", "arguments": {{ .Function.Arguments }}}
+{{ end }}</tool_call>
+{{- end }}{{ if not $last }}<|im_end|>
+{{ end }}
+{{- else if eq .Role "tool" }}<|im_start|>user
+<tool_response>
+{{ .Content }}
+</tool_response><|im_end|>
+{{ end }}
+{{- if and (ne .Role "assistant") $last }}<|im_start|>assistant
+{{ end }}
+{{- end }}
+{{- else }}
+{{- if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}{{ if .Prompt }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+{{ end }}<|im_start|>assistant
+{{ end }}{{ .Response }}{{ if .Response }}<|im_end|>{{ end }}"""
