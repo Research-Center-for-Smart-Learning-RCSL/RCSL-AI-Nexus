@@ -246,28 +246,35 @@ def test_control_tokens_are_control_tokens_in_either_width(tmp_path: Path, as_in
     assert counts == [1, 1]
 
 
-def test_a_run_of_spaces_counts_the_same_in_both_backends(tmp_path: Path) -> None:
-    """The Unigram path, which takes the same `split` flag in both languages."""
+def test_gemma4_counts_the_same_in_both_backends(tmp_path: Path) -> None:
+    """The port of llama.cpp's gemma4 BPE exists twice (C6b); the two must
+    agree on everything it does: merges by rank, specials, newline runs, byte
+    fallback. The real vocabulary is held to the runtime in the goldens."""
     from app.adapters.tokenizer.gguf_token_counter.construction import build_tokenizer_for_model
 
-    pieces = {"▁main": 100, "▁▁▁▁": 200, "▁▁": 300}
-    singles = {c: 400 + i for i, c in enumerate("ain▁m")}
-    tokens = [*pieces, *singles]
-    scores = [float(r) for r in [*pieces.values(), *singles.values()]]
-    blob = write_gguf(tmp_path / "blob", tokens=tokens, model="llama", scores=scores, merges=())
-    text = "main" + " " * 8 + "main"
+    tokens = ["<eos>", "▁", "▁▁", "▁▁▁▁", "m", "a", "i", "n", "ma", "in", "main", "\n\n"]
+    tokens += ["<0xC3>", "x"]
+    merges = ["▁ ▁", "▁▁ ▁▁", "m a", "i n", "ma in"]
+    blob = write_gguf(
+        tmp_path / "blob",
+        tokens=tokens,
+        model="llama",
+        pre="gemma4",
+        merges=merges,
+        control=["<eos>"],
+    )
+    texts = ["main" + " " * 8 + "main", "x\n\nx\n\n\n<eos>main", "é" * 3, "", "<eos><eos>"]
 
-    native = nexus_native.count_parts(str(blob), "unigram-ref", [text])
+    native = nexus_native.count_parts(str(blob), "gemma4-ref", texts)
     python = build_tokenizer_for_model(
         {
             "tokenizer.ggml.model": "llama",
+            "tokenizer.ggml.pre": "gemma4",
             "tokenizer.ggml.tokens": tokens,
-            "tokenizer.ggml.scores": scores,
-            "tokenizer.ggml.token_type": [1] * len(tokens),
+            "tokenizer.ggml.merges": merges,
+            "tokenizer.ggml.token_type": [3] + [1] * (len(tokens) - 1),
         }
-    ).encode(text)
+    )
 
-    # Five, against ten when every space was its own pre-token. The order of
-    # `▁▁` and `▁` is a tie in a vocabulary this small, so it is not asserted.
-    assert len(python.tokens) == 5 and "▁▁▁▁" in python.tokens, python.tokens
-    assert native == [len(python.tokens)], (native, python.tokens)
+    assert native == [len(python.encode(t).ids) for t in texts]
+    assert native[0] == 4, "main, ▁▁▁▁, ▁▁▁▁, main"
