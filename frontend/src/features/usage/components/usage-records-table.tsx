@@ -55,6 +55,36 @@ function CompactionCell({ record }: { record: UsageRecord }) {
   );
 }
 
+const BASIS_TITLE: Record<string, string> = {
+  runtime_final: 'counted by the runtime',
+  exact_counter: 'counted by the gateway’s tokenizer',
+  estimate: 'estimated',
+};
+
+/**
+ * Where an agent-billed row's figures came from, when the runtime did not
+ * confirm them. Nothing on a row the runtime counted, and nothing on a
+ * direct-path row, which carries no source at all.
+ */
+function SourceCell({ record }: { record: UsageRecord }) {
+  const source = record.totals_source;
+  if (source === null || source === 'runtime_final') return null;
+  const prompt = BASIS_TITLE[record.prompt_tokens_basis ?? ''] ?? 'unknown';
+  return (
+    <Badge
+      variant="outline"
+      className="ml-2"
+      title={
+        source === 'unavailable'
+          ? `The runtime never reported an output count; recorded as 0. Input ${prompt}.`
+          : `Output counted from streamed chunks, not confirmed by the runtime. Input ${prompt}.`
+      }
+    >
+      {source === 'unavailable' ? 'output unknown' : 'output estimated'}
+    </Badge>
+  );
+}
+
 /**
  * The individual requests behind the charts above.
  *
@@ -152,6 +182,7 @@ export function UsageRecordsTable() {
                   <TableCell className="font-mono text-xs">{r.model_alias}</TableCell>
                   <TableCell className="whitespace-nowrap tabular-nums text-xs text-muted-foreground">
                     {tokens(r.prompt_tokens)} in / {tokens(r.tokens)} out
+                    <SourceCell record={r} />
                     <CompactionCell record={r} />
                   </TableCell>
                   <TableCell className="whitespace-nowrap tabular-nums text-xs text-muted-foreground">

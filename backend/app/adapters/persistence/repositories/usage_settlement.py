@@ -13,19 +13,30 @@ delivery flag. All of them go through this class:
 
 Its own transactions: like the bindings, it must be visible to the other
 writers when it commits, not when a request's session does.
+
+`observe` is handed the row by whichever writer actually inserted it, so the
+inference metrics count each attempt once, in the process that billed it
+(the gateway, or the tailnet admin for what its sweeper settled). A later
+reconciliation of `completed` is not re-counted: the metric keeps what was
+known when the row was written, and the row is the record.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import uuid
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import text
+from sqlalchemy import CursorResult, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.domain.entities.usage import UsageRecord
 from app.domain.services.usage_settlement import BILLABLE_STATES, settle_usage
+
+logger = logging.getLogger(__name__)
 
 _FACTS = text(
     "SELECT a.op_id, a.client_delivery_complete, b.billing, b.tenant_id, "
@@ -60,8 +71,14 @@ _RECONCILE = text(
 
 
 class PostgresUsageSettlement:
-    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        *,
+        observe: Callable[[UsageRecord], None] | None = None,
+    ) -> None:
         self._sessions = sessions
+        self._observe = observe
 
     async def mark_delivery(self, op_id: str, complete: bool) -> None:
         """What the gateway saw of delivery, recorded once.
@@ -95,32 +112,64 @@ class PostgresUsageSettlement:
                 started_at=datetime.fromisoformat(billing["started_at"]),
                 delivered=facts["client_delivery_complete"],
             )
-            await session.execute(
-                _INSERT,
-                {
-                    "id": str(uuid.uuid4()),
-                    "attempt_id": op_id,
-                    "actor_id": billing["actor_id"],
-                    "api_key_id": billing.get("api_key_id"),
-                    "tenant_id": facts["tenant_id"],
-                    "capability": billing["capability"],
-                    "requested_capability": billing.get("requested_capability"),
-                    "model_alias": billing["model_alias"],
-                    "tokens": usage.tokens,
-                    "prompt_tokens": usage.prompt_tokens,
-                    "latency_ms": usage.latency_ms,
-                    "completed": usage.completed,
-                    "at": usage.at,
-                    "compaction_tier": compaction.get("tier"),
-                    "tokens_before": compaction.get("tokens_before"),
-                    "tokens_after": compaction.get("tokens_after"),
-                    "totals_source": usage.totals_source,
-                    "prompt_tokens_basis": usage.prompt_tokens_basis,
-                    "runtime_completed": usage.runtime_completed,
-                },
-            )
+            row = {
+                "id": str(uuid.uuid4()),
+                "attempt_id": op_id,
+                "actor_id": billing["actor_id"],
+                "api_key_id": billing.get("api_key_id"),
+                "tenant_id": facts["tenant_id"],
+                "capability": billing["capability"],
+                "requested_capability": billing.get("requested_capability"),
+                "model_alias": billing["model_alias"],
+                "tokens": usage.tokens,
+                "prompt_tokens": usage.prompt_tokens,
+                "latency_ms": usage.latency_ms,
+                "completed": usage.completed,
+                "at": usage.at,
+                "compaction_tier": compaction.get("tier"),
+                "tokens_before": compaction.get("tokens_before"),
+                "tokens_after": compaction.get("tokens_after"),
+                "totals_source": usage.totals_source,
+                "prompt_tokens_basis": usage.prompt_tokens_basis,
+                "runtime_completed": usage.runtime_completed,
+            }
+            # Only the writer that inserted the row reports it; a racing one sees 0.
+            result = await session.execute(_INSERT, row)
+            inserted = cast("CursorResult[Any]", result).rowcount == 1
             await session.execute(_RECONCILE, {"op_id": op_id})
+        if inserted:
+            self._emit(row)
         return True
+
+    def _emit(self, row: dict[str, Any]) -> None:
+        if self._observe is None:
+            return
+        try:
+            self._observe(
+                UsageRecord(
+                    id=row["id"],
+                    actor_id=row["actor_id"],
+                    api_key_id=row["api_key_id"],
+                    capability=row["capability"],
+                    model_alias=row["model_alias"],
+                    tokens=row["tokens"],
+                    latency_ms=row["latency_ms"],
+                    completed=row["completed"],
+                    at=row["at"],
+                    tenant_id=row["tenant_id"],
+                    requested_capability=row["requested_capability"],
+                    compaction_tier=row["compaction_tier"],
+                    tokens_before_compaction=row["tokens_before"],
+                    tokens_after_compaction=row["tokens_after"],
+                    prompt_tokens=row["prompt_tokens"],
+                    attempt_id=row["attempt_id"],
+                    totals_source=row["totals_source"],
+                    prompt_tokens_basis=row["prompt_tokens_basis"],
+                    runtime_completed=row["runtime_completed"],
+                )
+            )
+        except Exception:  # noqa: BLE001 - the row is written; a metric must not undo that
+            logger.warning("failed to emit inference metrics", exc_info=True)
 
     async def sweep(self, limit: int = 100) -> int:
         """Settle what nobody settled, and reconcile what was settled early.

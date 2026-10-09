@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from app.adapters.metrics.prometheus import Metrics
 from app.adapters.persistence.repositories import PostgresUsageSettlement
 from app.infrastructure.db import get_session_factory
 
@@ -24,8 +25,14 @@ logger = logging.getLogger(__name__)
 SWEEP_INTERVAL_SECONDS = 30
 
 
-async def run_usage_sweeper(interval_seconds: int = SWEEP_INTERVAL_SECONDS) -> None:
-    settlement = PostgresUsageSettlement(get_session_factory())
+async def run_usage_sweeper(
+    metrics: Metrics | None = None, interval_seconds: int = SWEEP_INTERVAL_SECONDS
+) -> None:
+    # What the sweeper settles is counted on this entrance's `/metrics`, so the
+    # gateway's and this one's together count every attempt once.
+    settlement = PostgresUsageSettlement(
+        get_session_factory(), observe=metrics.observe_inference if metrics else None
+    )
     while True:
         await asyncio.sleep(interval_seconds)
         try:

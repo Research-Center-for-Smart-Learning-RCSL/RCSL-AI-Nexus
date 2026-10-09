@@ -260,6 +260,15 @@ class UsageRecordResponse(BaseModel):
     compaction_tier: int | None
     tokens_before_compaction: int | None
     tokens_after_compaction: int | None
+    totals_source: str | None
+    """Agent-backed rows only: `runtime_final`, `estimated_from_chunks` or
+    `unavailable` (tokens recorded as 0). Null on direct-path rows."""
+    prompt_tokens_basis: str | None
+    """Agent-backed rows only: `runtime_final`, `exact_counter` or
+    `estimate`. Null on direct-path rows."""
+    runtime_completed: bool | None
+    """Agent-backed rows only: whether the runtime reached `done`, which
+    `completed` (the client received everything) does not say."""
 
     @classmethod
     def of(cls, record: UsageRecord) -> UsageRecordResponse:
@@ -278,6 +287,9 @@ class UsageRecordResponse(BaseModel):
             compaction_tier=record.compaction_tier,
             tokens_before_compaction=record.tokens_before_compaction,
             tokens_after_compaction=record.tokens_after_compaction,
+            totals_source=record.totals_source,
+            prompt_tokens_basis=record.prompt_tokens_basis,
+            runtime_completed=record.runtime_completed,
         )
 
 

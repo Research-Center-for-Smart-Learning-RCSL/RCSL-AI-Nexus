@@ -2768,14 +2768,20 @@ export interface components {
             model_alias: string;
             /** Prompt Tokens */
             prompt_tokens: number;
+            /** Prompt Tokens Basis */
+            prompt_tokens_basis: string | null;
             /** Requested Capability */
             requested_capability: string | null;
+            /** Runtime Completed */
+            runtime_completed: boolean | null;
             /** Tokens */
             tokens: number;
             /** Tokens After Compaction */
             tokens_after_compaction: number | null;
             /** Tokens Before Compaction */
             tokens_before_compaction: number | null;
+            /** Totals Source */
+            totals_source: string | null;
         };
         /** UserResponse */
         UserResponse: {
