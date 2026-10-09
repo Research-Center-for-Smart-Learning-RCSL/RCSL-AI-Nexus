@@ -13,6 +13,7 @@ from app.domain.entities.chat import (
 from app.domain.exceptions import (
     COUNT_BY_TOKENIZER,
 )
+from app.domain.services.validated_profiles import WidenedAdmission
 
 from .estimates import (
     _estimated_prompt_tokens,
@@ -30,7 +31,7 @@ def _warn_if_prompt_was_truncated(
     basis: str,
     request_id: str | None,
     actor: str,
-    widened: bool = False,
+    widened: WidenedAdmission | None = None,
 ) -> None:
     """The backstop for the estimate above being wrong in the unsafe direction.
 
@@ -41,8 +42,12 @@ def _warn_if_prompt_was_truncated(
     beginning the model never saw, and the only thing wrong with the response
     is that it is wrong.
 
-    `RouteChatRequest._refuse_what_this_target_would_truncate` refuses against
-    this same boundary before any hardware is committed, which means reaching it
+    **Except for a request admitted under a validated profile** (PR2b), which
+    passes num_ctx/2 by design and is judged against the count it was admitted
+    on instead, in both directions; see `_judge_widened`.
+
+    Otherwise `RouteChatRequest._refuse_what_this_target_would_truncate` refuses
+    against this same boundary before any hardware is committed, which means reaching it
     here is not a caller's problem to solve but a signal that the estimator
     under-counted their content: the refusal judged an estimate, and this judges
     what the tokenizer actually charged. Logged rather than raised: the answer
@@ -62,22 +67,8 @@ def _warn_if_prompt_was_truncated(
         # Zero means the stream never reached its terminal chunk, so there is
         # no figure to judge — not that nothing was read.
         return
-    if widened:
-        # Admitted past half the window under a validated profile (PR2b), so
-        # reaching num_ctx/2 is expected. Such a profile counts what the
-        # runtime evaluates (U − P = 0 on its corpus); the runtime evaluating
-        # clearly fewer is the cut this backstop exists for.
-        if prompt_tokens >= estimated * WIDENED_TRUNCATION_RATIO:
-            return
-        logger.warning(
-            "prompt likely truncated by the runtime: prompt_tokens=%s of %s counted under a "
-            "validated profile request_id=%s actor=%s — the profile no longer holds; "
-            "withdraw it",
-            prompt_tokens,
-            estimated,
-            request_id,
-            actor,
-        )
+    if widened is not None:
+        _judge_widened(prompt_tokens, widened, basis=basis, request_id=request_id, actor=actor)
         return
     if prompt_tokens < context_length // 2:
         # Only here. Past the boundary `prompt_eval_count` reports what the
@@ -102,8 +93,60 @@ def _warn_if_prompt_was_truncated(
     )
 
 
-WIDENED_TRUNCATION_RATIO = 0.95
-"""Below this share of the count, a widened request's evaluation was cut."""
+WIDENED_TOLERANCE = 8
+"""Tokens a widened request's evaluation may fall short of its count before it
+is called cut. A validated profile counts exactly what the runtime evaluates
+(U − P = 0 on its corpus, id-for-id on its goldens), and a cut drops thousands,
+so this only absorbs noise; it is no blind band worth the name."""
+
+
+def _judge_widened(
+    prompt_tokens: int,
+    admission: WidenedAdmission,
+    *,
+    basis: str,
+    request_id: str | None,
+    actor: str,
+) -> None:
+    """A request admitted past half the window under a validated profile
+    (PR2b): reaching num_ctx/2 is expected, so it is judged against the count
+    the guard admitted, in both directions.
+
+    - **More than counted** is the profile failing where it matters: the guard
+      reserved the output against a prompt smaller than the one the runtime
+      read, so generation can reach the window and shift the context.
+    - **Clearly fewer than counted** is the runtime cutting the prompt.
+
+    Either way the profile no longer bounds this input and is named, so it can
+    be withdrawn. Otherwise the drift line runs as it does below the half.
+    """
+    if prompt_tokens > admission.counted:
+        logger.warning(
+            "validated profile %s under-counted: the runtime evaluated %s of the %s counted "
+            "(limit %s) request_id=%s actor=%s — withdraw the profile",
+            admission.profile,
+            prompt_tokens,
+            admission.counted,
+            admission.limit,
+            request_id,
+            actor,
+        )
+        return
+    if prompt_tokens < admission.counted - WIDENED_TOLERANCE:
+        logger.warning(
+            "prompt likely truncated by the runtime: prompt_tokens=%s of %s counted under "
+            "validated profile %s request_id=%s actor=%s — withdraw the profile",
+            prompt_tokens,
+            admission.counted,
+            admission.profile,
+            request_id,
+            actor,
+        )
+        return
+    _log_estimate_drift(
+        prompt_tokens, estimated=admission.counted, basis=basis, request_id=request_id, actor=actor
+    )
+
 
 ESTIMATE_DRIFT_BAND = (0.9, 1.65)
 """The estimate-to-actual ratios already known to be normal, which are not news.

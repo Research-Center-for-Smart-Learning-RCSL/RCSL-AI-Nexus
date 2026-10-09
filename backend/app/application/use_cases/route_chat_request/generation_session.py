@@ -22,6 +22,7 @@ from app.domain.exceptions import (
 )
 from app.domain.ports.model_runtime_port import ModelRuntimePort
 from app.domain.services.prompt_capture import TranscriptBuffer, should_capture
+from app.domain.services.validated_profiles import WidenedAdmission
 
 from .dependencies import RouteChatDependencies
 from .estimates import effective_max_tokens
@@ -58,7 +59,7 @@ class GenerationSessionMixin(RouteChatDependencies):
         tokens_before_compaction: int | None = None,
         tokens_after_compaction: int | None = None,
         attempt: AttemptIdentity | None = None,
-        widened: bool = False,
+        widened: WidenedAdmission | None = None,
     ) -> AsyncGenerator[CompletionChunk, None]:
         # The caller's request is honoured only where it is stricter than ours.
         # An unbounded generation is a hardware problem, not a client choice.

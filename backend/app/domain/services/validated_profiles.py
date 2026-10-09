@@ -114,6 +114,17 @@ VALIDATED: tuple[ValidatedProfile, ...] = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class WidenedAdmission:
+    """What the guard judged when it admitted a request under a profile: the
+    profile, the count it compared (the larger of its two), and the limit.
+    The truncation backstop judges the runtime's figure against this count."""
+
+    profile: str
+    counted: int
+    limit: int
+
+
 def is_validated(
     key: ProfileKey, profiles: tuple[ValidatedProfile, ...] | None = None
 ) -> ValidatedProfile | None:
