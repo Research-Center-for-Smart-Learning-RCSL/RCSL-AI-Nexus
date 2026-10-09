@@ -43,7 +43,12 @@ from .inference_runtime import (
     COUNT_BY_TOKENIZER,
     AssistantUnavailableError,
     ContextTooLongError,
+    IdempotencyAttemptFailedError,
+    IdempotencyInProgressError,
+    IdempotencyKeyReusedError,
+    IdempotencyResultExpiredError,
     InsufficientMemoryError,
+    InvalidIdempotencyKeyError,
     InvalidModelReferenceError,
     ModelIntegrityError,
     ModelNotFoundError,
@@ -75,6 +80,11 @@ from .retention_evaluations import (
 )
 
 __all__ = [
+    "IdempotencyAttemptFailedError",
+    "IdempotencyInProgressError",
+    "IdempotencyKeyReusedError",
+    "IdempotencyResultExpiredError",
+    "InvalidIdempotencyKeyError",
     "DomainError",
     "StateConflictError",
     "ModelNotFoundError",

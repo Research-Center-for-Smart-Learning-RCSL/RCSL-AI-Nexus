@@ -28,6 +28,7 @@ from app.infrastructure.di import (
     RouteChatRequestDep,
 )
 from app.interfaces.http import sse
+from app.interfaces.http.idempotency import IdempotencyKeyDep, request_identity
 from app.interfaces.http.middleware.identity import current_actor
 from app.interfaces.http.schemas.chat_schemas import AdminChatRequest
 
@@ -41,30 +42,39 @@ async def admin_chat(
     use_case: RouteChatRequestDep,
     ground_chat: GroundChatFactoryDep,
     apply_template: ApplyPromptTemplateFactoryDep,
+    idempotency_key: IdempotencyKeyDep = None,
 ) -> StreamingResponse:
     """Always streaming. The panel has no non-streaming mode, and offering one
     would be a second path through the same use case for no caller."""
     messages = [Message(role=MessageRole(m.role), content=m.content) for m in body.messages]
 
-    # Before grounding, so the operator's template frames everything and the
-    # retrieved passages still sit beside the question they answer.
-    if body.prompt_template:
-        messages = await apply_template(actor.tenant_id).execute(
-            actor, messages, body.prompt_template
-        )
+    # A repeated `Idempotency-Key` is answered before the template and the
+    # retrieval (design R6 on #24).
+    identity = request_identity(idempotency_key, "admin.chat", body)
+    generation = await use_case.repeat(actor, body.capability, identity)
 
-    # Grounding happens before the streaming use case rather than inside it, so
-    # the retrieval read and the embedding call are not in front of the
-    # concurrency slot and the `finally` that records usage. See
-    # application/use_cases/ground_chat.py.
     passages: list[tuple[str, int]] = []
-    if body.use_knowledge:
-        messages, retrieved = await ground_chat(actor.tenant_id).execute(
-            actor, messages, collection_id=body.knowledge_collection
-        )
-        passages = [(p.document_id, p.index) for p in retrieved]
+    if generation is None:
+        # Before grounding, so the operator's template frames everything and
+        # the retrieved passages still sit beside the question they answer.
+        if body.prompt_template:
+            messages = await apply_template(actor.tenant_id).execute(
+                actor, messages, body.prompt_template
+            )
 
-    generation = use_case.execute(actor, body.capability, messages, body.max_tokens, body.think)
+        # Grounding happens before the streaming use case rather than inside
+        # it, so the retrieval read and the embedding call are not in front of
+        # the concurrency slot and the `finally` that records usage. See
+        # application/use_cases/ground_chat.py.
+        if body.use_knowledge:
+            messages, retrieved = await ground_chat(actor.tenant_id).execute(
+                actor, messages, collection_id=body.knowledge_collection
+            )
+            passages = [(p.document_id, p.index) for p in retrieved]
+
+        generation = use_case.execute(
+            actor, body.capability, messages, body.max_tokens, body.think, identity=identity
+        )
 
     # Priming before the response exists is what keeps authorization and
     # routing failures reportable as status codes. See interfaces/http/sse.py.
