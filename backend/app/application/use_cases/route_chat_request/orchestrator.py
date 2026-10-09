@@ -456,7 +456,7 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
                         composition=composition,
                         basis=basis,
                     )
-            await self._refuse_what_this_target_would_truncate(
+            widened = await self._refuse_what_this_target_would_truncate(
                 counted,
                 basis,
                 target,
@@ -550,6 +550,7 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
                     if compaction_result
                     else None,
                     attempt=attempt,
+                    widened=widened,
                 )
             ) as generation:
                 try:

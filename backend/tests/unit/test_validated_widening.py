@@ -123,3 +123,28 @@ async def test_anything_short_of_the_whole_fingerprint_keeps_the_half(
     with pytest.raises(ContextTooLongError) as caught:
         await _drain(_use_case(counter, observed_ago=observed_ago), MESSAGE, thinking=False)
     assert caught.value.limit == 16384
+
+
+def test_a_widened_request_past_the_half_is_not_called_truncated(caplog) -> None:
+    """Seen in production on the first widened request: 20045 evaluated of
+    20045 counted was reported as reaching num_ctx/2."""
+    from app.application.use_cases.route_chat_request.diagnostics import (
+        _warn_if_prompt_was_truncated,
+    )
+
+    def warned(prompt_tokens: int, *, widened: bool) -> bool:
+        caplog.clear()
+        _warn_if_prompt_was_truncated(
+            prompt_tokens,
+            32768,
+            estimated=20045,
+            basis="tokenizer",
+            request_id="r",
+            actor="a",
+            widened=widened,
+        )
+        return any("likely truncated" in r.message for r in caplog.records)
+
+    assert not warned(20045, widened=True)
+    assert warned(16384, widened=True), "a cut evaluation is still reported"
+    assert warned(20045, widened=False), "unchanged where the half applies"
