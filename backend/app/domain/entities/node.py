@@ -8,6 +8,7 @@ and is what the Phase 1 memory budget check works from.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 
 from app.domain.entities.model import RuntimeKind
@@ -33,3 +34,7 @@ class Node:
     agent_url: str | None = None
     """Where this node's agent is reached (PR4a on #24). None for a node with
     no agent, which the agent path refuses rather than reaching around."""
+    runtime_version: str | None = None
+    runtime_version_at: datetime | None = None
+    """The runtime's version as the heartbeat last read it, and when: one part
+    of a validated profile's key, used only while fresh (PR2b on #24)."""

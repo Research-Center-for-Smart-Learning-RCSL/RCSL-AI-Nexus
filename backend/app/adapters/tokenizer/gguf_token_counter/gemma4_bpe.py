@@ -110,7 +110,7 @@ class Gemma4Bpe:
             ranks.setdefault(pair, rank)
         self._ranks = ranks
         self._bytes = [self._ids.get(f"<0x{b:02X}>") for b in range(256)]
-        self._specials = _special_tokens(tokens, types)
+        self._specials = special_tokens(tokens, types)
 
     def encode(self, text: str, add_special_tokens: bool = False) -> Encoding:
         if add_special_tokens:
@@ -187,7 +187,7 @@ class Gemma4Bpe:
         return [s for s in symbols if s]
 
 
-def _special_tokens(tokens: Sequence[str], types: Sequence[int]) -> list[str]:
+def special_tokens(tokens: Sequence[str], types: Sequence[int]) -> list[str]:
     """The tokens `tokenizer_st_partition` splits out, longest first."""
     attrs = {i: (types[i] if i < len(types) else 1) for i in range(len(tokens))}
     present = {token: i for i, token in enumerate(tokens)}

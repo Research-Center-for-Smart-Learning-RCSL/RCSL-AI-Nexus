@@ -1,4 +1,4 @@
-"""Record the runtime's own token ids for gemma4, as goldens for the counter.
+"""Record the runtime's own token ids for a model, as goldens for the counter.
 
     cd backend && PYTHONPATH=$PWD uv run python \
         ../scripts/runtime-probes/record_tokenizer_goldens.py \
@@ -76,7 +76,7 @@ def main() -> int:
             "texts": [(i, *record(text)) for i, text in enumerate(texts)],
             "rendered": {name: record(text) for name, text in rendered_prompts(args.ref).items()},
         }
-    print('"""The runtime\'s own gemma4 token ids, recorded by')
+    print(f'"""The runtime\'s own {args.ref} token ids, recorded by')
     print("`scripts/runtime-probes/record_tokenizer_goldens.py` (C6b on #24).")
     print()
     print("`texts` index `gemma4_tokenizer_corpus.all_texts(seed, random)`;")

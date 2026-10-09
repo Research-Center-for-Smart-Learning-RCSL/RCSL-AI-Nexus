@@ -14,3 +14,6 @@ serde_json = { version = "1", features = ["preserve_order"] }
 tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 minijinja = "2"
 ahash = "0.8"
+
+[build-dependencies]
+sha2 = "0.10"

@@ -29,6 +29,7 @@ from app.adapters.tokenizer.gguf_token_counter.adapter import Measurement
 from app.application.use_cases.route_chat_request.estimates import (
     _estimated_prompt_tokens,  # noqa: PLC2701 - the gateway's own fallback, on purpose
 )
+from app.domain.services import validated_profiles
 from app.node_agent.wire import GenerationRequest
 
 
@@ -86,7 +87,13 @@ def check_generation(
     request: GenerationRequest,
     registered: Registration | None,
     measured: Measurement,
+    *,
+    node_id: str = "",
+    runtime_version: str | None = None,
+    profiles: tuple[validated_profiles.ValidatedProfile, ...] | None = None,
 ) -> GuardRefusal | GuardPass:
+    """`runtime_version` is read from the runtime by the caller, now; without
+    it no profile can match and the legacy rule applies (PR2b)."""
     if registered is None:
         return GuardRefusal("model_not_on_node", f"{request.ref} is not registered on this node")
     if registered.context_length > 0 and request.context_length != registered.context_length:
@@ -101,12 +108,15 @@ def check_generation(
     window = request.context_length
     if measured.declared_context is not None:
         window = min(window, measured.declared_context)
-    servable = min(window // 2, window - 1 - request.max_tokens)
     if measured.counted is not None:
         counted, basis = measured.counted, "exact_counter"
     else:
         counted, _ = _estimated_prompt_tokens(request.messages, request.tools)
         basis = "estimate"
+    profile = _profile(request, measured, node_id, runtime_version, profiles)
+    servable = validated_profiles.servable(
+        window, request.max_tokens, widened=profile is not None and basis == "exact_counter"
+    )
     provenance = {
         "manifest": measured.identity,
         "counted": counted,
@@ -114,6 +124,8 @@ def check_generation(
         "window": window,
         "servable": servable,
         "max_tokens": request.max_tokens,
+        "validated_profile": profile.ref if profile is not None else None,
+        "runtime_version": runtime_version,
     }
     if servable <= 0 or counted > servable:
         return GuardRefusal(
@@ -122,3 +134,30 @@ def check_generation(
             f"window with {request.max_tokens} reserved for output",
         )
     return GuardPass(provenance=provenance, identity=measured.identity)
+
+
+def _profile(
+    request: GenerationRequest,
+    measured: Measurement,
+    node_id: str,
+    runtime_version: str | None,
+    profiles: tuple[validated_profiles.ValidatedProfile, ...] | None,
+) -> validated_profiles.ValidatedProfile | None:
+    if (
+        runtime_version is None
+        or measured.identity is None
+        or measured.encoder is None
+        or measured.renderer is None
+    ):
+        return None
+    key = validated_profiles.ProfileKey(
+        node_id=node_id,
+        runtime="ollama",
+        runtime_version=runtime_version,
+        manifest=measured.identity,
+        encoder=measured.encoder,
+        renderer=measured.renderer,
+        tools=bool(request.tools),
+        thinking=validated_profiles.wire_thinking(request.thinking),
+    )
+    return validated_profiles.is_validated(key, profiles)
