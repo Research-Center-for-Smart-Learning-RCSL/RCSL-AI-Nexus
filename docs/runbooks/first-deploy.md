@@ -693,6 +693,38 @@ docstring 裡，那是估算器本身所在的地方。
   `/opt/homebrew/var/log/nexus-host-metrics.log`，`Address already in use` 那種是
   KeepAlive 重啟得比舊 socket 釋放快，它自己會好。
 
+- [ ] **裝 runtime witness 的 LaunchDaemon，再啟動 node agent。**（[#24](https://github.com/Research-Center-for-Smart-Learning-RCSL/RCSL-AI-Nexus/issues/24)
+  設計 S4/T1）node agent 跑在 VM 裡看不到 Mac 的 process，所以要解除 `outcome_unknown` 的
+  封鎖，只能靠這個 root job 觀察「哪個 Ollama process 在服務 `127.0.0.1:11434`」。這一個用
+  root 跑（不像上面那些用操作者帳號），因為它寫的是證據：容器和 Ollama 的帳號都不能冒充它。
+
+  ```sh
+  mkdir -p data/runtime-witness/out data/runtime-witness/challenge
+  sudo install -o root -g wheel -m 644 \
+    launchd/online.rcsl.runtime-witness.plist /Library/LaunchDaemons/
+  sudo launchctl bootstrap system /Library/LaunchDaemons/online.rcsl.runtime-witness.plist
+  cat data/runtime-witness/out/attestation.json   # status 應是 observed，seq 每 2 秒加一
+  ```
+
+  agent 需要 `secrets/agent_database_url`（`nexus_agent` 角色，密碼自己產生）、
+  `secrets/node_agent_token`（至少 32 字元）和 `.env` 裡的 `NODE_AGENT_NODE_ID`（這台在
+  `nodes` 的 id）。啟動後 `.env` 要固定帶上 override：
+
+  ```sh
+  COMPOSE_FILE=docker-compose.yml:docker-compose.node-agent.yml
+  ```
+
+  **這行不能省。** override 會把 postgres、gateway 和兩個 admin 接上 agent 的網路；之後只要
+  有人用單一檔案跑一次 `docker compose up -d`，postgres 就會被重建、拿掉 `agent-data`，agent
+  失去資料庫連線。設在 `.env` 之後，部署、開機對帳和健康監測看到的都是同一組服務。
+
+  `docker kill` 或 OOM 殺掉的 agent **不會**被 `unless-stopped` 自動拉起來（實測 Exited
+  137 後停著），要 `docker compose up -d node-agent`。這是故意不改的：被殺掉的 agent 若有進行中
+  的生成，重新接管時會把它轉成 `outcome_unknown` 並封鎖節點，那需要人來處理。解除方式見
+  `backend/app/node_agent/resolve.py` 開頭：`start` 取基準 → 重啟 Ollama
+  （`sudo launchctl kickstart -k system/online.rcsl.ollama`）→ `complete`，再依序把常駐模型
+  載回去（gemma4 → qwen → embedder，正式的 `num_ctx`、`keep_alive: -1`）。
+
 - [ ] **裝健康監測的 LaunchDaemon（狀態變了會寄信）。** 開機對帳那個 daemon 修的是開機那一
   刻。它修不好、或者它自己沒跑的時候，狀態會跟 2026-07-26 那次一模一樣：容器 running、
   gateway healthy、平台從 tailnet 打不到，而**沒有任何東西會說**。那次是靠人坐下來讀四份
