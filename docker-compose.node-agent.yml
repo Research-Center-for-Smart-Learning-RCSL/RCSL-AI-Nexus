@@ -56,6 +56,10 @@ services:
     # role when this file is absent, which is every deploy without this file.
     secrets:
       - agent_database_url
+    # Provisioning writes this node's agent address on every deploy; it is
+    # only used once NODE_AGENT_ENABLED is set.
+    environment:
+      NODE_AGENT_URL: http://node-agent:8100
 
   postgres:
     networks: [agent-data]
