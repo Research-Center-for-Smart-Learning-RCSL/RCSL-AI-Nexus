@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from app.adapters.persistence.repositories import PostgresNodeRepository
+from app.domain.entities.model import RuntimeKind
+from app.domain.ports.model_runtime_port import ModelRuntimePort, runtime_for
+from app.infrastructure.config import get_settings
 from app.infrastructure.db import get_session_factory
 
 logger = logging.getLogger(__name__)
@@ -42,7 +46,19 @@ async def _check_database() -> bool:
     return True
 
 
-async def _probe(name: str, coro: Awaitable[bool]) -> tuple[str, bool]:
+async def _check_runtime(runtimes: Mapping[RuntimeKind, ModelRuntimePort]) -> bool:
+    """This deployment's node's runtime: through its agent when agents are
+    enabled (PR4b), so readiness never reaches a runtime around it."""
+    if getattr(runtimes, "agents_enabled", False):
+        async with get_session_factory()() as session:
+            node = await PostgresNodeRepository(session).get(get_settings().node_id)
+        runtime = runtime_for(runtimes, node, RuntimeKind.OLLAMA)
+    else:
+        runtime = next(iter(runtimes.values()))
+    return runtime is not None and await runtime.health()
+
+
+async def _probe(name: str, coro: Awaitable[object]) -> tuple[str, bool]:
     """Run one dependency check, bounded and never raising.
 
     A readiness probe that hangs is worse than one that reports failure: the
@@ -50,8 +66,10 @@ async def _probe(name: str, coro: Awaitable[bool]) -> tuple[str, bool]:
     """
     try:
         async with asyncio.timeout(PROBE_TIMEOUT_SECONDS):
-            await coro
-        return name, True
+            result = await coro
+        # A check that answers False failed; until 2026-10-09 this returned
+        # True for it, so an unreachable runtime still read as ready.
+        return name, result is not False
     except Exception:  # noqa: BLE001
         logger.warning("readiness probe failed: %s", name, exc_info=True)
         return name, False
@@ -78,8 +96,7 @@ async def readyz(request: Request) -> JSONResponse:
 
     runtimes = getattr(request.app.state, "runtimes", None)
     if runtimes:
-        runtime = next(iter(runtimes.values()))
-        probes.append(_probe("runtime", runtime.health()))
+        probes.append(_probe("runtime", _check_runtime(runtimes)))
 
     checks = dict(await asyncio.gather(*probes))
     ready = all(checks.values())

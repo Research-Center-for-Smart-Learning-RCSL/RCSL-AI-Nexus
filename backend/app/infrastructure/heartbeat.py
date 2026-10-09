@@ -38,7 +38,7 @@ from app.adapters.http.node_health import RuntimeNodeHealth
 from app.adapters.persistence.repositories import PostgresModelRepository, PostgresNodeRepository
 from app.domain.entities.model import Model, ModelState, RuntimeKind, RuntimeResidency
 from app.domain.entities.node import Node, NodeStatus
-from app.domain.ports.model_runtime_port import ModelRuntimePort
+from app.domain.ports.model_runtime_port import ModelRuntimePort, runtime_for
 from app.domain.ports.node_health_port import NodeHealthPort
 from app.infrastructure.config import get_settings
 from app.infrastructure.db import session_scope
@@ -75,6 +75,8 @@ async def observe_models(
     models: ModelsSource,
     write_observation: ObservationWriter,
     local_node_id: str,
+    *,
+    local_node: Node | None = None,
 ) -> int:
     """Ask each runtime what it holds and reconcile every registered model.
 
@@ -90,7 +92,13 @@ async def observe_models(
     authority of one that just was.
     """
     residencies: dict[RuntimeKind, RuntimeResidency | None] = {}
-    for kind, adapter in runtimes.items():
+    for kind in runtimes:
+        # The local node's runtime for the kind, its agent when agents are
+        # enabled (PR4b); a kind with none there is simply not observed.
+        adapter = runtime_for(runtimes, local_node, kind)
+        if adapter is None:
+            residencies[kind] = None
+            continue
         try:
             residencies[kind] = await adapter.residency()
         except Exception:  # noqa: BLE001 - one broken runtime must not stop the sweep
@@ -193,11 +201,14 @@ async def run_heartbeat(app: FastAPI, interval_seconds: int) -> None:
         except Exception:  # noqa: BLE001 - a failed sweep must not kill the loop
             logger.exception("node heartbeat sweep failed")
         try:
+            local_id = get_settings().node_id
+            local = next((n for n in await load_nodes() if n.id == local_id), None)
             await observe_models(
                 app.state.runtimes,
                 load_models,
                 write_observation,
-                get_settings().node_id,
+                local_id,
+                local_node=local,
             )
         except asyncio.CancelledError:
             raise

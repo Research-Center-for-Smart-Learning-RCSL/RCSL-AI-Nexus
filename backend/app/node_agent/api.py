@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import hmac
 import json
-from collections.abc import AsyncIterator
+import logging
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -24,13 +25,22 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.adapters.runtime.ollama_adapter.encoding import chat_payload, embed_payload
 from app.adapters.tokenizer.gguf_token_counter.adapter import Measurement
-from app.node_agent.dispatch import Attempt, Existing, Refused
+from app.node_agent.dispatch import Attempt, Completed, Existing, Outcome, Refused
 from app.node_agent.guard import GuardRefusal, check_generation, check_pin, registration
 from app.node_agent.resolution import ResolutionRefused
 from app.node_agent.service import Agent, start, stop
 from app.node_agent.settings import AgentSettings
-from app.node_agent.store import NotOwner, Operation
-from app.node_agent.wire import Envelope, WireError, decode_embedding, decode_generation
+from app.node_agent.store import LIFECYCLE_KINDS, NotOwner, Operation
+from app.node_agent.wire import (
+    Envelope,
+    LifecycleRequest,
+    WireError,
+    decode_embedding,
+    decode_generation,
+    decode_lifecycle,
+)
+
+logger = logging.getLogger(__name__)
 
 MAX_BODY_BYTES = 64 * 1024 * 1024
 RUNTIME = "ollama"
@@ -264,6 +274,84 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             status_code=502 if operation.state == "failed" else 503, content=described
         )
 
+    @app.post("/v1/lifecycle/{action}", dependencies=authorised, response_model=None)
+    async def lifecycle(request: Request, action: str) -> StreamingResponse | JSONResponse:
+        """`load`, `unload` or `pull`, with the node to itself (PR4b).
+
+        A pull streams `accepted`, its progress and one `terminal` event, as
+        an inference does; a load or unload answers once it has settled.
+        """
+        if action not in LIFECYCLE_KINDS:
+            raise HTTPException(status_code=404, detail=f"no lifecycle action {action}")
+        agent = _agent(request)
+        try:
+            wanted = decode_lifecycle(await _body(request))
+        except WireError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        existing = await agent.store.observe(wanted.op_id)
+        if existing is not None:
+            return await _existing_lifecycle(agent, existing, action)
+
+        registered = await registration(agent.pool, agent.settings.node_id, RUNTIME, wanted.ref)
+        if registered is None:
+            return _guard_refused(
+                GuardRefusal("model_not_on_node", f"{wanted.ref} is not registered on this node")
+            )
+        context_length = None
+        if action == "load":
+            # The registration decides the runner's size, as it does for every
+            # request the agent sends; a caller may not size it otherwise.
+            context_length = registered.context_length or wanted.context_length
+            if (
+                wanted.context_length is not None
+                and registered.context_length > 0
+                and wanted.context_length != registered.context_length
+            ):
+                return _guard_refused(
+                    GuardRefusal(
+                        "context_length_mismatch",
+                        f"requested {wanted.context_length}, "
+                        f"registered {registered.context_length}",
+                    )
+                )
+        if action == "load":
+            relay = agent.relay.load(
+                wanted.ref, keep_alive=agent.keep_alive, context_length=context_length
+            )
+        elif action == "unload":
+            relay = agent.relay.unload(wanted.ref)
+        else:
+            relay = agent.relay.pull(wanted.ref)
+        submitted = await agent.dispatcher.exclusive(
+            wanted.op_id,
+            action,
+            relay,
+            provenance={"ref": wanted.ref, "context_length": context_length},
+            after=_repin(agent, wanted) if action == "pull" else None,
+        )
+        if isinstance(submitted, Existing):
+            return await _existing_lifecycle(agent, submitted.operation, action)
+        if isinstance(submitted, Refused):
+            return _refused(submitted)
+        if action == "pull":
+            return StreamingResponse(_stream(agent, submitted), media_type="application/x-ndjson")
+        async for _ in submitted.events():
+            pass
+        await submitted.settled
+        operation = await agent.store.observe(wanted.op_id)
+        if operation is None:
+            raise HTTPException(status_code=500, detail="operation vanished")
+        return await _existing_lifecycle(agent, operation, action)
+
+    @app.get("/v1/residency", dependencies=authorised)
+    async def residency(request: Request) -> JSONResponse:
+        """What the runtime holds and has on disk, read-only. Observing changes
+        nothing, so it is answered whatever the gate says."""
+        observed = await _agent(request).relay.residency()
+        if observed is None:
+            return JSONResponse(status_code=503, content={"refused": "runtime_unobserved"})
+        return JSONResponse(observed)
+
     @app.get("/v1/attempts/{op_id}", dependencies=authorised)
     async def attempt(request: Request, op_id: str) -> JSONResponse:
         agent = _agent(request)
@@ -323,6 +411,37 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
         return JSONResponse(done)
 
     return app
+
+
+async def _existing_lifecycle(agent: Agent, operation: Operation, action: str) -> JSONResponse:
+    if operation.kind != action:
+        return JSONResponse(
+            status_code=409, content={"op_id": operation.op_id, "refused": "op_id_conflict"}
+        )
+    described = await _describe(agent, operation)
+    status = {"completed": 200, "failed": 502}.get(operation.state, 202)
+    return JSONResponse(status_code=status, content=described)
+
+
+def _repin(agent: Agent, wanted: LifecycleRequest) -> Callable[[Outcome], Awaitable[None]]:
+    """After a completed pull and before the node serves again, pin what the
+    runtime now serves for the tag (design S5). If the runtime cannot say,
+    the old pin stays, and dispatch against the new weights is refused as a
+    revision mismatch until an operator re-pins: closed, not open."""
+
+    async def after(outcome: Outcome) -> None:
+        if not isinstance(outcome, Completed):
+            return
+        digest = await agent.relay.served_digest(wanted.ref)
+        if digest is None:
+            logger.error("pulled %s but the runtime does not list it; pin unchanged", wanted.ref)
+            return
+        moved = await agent.store.repin(wanted.op_id, RUNTIME, wanted.ref, digest)
+        await agent.store.audit(
+            "repin", wanted.op_id, {"ref": wanted.ref, "digest": digest, "models": moved}
+        )
+
+    return after
 
 
 async def _stream(agent: Agent, attempt: Attempt) -> AsyncIterator[bytes]:

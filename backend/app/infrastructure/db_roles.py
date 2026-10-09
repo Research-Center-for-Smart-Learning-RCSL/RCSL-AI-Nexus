@@ -106,8 +106,9 @@ GATEWAY_BINDING_GRANTS: tuple[tuple[str, str], ...] = (
 )
 
 # The node agent's account (PR4a on #24): the tables it owns, read access to
-# the registry it checks requests against, and one column of `nodes`, the lock
-# domain it binds on first claim. No DELETE anywhere: an operation, a stored
+# the registry it checks requests against, one column of `nodes`, the lock
+# domain it binds on first claim, and one of `models`, the weights pin its pull
+# sets. No DELETE anywhere: an operation, a stored
 # result or an audit row is evidence, and nothing the agent does removes one.
 AGENT_READ_TABLES: tuple[str, ...] = ("nodes", "models")
 AGENT_WRITABLE_TABLES: tuple[str, ...] = ("node_agents", "node_operations")
@@ -213,6 +214,8 @@ $do$;""",
             statements.append(f"GRANT SELECT, INSERT ON {_quote_ident(table)} TO {ident};")
         statements += [
             f"GRANT UPDATE (lock_domain_id) ON {_quote_ident('nodes')} TO {ident};",
+            # The weights pin, set by the agent's own pull (PR4b, design S5).
+            f"GRANT UPDATE (manifest_digest) ON {_quote_ident('models')} TO {ident};",
             f"GRANT USAGE, SELECT ON SEQUENCE node_operation_audit_id_seq TO {ident};",
         ]
     elif spec.profile == "admin":

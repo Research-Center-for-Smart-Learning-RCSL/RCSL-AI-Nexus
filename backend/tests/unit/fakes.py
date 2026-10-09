@@ -316,11 +316,15 @@ class FakeStateCommitter:
     so the point being modelled is only that these writes are visible to the
     reads the use case makes afterwards."""
 
-    def __init__(self, models: FakeModels) -> None:
+    def __init__(self, models: FakeModels, nodes: dict[str, Node] | None = None) -> None:
         self._models = models
+        self._nodes = nodes or {}
 
     async def get(self, model_id: str) -> Model | None:
         return self._models.rows.get(model_id)
+
+    async def node(self, node_id: str) -> Node | None:
+        return self._nodes.get(node_id)
 
     async def commit(self, model_id: str, state: ModelState) -> None:
         self._models.rows[model_id] = replace(

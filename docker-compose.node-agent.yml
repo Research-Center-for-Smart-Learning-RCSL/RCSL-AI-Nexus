@@ -1,5 +1,7 @@
 # The node agent (PR4a on #24): the only sender to this host's runtime once
-# NODE_AGENT_ENABLED is on, which waits for PR4b's all-senders audit.
+# NODE_AGENT_ENABLED is on. PR4b moved every sender behind it and added the
+# audit (tests/unit/test_runtime_sender_audit.py); turning the flag on is the
+# maintainer's call.
 #
 # An override file, not part of docker-compose.yml, so that a routine deploy
 # neither needs the agent's secrets nor starts the agent. Starting it is its
@@ -59,8 +61,10 @@ services:
     networks: [agent-data]
 
   # The senders get a path to the agent and its token, and nothing else
-  # changes: they still send directly until NODE_AGENT_ENABLED is set, which
-  # waits for PR4b. Each node's `agent_url` is then `http://node-agent:8100`.
+  # changes: they still send directly until NODE_AGENT_ENABLED is set. With it
+  # set they hold no runtime address at all (`NO_RUNTIME_URL`), and every call,
+  # lifecycle and download included, goes to the node's `agent_url`,
+  # `http://node-agent:8100` here.
   gateway:
     networks: [agent-gateway]
     secrets:

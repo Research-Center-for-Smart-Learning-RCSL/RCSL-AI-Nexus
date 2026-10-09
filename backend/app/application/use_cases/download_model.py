@@ -27,7 +27,7 @@ from app.domain.entities.audit import AuditAction
 from app.domain.entities.model import Model, ModelState, RuntimeKind
 from app.domain.exceptions import ModelNotFoundError, ModelStateConflictError
 from app.domain.ports.infrastructure_ports import JobProgressPort, JobStatus
-from app.domain.ports.model_runtime_port import ModelRuntimePort
+from app.domain.ports.model_runtime_port import ModelRuntimePort, runtime_for
 from app.domain.ports.repositories import ModelRepositoryPort
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
 
@@ -113,9 +113,12 @@ class DownloadModel:
             await self._fail(job_id, model_id, "The model was removed while queued.")
             return
 
-        runtime = self._runtimes.get(model.runtime)
+        # The model's own node's runtime, its agent when agents are enabled:
+        # the pull then has that node to itself (PR4b, design S5).
+        node = await self._state.node(model.node_id)
+        runtime = runtime_for(self._runtimes, node, model.runtime)
         if runtime is None:
-            await self._fail(job_id, model_id, "No adapter for this runtime.")
+            await self._fail(job_id, model_id, "No runtime for this model on its node.")
             await self._state.commit(model.id, ModelState.ERROR)
             return
 

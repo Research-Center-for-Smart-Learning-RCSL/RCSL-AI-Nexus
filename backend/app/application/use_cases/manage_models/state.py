@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import Protocol
 
 from app.domain.entities.model import Model, ModelState
+from app.domain.entities.node import Node
 
 
 class ModelStateCommitterPort(Protocol):
@@ -18,6 +19,11 @@ class ModelStateCommitterPort(Protocol):
     """
 
     async def get(self, model_id: str) -> Model | None: ...
+
+    async def node(self, node_id: str) -> Node | None:
+        """The node a model lives on, read the same way, so the detached pull
+        is sent to that node's runtime (final spec §1; its agent from PR4b)."""
+        ...
 
     async def commit(self, model_id: str, state: ModelState) -> None: ...
 

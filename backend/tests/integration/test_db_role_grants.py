@@ -189,6 +189,12 @@ async def test_node_agent_account_holds_its_own_tables_and_nothing_else(database
 
         await _denied(agent, "UPDATE nodes SET name = 'x' WHERE id = :id", id=node)
         await _denied(agent, "INSERT INTO models (id) VALUES ('m')")
+        # The weights pin its own pull sets (PR4b), and nothing else of a model.
+        await _allowed(
+            agent, "UPDATE models SET manifest_digest = 'd' WHERE node_id = :id", id=node
+        )
+        await _denied(agent, "UPDATE models SET context_length = 1 WHERE node_id = :id", id=node)
+        await _denied(agent, "UPDATE models SET state = 'loaded' WHERE node_id = :id", id=node)
         await _denied(agent, "DELETE FROM node_operation_audit")
         await _denied(agent, "UPDATE node_operation_audit SET event = 'x'")
         await _denied(agent, "UPDATE attempt_results SET result = '{}'::jsonb")

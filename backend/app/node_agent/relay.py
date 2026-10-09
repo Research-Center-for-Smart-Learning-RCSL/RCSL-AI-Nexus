@@ -29,6 +29,7 @@ from typing import Any
 
 import httpx
 
+from app.adapters.runtime.ollama_adapter.encoding import _set_num_ctx
 from app.node_agent.dispatch import (
     Completed,
     NotSent,
@@ -59,7 +60,117 @@ def _tag(ref: str) -> str:
     return ref if ":" in ref.rsplit("/", 1)[-1] else f"{ref}:latest"
 
 
-class OllamaRelay:
+class LifecycleRelay:
+    """Lifecycle sends: the same requests the direct adapter made (PR4b).
+
+    A base of `OllamaRelay` rather than a separate client so the agent has one
+    client and one transport to its runtime. Classified like every other
+    send; the dispatcher decides what an uncertain one means.
+    """
+
+    _client: httpx.AsyncClient
+
+    def load(self, ref: str, *, keep_alive: str | int, context_length: int | None) -> Relay:
+        return self._lifecycle(ref, keep_alive=keep_alive, context_length=context_length)
+
+    def unload(self, ref: str) -> Relay:
+        return self._lifecycle(ref, keep_alive=0, context_length=None)
+
+    def _lifecycle(self, ref: str, *, keep_alive: str | int, context_length: int | None) -> Relay:
+        # The load is where the runtime sizes the runner, so it carries the
+        # registered context; an unload sizes nothing (`lifecycle.py`).
+        options: dict[str, Any] = {}
+        _set_num_ctx(options, context_length)
+        body: dict[str, Any] = {"model": ref, "keep_alive": keep_alive}
+        if options:
+            body["options"] = options
+
+        async def run(sink: Sink) -> Outcome:
+            try:
+                response = await self._client.post("/api/generate", json=body)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                return NotSent(type(exc).__name__)
+            except httpx.HTTPError as exc:
+                return Uncertain(f"transport:{type(exc).__name__}")
+            endpoint = "generate"
+            if response.status_code == 400:
+                # An embedding model refuses generate; an empty embed moves the
+                # same weights the same way.
+                endpoint = "embed"
+                try:
+                    response = await self._client.post("/api/embed", json={**body, "input": []})
+                except httpx.HTTPError as exc:
+                    return Uncertain(f"transport:{type(exc).__name__}")
+            terminal = {"status": response.status_code, "endpoint": endpoint}
+            if response.status_code == 404:
+                return RuntimeRefused(terminal=terminal, reason="not_found")
+            if response.status_code >= 400:
+                terminal["error"] = response.text[:500]
+                return RuntimeRefused(terminal=terminal, reason=f"http_{response.status_code}")
+            return Completed(terminal=terminal)
+
+        return run
+
+    def pull(self, ref: str) -> Relay:
+        async def run(sink: Sink) -> Outcome:
+            last: dict[str, Any] = {}
+            try:
+                async with self._client.stream(
+                    "POST", "/api/pull", json={"model": ref, "stream": True}
+                ) as response:
+                    if response.status_code != 200:
+                        body = (await response.aread())[:500].decode("utf-8", "replace")
+                        return RuntimeRefused(
+                            terminal={"status": response.status_code, "error": body},
+                            reason="not_found"
+                            if response.status_code == 404
+                            else f"http_{response.status_code}",
+                        )
+                    async for line in response.aiter_lines():
+                        if not line.strip():
+                            continue
+                        try:
+                            event = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if event.get("error"):
+                            return RuntimeRefused(
+                                terminal={"error": str(event["error"])[:500]},
+                                reason="runtime_error",
+                            )
+                        last = {
+                            "status": event.get("status", ""),
+                            "completed": event.get("completed"),
+                            "total": event.get("total"),
+                        }
+                        sink.emit({"type": "progress", **last})
+                        if event.get("status") == "success":
+                            return Completed(terminal={"status": "success"})
+                    return Uncertain("eof_without_success", last)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                return NotSent(type(exc).__name__)
+            except httpx.HTTPError as exc:
+                return Uncertain(f"transport:{type(exc).__name__}", last)
+
+        return run
+
+    async def residency(self) -> dict[str, Any] | None:
+        """`/api/ps` and `/api/tags`, read-only, or None when either fails:
+        "could not ask" must not read as "nothing is loaded" (`lifecycle.py`)."""
+        try:
+            ps = await self._client.get("/api/ps", timeout=10.0)
+            tags = await self._client.get("/api/tags", timeout=10.0)
+            if ps.status_code != 200 or tags.status_code != 200:
+                return None
+            return {
+                "resident": ps.json().get("models") or [],
+                "on_disk": tags.json().get("models") or [],
+            }
+        except (httpx.HTTPError, ValueError):
+            return None
+
+
+class OllamaRelay(LifecycleRelay):
     def __init__(
         self,
         base_url: str,

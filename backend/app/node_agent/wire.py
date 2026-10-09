@@ -53,6 +53,20 @@ class EmbeddingRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class LifecycleRequest:
+    """`load`, `unload` or `pull` of one reference on the agent's node (PR4b).
+
+    No request id or payload hash: nothing binds a lifecycle call to a client
+    request, and the op id alone makes a resend idempotent."""
+
+    op_id: str
+    ref: str
+    context_length: int | None
+    """For `load` only, and then the registered figure: the load is where the
+    runtime sizes its runner."""
+
+
+@dataclass(frozen=True, slots=True)
 class Envelope:
     """The identity every forwarded call carries (final spec §5)."""
 
@@ -108,6 +122,15 @@ def encode_embedding(request: EmbeddingRequest, envelope: Envelope) -> dict[str,
     }
 
 
+def encode_lifecycle(request: LifecycleRequest) -> dict[str, Any]:
+    return {
+        "version": WIRE_VERSION,
+        "op_id": request.op_id,
+        "ref": request.ref,
+        "context_length": request.context_length,
+    }
+
+
 def _envelope(envelope: Envelope) -> dict[str, Any]:
     return {
         "op_id": envelope.op_id,
@@ -157,6 +180,21 @@ def decode_embedding(body: Any) -> tuple[EmbeddingRequest, Envelope]:
     if not texts or not all(isinstance(t, str) for t in texts):
         raise WireError("texts must be a non-empty list of strings")
     return EmbeddingRequest(ref=_str(data, "ref"), texts=tuple(texts)), _decode_envelope(data)
+
+
+def decode_lifecycle(body: Any) -> LifecycleRequest:
+    data = _object(body, "body")
+    _version(data)
+    request = LifecycleRequest(
+        op_id=_str(data, "op_id"),
+        ref=_str(data, "ref"),
+        context_length=_optional_int(data, "context_length"),
+    )
+    if len(request.op_id) > _MAX_LENGTHS["op_id"]:
+        raise WireError(f"op_id is longer than {_MAX_LENGTHS['op_id']} characters")
+    if request.context_length is not None and request.context_length <= 0:
+        raise WireError("context_length must be positive or null")
+    return request
 
 
 # The column widths these land in (`node_operations`); longer is a 400 here,

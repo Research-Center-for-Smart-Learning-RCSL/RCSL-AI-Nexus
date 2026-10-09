@@ -45,7 +45,7 @@ class ModelLifecycleMixin(ModelRegistryMixin):
             )
 
         node = await self._require_node(model.node_id)
-        runtime = await self._require_runtime(model.runtime)
+        runtime = self._runtime_on(node, model.runtime)
 
         live_free_gb: float | None = None
         if self._metrics is not None:
@@ -204,7 +204,7 @@ class ModelLifecycleMixin(ModelRegistryMixin):
         if effective is not ModelState.LOADED:
             raise ModelStateConflictError(detail=f"model {model.id} is {effective}, not loaded")
 
-        runtime = await self._require_runtime(model.runtime)
+        runtime = self._runtime_on(await self._require_node(model.node_id), model.runtime)
         await self._state.commit(model.id, ModelState.UNLOADING)
         try:
             await runtime.unload(model.ref)

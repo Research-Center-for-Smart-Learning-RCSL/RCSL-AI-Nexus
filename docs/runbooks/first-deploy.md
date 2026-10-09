@@ -725,6 +725,26 @@ docstring 裡，那是估算器本身所在的地方。
   （`sudo launchctl kickstart -k system/online.rcsl.ollama`）→ `complete`，再依序把常駐模型
   載回去（gemma4 → qwen → embedder，正式的 `num_ctx`、`keep_alive: -1`）。
 
+  **打開 `NODE_AGENT_ENABLED`（維護者下令才做）。** PR4b 之後，所有對 runtime 的送出都經過
+  節點的 agent：生成、Tier 2、embedding、`/readyz`、residency 掃描、節點健康、下載、load 和
+  unload。打開之後 gateway 和 admin 手上沒有任何 runtime 位址（`NO_RUNTIME_URL`）。
+
+  ```sh
+  docker compose exec -T postgres psql -U nexus -d nexus -c \
+    "UPDATE nodes SET agent_url = 'http://node-agent:8100' WHERE id = '<NODE_AGENT_NODE_ID>'"
+  echo 'NODE_AGENT_ENABLED=true' >> .env
+  docker compose up -d gateway admin-tailnet admin-public
+  ```
+
+  打開後要知道的兩件事：
+
+  - **下載會佔住整個節點。** pull 和 load、unload 一樣是獨佔操作（設計 S5）：開始前先排空
+    節點上的生成，進行中新請求一律 503（`node_draining`，Retry-After 30），完成並更新
+    `models.manifest_digest` 之後才恢復。大模型的下載可能要好幾分鐘，排在離峰時段。
+  - **節點被封鎖時不能 load、unload 或下載**，要先照上面的步驟解除；residency 仍照常回報。
+
+  要關回去：從 `.env` 拿掉那一行，再 `docker compose up -d gateway admin-tailnet admin-public`。
+
 - [ ] **裝健康監測的 LaunchDaemon（狀態變了會寄信）。** 開機對帳那個 daemon 修的是開機那一
   刻。它修不好、或者它自己沒跑的時候，狀態會跟 2026-07-26 那次一模一樣：容器 running、
   gateway healthy、平台從 tailnet 打不到，而**沒有任何東西會說**。那次是靠人坐下來讀四份

@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+import asyncpg
 import httpx
 import pytest
 
@@ -142,16 +143,70 @@ async def test_a_repeated_embedding_attempt_replays_its_stored_vectors(
     assert agent["ollama"].embeds == 1
 
 
-async def test_methods_outside_this_stage_fail_closed(agent: dict[str, Any]) -> None:
+async def test_load_and_unload_go_through_the_agent_with_the_registered_context(
+    agent: dict[str, Any],
+) -> None:
     runtime = agent["runtime"]
+    await runtime.load("qwen2.5:7b", context_length=32768)
+    await runtime.unload("qwen2.5:7b")
+
+    sent = agent["ollama"].lifecycle
+    assert sent[0]["options"] == {"num_ctx": 32768} and sent[0]["keep_alive"] != 0
+    assert sent[1]["keep_alive"] == 0 and "options" not in sent[1]
+    kinds = await _rows(agent, "SELECT kind, state FROM node_operations ORDER BY submitted_at")
+    assert kinds == [("load", "completed"), ("unload", "completed")]
+
+
+async def test_a_load_sized_otherwise_than_registered_is_refused(agent: dict[str, Any]) -> None:
     with pytest.raises(RuntimeCapabilityError):
-        await runtime.load("qwen2.5:7b", context_length=32768)
+        await agent["runtime"].load("qwen2.5:7b", context_length=4096)
+    assert agent["ollama"].lifecycle == []
+
+
+async def test_a_model_not_on_this_node_is_refused(agent: dict[str, Any]) -> None:
     with pytest.raises(RuntimeCapabilityError):
-        await runtime.unload("qwen2.5:7b")
-    with pytest.raises(RuntimeCapabilityError):
-        await runtime.residency()
-    with pytest.raises(RuntimeCapabilityError):
-        runtime.pull("qwen2.5:7b")
+        await agent["runtime"].unload("gemma4:31b-it-q8_0")
+
+
+async def test_a_pull_streams_progress_and_repins_before_serving(agent: dict[str, Any]) -> None:
+    progress = [p async for p in agent["runtime"].pull("qwen2.5:7b")]
+
+    assert [p.status for p in progress] == ["pulling manifest", "downloading", "success"]
+    assert progress[1].completed_bytes == 5 and progress[1].total_bytes == 10
+    pin = await _rows(agent, "SELECT manifest_digest FROM models WHERE ref = 'qwen2.5:7b'")
+    assert pin == [("b" * 64,)], "the pin names what the runtime now serves"
+    audit = await _rows(agent, "SELECT event FROM node_operation_audit WHERE event = 'repin'")
+    assert audit == [("repin",)]
+    assert await agent["runtime"].health() is True, "the node serves again"
+
+
+async def test_residency_is_read_through_the_agent(agent: dict[str, Any]) -> None:
+    observed = await agent["runtime"].residency()
+
+    assert observed is not None
+    assert observed.resident["qwen2.5:7b"] == 5.0
+    assert "nomic-embed-text" in observed.on_disk
+
+
+async def test_a_blocked_node_refuses_lifecycle_but_still_reports_residency(
+    agent: dict[str, Any],
+) -> None:
+    agent["ollama"].truncate = True
+    with pytest.raises(StreamInterruptedError):
+        await _generate(agent["runtime"])
+
+    with pytest.raises(ServerOverloadedError):
+        await agent["runtime"].load("qwen2.5:7b", context_length=32768)
+    assert agent["ollama"].lifecycle == []
+    assert await agent["runtime"].residency() is not None
+
+
+async def _rows(agent: dict[str, Any], sql: str) -> list[tuple[Any, ...]]:
+    conn = await asyncpg.connect(agent["dsn"])
+    try:
+        return [tuple(r) for r in await conn.fetch(sql)]
+    finally:
+        await conn.close()
 
 
 async def test_health_reports_the_agents_gate(agent: dict[str, Any]) -> None:
