@@ -239,6 +239,9 @@ async def test_gateway_account_binds_requests_but_cannot_rewrite_them(database_u
         await _denied(gateway, "UPDATE request_bindings SET payload_hash = 'v1:other'")
         await _denied(gateway, "UPDATE request_bindings SET billing = '{}'::jsonb")
         await _denied(gateway, "UPDATE request_attempts SET node_id = 'elsewhere'")
+        await _allowed(gateway, "UPDATE usage_records SET completed = true WHERE false")
+        await _denied(gateway, "UPDATE usage_records SET tokens = 0")
+        await _denied(gateway, "UPDATE usage_records SET actor_id = 'someone'")
         await _denied(gateway, "DELETE FROM request_bindings")
         await _denied(gateway, "DELETE FROM request_attempts")
     finally:

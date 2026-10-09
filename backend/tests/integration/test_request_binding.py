@@ -15,12 +15,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import asyncpg
 import httpx
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.adapters.authz.role_authorization import RoleAuthorization
-from app.adapters.persistence.repositories import PostgresRequestBindings
+from app.adapters.persistence.repositories import (
+    PostgresRequestBindings,
+    PostgresUsageSettlement,
+)
 from app.application.use_cases.list_capabilities import ListCapabilities
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.application.use_cases.route_chat_request.binding import RequestBinder, keyed_request_id
@@ -95,6 +99,7 @@ async def stack(
         nodes = FakeNodes([node])
         bindings = PostgresRequestBindings(async_sessionmaker(engine, expire_on_commit=False))
         usage = RecordingUsage()
+        settlement = PostgresUsageSettlement(async_sessionmaker(engine, expire_on_commit=False))
 
         def use_case() -> RouteChatRequest:
             return RouteChatRequest(
@@ -109,10 +114,12 @@ async def stack(
                 authz=RoleAuthorization(),
                 clock=FixedClock(datetime(2026, 10, 9, tzinfo=UTC)),
                 max_tokens_ceiling=1000,
-                binder=RequestBinder(bindings, nodes, runtimes),
+                binder=RequestBinder(bindings, nodes, runtimes, settlement),
             )
 
-        handles.update(use_case=use_case, bindings=bindings, usage=usage)
+        handles.update(
+            use_case=use_case, bindings=bindings, usage=usage, settlement=settlement, engine=engine
+        )
         try:
             yield handles
         finally:
@@ -145,7 +152,8 @@ async def test_a_repeated_key_replays_and_runs_once(stack: dict[str, Any]) -> No
     assert len(again) == 1, "decision Q3: one chunk"
     assert again[0].finish_reason == "stop" and again[0].prompt_tokens == 11
     assert stack["ollama"].chats == 1
-    assert len(stack["usage"].records) == 1, "a replay records no usage"
+    assert len(await _usage(stack)) == 1, "a replay records no usage"
+    assert stack["usage"].records == [], "agent-backed usage is settled, not recorded"
 
 
 async def test_the_same_key_for_a_different_request_is_refused(stack: dict[str, Any]) -> None:
@@ -217,7 +225,7 @@ async def test_requests_without_a_key_are_bound_and_run_each_time(stack: dict[st
     await _ask(stack, _identity(None))
 
     assert stack["ollama"].chats == 2
-    assert len(stack["usage"].records) == 2
+    assert len(await _usage(stack)) == 2
 
 
 def _payload(key: str) -> str:
@@ -240,3 +248,171 @@ def _original(op_id: str) -> dict[str, Any]:
         ),
         Envelope(op_id=op_id, request_id="k:key-4", payload_hash=None, store_output=True),
     )
+
+
+# -- usage, exactly once (design R6, S6, T3, U2, revision 6) -----------------
+
+
+async def _usage(stack: dict[str, Any]) -> list[asyncpg.Record]:
+    conn = await asyncpg.connect(stack["dsn"])
+    try:
+        return await conn.fetch("SELECT * FROM usage_records ORDER BY at")
+    finally:
+        await conn.close()
+
+
+async def _owner(stack: dict[str, Any], sql: str, *args: Any) -> None:
+    conn = await asyncpg.connect(stack["dsn"])
+    try:
+        await conn.execute(sql, *args)
+    finally:
+        await conn.close()
+
+
+async def _bound_attempt(stack: dict[str, Any], key: str) -> str:
+    """A keyed request bound and run to `done` at the agent, with no gateway
+    settling it: the state a gateway that died after the terminal commit
+    leaves behind."""
+    op_id = str(uuid.uuid4())
+    await stack["bindings"].create(
+        tenant_id=DEFAULT_TENANT_ID,
+        request_id=keyed_request_id(key),
+        payload_hash=_payload(key),
+        hash_version="v1",
+        key_supplied=True,
+        billing={
+            "actor_id": ACTOR.id,
+            "api_key_id": None,
+            "tenant_id": DEFAULT_TENANT_ID,
+            "capability": "chat",
+            "requested_capability": None,
+            "model_alias": "qwen7b",
+            "model_ref": "qwen2.5:7b",
+            "node_id": NODE,
+            "started_at": "2026-10-09T00:00:00+00:00",
+            "compaction": {"tier": None, "tokens_before": None, "tokens_after": None},
+        },
+        node_id=NODE,
+        op_id=op_id,
+    )
+    async with stack["http"].stream(
+        "POST", "/v1/inference", json=_original(op_id), headers=AUTH
+    ) as response:
+        await response.aread()
+    return op_id
+
+
+async def test_a_delivered_request_is_billed_once_from_the_runtime(stack: dict[str, Any]) -> None:
+    await _ask(stack, _identity("key-u1"))
+    await stack["settlement"].sweep()
+
+    [row] = await _usage(stack)
+    assert row["attempt_id"] is not None and row["actor_id"] == ACTOR.id
+    assert (row["tokens"], row["prompt_tokens"]) == (2, 11)
+    assert row["totals_source"] == "runtime_final"
+    assert row["prompt_tokens_basis"] == "runtime_final"
+    assert row["completed"] is True and row["runtime_completed"] is True
+
+
+async def test_a_sweep_before_the_delivery_flag_is_reconciled_not_duplicated(
+    stack: dict[str, Any],
+) -> None:
+    """Revision 6's ordering: done, the sweeper inserts first, then the
+    gateway commits delivery; one row, same attribution and totals, now
+    completed."""
+    op_id = await _bound_attempt(stack, "key-u2")
+
+    assert await stack["settlement"].sweep() == 1
+    [early] = await _usage(stack)
+    assert early["completed"] is False
+
+    await stack["settlement"].mark_delivery(op_id, True)
+    await stack["settlement"].settle(op_id)
+    await stack["settlement"].sweep()
+
+    [row] = await _usage(stack)
+    assert row["id"] == early["id"] and row["completed"] is True
+    unchanged = ("actor_id", "tenant_id", "attempt_id", "tokens", "prompt_tokens", "totals_source")
+    assert all(row[c] == early[c] for c in unchanged)
+
+
+async def test_a_gateway_dying_after_the_flag_is_recovered_by_the_sweeper(
+    stack: dict[str, Any],
+) -> None:
+    op_id = await _bound_attempt(stack, "key-u3")
+    await stack["settlement"].sweep()
+    # The gateway commits delivery and dies before reconciling.
+    await stack["settlement"].mark_delivery(op_id, True)
+
+    await stack["settlement"].sweep()
+
+    [row] = await _usage(stack)
+    assert row["completed"] is True
+
+
+async def test_a_gateway_dying_before_the_flag_stays_conservative(stack: dict[str, Any]) -> None:
+    op_id = await _bound_attempt(stack, "key-u4")
+
+    await stack["settlement"].sweep()
+    await stack["settlement"].sweep()
+
+    [row] = await _usage(stack)
+    assert row["completed"] is False and row["runtime_completed"] is True
+    conn = await asyncpg.connect(stack["dsn"])
+    try:
+        flag = await conn.fetchval(
+            "SELECT client_delivery_complete FROM request_attempts WHERE op_id = $1", op_id
+        )
+    finally:
+        await conn.close()
+    assert flag is None, "no delivery evidence is invented"
+
+
+async def test_racing_writers_leave_one_row(stack: dict[str, Any]) -> None:
+    op_id = await _bound_attempt(stack, "key-u5")
+
+    await asyncio.gather(
+        stack["settlement"].settle(op_id),
+        stack["settlement"].settle(op_id),
+        stack["settlement"].sweep(),
+    )
+
+    assert len(await _usage(stack)) == 1
+
+
+async def test_a_client_that_left_is_billed_once_the_agent_finishes(
+    stack: dict[str, Any],
+) -> None:
+    """S6: no partial row from the disconnecting gateway; the drained totals
+    land once, with delivery false and the runtime complete."""
+    use_case: RouteChatRequest = stack["use_case"]()
+    generation = use_case.execute(ACTOR, "chat", MESSAGES, 256, identity=_identity("key-u6"))
+    await anext(generation)
+    await generation.aclose()  # the client went away after the first chunk
+    await stack["settlement"].sweep()
+
+    [row] = await _usage(stack)
+    assert row["completed"] is False and row["runtime_completed"] is True
+    assert (row["tokens"], row["totals_source"]) == (2, "runtime_final")
+
+
+async def test_an_unknown_attempt_is_billed_only_once_resolved(stack: dict[str, Any]) -> None:
+    """T3/U2: unknown is not billable; once resolved failed, the last
+    checkpoint is an estimate, and without one the figure is unavailable."""
+    stack["ollama"].truncate = True
+    with pytest.raises(StreamInterruptedError):
+        await _ask(stack, _identity("key-u7"))
+    assert await stack["settlement"].sweep() == 0, "unknown is not billable"
+
+    # The operator's resolution, after the ordered reset (PR4a-1's CLI).
+    await _owner(
+        stack,
+        "UPDATE node_operations SET state = 'failed', resolved_by = 'operator' "
+        "WHERE state = 'outcome_unknown'",
+    )
+    assert await stack["settlement"].sweep() == 1
+
+    [row] = await _usage(stack)
+    assert (row["tokens"], row["totals_source"]) == (2, "estimated_from_chunks")
+    assert row["prompt_tokens_basis"] in {"exact_counter", "estimate"}
+    assert row["runtime_completed"] is False and row["completed"] is False

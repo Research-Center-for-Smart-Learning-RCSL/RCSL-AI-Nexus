@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator, Sequence
 from contextlib import aclosing
 
 from app.domain.entities.actor import Actor
+from app.domain.entities.attempt import AttemptIdentity
 from app.domain.entities.chat import (
     CompletionChunk,
     Message,
@@ -56,6 +57,7 @@ class GenerationSessionMixin(RouteChatDependencies):
         compaction_tier: int | None = None,
         tokens_before_compaction: int | None = None,
         tokens_after_compaction: int | None = None,
+        attempt: AttemptIdentity | None = None,
     ) -> AsyncGenerator[CompletionChunk, None]:
         # The caller's request is honoured only where it is stricter than ours.
         # An unbounded generation is a hardware problem, not a client choice.
@@ -265,4 +267,8 @@ class GenerationSessionMixin(RouteChatDependencies):
                 compaction_tier=compaction_tier,
                 tokens_before_compaction=tokens_before_compaction,
                 tokens_after_compaction=tokens_after_compaction,
+                # An agent-backed attempt is billed from the agent's terminal
+                # commit, once, by `settlement`; see `finalize_generation`.
+                attempt=attempt,
+                settlement=self._binder.settlement if self._binder is not None else None,
             )

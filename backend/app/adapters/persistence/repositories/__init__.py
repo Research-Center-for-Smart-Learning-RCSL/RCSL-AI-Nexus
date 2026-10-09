@@ -34,6 +34,7 @@ from .retention_templates import (
 from .usage import (
     PostgresUsageRepository,
 )
+from .usage_settlement import PostgresUsageSettlement
 from .users import PostgresUserRepository
 
 __all__ = [
@@ -51,6 +52,7 @@ __all__ = [
     "PostgresPromptLogRepository",
     "PostgresRefusalWriter",
     "PostgresRequestBindings",
+    "PostgresUsageSettlement",
     "PostgresRefusalRepository",
     "PostgresRecordPurge",
     "PostgresRetentionPolicyRepository",
