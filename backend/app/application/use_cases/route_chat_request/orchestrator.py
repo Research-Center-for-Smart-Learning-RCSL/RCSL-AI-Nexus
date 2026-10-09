@@ -10,6 +10,7 @@ from contextlib import aclosing
 
 from app.application.use_cases.list_capabilities import ListCapabilities
 from app.domain.entities.actor import Actor, Scope
+from app.domain.entities.attempt import AttemptIdentity, RequestIdentity, current_attempt
 from app.domain.entities.chat import (
     CompletionChunk,
     Message,
@@ -38,6 +39,7 @@ from app.domain.ports.token_counter_port import TokenCounterPort
 from app.domain.services.routing_service import RoutingService
 from app.shared.clock import Clock
 
+from .binding import RequestBinder, billing_snapshot
 from .compaction import CompactionDisclosure, try_compact
 from .compaction_cache import CompactionCache
 from .compaction_tier2 import SummariseFn, try_tier2
@@ -76,7 +78,14 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
         summarise_fn: SummariseFn | None = None,
         compaction_cache: CompactionCache | None = None,
         compaction_lock: asyncio.Lock | None = None,
+        binder: RequestBinder | None = None,
     ) -> None:
+        self._binder = binder
+        """Binds each request to one node agent attempt, or None while node
+        agents are disabled, when `Idempotency-Key` has nothing to act on: a
+        direct runtime keeps no record a repeat could be answered from. See
+        `binding.py`."""
+
         self._summarise_fn = summarise_fn
         """How Tier 2 summarises, or None where nothing built it.
 
@@ -193,28 +202,26 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
             without real waiting. Monotonic, not the wall-clock `Clock`, because an
             NTP step must not move a generation's deadline."""
 
-    async def execute(
-        self,
-        actor: Actor,
-        capability: str,
-        messages: Sequence[Message],
-        max_tokens: int | None = None,
-        thinking: bool | None = None,
-        tools: Sequence[ToolDefinition] = (),
-        tool_choice: ToolChoice | None = None,
-        sampling: SamplingOptions | None = None,
-    ) -> AsyncGenerator[CompletionChunk, None]:
-        """`thinking=None` takes the configured default; True and False are the
-        caller's explicit choice.
+    async def repeat(
+        self, actor: Actor, capability: str, identity: RequestIdentity | None
+    ) -> AsyncGenerator[CompletionChunk, None] | None:
+        """The answer to a repeated `Idempotency-Key`, or None to proceed.
 
-        Per request rather than per model, because one resident copy has to
-        serve both: the registry cannot hold the same weights under two aliases
-        (`ix_models_node_ref` is unique on node, runtime and ref), and if it
-        could, the memory budget would count 32 GB twice and refuse the second
-        load. Unlike `max_tokens` this is not clamped — it costs no hardware,
-        and a caller asking a deliberating model to answer directly is asking
-        for less work, not more.
+        Called by the HTTP layer after authentication and before templates and
+        retrieval, so a repeat costs neither (design R6 on #24). Authorised
+        like a new request: a key does not outlive the caller's right to use
+        the capability. A replay records no usage; the original did.
         """
+        if self._binder is None or identity is None or identity.key is None:
+            return None
+        self._authz.require(actor, self.required_scope)
+        await self._authorise(actor, capability)
+        chunks = await self._binder.repeat(actor, identity)
+        return None if chunks is None else _replayed(chunks)
+
+    async def _authorise(self, actor: Actor, capability: str) -> tuple[str, str | None]:
+        """The capability that will serve, and the one asked for when that
+        differs; raises when the caller may not use it."""
         self._authz.require(actor, self.required_scope)
 
         # Which capability, as opposed to whether inference at all. An API key
@@ -261,7 +268,32 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
         # substitution: the header is read by a client or by nobody, and the
         # log line above is gone with the container.
         requested_capability = capability if served != capability else None
-        capability = served
+        return served, requested_capability
+
+    async def execute(
+        self,
+        actor: Actor,
+        capability: str,
+        messages: Sequence[Message],
+        max_tokens: int | None = None,
+        thinking: bool | None = None,
+        tools: Sequence[ToolDefinition] = (),
+        tool_choice: ToolChoice | None = None,
+        sampling: SamplingOptions | None = None,
+        identity: RequestIdentity | None = None,
+    ) -> AsyncGenerator[CompletionChunk, None]:
+        """`thinking=None` takes the configured default; True and False are the
+        caller's explicit choice.
+
+        Per request rather than per model, because one resident copy has to
+        serve both: the registry cannot hold the same weights under two aliases
+        (`ix_models_node_ref` is unique on node, runtime and ref), and if it
+        could, the memory budget would count 32 GB twice and refuse the second
+        load. Unlike `max_tokens` this is not clamped — it costs no hardware,
+        and a caller asking a deliberating model to answer directly is asking
+        for less work, not more.
+        """
+        capability, requested_capability = await self._authorise(actor, capability)
 
         # A ceiling on input as well as output. Context cost grows faster than
         # linearly on unified memory, so a single enormous prompt is a
@@ -428,6 +460,46 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
                 counted, basis, target, actor, messages, tools, max_tokens
             )
 
+            attempt: AttemptIdentity | None = None
+            if self._binder is not None:
+                bound = await self._binder.bind(
+                    actor,
+                    identity,
+                    target.node_id,
+                    billing_snapshot(
+                        actor,
+                        capability=capability,
+                        requested_capability=requested_capability,
+                        model_alias=target.alias,
+                        model_ref=target.ref,
+                        node_id=target.node_id,
+                        started_at=self._clock.now().isoformat(),
+                        compaction={
+                            "tier": compaction_result.tier if compaction_result else None,
+                            "tokens_before": compaction_result.tokens_before
+                            if compaction_result
+                            else None,
+                            "tokens_after": compaction_result.tokens_after
+                            if compaction_result
+                            else None,
+                        },
+                    ),
+                )
+                if isinstance(bound, list):
+                    # A concurrent copy of this keyed request won the binding
+                    # and has already finished: its answer, not a second run.
+                    for chunk in bound:
+                        yield chunk
+                    return
+                attempt = bound
+
+            # Read by the node agent adapter when the first chunk is pulled,
+            # which happens in this task. Restored by `set` rather than a
+            # token, because the stream may be resumed in a copied context.
+            previous = current_attempt.get()
+            if attempt is not None:
+                current_attempt.set(attempt)
+
             # `aclosing` again, for the same reason it is needed one layer
             # down: a bare `async for` over a generator leaves it for the
             # garbage collector when this one is closed, so the inner
@@ -471,5 +543,14 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
                     else None,
                 )
             ) as generation:
-                async for chunk in generation:
-                    yield chunk
+                try:
+                    async for chunk in generation:
+                        yield chunk
+                finally:
+                    if attempt is not None:
+                        current_attempt.set(previous)
+
+
+async def _replayed(chunks: Sequence[CompletionChunk]) -> AsyncGenerator[CompletionChunk, None]:
+    for chunk in chunks:
+        yield chunk

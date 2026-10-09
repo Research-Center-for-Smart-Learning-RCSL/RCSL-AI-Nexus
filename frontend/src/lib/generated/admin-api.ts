@@ -3020,7 +3020,9 @@ export interface operations {
     admin_chat_admin_chat_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };

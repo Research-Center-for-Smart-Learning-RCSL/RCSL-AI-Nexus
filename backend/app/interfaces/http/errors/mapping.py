@@ -13,9 +13,11 @@ from app.domain.exceptions import (
     DocumentStateConflictError,
     DomainError,
     EvaluationRunNotFoundError,
+    IdempotencyKeyReusedError,
     InsufficientMemoryError,
     InvalidCidrError,
     InvalidCredentialsError,
+    InvalidIdempotencyKeyError,
     InvalidModelReferenceError,
     InvalidNodeAddressError,
     InvalidTotpError,
@@ -95,6 +97,9 @@ STATUS_MAP: dict[type[DomainError], int] = {
     RuntimeCapabilityError: 400,
     VectorStoreError: 503,
     ServerOverloadedError: 503,
+    InvalidIdempotencyKeyError: 400,
+    IdempotencyKeyReusedError: 422,
+    # The other idempotency refusals are StateConflictError subclasses: 409.
     # RuntimeTimeoutError and StreamInterruptedError are absent on purpose:
     # they subclass NoAvailableModelError and inherit its 503 through the MRO
     # walk below, so the split stays a split of *codes*, not of statuses.
@@ -115,6 +120,9 @@ OPENAI_ERROR_TYPES: dict[int, str] = {
     # retry. That is the split-by-remedy rule in `domain/exceptions.py` losing
     # in the last translation before the wire.
     413: "invalid_request_error",
+    # 422 is the caller's request being wrong for what it names, such as an
+    # Idempotency-Key reused for a different body: theirs to fix, not ours.
+    422: "invalid_request_error",
     429: "rate_limit_error",
     503: "service_unavailable",
 }

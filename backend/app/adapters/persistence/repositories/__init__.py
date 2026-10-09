@@ -25,6 +25,7 @@ from .refusals import (
     PostgresRefusalRepository,
     PostgresRefusalWriter,
 )
+from .request_bindings import PostgresRequestBindings
 from .retention_templates import (
     PostgresPromptTemplateRepository,
     PostgresRecordPurge,
@@ -49,6 +50,7 @@ __all__ = [
     "PostgresPromptLogWriter",
     "PostgresPromptLogRepository",
     "PostgresRefusalWriter",
+    "PostgresRequestBindings",
     "PostgresRefusalRepository",
     "PostgresRecordPurge",
     "PostgresRetentionPolicyRepository",

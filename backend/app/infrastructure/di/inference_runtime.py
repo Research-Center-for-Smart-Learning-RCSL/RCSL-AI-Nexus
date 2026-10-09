@@ -14,6 +14,7 @@ from app.adapters.persistence.repositories import (
     PostgresModelRepository,
     PostgresNodeRepository,
     PostgresPromptLogWriter,
+    PostgresRequestBindings,
     PostgresRoutingPolicyRepository,
     PostgresUsageRepository,
 )
@@ -24,6 +25,7 @@ from app.application.use_cases.list_capabilities import ListCapabilities
 from app.application.use_cases.manage_models import ManageModels
 from app.application.use_cases.manage_routing_policies import ManageRoutingPolicies
 from app.application.use_cases.route_chat_request import RouteChatRequest
+from app.application.use_cases.route_chat_request.binding import RequestBinder
 from app.application.use_cases.route_chat_request.compaction_cache import CompactionCache
 from app.application.use_cases.route_chat_request.compaction_tier2 import (
     SummariseFn,
@@ -176,6 +178,24 @@ def build_route_chat_request(
             CompactionCache(cache) if (cache := getattr(request.app.state, "cache", None)) else None
         ),
         compaction_lock=getattr(request.app.state, "compaction_lock", None),
+        binder=build_request_binder(request, session),
+    )
+
+
+def build_request_binder(request: Request, session: SessionDep) -> RequestBinder | None:
+    """Only while node agents are enabled; see `route_chat_request/binding.py`.
+
+    The node lookup reads the request's session, as routing does; the bindings
+    themselves commit in their own transactions, before anything is sent.
+    """
+    runtimes = request.app.state.runtimes
+    if not getattr(runtimes, "agents_enabled", False):
+        return None
+    return RequestBinder(
+        bindings=PostgresRequestBindings(get_session_factory()),
+        nodes=PostgresNodeRepository(session),
+        runtimes=runtimes,
+        request_id=current_request_id,
     )
 
 

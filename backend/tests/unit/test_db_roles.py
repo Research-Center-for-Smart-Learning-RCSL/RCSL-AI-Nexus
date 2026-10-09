@@ -20,6 +20,7 @@ import re
 import pytest
 
 from app.infrastructure.db_roles import (
+    GATEWAY_BINDING_GRANTS,
     GATEWAY_DENIED_READ_TABLES,
     GATEWAY_WRITABLE_TABLES,
     RoleSpec,
@@ -62,7 +63,9 @@ def test_gateway_can_read_all_tables():
 
 def test_gateway_may_write_only_the_named_tables():
     statements = build_statements([GATEWAY], database="nexus")
-    permitted = {f'"{table}"' for table in GATEWAY_WRITABLE_TABLES}
+    permitted = {f'"{table}"' for table in GATEWAY_WRITABLE_TABLES} | {
+        f'"{table}"' for table, _ in GATEWAY_BINDING_GRANTS
+    }
     for privs, target in _grants_to(statements, "nexus_gateway"):
         if any(verb in privs for verb in WRITE_VERBS):
             assert target in permitted, (privs, target)
@@ -123,7 +126,21 @@ def test_gateway_writable_set_is_exactly_the_named_tables():
     insert_targets = {
         target for privs, target in _grants_to(statements, "nexus_gateway") if "INSERT" in privs
     }
-    assert insert_targets == {f'"{table}"' for table in GATEWAY_WRITABLE_TABLES}
+    assert insert_targets == {f'"{table}"' for table in GATEWAY_WRITABLE_TABLES} | {
+        f'"{table}"' for table, _ in GATEWAY_BINDING_GRANTS
+    }
+
+
+def test_gateway_updates_bindings_only_by_named_column():
+    """PR4a-2 on #24: the gateway may move a binding and record delivery, and
+    nothing else on those tables; an UPDATE without a column list would let it
+    rewrite a payload hash or a billing snapshot."""
+    statements = build_statements([GATEWAY], database="nexus")
+    for privs, target in _grants_to(statements, "nexus_gateway"):
+        if "UPDATE" in privs:
+            assert target in {f'"{t}"' for t, _ in GATEWAY_BINDING_GRANTS}, (privs, target)
+            assert re.search(r"UPDATE \([A-Z_, ]+\)", privs), privs
+        assert "DELETE" not in privs, (privs, target)
 
 
 def test_admin_has_full_dml_on_all_tables():

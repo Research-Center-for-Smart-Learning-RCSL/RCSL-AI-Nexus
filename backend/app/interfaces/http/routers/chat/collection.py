@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from contextlib import aclosing
 
-from app.application.use_cases.route_chat_request import RouteChatRequest
-from app.domain.entities.actor import Actor
-from app.domain.entities.chat import (
-    Message,
-    SamplingOptions,
-    ToolChoice,
-    ToolDefinition,
-)
+from app.domain.entities.chat import CompletionChunk
 from app.interfaces.http.schemas.chat_schemas import (
     ChatCompletionResponse,
     Choice,
@@ -26,14 +20,7 @@ async def _collect(
     completion_id: str,
     created: int,
     capability: str,
-    actor: Actor,
-    use_case: RouteChatRequest,
-    messages: list[Message],
-    max_tokens: int | None,
-    thinking: bool | None,
-    tools: list[ToolDefinition],
-    tool_choice: ToolChoice | None,
-    sampling: SamplingOptions | None,
+    generation: AsyncGenerator[CompletionChunk, None],
 ) -> ChatCompletionResponse:
     """Non-streaming path.
 
@@ -47,11 +34,7 @@ async def _collect(
     prompt_tokens = 0
     finish_reason: str | None = None
 
-    async with aclosing(
-        use_case.execute(
-            actor, capability, messages, max_tokens, thinking, tools, tool_choice, sampling
-        )
-    ) as stream:
+    async with aclosing(generation) as stream:
         async for chunk in stream:
             parts.append(chunk.delta)
             reasoning.append(chunk.reasoning)
