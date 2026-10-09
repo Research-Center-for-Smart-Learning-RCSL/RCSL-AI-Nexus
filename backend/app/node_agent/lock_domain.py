@@ -34,6 +34,7 @@ import errno
 import fcntl
 import json
 import os
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,13 +71,15 @@ def kernel_boot_id() -> str | None:
         return None
 
 
-def initialise(directory: Path) -> Domain:
+def initialise(directory: Path, *, settle_s: float = 5.0) -> Domain:
     """Create the domain if the directory holds neither file, else read it.
 
     `O_EXCL` on the lock file decides a race between two first starts: the
-    loser finds the file and reads the domain the winner writes. A directory
-    with only one of the two files is refused, never completed: completing it
-    could mint a second domain over a lock someone already holds.
+    loser finds the file and reads the domain the winner writes, waiting up to
+    `settle_s` for the winner to write it (review of #33's branch). A
+    directory with only one of the two files after that is refused, never
+    completed: completing it could mint a second domain over a lock someone
+    already holds.
     """
     lock = directory / LOCK_NAME
     domain = directory / DOMAIN_NAME
@@ -91,6 +94,9 @@ def initialise(directory: Path) -> Domain:
             finally:
                 os.close(fd)
             _write_domain(domain, Domain(domain_id=uuid.uuid4().hex, lock_inode=inode))
+    deadline = time.monotonic() + settle_s
+    while lock.exists() and not domain.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
     return read_domain(directory)
 
 

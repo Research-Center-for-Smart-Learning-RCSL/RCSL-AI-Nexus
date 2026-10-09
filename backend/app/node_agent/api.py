@@ -30,10 +30,11 @@ from app.node_agent.resolution import ResolutionRefused
 from app.node_agent.service import Agent, start, stop
 from app.node_agent.settings import AgentSettings
 from app.node_agent.store import NotOwner, Operation
-from app.node_agent.wire import WireError, decode_embedding, decode_generation
+from app.node_agent.wire import Envelope, WireError, decode_embedding, decode_generation
 
 MAX_BODY_BYTES = 64 * 1024 * 1024
 RUNTIME = "ollama"
+CANCELLABLE_KINDS = ("inference", "embedding_batch")
 
 
 def _agent(request: Request) -> Agent:
@@ -84,6 +85,24 @@ async def _describe(agent: Agent, operation: Operation) -> dict[str, Any]:
     if operation.state == "completed" and operation.store_output:
         described["result"] = await agent.store.stored_result(operation.op_id)
     return described
+
+
+async def _existing(
+    agent: Agent, operation: Operation, kind: str, envelope: Envelope
+) -> JSONResponse:
+    """An op id that already exists, answered only to the request it belongs to.
+
+    A different kind or payload hash under the same op id is a conflict, never
+    the other request's state or result (review of #33's branch). A tombstone
+    carries no hash, so a late original still observes it.
+    """
+    if operation.kind != kind or (
+        operation.payload_hash is not None and operation.payload_hash != envelope.payload_hash
+    ):
+        return JSONResponse(
+            status_code=409, content={"op_id": operation.op_id, "refused": "op_id_conflict"}
+        )
+    return JSONResponse(await _describe(agent, operation))
 
 
 def _refused(refusal: Refused) -> JSONResponse:
@@ -155,7 +174,7 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         existing = await agent.store.observe(envelope.op_id)
         if existing is not None:
-            return JSONResponse(await _describe(agent, existing))
+            return await _existing(agent, existing, "inference", envelope)
 
         registered = await registration(agent.pool, agent.settings.node_id, RUNTIME, generation.ref)
         verdict = check_generation(
@@ -187,7 +206,7 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             deadline_s=agent.settings.queue_deadline_s,
         )
         if isinstance(submitted, Existing):
-            return JSONResponse(await _describe(agent, submitted.operation))
+            return await _existing(agent, submitted.operation, "inference", envelope)
         if isinstance(submitted, Refused):
             return _refused(submitted)
         return StreamingResponse(_stream(agent, submitted), media_type="application/x-ndjson")
@@ -201,7 +220,7 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         existing = await agent.store.observe(envelope.op_id)
         if existing is not None:
-            return JSONResponse(await _describe(agent, existing))
+            return await _existing(agent, existing, "embedding_batch", envelope)
         registered = await registration(agent.pool, agent.settings.node_id, RUNTIME, batch.ref)
         if registered is None:
             return _guard_refused(
@@ -226,7 +245,7 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             deadline_s=agent.settings.queue_deadline_s,
         )
         if isinstance(submitted, Existing):
-            return JSONResponse(await _describe(agent, submitted.operation))
+            return await _existing(agent, submitted.operation, "embedding_batch", envelope)
         if isinstance(submitted, Refused):
             return _refused(submitted)
         vectors: Any = None
@@ -254,10 +273,14 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
         return JSONResponse(await _describe(agent, operation))
 
     @app.post("/v1/attempts/{op_id}/cancel", dependencies=authorised)
-    async def cancel(request: Request, op_id: str) -> JSONResponse:
+    async def cancel(request: Request, op_id: str, kind: str) -> JSONResponse:
+        # The kind is the caller's: a cancel that arrives before the original
+        # leaves a tombstone, and the tombstone must say what it stands for.
+        if kind not in CANCELLABLE_KINDS:
+            raise HTTPException(status_code=400, detail=f"kind must be one of {CANCELLABLE_KINDS}")
         agent = _agent(request)
         try:
-            operation = await agent.store.cancel_accepted(op_id, "cancel_requested")
+            operation = await agent.store.cancel_accepted(op_id, "cancel_requested", kind=kind)
         except NotOwner:
             await agent.dispatcher.lose_role("not_owner_at_cancel")
             return JSONResponse(status_code=503, content={"refused": "node_lost"})
