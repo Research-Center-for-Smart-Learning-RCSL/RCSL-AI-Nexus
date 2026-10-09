@@ -46,6 +46,7 @@ async def finalize_generation(
     tokens_after_compaction: int | None = None,
     attempt: AttemptIdentity | None = None,
     settlement: UsageSettlementPort | None = None,
+    widened: bool = False,
 ) -> None:
     """Finalize both records without allowing either failure to hide the other."""
     _warn_if_prompt_was_truncated(
@@ -55,6 +56,7 @@ async def finalize_generation(
         basis=counted_basis,
         request_id=request_id(),
         actor=actor.display,
+        widened=widened,
     )
 
     if attempt is not None and settlement is not None:
