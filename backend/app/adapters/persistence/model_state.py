@@ -25,8 +25,9 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.adapters.persistence import mappers as m
-from app.adapters.persistence.sqlalchemy_models import ModelRow
+from app.adapters.persistence.sqlalchemy_models import ModelRow, NodeRow
 from app.domain.entities.model import Model, ModelState
+from app.domain.entities.node import Node
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,11 @@ class ModelStateCommitter:
         async with self._sessions() as session:
             row = await session.get(ModelRow, model_id)
             return m.model_to_domain(row) if row else None
+
+    async def node(self, node_id: str) -> Node | None:
+        async with self._sessions() as session:
+            row = await session.get(NodeRow, node_id)
+            return m.node_to_domain(row) if row else None
 
     async def commit(self, model_id: str, state: ModelState) -> None:
         try:

@@ -110,22 +110,7 @@ class OllamaLifecycleMixin(OllamaRuntimeBase):
         except (httpx.HTTPError, json.JSONDecodeError):
             return None
 
-        resident: dict[str, float] = {}
-        for entry in resident_models:
-            name = entry.get("name") or entry.get("model")
-            if not name:
-                continue
-            gb = float(entry.get("size") or 0) / 1024**3
-            for spelling in _spellings(name):
-                resident[spelling] = gb
-
-        on_disk: set[str] = set()
-        for entry in on_disk_models:
-            name = entry.get("name") or entry.get("model")
-            if name:
-                on_disk.update(_spellings(name))
-
-        return RuntimeResidency(resident=resident, on_disk=frozenset(on_disk))
+        return residency_from(resident_models, on_disk_models)
 
     async def _post_lifecycle(
         self, ref: str, keep_alive: str | int, context_length: int | None = None
@@ -151,3 +136,27 @@ class OllamaLifecycleMixin(OllamaRuntimeBase):
                 raise NoAvailableModelError(
                     detail=f"ollama lifecycle post returned {response.status_code} for {ref}"
                 )
+
+
+def residency_from(resident_models: list[Any], on_disk_models: list[Any]) -> RuntimeResidency:
+    """`/api/ps` and `/api/tags` model lists as a residency observation.
+
+    Shared with the node agent's adapter, which receives the same two lists
+    from the agent (PR4b): one reading of Ollama's names, wherever it ran.
+    """
+    resident: dict[str, float] = {}
+    for entry in resident_models:
+        name = entry.get("name") or entry.get("model")
+        if not name:
+            continue
+        gb = float(entry.get("size") or 0) / 1024**3
+        for spelling in _spellings(name):
+            resident[spelling] = gb
+
+    on_disk: set[str] = set()
+    for entry in on_disk_models:
+        name = entry.get("name") or entry.get("model")
+        if name:
+            on_disk.update(_spellings(name))
+
+    return RuntimeResidency(resident=resident, on_disk=frozenset(on_disk))

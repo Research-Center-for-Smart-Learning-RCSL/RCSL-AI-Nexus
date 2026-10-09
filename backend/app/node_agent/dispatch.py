@@ -34,7 +34,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from app.node_agent.store import NotOwner, Operation
+from app.node_agent.store import LIFECYCLE_KINDS, NotOwner, Operation
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +242,10 @@ class Dispatcher:
         self._gate_changed = asyncio.Event()
         self._host_lock_held = host_lock_held
         self._settle_retry_s = settle_retry_s
+        self._exclusive: str | None = None
+        """The lifecycle operation holding the node, if any (`exclusive`)."""
+        self._held_by_operator = False
+        """An operator's drain, which a lifecycle operation ending must not undo."""
         self._uncommitted_unknown: set[str] = set()
         """Operations this process knows are uncertain but has not yet
         committed as `outcome_unknown`. The database cannot see them, so
@@ -281,7 +285,9 @@ class Dispatcher:
     async def drain(self) -> None:
         """Admit nothing more and wait for admitted work to reach terminal
         evidence. Queued `accepted` work is cancelled as it reaches promotion."""
-        await self._close(GateState.DRAINING)
+        async with self._barrier:
+            self._held_by_operator = True
+            self._close_locked(GateState.DRAINING)
         await self._idle.wait()
 
     async def reopen(self) -> GateState:
@@ -290,12 +296,16 @@ class Dispatcher:
         Unknown means committed **or** known here and not yet committed.
         """
         async with self._barrier:
-            if self._state is GateState.LOST:
-                return self._state
-            blocked = bool(self._uncommitted_unknown) or await self._store.any_unknown()
-            self._state = GateState.BLOCKED if blocked else GateState.SERVING
-            self._gate_changed.set()
+            self._held_by_operator = False
+            return await self._reopen_locked()
+
+    async def _reopen_locked(self) -> GateState:
+        if self._state is GateState.LOST or self._exclusive is not None:
             return self._state
+        blocked = bool(self._uncommitted_unknown) or await self._store.any_unknown()
+        self._state = GateState.BLOCKED if blocked else GateState.SERVING
+        self._gate_changed.set()
+        return self._state
 
     def holds(self, op_id: str) -> bool:
         """Whether this process still has a task for the operation."""
@@ -303,6 +313,113 @@ class Dispatcher:
 
     async def wait_idle(self) -> None:
         await self._idle.wait()
+
+    # -- lifecycle ---------------------------------------------------------
+
+    async def exclusive(
+        self,
+        op_id: str,
+        kind: str,
+        relay: Relay,
+        *,
+        provenance: dict[str, Any] | None = None,
+        after: Callable[[Outcome], Awaitable[None]] | None = None,
+    ) -> Attempt | Existing | Refused:
+        """Run a lifecycle operation with the node to itself (PR4b, design S5).
+
+        Admission closes first, as a drain: queued work is cancelled unsent as
+        it reaches promotion, and admitted work is waited for to terminal
+        evidence. Only then is the operation promoted, under the same barrier
+        and the same refusal while anything is unknown. `after` runs once the
+        outcome is committed and before the node serves again, so a pull's new
+        pin is in place before anything is dispatched against it. The node
+        reopens when the operation ends, unless an operator's drain, a block
+        or a lost role says otherwise.
+
+        Unlike inference, an operation whose outcome is uncertain fails rather
+        than blocks: it changes what the runtime holds, which the heartbeat
+        observes again, and a pull that may have rewritten a tag is caught by
+        the weights pin (final spec §3 blocks on inference, summary and
+        embedding).
+        """
+        if kind not in LIFECYCLE_KINDS:
+            raise ValueError(f"{kind} is not a lifecycle operation")
+        existing = await self._store.observe(op_id)
+        if existing is not None:
+            return Existing(existing)
+        async with self._barrier:
+            if self._state is not GateState.SERVING:
+                return Refused(f"node_{self._state.value}", retry_after=_retry_after(self._state))
+            self._exclusive = op_id
+            self._close_locked(GateState.DRAINING)
+        handed_off = False
+        try:
+            try:
+                inserted = await self._store.insert_accepted(
+                    op_id, kind, request_id=None, payload_hash=None, store_output=False
+                )
+            except NotOwner:
+                await self.lose_role("not_owner_at_insert")
+                return Refused("node_lost", retry_after=None)
+            if inserted is None:
+                found = await self._store.observe(op_id)
+                return Existing(found) if found else Refused("conflict", retry_after=1)
+            try:
+                await self._idle.wait()
+                await self._slots.acquire()
+            except asyncio.CancelledError:
+                await _shielded(self._unsent(op_id, kind, "cancelled_before_send"))
+                raise
+            attempt = Attempt(op_id)
+            refusal: str | None = None
+            try:
+                async with self._barrier:
+                    # Re-read: a block or a lost role may have replaced the drain
+                    # while admitted work finished (mypy narrowed it above).
+                    state: GateState = self._state
+                    if state is not GateState.DRAINING:
+                        refusal = f"{state.value}_before_send"
+                    elif not self._host_lock_held():
+                        self._state = GateState.LOST
+                        refusal = "lost_before_send"
+                    else:
+                        try:
+                            promoted = await self._store.promote(op_id, provenance or {})
+                        except NotOwner:
+                            self._state = GateState.LOST
+                            promoted = False
+                        if promoted:
+                            self._idle.clear()
+                            self._admitted[op_id] = asyncio.create_task(
+                                self._run(attempt, relay, kind=kind, after=after)
+                            )
+                            handed_off = True
+                        else:
+                            refusal = (
+                                "lost_before_send"
+                                if self._state is GateState.LOST
+                                else "node_blocked"
+                            )
+            except BaseException:
+                if not handed_off:
+                    self._slots.release()
+                    await _shielded(self._unsent_after_failed_promotion(op_id, kind))
+                raise
+            if handed_off:
+                return attempt
+            self._slots.release()
+            return await self._unsent(op_id, kind, refusal or "not_promoted")
+        finally:
+            if not handed_off:
+                await self._end_exclusive(op_id)
+
+    async def _end_exclusive(self, op_id: str) -> None:
+        async with self._barrier:
+            if self._exclusive != op_id:
+                return
+            self._exclusive = None
+            if self._state is GateState.DRAINING and not self._held_by_operator:
+                await self._reopen_locked()
 
     # -- one attempt -------------------------------------------------------
 
@@ -419,7 +536,9 @@ class Dispatcher:
                         promoted = False
                     if promoted:
                         self._idle.clear()
-                        self._admitted[op_id] = asyncio.create_task(self._run(attempt, relay))
+                        self._admitted[op_id] = asyncio.create_task(
+                            self._run(attempt, relay, kind=kind)
+                        )
                         created = True
                         refusal = None
                     elif self._state is GateState.LOST:
@@ -466,7 +585,14 @@ class Dispatcher:
             operation = None
         return Refused(reason, retry_after=_retry_after(self._state), operation=operation)
 
-    async def _run(self, attempt: Attempt, relay: Relay) -> None:
+    async def _run(
+        self,
+        attempt: Attempt,
+        relay: Relay,
+        *,
+        kind: str,
+        after: Callable[[Outcome], Awaitable[None]] | None = None,
+    ) -> None:
         op_id = attempt.op_id
         outcome: Outcome
         cancelled: asyncio.CancelledError | None = None
@@ -482,8 +608,14 @@ class Dispatcher:
         except Exception as exc:  # noqa: BLE001 - a relay bug is not terminal evidence
             logger.exception("relay for %s raised", op_id)
             outcome = Uncertain(reason=f"relay_error:{type(exc).__name__}")
+        lifecycle = kind in LIFECYCLE_KINDS
         try:
-            await self._settle(op_id, outcome)
+            await self._settle(op_id, outcome, blocking=not lifecycle)
+            if after is not None:
+                try:
+                    await after(outcome)
+                except Exception:  # noqa: BLE001 - the outcome is committed already
+                    logger.exception("the follow-up of %s failed", op_id)
         finally:
             attempt._close()  # noqa: SLF001
             if not attempt.settled.done():
@@ -492,10 +624,12 @@ class Dispatcher:
             self._admitted.pop(op_id, None)
             if not self._admitted:
                 self._idle.set()
+            if lifecycle:
+                await _shielded(self._end_exclusive(op_id))
         if cancelled is not None:
             raise cancelled
 
-    async def _settle(self, op_id: str, outcome: Outcome) -> None:
+    async def _settle(self, op_id: str, outcome: Outcome, *, blocking: bool = True) -> None:
         """Commit the outcome, retrying until it is committed or the role is lost.
 
         A database error never turns into a different outcome (review on
@@ -503,7 +637,7 @@ class Dispatcher:
         unknown is committed, and the task, with its slot, is held until the
         commit, so drain and exit wait for it too.
         """
-        if isinstance(outcome, Uncertain):
+        if isinstance(outcome, Uncertain) and blocking:
             async with self._barrier:
                 self._uncommitted_unknown.add(op_id)
                 self._close_locked(GateState.BLOCKED)
@@ -521,6 +655,10 @@ class Dispatcher:
                 await self._store.finish(op_id, "failed", outcome.terminal, reason=outcome.reason)
             elif isinstance(outcome, NotSent):
                 await self._store.finish(op_id, "failed", {}, reason=f"not_sent:{outcome.reason}")
+            elif not blocking:
+                await self._store.finish(
+                    op_id, "failed", outcome.observed, reason=f"uncertain:{outcome.reason}"
+                )
             else:
                 await self._store.mark_unknown(op_id, outcome.reason, outcome.observed)
 
@@ -537,7 +675,7 @@ class Dispatcher:
                 delay = min(delay * 2, SETTLE_RETRY_CAP_S)
                 continue
             break
-        if isinstance(outcome, Uncertain):
+        if isinstance(outcome, Uncertain) and blocking:
             self._uncommitted_unknown.discard(op_id)
 
 

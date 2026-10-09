@@ -18,10 +18,11 @@ Two modes, chosen by `NODE_AGENT_ENABLED`:
   sender is therefore safe in the one sense that matters: whatever has not
   been converted stops working instead of bypassing the agent (design R4).
 
-Known unconverted by-kind paths, left for PR4b's audit: `/readyz` probes the
-first by-kind entry (so it reports the runtime down with the flag on), the
-residency sweep (which then observes nothing), model download and the
-registry's load and unload (which refuse).
+Every runtime caller resolves by node since PR4b: generation, Tier 2,
+embeddings, `/readyz`, the residency sweep, node health, download and the
+registry's load and unload. The by-kind entries are then only grammar, and are
+built without the runtime's address (`NO_RUNTIME_URL`); the audit in
+`tests/unit/test_runtime_sender_audit.py` holds both properties.
 """
 
 from __future__ import annotations
@@ -49,6 +50,11 @@ MIN_AGENT_TOKEN_LENGTH = 32
 AGENT_KINDS = frozenset({RuntimeKind.OLLAMA})
 """The runtimes a node agent fronts. MLX has no agent yet, so with the flag on
 it is refused like any other direct sender."""
+
+NO_RUNTIME_URL = "http://no-runtime.invalid"
+"""What a by-kind adapter is built with while agents are enabled: `.invalid`
+never resolves (RFC 6761), so even a path that slipped past the refusals
+could not reach a runtime."""
 
 _BYPASS = "node agents are enabled; a runtime is reached only through its node's agent"
 

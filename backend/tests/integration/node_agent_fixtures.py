@@ -31,8 +31,35 @@ class FakeOllama:
         self.chats = 0
         self.embeds = 0
         self.truncate = False
+        self.lifecycle: list[dict[str, Any]] = []
+        self.digest = "a" * 64
+        self.pulled_digest = "b" * 64
+        self.resident: list[dict[str, Any]] = [{"name": "qwen2.5:7b", "size": 5 * 1024**3}]
 
     def handle(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/generate":
+            self.lifecycle.append(json.loads(request.content))
+            return httpx.Response(200, json={"done": True, "done_reason": "load"})
+        if request.url.path == "/api/pull":
+            self.digest = self.pulled_digest
+            lines = [
+                {"status": "pulling manifest"},
+                {"status": "downloading", "completed": 5, "total": 10},
+                {"status": "success"},
+            ]
+            return httpx.Response(200, content="".join(json.dumps(x) + "\n" for x in lines))
+        if request.url.path == "/api/ps":
+            return httpx.Response(200, json={"models": self.resident})
+        if request.url.path == "/api/tags":
+            return httpx.Response(
+                200,
+                json={
+                    "models": [
+                        {"name": "qwen2.5:7b", "digest": self.digest},
+                        {"name": "nomic-embed-text:latest", "digest": "c" * 64},
+                    ]
+                },
+            )
         if request.url.path == "/api/chat":
             self.chats += 1
             lines = [
