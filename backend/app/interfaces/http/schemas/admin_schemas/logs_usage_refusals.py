@@ -269,6 +269,13 @@ class UsageRecordResponse(BaseModel):
     runtime_completed: bool | None
     """Agent-backed rows only: whether the runtime reached `done`, which
     `completed` (the client received everything) does not say."""
+    prompt_eval_ms: int | None
+    """Agent-backed rows that reached `done` only: the runtime's prefill time.
+    A cached prefix is not in it, though `prompt_tokens` counts it."""
+    eval_ms: int | None
+    """The runtime's decode time, null under the same conditions."""
+    load_ms: int | None
+    """The runtime's runner load time. A few milliseconds when warm."""
 
     @classmethod
     def of(cls, record: UsageRecord) -> UsageRecordResponse:
@@ -290,6 +297,9 @@ class UsageRecordResponse(BaseModel):
             totals_source=record.totals_source,
             prompt_tokens_basis=record.prompt_tokens_basis,
             runtime_completed=record.runtime_completed,
+            prompt_eval_ms=record.prompt_eval_ms,
+            eval_ms=record.eval_ms,
+            load_ms=record.load_ms,
         )
 
 

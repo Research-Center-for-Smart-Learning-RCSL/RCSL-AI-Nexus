@@ -75,6 +75,10 @@ class UsageRecordRow(Base):
     totals_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     prompt_tokens_basis: Mapped[str | None] = mapped_column(String(16), nullable=True)
     runtime_completed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # The runtime's `done` timings (migration `a8d3f61c2e47`), same writer.
+    prompt_eval_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    eval_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    load_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         # The quota reads by key over a time window, so the composite is what

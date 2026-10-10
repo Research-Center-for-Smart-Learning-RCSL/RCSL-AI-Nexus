@@ -57,6 +57,9 @@ def usage_to_row(usage: UsageRecord) -> UsageRecordRow:
         totals_source=usage.totals_source,
         prompt_tokens_basis=usage.prompt_tokens_basis,
         runtime_completed=usage.runtime_completed,
+        prompt_eval_ms=usage.prompt_eval_ms,
+        eval_ms=usage.eval_ms,
+        load_ms=usage.load_ms,
     )
 
 
@@ -87,6 +90,9 @@ def usage_row_to_domain(row: UsageRecordRow) -> UsageRecord:
         totals_source=row.totals_source,
         prompt_tokens_basis=row.prompt_tokens_basis,
         runtime_completed=row.runtime_completed,
+        prompt_eval_ms=row.prompt_eval_ms,
+        eval_ms=row.eval_ms,
+        load_ms=row.load_ms,
     )
 
 

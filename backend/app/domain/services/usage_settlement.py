@@ -12,6 +12,9 @@ attempt, and inserted once.
   count, an observation and never a bound; `unavailable` is 0, labelled.
 - **Prompt basis** is independent of the output source: the runtime's figure
   when it reported one, otherwise the agent's own count and its basis.
+- **Timings** (PR7) are the runtime's own `done` durations, in whole
+  milliseconds, and null when it reported none. Never zero-filled: a row
+  without a `done` has no prefill time, which is not a prefill time of 0.
 - **`completed`** keeps its meaning, the client received the whole response:
   true only when the gateway committed that. `runtime_completed` is the
   runtime reaching `done`.
@@ -41,6 +44,9 @@ class SettledUsage:
     latency_ms: int
     completed: bool
     at: datetime
+    prompt_eval_ms: int | None = None
+    eval_ms: int | None = None
+    load_ms: int | None = None
 
 
 def settle_usage(
@@ -94,7 +100,15 @@ def settle_usage(
         # starts false and only reconciliation may turn it true.
         completed=delivered is True,
         at=started_at + timedelta(milliseconds=latency_ms),
+        prompt_eval_ms=_ms(terminal.get("prompt_eval_duration")),
+        eval_ms=_ms(terminal.get("eval_duration")),
+        load_ms=_ms(terminal.get("load_duration")),
     )
+
+
+def _ms(nanoseconds: Any) -> int | None:
+    value = _int(nanoseconds)
+    return value // 1_000_000 if value is not None else None
 
 
 def _int(value: Any) -> int | None:

@@ -122,6 +122,20 @@ class UsageRecord:
     """Whether the runtime reached `done`, which `completed` (the client got
     everything) does not say. Null on direct-path rows."""
 
+    prompt_eval_ms: int | None = None
+    """Prefill time the runtime reported in its `done`. It covers only the
+    tokens the runtime evaluated: a cached prefix costs nothing here, while
+    `prompt_tokens` still counts it. So the ratio of the two is not a
+    prefill rate. Null when the runtime reported no `done` (MLX, a stream that
+    never finished) and on direct-path rows; never zero-filled."""
+
+    eval_ms: int | None = None
+    """Decode time from the same `done`, null under the same conditions."""
+
+    load_ms: int | None = None
+    """Runner load time from the same `done`. A few milliseconds on a warm
+    runner rather than zero, so only a large value means a cold load."""
+
 
 @dataclass(frozen=True, slots=True)
 class LatencyStats:

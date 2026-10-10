@@ -90,3 +90,49 @@ def test_a_completed_attempt_without_runtime_totals_is_not_called_final() -> Non
 
     assert usage.totals_source == "estimated_from_chunks"
     assert usage.prompt_tokens_basis == "estimate"
+
+
+def test_the_runtimes_timings_are_whole_milliseconds() -> None:
+    """PR7: nanoseconds from `done`, floored, never rounded up into time the
+    runtime did not spend."""
+    usage = settle_usage(
+        state="completed",
+        terminal={
+            "eval_count": 2,
+            "prompt_eval_duration": 28_940_123_456,
+            "eval_duration": 999_999,
+            "load_duration": 0,
+        },
+        observed=None,
+        provenance=None,
+        started_at=STARTED,
+        delivered=True,
+    )
+
+    assert (usage.prompt_eval_ms, usage.eval_ms, usage.load_ms) == (28940, 0, 0)
+
+
+def test_timings_the_runtime_did_not_report_are_null_not_zero() -> None:
+    for terminal in (None, {"resolution": "operator_reset"}, {"eval_count": 2}):
+        usage = settle_usage(
+            state="completed" if terminal else "failed",
+            terminal=terminal,
+            observed={"observed_chunk_count": 3},
+            provenance=None,
+            started_at=STARTED,
+            delivered=None,
+        )
+        assert (usage.prompt_eval_ms, usage.eval_ms, usage.load_ms) == (None, None, None)
+
+
+def test_a_malformed_timing_is_null() -> None:
+    usage = settle_usage(
+        state="completed",
+        terminal={"eval_count": 2, "prompt_eval_duration": -1, "eval_duration": "5"},
+        observed=None,
+        provenance=None,
+        started_at=STARTED,
+        delivered=True,
+    )
+
+    assert (usage.prompt_eval_ms, usage.eval_ms) == (None, None)

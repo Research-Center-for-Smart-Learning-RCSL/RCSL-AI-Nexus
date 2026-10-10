@@ -2760,12 +2760,18 @@ export interface components {
             compaction_tier: number | null;
             /** Completed */
             completed: boolean;
+            /** Eval Ms */
+            eval_ms: number | null;
             /** Id */
             id: string;
             /** Latency Ms */
             latency_ms: number;
+            /** Load Ms */
+            load_ms: number | null;
             /** Model Alias */
             model_alias: string;
+            /** Prompt Eval Ms */
+            prompt_eval_ms: number | null;
             /** Prompt Tokens */
             prompt_tokens: number;
             /** Prompt Tokens Basis */
