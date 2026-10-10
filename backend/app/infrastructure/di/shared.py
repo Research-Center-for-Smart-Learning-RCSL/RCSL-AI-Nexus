@@ -202,11 +202,40 @@ def build_audit() -> PostgresAudit:
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:
+    """The request's one session, open until the response has been sent.
+
+    Request-scoped, which on FastAPI ≥ 0.118 means exited *after* the response
+    went out (`fastapi/routing.py`, `request_response`). A streaming response
+    needs exactly that: usage is written through this session while the stream
+    is driven, after the handler has returned. Its commit is therefore only the
+    backstop for what a stream writes; see `_commit_before_response`.
+    """
     async with session_scope() as session:
         yield session
 
 
-SessionDep = Annotated[AsyncSession, Depends(get_session)]
+async def _commit_before_response(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> AsyncIterator[AsyncSession]:
+    """Commit what the handler wrote before its response is sent (#45).
+
+    With only `get_session`, every write committed after its 200 was on the
+    wire. A client that read straight back could be served the pre-write state
+    (the intermittent `routing-selection` e2e failure since 2026-08-18), and a
+    commit that failed reached nobody: the caller already held a success for a
+    write that was then lost.
+
+    Function-scoped, so it exits when the handler returns: a commit that fails
+    becomes the request's 500. The session is the same one, so a stream keeps
+    using it afterwards and `get_session` commits what the stream wrote. When
+    the handler raises, nothing is committed here and `session_scope` rolls
+    back, as before.
+    """
+    yield session
+    await session.commit()
+
+
+SessionDep = Annotated[AsyncSession, Depends(_commit_before_response, scope="function")]
 
 
 def get_runtimes(request: Request) -> dict[RuntimeKind, ModelRuntimePort]:
