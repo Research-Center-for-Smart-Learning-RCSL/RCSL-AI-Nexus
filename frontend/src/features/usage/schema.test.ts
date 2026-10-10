@@ -69,6 +69,9 @@ describe('usageRecordSchema', () => {
     compaction_tier: null,
     tokens_before_compaction: null,
     tokens_after_compaction: null,
+    prompt_eval_ms: null,
+    eval_ms: null,
+    load_ms: null,
   };
 
   it('reads a direct-path row as having no source', () => {
@@ -90,6 +93,19 @@ describe('usageRecordSchema', () => {
     });
     expect(data.totals_source).toBe('unavailable');
     expect(data.prompt_tokens_basis).toBe('estimate');
+  });
+
+  it('keeps the runtime timings, and leaves unreported ones null', () => {
+    const data = usageRecordSchema.parse({
+      ...row,
+      totals_source: 'runtime_final',
+      prompt_tokens_basis: 'runtime_final',
+      runtime_completed: true,
+      prompt_eval_ms: 28940,
+      eval_ms: 18,
+    });
+    expect(data.prompt_eval_ms).toBe(28940);
+    expect(data.load_ms).toBeNull();
   });
 
   it('rejects a source the backend never writes', () => {

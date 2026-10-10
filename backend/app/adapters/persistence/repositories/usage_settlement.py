@@ -51,11 +51,11 @@ _INSERT = text(
     "INSERT INTO usage_records (id, attempt_id, actor_id, api_key_id, tenant_id, capability, "
     "requested_capability, model_alias, tokens, prompt_tokens, latency_ms, completed, at, "
     "compaction_tier, tokens_before_compaction, tokens_after_compaction, totals_source, "
-    "prompt_tokens_basis, runtime_completed) "
+    "prompt_tokens_basis, runtime_completed, prompt_eval_ms, eval_ms, load_ms) "
     "VALUES (:id, :attempt_id, :actor_id, :api_key_id, :tenant_id, :capability, "
     ":requested_capability, :model_alias, :tokens, :prompt_tokens, :latency_ms, :completed, "
     ":at, :compaction_tier, :tokens_before, :tokens_after, :totals_source, "
-    ":prompt_tokens_basis, :runtime_completed) "
+    ":prompt_tokens_basis, :runtime_completed, :prompt_eval_ms, :eval_ms, :load_ms) "
     "ON CONFLICT (attempt_id) DO NOTHING"
 )
 
@@ -132,6 +132,9 @@ class PostgresUsageSettlement:
                 "totals_source": usage.totals_source,
                 "prompt_tokens_basis": usage.prompt_tokens_basis,
                 "runtime_completed": usage.runtime_completed,
+                "prompt_eval_ms": usage.prompt_eval_ms,
+                "eval_ms": usage.eval_ms,
+                "load_ms": usage.load_ms,
             }
             # Only the writer that inserted the row reports it; a racing one sees 0.
             result = await session.execute(_INSERT, row)
@@ -166,6 +169,9 @@ class PostgresUsageSettlement:
                     totals_source=row["totals_source"],
                     prompt_tokens_basis=row["prompt_tokens_basis"],
                     runtime_completed=row["runtime_completed"],
+                    prompt_eval_ms=row["prompt_eval_ms"],
+                    eval_ms=row["eval_ms"],
+                    load_ms=row["load_ms"],
                 )
             )
         except Exception:  # noqa: BLE001 - the row is written; a metric must not undo that

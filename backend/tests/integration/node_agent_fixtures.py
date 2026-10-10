@@ -74,6 +74,10 @@ class FakeOllama:
                         "done_reason": "stop",
                         "eval_count": 2,
                         "prompt_eval_count": 11,
+                        # Nanoseconds, as the runtime reports them.
+                        "prompt_eval_duration": 1_234_567_890,
+                        "eval_duration": 45_600_000,
+                        "load_duration": 7_999_999,
                     }
                 )
             return httpx.Response(200, content="".join(json.dumps(x) + "\n" for x in lines))
