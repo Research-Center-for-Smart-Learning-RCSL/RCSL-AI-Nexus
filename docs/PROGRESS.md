@@ -36,6 +36,9 @@ separately at the end, marked as superseded.
 
 ### October 2026
 
+**[2026-10-10](./progress/2026-10-10.md)**
+- 寫入改在回應送出前 commit（#45）；部署時 colima VM 記憶體不足（3 GiB）殺掉了正式服務的 worker
+
 **[2026-10-09](./progress/2026-10-09.md)**
 - Node agent（PR4a-1）落地但未接上：主機鎖、選舉與 fencing、send barrier、只認 runtime 終態證據、有序重設證據才能解除封鎖
 
