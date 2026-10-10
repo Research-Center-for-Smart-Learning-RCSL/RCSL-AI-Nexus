@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,6 +34,17 @@ NODE_ID = "local"
 
 @pytest.fixture
 def admin() -> Iterator[TestClient]:
+    with admin_client() as client:
+        yield client
+
+
+@contextmanager
+def admin_client(wrap: Callable[[Any], Any] = lambda app: app) -> Iterator[TestClient]:
+    """The `admin` fixture's client, with its app optionally wrapped.
+
+    One client per test: the engine is process-global and bound to the event
+    loop of the first client that used it, so a second client cannot share it.
+    """
     if not TEST_DATABASE_URL:
         pytest.skip("TEST_DATABASE_URL is not set")
     reset_schema(TEST_DATABASE_URL)
@@ -63,7 +76,7 @@ def admin() -> Iterator[TestClient]:
 
     from app.infrastructure.main_admin_tailnet import create_app
 
-    with TestClient(create_app()) as client:
+    with TestClient(wrap(create_app())) as client:
         # Claims the administrator account, and seeds the CSRF companion
         # cookie: the tailnet entrance now carries the double-submit guard,
         # because `tailscale serve` attaches the identity header to any request

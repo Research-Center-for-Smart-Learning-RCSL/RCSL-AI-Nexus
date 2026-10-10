@@ -144,6 +144,11 @@ async function selectSoleCandidate(page: Page, alias: string) {
     // never reproduced it, so the question cannot be answered by trying again
     // locally. It has to be answered on the run that fails.
     //
+    // It was, on 2026-10-09 (#45): both sides already said the new alias. The
+    // backend committed a request's session only after its response had been
+    // sent, so the page's refetch could beat the commit. Fixed by committing
+    // before the response; this evidence path stays for whatever comes next.
+    //
     // So the next failure records the fork instead of leaving it open. The poll
     // goes straight to the admin entrance, past both the browser and the Next
     // proxy that `page` speaks to, which is what makes the two answers mean
