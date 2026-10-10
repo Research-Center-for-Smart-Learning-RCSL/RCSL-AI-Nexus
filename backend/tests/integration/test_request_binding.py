@@ -322,6 +322,7 @@ async def test_a_delivered_request_is_billed_once_from_the_runtime(stack: dict[s
     assert row["totals_source"] == "runtime_final"
     assert row["prompt_tokens_basis"] == "runtime_final"
     assert row["completed"] is True and row["runtime_completed"] is True
+    assert (row["prompt_eval_ms"], row["eval_ms"], row["load_ms"]) == (1234, 45, 7)
 
 
 async def test_a_settled_row_is_read_back_and_counted_with_its_sources(
@@ -337,10 +338,12 @@ async def test_a_settled_row_is_read_back_and_counted_with_its_sources(
         [read] = await PostgresUsageRepository.unscoped(session).list_records()
     assert (read.totals_source, read.prompt_tokens_basis) == ("runtime_final", "runtime_final")
     assert read.runtime_completed is True and read.attempt_id is not None
+    assert (read.prompt_eval_ms, read.eval_ms, read.load_ms) == (1234, 45, 7)
 
     [counted] = stack["observed"]
     assert (counted.id, counted.attempt_id, counted.tokens) == (read.id, read.attempt_id, 2)
     assert counted.totals_source == "runtime_final" and counted.completed is True
+    assert counted.prompt_eval_ms == 1234
 
 
 async def test_a_sweep_before_the_delivery_flag_is_reconciled_not_duplicated(
@@ -424,6 +427,7 @@ async def test_a_client_that_left_is_billed_once_the_agent_finishes(
     [row] = await _usage(stack)
     assert row["completed"] is False and row["runtime_completed"] is True
     assert (row["tokens"], row["totals_source"]) == (2, "runtime_final")
+    assert (row["prompt_eval_ms"], row["eval_ms"], row["load_ms"]) == (1234, 45, 7)
 
 
 async def test_an_unknown_attempt_is_billed_only_once_resolved(stack: dict[str, Any]) -> None:
@@ -446,3 +450,4 @@ async def test_an_unknown_attempt_is_billed_only_once_resolved(stack: dict[str, 
     assert (row["tokens"], row["totals_source"]) == (2, "estimated_from_chunks")
     assert row["prompt_tokens_basis"] in {"exact_counter", "estimate"}
     assert row["runtime_completed"] is False and row["completed"] is False
+    assert (row["prompt_eval_ms"], row["eval_ms"], row["load_ms"]) == (None, None, None)

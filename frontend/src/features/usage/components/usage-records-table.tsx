@@ -85,6 +85,28 @@ function SourceCell({ record }: { record: UsageRecord }) {
   );
 }
 
+function seconds(ms: number): string {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+/**
+ * Where the time went, when the runtime said. Prefill is shown because it is
+ * the part that varies: a cached prefix makes it near zero, a lost one makes
+ * it most of the wait. It excludes cached tokens, which the "in" count
+ * includes, so the two are not divided into a rate here.
+ */
+function TimingCell({ record }: { record: UsageRecord }) {
+  if (record.prompt_eval_ms === null) return null;
+  const parts = [`prefill ${seconds(record.prompt_eval_ms)}`];
+  if (record.eval_ms !== null) parts.push(`decode ${seconds(record.eval_ms)}`);
+  if (record.load_ms !== null) parts.push(`load ${seconds(record.load_ms)}`);
+  return (
+    <span className="ml-1" title={parts.join(' · ')}>
+      · prefill {seconds(record.prompt_eval_ms)}
+    </span>
+  );
+}
+
 /**
  * The individual requests behind the charts above.
  *
@@ -186,7 +208,8 @@ export function UsageRecordsTable() {
                     <CompactionCell record={r} />
                   </TableCell>
                   <TableCell className="whitespace-nowrap tabular-nums text-xs text-muted-foreground">
-                    {(r.latency_ms / 1000).toFixed(1)}s
+                    {seconds(r.latency_ms)}
+                    <TimingCell record={r} />
                   </TableCell>
                   <TableCell>
                     {r.completed ? (

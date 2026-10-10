@@ -83,6 +83,11 @@ export const usageRecordSchema = z.object({
   totals_source: z.enum(['runtime_final', 'estimated_from_chunks', 'unavailable']).nullable(),
   prompt_tokens_basis: z.enum(['runtime_final', 'exact_counter', 'estimate']).nullable(),
   runtime_completed: z.boolean().nullable(),
+  /** The runtime's own timings from its `done`; null when it reported none.
+   *  Prefill excludes a cached prefix, which `prompt_tokens` still counts. */
+  prompt_eval_ms: z.number().int().nonnegative().nullable(),
+  eval_ms: z.number().int().nonnegative().nullable(),
+  load_ms: z.number().int().nonnegative().nullable(),
 });
 
 export const usageRecordPageSchema = z.object({
