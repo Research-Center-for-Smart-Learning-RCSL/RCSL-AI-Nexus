@@ -13,6 +13,7 @@ it is not inferred from anything else.
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from typing import cast
 
 from redis.asyncio import Redis
@@ -27,8 +28,27 @@ class RedisCache:
         # as bytes | str | None regardless.
         return cast("str | None", await self._redis.get(key))
 
+    async def get_first(self, keys: Sequence[str]) -> tuple[str, str] | None:
+        if not keys:
+            return None
+        # One result, not MGET's potentially 256 x 256KiB response. The caller
+        # bounds KEYS; Redis scans these in requested newest-first order.
+        result = await self._redis.eval(
+            "for _, key in ipairs(KEYS) do "
+            "local value = redis.call('GET', key); "
+            "if value then return {key, value} end end return nil",
+            len(keys),
+            *keys,
+        )
+        if result is None:
+            return None
+        return str(result[0]), str(result[1])
+
     async def set(self, key: str, value: str, ttl_seconds: int) -> None:
         await self._redis.set(key, value, ex=ttl_seconds)
+
+    async def set_if_absent(self, key: str, value: str, ttl_seconds: int) -> bool:
+        return bool(await self._redis.set(key, value, ex=ttl_seconds, nx=True))
 
     async def delete(self, key: str) -> None:
         await self._redis.delete(key)
@@ -69,8 +89,22 @@ class InMemoryCache:
     async def get(self, key: str) -> str | None:
         return self._live(key)
 
+    async def get_first(self, keys: Sequence[str]) -> tuple[str, str] | None:
+        for key in keys:
+            value = self._live(key)
+            if value is not None:
+                return key, value
+        return None
+
     async def set(self, key: str, value: str, ttl_seconds: int) -> None:
         self._values[key] = (value, time.monotonic() + ttl_seconds)
+
+    async def set_if_absent(self, key: str, value: str, ttl_seconds: int) -> bool:
+        # No await between checking and writing: atomic within this event loop.
+        if self._live(key) is not None:
+            return False
+        self._values[key] = (value, time.monotonic() + ttl_seconds)
+        return True
 
     async def delete(self, key: str) -> None:
         self._values.pop(key, None)

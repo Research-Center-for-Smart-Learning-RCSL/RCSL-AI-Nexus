@@ -91,7 +91,8 @@ async def test_a_validated_profile_is_admitted_past_the_half() -> None:
 
     await _drain(_use_case(counter), MESSAGE, thinking=False)
 
-    assert counter.measured == 1
+    # Compaction uses the validated budget before the final admission check.
+    assert counter.measured == 2
 
 
 async def test_the_output_bound_still_holds_when_widened() -> None:

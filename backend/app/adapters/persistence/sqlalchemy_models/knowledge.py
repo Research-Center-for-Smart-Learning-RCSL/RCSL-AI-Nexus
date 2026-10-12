@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -27,6 +29,8 @@ class KnowledgeCollectionRow(Base):
 
     name: Mapped[str] = mapped_column(String(128))
     description: Mapped[str] = mapped_column(String(1024), default="")
+    epoch: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+    mutations_in_progress: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -65,4 +69,16 @@ class KnowledgeDocumentRow(Base):
     uploaded_by: Mapped[str] = mapped_column(String(36))
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class KnowledgeTenantEpochRow(Base):
+    __tablename__ = "knowledge_tenant_epochs"
+
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), primary_key=True)
+    epoch: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+    mutations_in_progress: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    embedding_identity: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    index_requires_rebuild: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
     )

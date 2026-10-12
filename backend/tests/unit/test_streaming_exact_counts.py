@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 
 import pytest
 
@@ -9,8 +10,9 @@ from app.domain.entities.chat import (
     MessageRole,
     ToolDefinition,
 )
-from app.domain.exceptions import ContextTooLongError
+from app.domain.exceptions import ContextTooLongError, NoAvailableModelError
 from tests.unit.streaming_contract_fixtures import (
+    ACTOR,
     MESSAGES,
     FakeCounter,
     FakeRuntime,
@@ -45,7 +47,12 @@ async def test_the_bound_before_the_slot_refuses_without_asking_any_model() -> N
     use_case, _, limiter = build(FakeRuntime(chunks=1), max_context_tokens=1000, tokens=counter)
 
     with pytest.raises(ContextTooLongError) as caught:
-        await _drain(use_case, [Message(role=MessageRole.USER, content="x" * 80_000)])
+        async for _ in use_case.execute(
+            replace(ACTOR, compaction_enabled=False),
+            "chat",
+            [Message(role=MessageRole.USER, content="x" * 80_000)],
+        ):
+            pass
 
     assert caught.value.basis == "lower_bound"
     assert "at least" in (caught.value.detail or "")
@@ -269,7 +276,7 @@ async def test_a_registration_above_the_declared_context_is_judged_by_the_declar
     assert caught.value.limit == 4096 // 2
 
 
-async def test_an_unreadable_declared_context_leaves_the_registration_standing() -> None:
+async def test_an_unreadable_declared_context_refuses_admission() -> None:
     class Unreadable(FakeCounter):
         async def native_context_length(self, ref: str) -> int | None:
             raise OSError("header unreadable")
@@ -281,4 +288,5 @@ async def test_an_unreadable_declared_context_leaves_the_registration_standing()
         tokens=Unreadable(total=3000),
     )
 
-    await _drain(use_case, [Message(role=MessageRole.USER, content="short")])
+    with pytest.raises(NoAvailableModelError, match="capacity unresolved"):
+        await _drain(use_case, [Message(role=MessageRole.USER, content="short")])

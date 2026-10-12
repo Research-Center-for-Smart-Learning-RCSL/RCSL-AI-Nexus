@@ -12,6 +12,7 @@ from app.domain.entities.chat import (
 )
 from app.domain.entities.model import PullProgress, RuntimeKind, RuntimeResidency
 from app.domain.entities.node import Node
+from app.domain.ports.token_counter_port import TokenCounterPort
 
 
 class ModelRuntimePort(Protocol):
@@ -171,3 +172,26 @@ def runtime_for(
         resolved: ModelRuntimePort | None = resolve(node, kind)
         return resolved
     return runtimes.get(kind)
+
+
+async def declared_context_for(
+    runtime: ModelRuntimePort | None,
+    ref: str,
+    tokens: TokenCounterPort | None,
+) -> int | None:
+    """Resolve capacity on the selected host, never from a different node's GGUF.
+
+    Agent adapters own the metadata read. A direct single-host adapter may use
+    its colocated counter. Failure remains unresolved; callers decide whether
+    to store the row or refuse inference.
+    """
+    read = getattr(runtime, "declared_context_length", None)
+    try:
+        value = (
+            await read(ref)
+            if callable(read)
+            else (await tokens.native_context_length(ref) if tokens is not None else None)
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None

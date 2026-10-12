@@ -70,6 +70,10 @@ class StubRuntime:
         """What actually reached the runtime, which is where grounding shows up:
         the retrieval tests assert on the messages rather than on the answer."""
 
+    async def declared_context_length(self, ref: str) -> int:
+        """The simulated weights have resolved capacity, independent of counting."""
+        return 32768
+
     async def generate(
         self,
         ref: str,

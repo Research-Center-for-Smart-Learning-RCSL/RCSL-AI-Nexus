@@ -73,6 +73,8 @@ def model_to_domain(row: ModelRow) -> Model:
         observed_state=ModelState(row.observed_state) if row.observed_state else None,
         observed_memory_gb=row.observed_memory_gb,
         observed_at=row.observed_at,
+        capacity_validated=bool(row.capacity_validated),
+        manifest_digest=row.manifest_digest,
     )
 
 
@@ -87,6 +89,7 @@ def model_to_row(model: Model) -> ModelRow:
         capabilities=sorted(model.capabilities),
         memory_gb=model.resource_profile.memory_gb,
         context_length=model.resource_profile.context_length,
+        capacity_validated=model.capacity_validated,
         observed_state=model.observed_state.value if model.observed_state else None,
         observed_memory_gb=model.observed_memory_gb,
         observed_at=model.observed_at,

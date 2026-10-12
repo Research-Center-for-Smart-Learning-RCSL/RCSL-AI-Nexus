@@ -35,6 +35,7 @@ from fastapi import FastAPI
 
 from app.adapters.http.parser_client import HttpDocumentParser
 from app.adapters.persistence.document_state import DocumentStateCommitter
+from app.adapters.persistence.knowledge_epochs import PostgresKnowledgeEpochs
 from app.adapters.persistence.model_state import ModelStateCommitter
 from app.adapters.storage.filesystem_documents import FilesystemDocumentStorage
 from app.application.use_cases.download_model import DownloadModel
@@ -123,18 +124,29 @@ class _DetachedEmbedder:
     def __init__(self, runtimes: dict[RuntimeKind, ModelRuntimePort]) -> None:
         self._runtimes = runtimes
 
-    async def resolve(self) -> tuple[Model, ModelRuntimePort]:
+    async def resolve(
+        self, *, required_identity: str | None = None
+    ) -> tuple[Model, ModelRuntimePort]:
         async with session_scope() as session:
-            return await build_embed_texts(self._runtimes, session).resolve()
+            return await build_embed_texts(self._runtimes, session).resolve(
+                required_identity=required_identity
+            )
 
     async def embed_with(
-        self, runtime: ModelRuntimePort, texts: Sequence[str], ref: str | None = None
+        self,
+        runtime: ModelRuntimePort,
+        texts: Sequence[str],
+        ref: str | None = None,
+        *,
+        expected_identity: str | None = None,
     ) -> list[list[float]]:
         if ref is None:
             target, runtime = await self.resolve()
             ref = target.ref
         async with session_scope() as session:
-            return await build_embed_texts(self._runtimes, session).embed_with(runtime, texts, ref)
+            return await build_embed_texts(self._runtimes, session).embed_with(
+                runtime, texts, ref, expected_identity=expected_identity
+            )
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         target, runtime = await self.resolve()
@@ -153,6 +165,7 @@ def _detached_ingest(app: FastAPI, tenant_id: str) -> IngestDocument:
         jobs=app.state.jobs,
         vectors=build_vector_store(settings, tenant_id),
         embedder=_DetachedEmbedder(app.state.runtimes),
+        epochs=PostgresKnowledgeEpochs(get_session_factory(), tenant_id),
     )
 
 

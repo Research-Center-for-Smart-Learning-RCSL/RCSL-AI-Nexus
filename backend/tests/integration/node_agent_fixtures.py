@@ -16,6 +16,7 @@ import asyncpg
 import httpx
 import pytest
 
+from app.adapters.tokenizer.gguf_token_counter.adapter import Measurement
 from app.node_agent import service
 from app.node_agent.api import create_app
 from app.node_agent.relay import OllamaRelay
@@ -142,6 +143,22 @@ async def running_agent(
     app = create_app(settings)
     async with app.router.lifespan_context(app):
         agent = app.state.agent
+
+        # This fake Ollama has known weights/capacity. Missing metadata is
+        # covered by separate fail-closed guard tests, not these stream tests.
+        class Counter:
+            async def measure_capacity(self, ref: str) -> Measurement:
+                return Measurement(
+                    identity="c" * 64 if ref == "nomic-embed-text" else ollama.digest,
+                    counted=None,
+                    declared_context=2048 if ref == "nomic-embed-text" else 32768,
+                )
+
+            async def measure(self, ref, messages, tools) -> Measurement:
+                capacity = await self.measure_capacity(ref)
+                return capacity._replace(counted=11)
+
+        agent.counter = Counter()
         terminated: list[bool] = []
         agent.terminate = lambda: terminated.append(True)
         transport = httpx.ASGITransport(app=app)

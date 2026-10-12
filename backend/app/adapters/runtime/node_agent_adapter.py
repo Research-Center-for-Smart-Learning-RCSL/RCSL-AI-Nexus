@@ -37,6 +37,7 @@ import httpx
 from app.adapters.runtime.ollama_adapter import OllamaAdapter
 from app.adapters.runtime.ollama_adapter.decoding import ChatStreamDecoder
 from app.adapters.runtime.ollama_adapter.lifecycle import residency_from
+from app.application.use_cases.route_chat_request.compaction_tier2 import SUMMARY_OUTPUT_TOKENS
 from app.domain.entities.attempt import AttemptIdentity, current_attempt
 from app.domain.entities.chat import (
     CompletionChunk,
@@ -45,6 +46,7 @@ from app.domain.entities.chat import (
     ToolChoice,
     ToolDefinition,
 )
+from app.domain.entities.embedding import current_embedding_manifest
 from app.domain.entities.model import PullProgress, RuntimeResidency
 from app.domain.exceptions import (
     ModelNotFoundError,
@@ -68,6 +70,8 @@ logger = logging.getLogger(__name__)
 
 
 class NodeAgentRuntime:
+    supports_embedding_manifest_pin = True
+
     def __init__(
         self,
         agent_url: str,
@@ -91,6 +95,17 @@ class NodeAgentRuntime:
             transport=self._transport,
         )
 
+    async def declared_context_length(self, ref: str) -> int | None:
+        """The selected agent's current metadata, including before registration."""
+        self.validate_ref(ref)
+        async with self._client() as client:
+            response = await client.get("/v1/model-capacity", params={"ref": ref})
+            response.raise_for_status()
+            value = response.json().get("declared_context_length")
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+        return None
+
     @staticmethod
     def _identity() -> AttemptIdentity:
         return current_attempt.get() or AttemptIdentity.unbound()
@@ -105,6 +120,48 @@ class NodeAgentRuntime:
         )
 
     # -- generation --------------------------------------------------------
+
+    async def summarise(self, ref: str, messages: Sequence[Message], context_length: int) -> str:
+        """The agent constructs, counts and executes the Tier 2 prompt.
+
+        A fresh operation identity keeps this internal summary separate from
+        the eventual inference attempt bound to the user's request.
+        """
+        self.validate_ref(ref)
+        identity = AttemptIdentity.unbound()
+        body = encode_generation(
+            GenerationRequest(
+                ref=ref,
+                messages=tuple(messages),
+                max_tokens=SUMMARY_OUTPUT_TOKENS,
+                thinking=False,
+                tools=(),
+                tool_choice=None,
+                sampling=None,
+                context_length=context_length,
+            ),
+            self._envelope(identity),
+        )
+        async with self._client() as client:
+            for attempt in (1, 2):
+                try:
+                    response = await client.post("/v1/summary", json=body)
+                except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                    if attempt == 2:
+                        raise NoAvailableModelError(detail="summary agent unreachable") from exc
+                    continue
+                except httpx.HTTPError as exc:
+                    raise StreamInterruptedError(
+                        detail=f"summary {identity.op_id} lost its terminal response"
+                    ) from exc
+                if response.status_code != 200:
+                    self._raise_for_refusal(response, identity.op_id)
+                described = response.json()
+                text = described.get("summary") or (described.get("result") or {}).get("summary")
+                if described.get("state") == "completed" and isinstance(text, str) and text:
+                    return text
+                raise StreamInterruptedError(detail=f"summary {identity.op_id} is incomplete")
+        raise NoAvailableModelError(detail="summary agent gave no response")
 
     async def generate(
         self,
@@ -307,7 +364,10 @@ class NodeAgentRuntime:
         self.validate_ref(ref)
         identity = self._identity()
         body = encode_embedding(
-            EmbeddingRequest(ref=ref, texts=tuple(texts)), self._envelope(identity)
+            EmbeddingRequest(
+                ref=ref, texts=tuple(texts), expected_manifest=current_embedding_manifest.get()
+            ),
+            self._envelope(identity),
         )
         async with self._client() as client:
             response: httpx.Response | None = None

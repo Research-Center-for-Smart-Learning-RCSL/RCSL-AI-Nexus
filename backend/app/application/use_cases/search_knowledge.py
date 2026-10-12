@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import logging
 
-from app.application.use_cases.embed_texts import TextEmbedderPort
+from app.application.use_cases.embed_texts import TextEmbedderPort, embedding_identity
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.knowledge import RetrievedPassage
 from app.domain.exceptions import NoAvailableModelError, VectorStoreError
+from app.domain.ports.grounding_ports import KnowledgeEpochPort
 from app.domain.ports.knowledge_ports import VectorStorePort
 from app.domain.ports.security_ports import AuthorizationPort
 
@@ -43,10 +44,16 @@ class SearchKnowledge:
         vectors: VectorStorePort,
         embedder: TextEmbedderPort,
         authz: AuthorizationPort,
+        epochs: KnowledgeEpochPort | None = None,
     ) -> None:
         self._vectors = vectors
         self._embedder = embedder
         self._authz = authz
+        self._epochs = epochs
+
+    def authorize_grounding(self, actor: Actor) -> None:
+        # Cache replay carries the same authorization as fresh retrieval.
+        self._authz.require(actor, Scope.CHAT_USE)
 
     async def execute(
         self,
@@ -56,6 +63,7 @@ class SearchKnowledge:
         scope: Scope = Scope.KNOWLEDGE_READ,
         collection_id: str | None = None,
         top_k: int = DEFAULT_TOP_K,
+        expected_identity: str | None = None,
     ) -> list[RetrievedPassage]:
         self._authz.require(actor, scope)
 
@@ -63,7 +71,25 @@ class SearchKnowledge:
         if not trimmed:
             return []
 
-        vectors = await self._embedder.embed([trimmed])
+        if expected_identity is None and self._epochs is not None:
+            epoch = await self._epochs.read(collection_id)
+            if epoch is None or not epoch.clean or epoch.index_requires_rebuild:
+                return []
+            expected_identity = epoch.embedding_identity
+            if expected_identity is None:
+                raise NoAvailableModelError(
+                    detail="knowledge index embedding identity is unresolved"
+                )
+
+        if expected_identity is None:
+            vectors = await self._embedder.embed([trimmed])
+        else:
+            target, runtime = await self._embedder.resolve(required_identity=expected_identity)
+            if embedding_identity(target) != expected_identity:
+                raise NoAvailableModelError(detail="embedding model differs from the index space")
+            vectors = await self._embedder.embed_with(
+                runtime, [trimmed], target.ref, expected_identity=expected_identity
+            )
         if not vectors:
             return []
 
@@ -81,6 +107,7 @@ class SearchKnowledge:
         scope: Scope = Scope.KNOWLEDGE_READ,
         collection_id: str | None = None,
         top_k: int = DEFAULT_TOP_K,
+        expected_identity: str | None = None,
     ) -> list[RetrievedPassage]:
         """Retrieval that degrades instead of failing.
 
@@ -92,7 +119,12 @@ class SearchKnowledge:
         """
         try:
             return await self.execute(
-                actor, query, scope=scope, collection_id=collection_id, top_k=top_k
+                actor,
+                query,
+                scope=scope,
+                collection_id=collection_id,
+                top_k=top_k,
+                expected_identity=expected_identity,
             )
         except (VectorStoreError, NoAvailableModelError) as exc:
             logger.info("retrieval_unavailable actor=%s reason=%s", actor.display, exc.detail)

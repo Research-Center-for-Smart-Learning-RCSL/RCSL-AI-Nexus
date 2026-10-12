@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.http.parser_client import HttpDocumentParser
 from app.adapters.persistence.document_state import DocumentStateCommitter
+from app.adapters.persistence.knowledge_epochs import PostgresKnowledgeEpochs
 from app.adapters.persistence.repositories import (
     PostgresKnowledgeRepository,
     PostgresModelRepository,
@@ -53,6 +54,7 @@ def build_manage_knowledge(
         vectors=build_vector_store(settings, tenant),
         authz=request.app.state.authz,
         audit=request.app.state.audit,
+        epochs=PostgresKnowledgeEpochs(get_session_factory(), tenant, mutation_session=session),
     )
 
 
@@ -108,6 +110,7 @@ def build_ingest_document(
         # it claims was inserted in that same uncommitted transaction. See
         # IngestDocument.claim.
         knowledge=PostgresKnowledgeRepository(session, tenant),
+        epochs=PostgresKnowledgeEpochs(get_session_factory(), tenant),
     )
 
 
@@ -135,7 +138,11 @@ def build_ground_chat_factory(
                 vectors=build_vector_store(settings, tenant_id),
                 embedder=build_embed_texts(request.app.state.runtimes, session),
                 authz=request.app.state.authz,
-            )
+                epochs=PostgresKnowledgeEpochs(get_session_factory(), tenant_id),
+            ),
+            records=request.app.state.cache,
+            epochs=PostgresKnowledgeEpochs(get_session_factory(), tenant_id),
+            server_key=settings.api_key_pepper.encode(),
         )
 
     return make
@@ -189,4 +196,5 @@ def build_search_knowledge(
         vectors=build_vector_store(settings, tenant),
         embedder=build_embed_texts(request.app.state.runtimes, session),
         authz=request.app.state.authz,
+        epochs=PostgresKnowledgeEpochs(get_session_factory(), tenant),
     )

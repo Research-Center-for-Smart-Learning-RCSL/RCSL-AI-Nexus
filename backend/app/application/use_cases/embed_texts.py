@@ -16,10 +16,12 @@ entry point.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Sequence
 from typing import Protocol
 
+from app.domain.entities.embedding import current_embedding_manifest
 from app.domain.entities.model import Model, RuntimeKind
 from app.domain.exceptions import NoAvailableModelError
 from app.domain.ports.model_runtime_port import ModelRuntimePort, runtime_for
@@ -43,6 +45,19 @@ set by how large a document someone uploaded. Batching bounds both.
 """
 
 
+def embedding_identity(model: Model) -> str | None:
+    """Exact weights and vector-space implementation, never dimension alone.
+
+    A mutable tag without its manifest cannot prove an index-compatible space.
+    Conservatively require the same runtime and reference as well as digest.
+    """
+    if not model.manifest_digest:
+        return None
+    return json.dumps(
+        [model.runtime.value, model.ref, model.manifest_digest], separators=(",", ":")
+    )
+
+
 class TextEmbedderPort(Protocol):
     """What a caller needs from the embedder.
 
@@ -58,10 +73,17 @@ class TextEmbedderPort(Protocol):
     the start of indexing rather than once per batch.
     """
 
-    async def resolve(self) -> tuple[Model, ModelRuntimePort]: ...
+    async def resolve(
+        self, *, required_identity: str | None = None
+    ) -> tuple[Model, ModelRuntimePort]: ...
 
     async def embed_with(
-        self, runtime: ModelRuntimePort, texts: Sequence[str], ref: str | None = None
+        self,
+        runtime: ModelRuntimePort,
+        texts: Sequence[str],
+        ref: str | None = None,
+        *,
+        expected_identity: str | None = None,
     ) -> list[list[float]]: ...
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
@@ -82,7 +104,9 @@ class EmbedTexts:
         self._runtimes = runtimes
         self._routing = routing
 
-    async def resolve(self) -> tuple[Model, ModelRuntimePort]:
+    async def resolve(
+        self, *, required_identity: str | None = None
+    ) -> tuple[Model, ModelRuntimePort]:
         """Which model answers `embedding`, and the adapter that can drive it.
 
         Exposed rather than kept private because the caller needs the model's
@@ -98,6 +122,10 @@ class EmbedTexts:
             )
 
         models = {m.alias: m for m in await self._models.list_all()}
+        if required_identity is not None:
+            # Fail over only to the same index space, even when an unrelated
+            # model happens to produce vectors with the same dimension.
+            models = {a: m for a, m in models.items() if embedding_identity(m) == required_identity}
         nodes = {n.id: n for n in await self._nodes.list_all()}
         target = self._routing.select(policy, models, nodes)
 
@@ -117,11 +145,16 @@ class EmbedTexts:
         """
         if not texts:
             return []
-        _, runtime = await self.resolve()
-        return await self.embed_with(runtime, texts)
+        target, runtime = await self.resolve()
+        return await self.embed_with(runtime, texts, target.ref)
 
     async def embed_with(
-        self, runtime: ModelRuntimePort, texts: Sequence[str], ref: str | None = None
+        self,
+        runtime: ModelRuntimePort,
+        texts: Sequence[str],
+        ref: str | None = None,
+        *,
+        expected_identity: str | None = None,
     ) -> list[list[float]]:
         """Batched embedding against an already-resolved runtime, so a caller
         that ingests a whole document resolves the policy once rather than once
@@ -130,10 +163,39 @@ class EmbedTexts:
             target, runtime = await self.resolve()
             ref = target.ref
 
+        required_manifest = None
+        if expected_identity is not None:
+            try:
+                fields = json.loads(expected_identity)
+                if (
+                    not isinstance(fields, list)
+                    or len(fields) != 3
+                    or fields[1] != ref
+                    or not isinstance(fields[2], str)
+                    or not fields[2]
+                ):
+                    raise ValueError("invalid embedding identity")
+                required_manifest = fields[2]
+            except (ValueError, TypeError, IndexError) as exc:
+                raise NoAvailableModelError(
+                    detail="embedding identity cannot be validated"
+                ) from exc
+            if not getattr(runtime, "supports_embedding_manifest_pin", False):
+                raise NoAvailableModelError(
+                    detail="embedding sender cannot validate pinned weights"
+                )
+
         vectors: list[list[float]] = []
         for start in range(0, len(texts), MAX_BATCH):
             batch = texts[start : start + MAX_BATCH]
-            produced = await runtime.embed(ref, batch)
+            # Scoped to this async task and reset even on failure/cancellation.
+            # The agent receives the expected manifest on every batch, so a
+            # mutable tag repinned after resolve cannot silently switch spaces.
+            token = current_embedding_manifest.set(required_manifest)
+            try:
+                produced = await runtime.embed(ref, batch)
+            finally:
+                current_embedding_manifest.reset(token)
             if len(produced) != len(batch):
                 # A silent mismatch would pair passages with the wrong vectors,
                 # which is a knowledge base that retrieves confidently and

@@ -68,6 +68,13 @@ class Model:
 
     observed_at: datetime | None = None
 
+    capacity_validated: bool = False
+    """The declared capacity has been read. This is separate from counting
+    profile validation and never authorizes a widened admission window."""
+
+    manifest_digest: str | None = None
+    """The node agent's pinned weights identity, not a client-editable field."""
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeResidency:

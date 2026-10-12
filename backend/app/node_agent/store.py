@@ -47,6 +47,10 @@ class NotOwner(Exception):  # noqa: N818 - a state, not a failure
     """This process no longer owns the node; its write was not applied."""
 
 
+class SummaryBusy(Exception):  # noqa: N818 - an admission state
+    """A summary is already outstanding on this node."""
+
+
 @dataclass(frozen=True, slots=True)
 class Ownership:
     node_id: str
@@ -209,7 +213,15 @@ class OperationStore:
         A loser of the race only observes the existing attempt; reading
         `accepted` grants nothing (design R3).
         """
-        async with self._owned(dispatch=False, action="insert", op_id=op_id) as conn:
+        async with self._owned(dispatch=kind == "summary", action="insert", op_id=op_id) as conn:
+            if kind == "summary" and await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM node_operations "
+                "WHERE node_id = $1 AND kind = 'summary' "
+                "AND state IN ('accepted', 'running', 'outcome_unknown') AND op_id <> $2)",
+                self.node_id,
+                op_id,
+            ):
+                raise SummaryBusy("summary already outstanding")
             row = await conn.fetchrow(
                 "INSERT INTO node_operations (node_id, op_id, kind, state, origin_generation, "
                 "origin_boot_id, owner_generation, request_id, payload_hash, store_output) "

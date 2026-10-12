@@ -2246,6 +2246,8 @@ export interface components {
             alias: string;
             /** Capabilities */
             capabilities: string[];
+            /** Capacity Validated */
+            capacity_validated: boolean;
             /** Id */
             id: string;
             /** Node Id */

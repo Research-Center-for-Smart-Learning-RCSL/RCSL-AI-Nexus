@@ -9,8 +9,9 @@ from app.domain.entities.chat import (
     MessageRole,
 )
 from app.domain.entities.model import RuntimeKind
-from app.domain.exceptions import ContextTooLongError
+from app.domain.exceptions import ContextTooLongError, NoAvailableModelError
 from tests.unit.streaming_contract_fixtures import (
+    FakeCounter,
     FakeRuntime,
     _cjk,
     _run,
@@ -109,7 +110,7 @@ async def test_a_prompt_the_target_would_truncate_is_refused_before_generating()
     with pytest.raises(ContextTooLongError) as caught:
         await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 3000)])
 
-    assert "4096" in (caught.value.detail or "")
+    assert caught.value.limit == min(8192 // 2, 8192 - 1 - 1000) // 3
 
 
 async def test_that_refusal_does_not_name_the_model_to_the_caller() -> None:
@@ -142,17 +143,20 @@ async def test_only_ollama_is_held_to_the_half_context_rule() -> None:
     requests it would have answered whole."""
     runtime = FakeRuntime(chunks=1)
     use_case, _, _ = build(
-        runtime, max_context_tokens=32768, context_length=8192, runtime_kind=RuntimeKind.MLX
+        runtime,
+        max_context_tokens=32768,
+        context_length=8192,
+        runtime_kind=RuntimeKind.MLX,
+        tokens=FakeCounter(total=5000),
     )
 
     await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 3000)])
 
 
-async def test_a_model_registered_before_profiles_were_required_is_not_judged() -> None:
-    """The column defaults to 0, which is a row written before the profile was
-    required rather than a model that can read nothing. `_set_num_ctx` declines
-    to send that value for the same reason."""
+async def test_a_model_without_a_registered_capacity_refuses_admission() -> None:
+    """An unresolved historical row must be resolved before serving."""
     runtime = FakeRuntime(chunks=1)
     use_case, _, _ = build(runtime, max_context_tokens=32768, context_length=0)
 
-    await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 3000)])
+    with pytest.raises(NoAvailableModelError, match="capacity unresolved"):
+        await _run(use_case, messages=[Message(role=MessageRole.USER, content="word " * 3000)])
