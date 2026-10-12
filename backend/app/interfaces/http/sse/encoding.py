@@ -34,12 +34,37 @@ Trailer = Callable[[], Awaitable[dict[str, object] | None]]
 
 
 CITATION_HEADER = "X-Knowledge-Sources"
+CITATION_TRUNCATED_HEADER = "X-Knowledge-Sources-Truncated"
+# Leave room for the other response headers in a 4 KiB proxy header buffer.
+MAX_CITATION_HEADER_BYTES = 2048
 
 
 def citation_header(passages: list[tuple[str, int]]) -> dict[str, str]:
-    if not passages:
-        return {}
-    return {CITATION_HEADER: ",".join(f"{doc}:{index}" for doc, index in passages)}
+    """Bound HTTP disclosure without changing the complete grounding chain.
+
+    Prefer the latest occurrence of each citation when history fills the
+    budget, while preserving input order among the retained entries.
+    """
+    seen: set[tuple[str, int]] = set()
+    entries: list[str] = []
+    size = 0
+    truncated = False
+    for citation in reversed(passages):
+        if citation in seen:
+            continue
+        seen.add(citation)
+        doc, index = citation
+        entry = f"{doc}:{index}"
+        added = len(entry.encode("utf-8")) + bool(entries)
+        if size + added > MAX_CITATION_HEADER_BYTES:
+            truncated = True
+            continue
+        entries.append(entry)
+        size += added
+    headers = {CITATION_HEADER: ",".join(reversed(entries))} if entries else {}
+    if truncated:
+        headers[CITATION_TRUNCATED_HEADER] = "true"
+    return headers
 
 
 CAPABILITY_DEFAULTED_HEADER = "X-Capability-Defaulted"

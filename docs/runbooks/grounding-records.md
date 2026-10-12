@@ -10,6 +10,14 @@ additional passages are omitted. Prefix reuse is therefore bounded by record
 retention, unchanged history, selection settings, embedding identity and a
 clean current knowledge epoch.
 
+HTTP citation disclosure is separate from the stored chain. All chat routes
+deduplicate `X-Knowledge-Sources` by document ID and passage index and cap its
+value at 2048 bytes, favoring the most recent citations. Retained entries keep
+their original order. `X-Knowledge-Sources-Truncated: true` indicates that
+distinct citations were omitted from the header. This leaves room for other
+response headers in the documented proxy's 4 KiB header buffer. The complete
+stored context and citations still replay into the model's prompt.
+
 Cold lookup scans at most the 256 most recent user anchors in one Redis
 round trip and returns only the first stored chain (at most 256 KiB), rather
 than fetching every chain. If no chain is retained inside that bound for a
