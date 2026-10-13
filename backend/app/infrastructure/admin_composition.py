@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI
 
 from app.adapters.metrics.prometheus import build_metrics
+from app.infrastructure.availability import run_availability
 from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.db import dispose_engine, init_engine
 from app.infrastructure.di import (
@@ -47,6 +48,7 @@ from app.interfaces.http.routers import (
     admin_chat,
     api_keys,
     assistant,
+    capability_availability,
     client_tools,
     dashboard,
     evaluations,
@@ -139,6 +141,9 @@ async def admin_lifespan(app: FastAPI, *, run_node_heartbeat: bool = True) -> As
     # so a lifespan that opens and closes quickly (every test) cancels it before
     # it touches the database. Disabled by a non-positive interval.
     heartbeat: asyncio.Task[None] | None = None
+    availability: asyncio.Task[None] | None = None
+    if run_node_heartbeat:
+        availability = asyncio.create_task(run_availability(app))
     if run_node_heartbeat and settings.node_heartbeat_interval_seconds > 0:
         heartbeat = asyncio.create_task(
             run_heartbeat(app, settings.node_heartbeat_interval_seconds)
@@ -169,7 +174,7 @@ async def admin_lifespan(app: FastAPI, *, run_node_heartbeat: bool = True) -> As
     try:
         yield
     finally:
-        for task in (heartbeat, retention, snapshot, usage_sweeper):
+        for task in (heartbeat, availability, retention, snapshot, usage_sweeper):
             if task is None:
                 continue
             task.cancel()
@@ -222,6 +227,7 @@ def mount_admin_routers(app: FastAPI) -> None:
         # rather than from a branch on GitHub.
         client_tools.router,
         routing_policies.router,
+        capability_availability.router,
         dashboard.router,
         usage.router,
         logs.router,

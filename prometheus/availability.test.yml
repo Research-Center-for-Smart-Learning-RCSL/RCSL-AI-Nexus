@@ -1,0 +1,67 @@
+rule_files:
+  - availability.rules.yml
+evaluation_interval: 15s
+tests:
+  - name: quiet outage becomes firing and clears after recovery
+    interval: 15s
+    input_series:
+      - series: 'nexus_capability_available{job="admin-tailnet",capability="chat"}'
+        values: '0x24 1x4'
+      - series: 'nexus_availability_observed_at_seconds{job="admin-tailnet"}'
+        values: '0+15x30'
+      - series: 'nexus_node_operation_unresolved{job="admin-tailnet",node="n1"}'
+        values: '1x24 0x4'
+      - series: 'nexus_inference_silent_outage{job="admin-tailnet"}'
+        values: '1x24 0x4'
+    alert_rule_test:
+      - eval_time: 4m45s
+        alertname: NexusCapabilityUnavailable
+        exp_alerts: []
+      - eval_time: 5m15s
+        alertname: NexusCapabilityUnavailable
+        exp_alerts:
+          - exp_labels: {job: admin-tailnet, capability: chat, severity: critical}
+            exp_annotations: {summary: An enabled capability has no eligible model.}
+      - eval_time: 0m
+        alertname: NexusNodeOperationUnresolved
+        exp_alerts:
+          - exp_labels: {job: admin-tailnet, node: n1, severity: critical}
+            exp_annotations: {summary: A node is blocked until terminal evidence or verified reset.}
+      - eval_time: 0m
+        alertname: NexusSilentInferenceOutage
+        exp_alerts:
+          - exp_labels: {job: admin-tailnet, severity: critical}
+            exp_annotations: {summary: Gateway refusals but no completed inference in the last 24 hours.}
+      - eval_time: 7m
+        alertname: NexusCapabilityUnavailable
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: NexusNodeOperationUnresolved
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: NexusSilentInferenceOutage
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: NexusAvailabilityObserverStale
+        exp_alerts: []
+  - name: stale observer fires and then recovers
+    interval: 15s
+    input_series:
+      - series: 'nexus_availability_observed_at_seconds{job="admin-tailnet"}'
+        values: '0x20 315+15x10'
+    alert_rule_test:
+      - eval_time: 3m45s
+        alertname: NexusAvailabilityObserverStale
+        exp_alerts:
+          - exp_labels: {job: admin-tailnet, severity: critical}
+            exp_annotations: {summary: Availability is unknown because its observer is absent or stale.}
+      - eval_time: 6m
+        alertname: NexusAvailabilityObserverStale
+        exp_alerts: []
+  - name: absent observer cannot report healthy
+    alert_rule_test:
+      - eval_time: 2m15s
+        alertname: NexusAvailabilityObserverStale
+        exp_alerts:
+          - exp_labels: {job: admin-tailnet, severity: critical}
+            exp_annotations: {summary: Availability is unknown because its observer is absent or stale.}

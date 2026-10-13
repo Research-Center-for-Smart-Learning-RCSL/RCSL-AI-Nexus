@@ -58,6 +58,8 @@ function backendEnv(repoRoot, { databaseUrl, ollamaUrl, ollamaModelsPath }) {
     COOKIE_SECURE: 'false',
     OLLAMA_BASE_URL: ollamaUrl,
     OLLAMA_MODELS_PATH: ollamaModelsPath,
+    NODE_ID: 'node-e2e',
+    NODE_HEARTBEAT_INTERVAL_SECONDS: '1',
     MAX_CONTEXT_LENGTH,
     // uv resolves the project from the working directory, which is `backend`
     // for every child here; PYTHONPATH is what lets the seeder import `app`
@@ -211,6 +213,25 @@ export async function startFullStack({ repoRoot, databaseUrl }) {
       label: 'The gateway',
       timeoutMs: Number(process.env.E2E_BACKEND_TIMEOUT_MS ?? 120_000),
     });
+
+    // Health alone cannot prove the first residency sweep has reached the
+    // seeded models. Wait for the same dry-run that the operator sees.
+    const residencyDeadline = Date.now() + 30_000;
+    let resident = false;
+    while (Date.now() < residencyDeadline) {
+      const response = await fetch(`${adminUrl}/admin/capabilities/availability`, {
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (response.ok) {
+        const status = await response.json();
+        if (status.capabilities.some((c) => c.capability === 'chat' && c.available)) {
+          resident = true;
+          break;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    if (!resident) throw new Error('The seeded chat models did not become observably resident.');
 
     return {
       adminUrl,

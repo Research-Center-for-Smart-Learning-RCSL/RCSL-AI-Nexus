@@ -62,6 +62,28 @@ class Metrics:
 
     def __init__(self, registry: CollectorRegistry) -> None:
         self.registry = registry
+        self.capability_available = Gauge(
+            "nexus_capability_available",
+            "Enabled capability has an eligible route.",
+            ["capability"],
+            registry=registry,
+        )
+        self.node_operation_unresolved = Gauge(
+            "nexus_node_operation_unresolved",
+            "Uncertain operations still blocking a node.",
+            ["node"],
+            registry=registry,
+        )
+        self.silent_outage = Gauge(
+            "nexus_inference_silent_outage",
+            "No completed usage and gateway refusals in 24 hours.",
+            registry=registry,
+        )
+        self.availability_observed_at = Gauge(
+            "nexus_availability_observed_at_seconds",
+            "Last successful availability DB snapshot.",
+            registry=registry,
+        )
 
         self.http_requests = Counter(
             "nexus_http_requests_total",

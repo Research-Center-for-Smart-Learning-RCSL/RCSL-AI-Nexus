@@ -1,0 +1,32 @@
+# Delivery uses the existing health-check mail path, which reads firing ALERTS.
+# Scope to the one periodic owner; the public admin has no observation loop.
+groups:
+  - name: nexus-availability
+    interval: 15s
+    rules:
+      - alert: NexusCapabilityUnavailable
+        expr: nexus_capability_available{job="admin-tailnet"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: An enabled capability has no eligible model.
+      - alert: NexusNodeOperationUnresolved
+        expr: nexus_node_operation_unresolved{job="admin-tailnet"} > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A node is blocked until terminal evidence or verified reset.
+      - alert: NexusSilentInferenceOutage
+        expr: nexus_inference_silent_outage{job="admin-tailnet"} == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: Gateway refusals but no completed inference in the last 24 hours.
+      - alert: NexusAvailabilityObserverStale
+        expr: (time() - nexus_availability_observed_at_seconds{job="admin-tailnet"} > 90) or absent(nexus_availability_observed_at_seconds{job="admin-tailnet"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Availability is unknown because its observer is absent or stale.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 
@@ -19,6 +20,8 @@ def make_model(alias: str, state: ModelState = ModelState.LOADED, node_id: str =
         runtime=RuntimeKind.OLLAMA,
         node_id=node_id,
         state=state,
+        observed_state=state,
+        observed_at=datetime.now(UTC),
         capabilities=frozenset({"chat"}),
         resource_profile=ResourceProfile(memory_gb=8.0, context_length=8192),
     )
@@ -189,8 +192,8 @@ def test_observed_state_can_also_qualify_a_model_intent_would_refuse(
     assert service.select(policy, {"primary": warmed}, {"n1": make_node()}).alias == "primary"
 
 
-def test_unobserved_model_routes_on_intent(service: RoutingService) -> None:
-    """None means "cannot be observed" (MLX, or no sweep yet), not "absent".
+def test_unobservable_mlx_model_routes_on_intent(service: RoutingService) -> None:
+    """MLX has no residency endpoint and retains its intent fallback.
 
     Falling back to intent keeps a runtime with no residency endpoint routing
     exactly as it did before observations existed.
@@ -205,6 +208,10 @@ def test_unobserved_model_routes_on_intent(service: RoutingService) -> None:
             ),
         ),
     )
-    models = {"primary": make_model("primary", state=ModelState.LOADED)}
+    models = {
+        "primary": replace(
+            make_model("primary"), runtime=RuntimeKind.MLX, observed_state=None, observed_at=None
+        )
+    }
 
     assert service.select(policy, models, {"n1": make_node()}).alias == "primary"

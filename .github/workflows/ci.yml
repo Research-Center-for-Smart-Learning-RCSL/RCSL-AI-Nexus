@@ -35,6 +35,15 @@ permissions:
   contents: read
 
 jobs:
+  availability-alerts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate and stage Prometheus availability alerts
+        run: |
+          docker run --rm -v "$PWD/prometheus:/rules:ro" -w /rules \
+            --entrypoint promtool prom/prometheus:v3.1.0 test rules availability.test.yml
+
   backend:
     runs-on: ubuntu-latest
 
