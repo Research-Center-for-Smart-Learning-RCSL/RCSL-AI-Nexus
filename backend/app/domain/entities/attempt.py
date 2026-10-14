@@ -63,3 +63,5 @@ class Binding:
     node_id: str
     op_id: str
     billing: dict[str, Any]
+    """The current attempt's immutable billing snapshot, with the original
+    request snapshot as a fallback for legacy attempts."""

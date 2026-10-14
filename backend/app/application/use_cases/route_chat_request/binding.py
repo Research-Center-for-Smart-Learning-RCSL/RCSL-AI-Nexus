@@ -150,7 +150,9 @@ class RequestBinder:
             existing = await self._existing(bound, may_cancel=False)
             if existing is not None:
                 return existing
-            bound = await self._bindings.rebind(bound, node_id=node_id, op_id=op_id)
+            bound = await self._bindings.rebind(
+                bound, node_id=node_id, op_id=op_id, billing=billing
+            )
             if bound.op_id != op_id:
                 # Lost the rebind as well; converge on the winner the same way.
                 existing = await self._existing(bound, may_cancel=False)
@@ -215,7 +217,8 @@ def billing_snapshot(
     compaction: dict[str, int | None],
 ) -> dict[str, Any]:
     """Everything a usage row needs that the agent does not know (design S6),
-    fixed once, when the request is bound."""
+    fixed once, when this attempt is bound. An unsent retry may select another
+    target or run later, so it supplies a fresh snapshot (review on #32)."""
     return {
         "actor_id": actor.id,
         "api_key_id": actor.api_key_id,

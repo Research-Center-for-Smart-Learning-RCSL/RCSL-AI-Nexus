@@ -234,8 +234,14 @@ async def test_gateway_account_binds_requests_but_cannot_rewrite_them(database_u
             node_id="n1",
             op_id=str(uuid.uuid4()),
         )
-        moved = await bindings.rebind(bound, node_id="n2", op_id=str(uuid.uuid4()))
+        moved = await bindings.rebind(
+            bound,
+            node_id="n2",
+            op_id=str(uuid.uuid4()),
+            billing={"actor_id": "a", "model_alias": "m2"},
+        )
         assert moved.seq == 2 and moved.node_id == "n2"
+        assert moved.billing["model_alias"] == "m2"
         await _allowed(
             gateway,
             "UPDATE request_attempts SET client_delivery_complete = true WHERE op_id = :op",
@@ -245,6 +251,7 @@ async def test_gateway_account_binds_requests_but_cannot_rewrite_them(database_u
         await _denied(gateway, "UPDATE request_bindings SET payload_hash = 'v1:other'")
         await _denied(gateway, "UPDATE request_bindings SET billing = '{}'::jsonb")
         await _denied(gateway, "UPDATE request_attempts SET node_id = 'elsewhere'")
+        await _denied(gateway, "UPDATE request_attempts SET billing = '{}'::jsonb")
         await _allowed(gateway, "UPDATE usage_records SET completed = true WHERE false")
         await _denied(gateway, "UPDATE usage_records SET tokens = 0")
         await _denied(gateway, "UPDATE usage_records SET actor_id = 'someone'")
