@@ -30,6 +30,12 @@ will stop routing Ollama once the evidence expires; keep that interval below
 the freshness limit. A successful operator load becomes eligible after read-back.
 MLX has no residency endpoint and retains the existing lifecycle-intent fallback.
 
+With node agents enabled, each node/runtime is observed through its own agent,
+and its result is written before the next node is probed. Direct adapters still
+observe only their configured local host. The request reader uses the database
+wall clock after reading observations, so authentication's earlier transaction
+start cannot make a newly committed heartbeat appear to come from the future.
+
 This closes the observation fallback part of #49. It does not add desired
 residency, automatic reload or runtime reset. After a real restart an operator
 still restores the models in the documented largest-first order until the rest

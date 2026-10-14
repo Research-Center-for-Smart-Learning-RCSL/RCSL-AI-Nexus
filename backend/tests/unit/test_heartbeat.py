@@ -7,6 +7,13 @@ identical writes every interval.
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import UTC, datetime
+
+import httpx
+import pytest
+
+from app.application.use_cases.capability_availability import assess_availability
 from app.domain.entities.model import (
     Model,
     ModelState,
@@ -15,7 +22,11 @@ from app.domain.entities.model import (
     RuntimeResidency,
 )
 from app.domain.entities.node import Node, NodeStatus
+from app.domain.entities.routing_policy import RoutingCandidate, RoutingPolicy
+from app.domain.services.routing_service import RoutingService
 from app.infrastructure.heartbeat import observe_models, sweep
+from app.infrastructure.runtime_directory import RuntimeDirectory
+from app.shared.clock import FixedClock
 from tests.unit.fakes import FakeNodeHealth, FakeRuntime
 
 
@@ -226,6 +237,103 @@ async def test_another_node_s_models_are_left_unobserved_not_reported_absent() -
     assert changed == 1, "only the local model's observation moved"
     assert writes == [("id-here", ModelState.LOADED, 4.0)]
     assert all(w[0] != "id-there" for w in writes), "a remote model must not be reported absent"
+
+
+@pytest.mark.parametrize("remote_status", [200, 503, None])
+async def test_agent_backed_nodes_are_observed_independently_before_routing(remote_status):
+    now = datetime(2026, 10, 14, tzinfo=UTC)
+    nodes = {
+        name: replace(_node(name, NodeStatus.ONLINE), agent_url=f"http://agent-{name}")
+        for name in ("a", "b")
+    }
+    if remote_status is None:
+        nodes["b"] = replace(nodes["b"], agent_url=None)
+    # Identical runtime refs on two nodes must not share one residency answer.
+    models = [
+        replace(
+            _model("shared", node_id=name),
+            id=f"m-{name}",
+            alias=name,
+            observed_state=ModelState.LOADED,
+            observed_at=now,
+        )
+        for name in nodes
+    ]
+    calls = []
+
+    def handle(request):
+        assert request.url.path == "/v1/residency"
+        calls.append(request.url.host)
+        assert request.headers["authorization"] == "Bearer " + "t" * 40
+        if request.url.host == "agent-b":
+            # The local answer must already be stamped before waiting on a
+            # different agent, whose request might consume its full timeout.
+            assert written == ["m-a"]
+            assert models[0].observed_state is ModelState.DOWNLOADED
+        if request.url.host == "agent-b" and remote_status != 200:
+            return httpx.Response(remote_status)
+        # A is on disk but cold; only B is resident.
+        resident = (
+            [{"name": "shared", "size": 8 * 1024**3}] if request.url.host == "agent-b" else []
+        )
+        return httpx.Response(200, json={"resident": resident, "on_disk": [{"name": "shared"}]})
+
+    directory = RuntimeDirectory({}, agent_token="t" * 40, transport=httpx.MockTransport(handle))
+    written = []
+
+    async def source():
+        return models
+
+    async def write(model_id, state, memory):
+        written.append(model_id)
+        models[:] = [
+            replace(
+                m,
+                observed_state=state,
+                observed_memory_gb=memory,
+                observed_at=now if state else None,
+            )
+            if m.id == model_id
+            else m
+            for m in models
+        ]
+
+    await observe_models(directory, source, write, "a", nodes_by_id=nodes)
+    assert calls == (["agent-a", "agent-b"] if remote_status is not None else ["agent-a"])
+    assert written == ["m-a", "m-b"]
+    assert models[0].observed_state is ModelState.DOWNLOADED
+    assert models[1].observed_state is (ModelState.LOADED if remote_status == 200 else None)
+    policy = RoutingPolicy("chat", (RoutingCandidate("a", 100), RoutingCandidate("b", 1)))
+    status = next(
+        c
+        for c in assess_availability([policy], models, list(nodes.values()), {}, frozenset(), now)
+        if c.capability == "chat"
+    )
+    assert status.available is (remote_status == 200)
+    if remote_status == 200:
+        assert (
+            RoutingService(FixedClock(now))
+            .select(policy, {m.alias: m for m in models}, nodes)
+            .alias
+            == "b"
+        )
+
+
+async def test_agent_residency_is_queried_once_per_node_runtime():
+    node = replace(_node("a", NodeStatus.ONLINE), agent_url="http://agent-a")
+    calls = []
+
+    def handle(request):
+        calls.append(request.url.host)
+        return httpx.Response(200, json={"resident": [], "on_disk": []})
+
+    directory = RuntimeDirectory({}, agent_token="t" * 40, transport=httpx.MockTransport(handle))
+
+    async def source():
+        return [_model("one"), _model("two")]
+
+    await observe_models(directory, source, _writer([]), "a", nodes_by_id={"a": node})
+    assert calls == ["agent-a"]
 
 
 async def test_each_node_is_stamped_with_its_runtimes_version_and_cleared_when_silent() -> None:
