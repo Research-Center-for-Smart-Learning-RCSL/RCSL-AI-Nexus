@@ -29,8 +29,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import datetime
+from typing import cast
 
 from fastapi import FastAPI
+from sqlalchemy import text
 
 from app.adapters.http.node_health import RuntimeNodeHealth
 from app.adapters.persistence.repositories import PostgresModelRepository, PostgresNodeRepository
@@ -46,7 +49,10 @@ logger = logging.getLogger(__name__)
 NodesSource = Callable[[], Awaitable[list[Node]]]
 StatusWriter = Callable[[str, NodeStatus], Awaitable[None]]
 ModelsSource = Callable[[], Awaitable[list[Model]]]
-ObservationWriter = Callable[[str, ModelState | None, float | None], Awaitable[None]]
+ObservationWriter = Callable[
+    [str, ModelState | None, float | None, datetime | None], Awaitable[None]
+]
+ObservationTime = Callable[[], Awaitable[datetime]]
 
 
 async def sweep(health: NodeHealthPort, nodes: NodesSource, write_status: StatusWriter) -> int:
@@ -74,6 +80,7 @@ async def observe_models(
     write_observation: ObservationWriter,
     local_node_id: str,
     *,
+    observation_time: ObservationTime,
     local_node: Node | None = None,
     nodes_by_id: dict[str, Node] | None = None,
 ) -> int:
@@ -106,7 +113,13 @@ async def observe_models(
         if node_id == local_node_id or agents_enabled:
             adapter = runtime_for(runtimes, nodes_by_id.get(node_id), kind)
         residency: RuntimeResidency | None = None
+        observed_at = None
         if adapter is not None:
+            # Database time before the probe conservatively includes probe
+            # and write latency. One frozen time for the whole answer prevents
+            # a delayed first write from freshening its siblings' old evidence.
+            # The provider closes its transaction before runtime network I/O.
+            observed_at = await observation_time()
             try:
                 residency = await adapter.residency()
             except Exception:  # noqa: BLE001 - one broken runtime must not stop the sweep
@@ -134,7 +147,9 @@ async def observe_models(
             # actual transition is counted and logged.
             if unchanged and observed is None:
                 continue
-            await write_observation(model.id, observed, observed_gb)
+            await write_observation(
+                model.id, observed, observed_gb, observed_at if observed else None
+            )
             if unchanged:
                 continue
             changed += 1
@@ -186,10 +201,21 @@ async def run_heartbeat(app: FastAPI, interval_seconds: int) -> None:
             return await PostgresModelRepository(session).list_all()
 
     async def write_observation(
-        model_id: str, state: ModelState | None, memory_gb: float | None
+        model_id: str,
+        state: ModelState | None,
+        memory_gb: float | None,
+        observed_at: datetime | None,
     ) -> None:
         async with session_scope() as session:
-            await PostgresModelRepository(session).set_observed(model_id, state, memory_gb)
+            await PostgresModelRepository(session).set_observed(
+                model_id, state, memory_gb, observed_at=observed_at
+            )
+
+    async def observation_time() -> datetime:
+        async with session_scope() as session:
+            return cast(
+                datetime, (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
+            )
 
     async def write_version(node_id: str, version: str | None) -> None:
         async with session_scope() as session:
@@ -217,6 +243,7 @@ async def run_heartbeat(app: FastAPI, interval_seconds: int) -> None:
                 load_models,
                 write_observation,
                 local_id,
+                observation_time=observation_time,
                 nodes_by_id=nodes_by_id,
             )
         except asyncio.CancelledError:

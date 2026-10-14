@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import timedelta
 
 import pytest
+from sqlalchemy import text
 
 from app.adapters.persistence.repositories import (
     PostgresModelRepository,
@@ -88,7 +90,8 @@ async def test_an_intent_write_clears_the_observation_beside_it(session) -> None
     await repo.save(model)
     await session.flush()
 
-    await repo.set_observed(model.id, ModelState.DOWNLOADED, None)
+    at = (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
+    await repo.set_observed(model.id, ModelState.DOWNLOADED, None, observed_at=at)
     await session.flush()
     observed = await repo.get(model.id)
     assert observed is not None and observed.observed_at is not None
@@ -115,12 +118,13 @@ async def test_an_unobservable_runtime_clears_rather_than_asserting_absence(sess
     await repo.save(model)
     await session.flush()
 
-    await repo.set_observed(model.id, ModelState.LOADED, 5.7)
+    at = (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
+    await repo.set_observed(model.id, ModelState.LOADED, 5.7, observed_at=at)
     await session.flush()
     seen = await repo.get(model.id)
     assert seen is not None and seen.observed_memory_gb == 5.7
 
-    await repo.set_observed(model.id, None, None)
+    await repo.set_observed(model.id, None, None, observed_at=at)
     await session.flush()
 
     cleared = await repo.get(model.id)
@@ -128,6 +132,24 @@ async def test_an_unobservable_runtime_clears_rather_than_asserting_absence(sess
     assert cleared.observed_state is None
     assert cleared.observed_at is None
     assert cleared.state is ModelState.LOADED, "intent is untouched by an observation write"
+
+
+async def test_observation_write_preserves_capture_time_and_requires_it(session) -> None:
+    await PostgresNodeRepository(session).save(_node())
+    await session.flush()
+    repo = PostgresModelRepository(session)
+    model = _model()
+    await repo.save(model)
+    await session.flush()
+    at = (await session.execute(text("SELECT clock_timestamp()"))).scalar_one() - timedelta(
+        seconds=91
+    )
+    await repo.set_observed(model.id, ModelState.LOADED, 5.7, observed_at=at)
+    await session.flush()
+    stored = await repo.get(model.id)
+    assert stored is not None and stored.observed_at == at
+    with pytest.raises(ValueError, match="capture time"):
+        await repo.set_observed(model.id, ModelState.LOADED, 5.7, observed_at=None)
 
 
 async def test_routing_policy_structured_requirements_round_trip(session) -> None:

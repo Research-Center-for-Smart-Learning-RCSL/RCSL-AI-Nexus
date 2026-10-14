@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import delete, func, or_, select, update
 
 from app.adapters.persistence import mappers as m
@@ -153,18 +155,24 @@ class PostgresModelRepository(_Base):
         )
 
     async def set_observed(
-        self, model_id: str, state: ModelState | None, memory_gb: float | None
+        self,
+        model_id: str,
+        state: ModelState | None,
+        memory_gb: float | None,
+        *,
+        observed_at: datetime | None,
     ) -> None:
-        # The timestamp is the database's now(), not a client clock, and it is
-        # cleared alongside a None state: all three columns null together means
-        # "not currently observed", which is also the migration's start state.
+        # Preserve the pre-probe database timestamp rather than the time this
+        # later write acquired its connection. Unknown clears it unconditionally.
+        if state is not None and observed_at is None:
+            raise ValueError("a positive residency observation requires its capture time")
         await self._session.execute(
             update(ModelRow)
             .where(ModelRow.id == model_id)
             .values(
                 observed_state=state.value if state else None,
                 observed_memory_gb=memory_gb,
-                observed_at=func.now() if state else None,
+                observed_at=observed_at if state else None,
             )
         )
 

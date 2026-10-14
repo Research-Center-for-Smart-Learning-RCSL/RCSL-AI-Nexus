@@ -40,7 +40,7 @@ DISPATCH_NAMESPACE = 0x4E58_0002
 LIFECYCLE_KINDS = frozenset({"load", "unload", "pull"})
 """Operations that change what the runtime holds rather than produce output
 anyone is billed or answered with (PR4b). Exclusive with dispatch on the node;
-an uncertain one fails rather than blocks (see `Dispatcher.exclusive`)."""
+an uncertain one blocks until verified resolution (#49, `Dispatcher.exclusive`)."""
 
 
 class NotOwner(Exception):  # noqa: N818 - a state, not a failure

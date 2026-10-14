@@ -8,7 +8,7 @@ identical writes every interval.
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -101,10 +101,17 @@ def _model(
 
 
 def _writer(writes: list[tuple[str, ModelState | None, float | None]]):
-    async def write(model_id: str, state: ModelState | None, gb: float | None) -> None:
+    async def write(
+        model_id: str, state: ModelState | None, gb: float | None, at: datetime | None
+    ) -> None:
+        assert (at is None) is (state is None)
         writes.append((model_id, state, gb))
 
     return write
+
+
+async def _observation_time() -> datetime:
+    return datetime(2026, 10, 14, tzinfo=UTC)
 
 
 async def test_observation_catches_the_registry_lie() -> None:
@@ -118,7 +125,13 @@ async def test_observation_catches_the_registry_lie() -> None:
     async def source() -> list[Model]:
         return models
 
-    changed = await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes), "a")
+    changed = await observe_models(
+        {RuntimeKind.OLLAMA: runtime},
+        source,
+        _writer(writes),
+        "a",
+        observation_time=_observation_time,
+    )
 
     assert changed == 1
     assert writes == [("id-qwen7b", ModelState.DOWNLOADED, None)]
@@ -134,7 +147,13 @@ async def test_observation_records_the_runtime_own_memory_figure() -> None:
     async def source() -> list[Model]:
         return models
 
-    changed = await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes), "a")
+    changed = await observe_models(
+        {RuntimeKind.OLLAMA: runtime},
+        source,
+        _writer(writes),
+        "a",
+        observation_time=_observation_time,
+    )
 
     assert changed == 1
     assert writes == [("id-glm", ModelState.LOADED, 38.0)]
@@ -164,7 +183,16 @@ async def test_unchanged_observation_is_rewritten_but_not_counted() -> None:
     async def source() -> list[Model]:
         return models
 
-    assert await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes), "a") == 0
+    assert (
+        await observe_models(
+            {RuntimeKind.OLLAMA: runtime},
+            source,
+            _writer(writes),
+            "a",
+            observation_time=_observation_time,
+        )
+        == 0
+    )
     assert writes == [("id-glm", ModelState.LOADED, 38.0)], "restamped, so the row stays readable"
 
 
@@ -179,7 +207,11 @@ async def test_unobservable_runtime_clears_a_stale_observation() -> None:
         return models
 
     changed = await observe_models(
-        {RuntimeKind.OLLAMA: FakeRuntime(residency=None)}, source, _writer(writes), "a"
+        {RuntimeKind.OLLAMA: FakeRuntime(residency=None)},
+        source,
+        _writer(writes),
+        "a",
+        observation_time=_observation_time,
     )
 
     assert changed == 1
@@ -196,7 +228,11 @@ async def test_a_raising_runtime_reads_as_unobservable_not_as_absent() -> None:
         return models
 
     changed = await observe_models(
-        {RuntimeKind.OLLAMA: FakeRuntime(fail_on="residency")}, source, _writer(writes), "a"
+        {RuntimeKind.OLLAMA: FakeRuntime(fail_on="residency")},
+        source,
+        _writer(writes),
+        "a",
+        observation_time=_observation_time,
     )
 
     assert changed == 1
@@ -212,7 +248,10 @@ async def test_a_runtime_with_no_adapter_leaves_no_observation() -> None:
     async def source() -> list[Model]:
         return models
 
-    assert await observe_models({}, source, _writer(writes), "a") == 0
+    assert (
+        await observe_models({}, source, _writer(writes), "a", observation_time=_observation_time)
+        == 0
+    )
     assert writes == []
 
 
@@ -232,7 +271,13 @@ async def test_another_node_s_models_are_left_unobserved_not_reported_absent() -
     async def source() -> list[Model]:
         return [local, remote]
 
-    changed = await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes), "a")
+    changed = await observe_models(
+        {RuntimeKind.OLLAMA: runtime},
+        source,
+        _writer(writes),
+        "a",
+        observation_time=_observation_time,
+    )
 
     assert changed == 1, "only the local model's observation moved"
     assert writes == [("id-here", ModelState.LOADED, 4.0)]
@@ -284,21 +329,23 @@ async def test_agent_backed_nodes_are_observed_independently_before_routing(remo
     async def source():
         return models
 
-    async def write(model_id, state, memory):
+    async def write(model_id, state, memory, observed_at):
         written.append(model_id)
         models[:] = [
             replace(
                 m,
                 observed_state=state,
                 observed_memory_gb=memory,
-                observed_at=now if state else None,
+                observed_at=observed_at,
             )
             if m.id == model_id
             else m
             for m in models
         ]
 
-    await observe_models(directory, source, write, "a", nodes_by_id=nodes)
+    await observe_models(
+        directory, source, write, "a", nodes_by_id=nodes, observation_time=_observation_time
+    )
     assert calls == (["agent-a", "agent-b"] if remote_status is not None else ["agent-a"])
     assert written == ["m-a", "m-b"]
     assert models[0].observed_state is ModelState.DOWNLOADED
@@ -332,8 +379,102 @@ async def test_agent_residency_is_queried_once_per_node_runtime():
     async def source():
         return [_model("one"), _model("two")]
 
-    await observe_models(directory, source, _writer([]), "a", nodes_by_id={"a": node})
+    await observe_models(
+        directory,
+        source,
+        _writer([]),
+        "a",
+        nodes_by_id={"a": node},
+        observation_time=_observation_time,
+    )
     assert calls == ["agent-a"]
+
+
+@pytest.mark.parametrize("delay_at", ["probe", "first_write"])
+async def test_a_group_keeps_its_capture_time_despite_probe_or_write_delay(delay_at):
+    initial = await _observation_time()
+    current = initial
+    clock_calls = 0
+    models = [_model("one"), _model("two")]
+    stamped = []
+
+    async def timestamp():
+        nonlocal clock_calls
+        clock_calls += 1
+        return current
+
+    class SlowRuntime(FakeRuntime):
+        async def residency(self):
+            nonlocal current
+            assert clock_calls == 1, "capture database time before awaiting the runtime"
+            if delay_at == "probe":
+                current += timedelta(seconds=91)
+            return RuntimeResidency(resident={"one": 4.0, "two": 4.0})
+
+    async def source():
+        return models
+
+    async def write(model_id, state, memory, at):
+        nonlocal current
+        stamped.append(at)
+        models[:] = [
+            replace(m, observed_state=state, observed_memory_gb=memory, observed_at=at)
+            if m.id == model_id
+            else m
+            for m in models
+        ]
+        if delay_at == "first_write" and len(stamped) == 1:
+            current += timedelta(seconds=91)
+
+    await observe_models(
+        {RuntimeKind.OLLAMA: SlowRuntime()}, source, write, "a", observation_time=timestamp
+    )
+    assert clock_calls == 1 and stamped == [initial, initial]
+    node = _node("a", NodeStatus.ONLINE)
+    routing = RoutingService(FixedClock(current))
+    for model in models:
+        policy = RoutingPolicy("chat", (RoutingCandidate(model.alias, 100),))
+        status = next(
+            c
+            for c in assess_availability([policy], [model], [node], {}, frozenset(), current)
+            if c.capability == "chat"
+        )
+        assert not status.available and status.reasons == ("residency_stale",)
+        assert (
+            routing.rejection(policy.candidates[0].require, model, node, None, current)
+            == "residency_stale"
+        )
+
+
+async def test_a_failed_database_clock_never_falls_back_to_write_time():
+    async def timestamp():
+        raise ConnectionError("database clock unavailable")
+
+    async def source():
+        return [_model("one")]
+
+    written = []
+    with pytest.raises(ConnectionError, match="clock unavailable"):
+        await observe_models(
+            {RuntimeKind.OLLAMA: FakeRuntime()},
+            source,
+            _writer(written),
+            "a",
+            observation_time=timestamp,
+        )
+    assert written == []
+
+
+async def test_a_missing_adapter_does_not_need_a_database_clock():
+    async def timestamp():
+        raise AssertionError("no runtime to probe")
+
+    async def source():
+        return [_model("one", observed=ModelState.LOADED)]
+
+    written = []
+    await observe_models({}, source, _writer(written), "a", observation_time=timestamp)
+    assert written == [("id-one", None, None)]
 
 
 async def test_each_node_is_stamped_with_its_runtimes_version_and_cleared_when_silent() -> None:

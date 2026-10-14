@@ -31,8 +31,12 @@ the freshness limit. A successful operator load becomes eligible after read-back
 MLX has no residency endpoint and retains the existing lifecycle-intent fallback.
 
 With node agents enabled, each node/runtime is observed through its own agent,
-and its result is written before the next node is probed. Direct adapters still
-observe only their configured local host. The request reader uses the database
+and its result is written before the next node is probed. Each node/runtime
+answer uses one database timestamp captured **before** its probe. That fixed
+time is preserved across all model writes, so a slow probe or earlier database
+write cannot make an old answer appear fresh. The clock transaction closes
+before runtime I/O; clock failure never falls back to the later write time.
+Direct adapters still observe only their configured local host. The request reader uses the database
 wall clock after reading observations, so authentication's earlier transaction
 start cannot make a newly committed heartbeat appear to come from the future.
 
