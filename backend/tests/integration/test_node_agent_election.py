@@ -154,34 +154,53 @@ async def test_a_foreign_lock_domain_is_refused_after_the_owner_is_gone(
         await _elect(dsn, _domain(tmp_path, "second"))
 
 
+@pytest.mark.parametrize(
+    "kind", ["inference", "embedding_batch", "summary", "load", "unload", "pull"]
+)
 async def test_takeover_resolves_open_work_conservatively(
-    dsn: str, pool: asyncpg.Pool, tmp_path: Path
+    dsn: str, pool: asyncpg.Pool, tmp_path: Path, kind: str
 ) -> None:
     directory = _domain(tmp_path)
     lock, conn, a = await _elect(dsn, directory)
     store = OperationStore(pool, a.ownership)
-    await store.insert_accepted(
-        "op-run", "inference", request_id=None, payload_hash=None, store_output=False
-    )
-    await store.insert_accepted(
-        "op-acc", "inference", request_id=None, payload_hash=None, store_output=False
-    )
-    assert await store.promote("op-run", {})
-    await _die(lock, conn)
+    try:
+        await store.insert_accepted(
+            "op-run", kind, request_id=None, payload_hash=None, store_output=False
+        )
+        # Only one summary may be outstanding. Queue ordinary inference
+        # behind it; the other operation kinds can retain their own kind.
+        await store.insert_accepted(
+            "op-acc",
+            "inference" if kind == "summary" else kind,
+            request_id=None,
+            payload_hash=None,
+            store_output=False,
+        )
+        assert await store.promote("op-run", {})
+    finally:
+        await _die(lock, conn)
 
     lock_b, conn_b, b = await _elect(dsn, directory)
 
-    assert b.ownership.generation == a.ownership.generation + 1
-    assert (b.converted_unknown, b.converted_unsent) == (1, 1)
-    store_b = OperationStore(pool, b.ownership)
-    run = await store_b.observe("op-run")
-    acc = await store_b.observe("op-acc")
-    assert run is not None and run.state == "outcome_unknown"
-    assert run.origin_generation == a.ownership.generation, "sender provenance kept"
-    assert run.owner_generation == b.ownership.generation
-    assert acc is not None and acc.state == "cancelled_unsent"
-    assert await store_b.any_unknown()
-    await _die(lock_b, conn_b)
+    try:
+        assert b.ownership.generation == a.ownership.generation + 1
+        assert (b.converted_unknown, b.converted_unsent) == (1, 1)
+        store_b = OperationStore(pool, b.ownership)
+        run = await store_b.observe("op-run")
+        acc = await store_b.observe("op-acc")
+        assert run is not None and run.state == "outcome_unknown"
+        assert run.origin_generation == a.ownership.generation, "sender provenance kept"
+        assert run.owner_generation == b.ownership.generation
+        assert run.terminal is None and run.reason == "orphaned_by_takeover"
+        assert acc is not None and acc.state == "cancelled_unsent"
+        assert await store_b.any_unknown()
+        assert not await store_b.promote("op-acc", {}), "takeover never redispatches queued work"
+        with pytest.raises(NotOwner):
+            await store.finish("op-run", "completed", {"late": True})
+        still_unknown = await store_b.observe("op-run")
+        assert still_unknown is not None and still_unknown.state == "outcome_unknown"
+    finally:
+        await _die(lock_b, conn_b)
 
 
 async def test_a_superseded_owner_cannot_write_anything(

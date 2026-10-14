@@ -14,17 +14,24 @@ from typing import Any
 import asyncpg
 import httpx
 import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.adapters.persistence.repositories import PostgresRoutingPolicyRepository
 from app.adapters.runtime.node_agent_adapter import NodeAgentRuntime
 from app.domain.entities.attempt import AttemptIdentity, current_attempt
 from app.domain.entities.chat import CompletionChunk, Message, MessageRole
+from app.domain.entities.model import RuntimeKind
+from app.domain.entities.routing_policy import RoutingCandidate, RoutingPolicy
 from app.domain.exceptions import (
     NoAvailableModelError,
     RuntimeCapabilityError,
     ServerOverloadedError,
     StreamInterruptedError,
 )
-from tests.integration.node_agent_fixtures import TOKEN, running_agent
+from app.infrastructure.availability import read_availability
+from app.node_agent.dispatch import GateState
+from tests.integration.node_agent_fixtures import NODE, TOKEN, running_agent
 
 MESSAGES = [Message(role=MessageRole.USER, content="hi")]
 
@@ -199,6 +206,64 @@ async def test_a_blocked_node_refuses_lifecycle_but_still_reports_residency(
         await agent["runtime"].load("qwen2.5:7b", context_length=32768)
     assert agent["ollama"].lifecycle == []
     assert await agent["runtime"].residency() is not None
+
+
+@pytest.mark.parametrize("kind", ["load", "unload", "pull"])
+async def test_uncertain_lifecycle_is_durable_blocks_dispatch_and_reports_outage(
+    agent: dict[str, Any], kind: str
+) -> None:
+    runtime = agent["runtime"]
+    agent["ollama"].uncertain_lifecycle = True
+    with pytest.raises(StreamInterruptedError):
+        if kind == "load":
+            await runtime.load("qwen2.5:7b", context_length=32768)
+        elif kind == "unload":
+            await runtime.unload("qwen2.5:7b")
+        else:
+            _ = [p async for p in runtime.pull("qwen2.5:7b")]
+    rows = await _rows(agent, "SELECT kind, state, terminal FROM node_operations")
+    assert rows == [(kind, "outcome_unknown", None)]
+    pin = await _rows(agent, "SELECT manifest_digest FROM models WHERE alias = 'qwen7b'")
+    if kind == "pull":
+        assert pin == [(None,)], "an incomplete pull cannot repin potentially changed weights"
+    agent["ollama"].uncertain_lifecycle = False
+    for send in (
+        lambda: _generate(runtime),
+        lambda: runtime.embed("nomic-embed-text", ["a"]),
+        lambda: runtime.load("qwen2.5:7b", context_length=32768),
+        lambda: runtime.unload("qwen2.5:7b"),
+    ):
+        with pytest.raises(ServerOverloadedError) as refused:
+            await send()
+        assert refused.value.retry_after_seconds == 60
+    with pytest.raises(ServerOverloadedError):
+        _ = [p async for p in runtime.pull("qwen2.5:7b")]
+    assert agent["ollama"].chats == agent["ollama"].embeds == 0
+    assert len(agent["ollama"].lifecycle) == (0 if kind == "pull" else 1)
+    assert await runtime.residency() is not None, "fresh residency never resolves remote work"
+    assert await agent["agent"].dispatcher.reopen() is not GateState.SERVING
+
+    # With no inference traffic, committed evidence still drives #50's gauges
+    # and unavailable-capability alert. Even a seven-day-old operation blocks.
+    engine = create_async_engine(agent["dsn"].replace("postgresql://", "postgresql+asyncpg://", 1))
+    try:
+        async with async_sessionmaker(engine)() as session:
+            await session.execute(
+                text("UPDATE models SET observed_state = 'loaded', observed_at = clock_timestamp()")
+            )
+            await session.execute(
+                text("UPDATE node_operations SET submitted_at = now() - interval '7 days'")
+            )
+            await PostgresRoutingPolicyRepository(session).save(
+                RoutingPolicy("chat", (RoutingCandidate("qwen7b", 100),))
+            )
+            await session.commit()
+            snapshot = await read_availability(session, {RuntimeKind.OLLAMA: runtime})
+            assert snapshot.unresolved == {NODE: 1}
+            chat = next(c for c in snapshot.capabilities if c.capability == "chat")
+            assert not chat.available and chat.reasons == ("node_operation_unresolved",)
+    finally:
+        await engine.dispose()
 
 
 async def _rows(agent: dict[str, Any], sql: str) -> list[tuple[Any, ...]]:

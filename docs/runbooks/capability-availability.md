@@ -42,6 +42,32 @@ still restores the models in the documented largest-first order until the rest
 of #49 ships. Unknown-operation blocks still require existing audited resolution;
 an expired lease never clears them.
 
+### Uncertain lifecycle operations
+
+`load`, `unload` and `pull` now follow the same node-wide uncertainty rule as
+inference, embeddings and summaries. A lost response, timeout or pull stream
+without terminal success records `outcome_unknown`; the node refuses new
+scheduler-changing work with 503 and `Retry-After: 60`. Agent takeover converts
+every orphaned `running` operation to unknown, including lifecycle work. It
+preserves the original sender generation, fences late completions, and cancels
+queued `accepted` operations without sending them.
+
+Read-only residency remains available, but neither a fresh resident model nor
+an absent model proves an earlier operation has finished. The unresolved gauge
+and capability alert therefore persist even on a quiet host, until the existing
+audited resolution path verifies the ordered sender-gone, quiescence, baseline
+and runtime-reset evidence. A reset before the baseline does not qualify. Use
+the resolution procedure in [first deployment](./first-deploy.md); the automated
+admin reset action and residency reconciler remain unfinished parts of #49.
+
+This supersedes PR4b's uncertainty exception recorded on 2026-10-09 and resolves
+the decision requested by #49 section 6 in favor of #24 section 3's uniform
+block. A completed response, explicit runtime refusal or proven unsent request
+still allows reopening. This increases operator-visible blocking after a lost
+lifecycle response; recovery requires evidence instead of a repeat load.
+Historical rows already recorded as `failed` by the earlier implementation
+are not reclassified, because their remote outcome cannot be reconstructed.
+
 ## Metrics and delivery
 
 The tailnet admin runs an independent, read-only loop every 30 seconds, with a
