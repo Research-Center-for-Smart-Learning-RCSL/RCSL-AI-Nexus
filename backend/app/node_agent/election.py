@@ -32,7 +32,6 @@ from app.node_agent.lock_domain import HostLock
 from app.node_agent.store import (
     DISPATCH_NAMESPACE,
     ELECTION_NAMESPACE,
-    LIFECYCLE_KINDS,
     Ownership,
 )
 
@@ -145,21 +144,9 @@ async def claim(
                     "previous_boot_id": previous["boot_id"],
                 }
             )
-            # A lifecycle operation that may have been sent changes residency,
-            # not output nobody can account for: it fails, recorded, and does
-            # not block (PR4b; final spec §3 blocks on inference, summary and
-            # embedding). Residency is observed again by the heartbeat, and a
-            # pull that may have rewritten a tag is caught by the weights pin.
-            await conn.execute(
-                "UPDATE node_operations SET state = 'failed', owner_generation = $2, "
-                "reason = 'orphaned_lifecycle', resolved_at = now(), resolved_by = 'takeover', "
-                "provenance = provenance || $3::jsonb "
-                "WHERE node_id = $1 AND state = 'running' AND kind = ANY($4::text[])",
-                node_id,
-                generation,
-                takeover,
-                sorted(LIFECYCLE_KINDS),
-            )
+            # Every running operation may still be executing in the runtime,
+            # including lifecycle work (#49 §6). Taking over the sender proves
+            # it cannot send again, not that its remote work reached a terminal.
             unknown = await conn.fetchval(
                 "WITH moved AS (UPDATE node_operations SET state = 'outcome_unknown', "
                 "owner_generation = $2, reason = 'orphaned_by_takeover', "

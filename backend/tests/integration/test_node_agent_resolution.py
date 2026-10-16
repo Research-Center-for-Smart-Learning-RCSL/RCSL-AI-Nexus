@@ -16,7 +16,9 @@ from typing import Any
 
 import asyncpg
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.infrastructure.availability import read_availability
 from app.node_agent.dispatch import Dispatcher, GateState
 from app.node_agent.election import claim
 from app.node_agent.lock_domain import HostLock, initialise
@@ -70,7 +72,9 @@ class FakeWitness:
 
 
 @pytest.fixture
-async def agent(database_url: str, tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
+async def agent(
+    database_url: str, tmp_path: Path, request: pytest.FixtureRequest
+) -> AsyncIterator[dict[str, Any]]:
     dsn = database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
     setup = await asyncpg.connect(dsn)
     await setup.execute(
@@ -90,7 +94,11 @@ async def agent(database_url: str, tmp_path: Path) -> AsyncIterator[dict[str, An
     a = await claim(conn_a, NODE, lock_a, kernel_boot_id="k")
     store_a = OperationStore(pool, a.ownership)
     await store_a.insert_accepted(
-        "orphan", "inference", request_id=None, payload_hash=None, store_output=False
+        "orphan",
+        getattr(request, "param", "inference"),
+        request_id=None,
+        payload_hash=None,
+        store_output=False,
     )
     assert await store_a.promote("orphan", {})
     await conn_a.close()
@@ -125,7 +133,16 @@ async def agent(database_url: str, tmp_path: Path) -> AsyncIterator[dict[str, An
         await pool.close()
 
 
-async def test_a_restart_after_the_baseline_clears_the_block(agent: dict[str, Any]) -> None:
+@pytest.mark.parametrize("agent", ["inference", "load", "unload", "pull"], indirect=True)
+async def test_a_restart_after_the_baseline_clears_the_block(
+    agent: dict[str, Any], database_url: str
+) -> None:
+    engine = create_async_engine(database_url)
+    try:
+        async with async_sessionmaker(engine)() as session:
+            assert (await read_availability(session, {})).unresolved == {NODE: 1}
+    finally:
+        await engine.dispose()
     started = await agent["resolutions"].start(
         "orphan", evidence="runtime restarted by operator", operator="ops"
     )
@@ -136,6 +153,12 @@ async def test_a_restart_after_the_baseline_clears_the_block(agent: dict[str, An
     assert done == {"op_id": "orphan", "state": "failed", "gate": "serving"}
     op = await agent["store"].observe("orphan")
     assert op is not None and op.state == "failed"
+    engine = create_async_engine(database_url)
+    try:
+        async with async_sessionmaker(engine)() as session:
+            assert (await read_availability(session, {})).unresolved == {NODE: 0}
+    finally:
+        await engine.dispose()
     events = [
         r["event"]
         for r in await agent["pool"].fetch(
@@ -145,6 +168,7 @@ async def test_a_restart_after_the_baseline_clears_the_block(agent: dict[str, An
     assert events == ["resolution_baseline", "resolved_by_reset"]
 
 
+@pytest.mark.parametrize("agent", ["inference", "load", "unload", "pull"], indirect=True)
 async def test_a_restart_that_happened_before_the_baseline_does_not_count(
     agent: dict[str, Any],
 ) -> None:

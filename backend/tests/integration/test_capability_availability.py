@@ -62,6 +62,27 @@ async def test_residency_loss_unknown_staleness_and_recovery(snapshot_db):
         assert chat.reasons == (() if reason is None else (reason,))
 
 
+async def test_request_transaction_does_not_make_a_new_heartbeat_look_future(snapshot_db):
+    session = snapshot_db
+    transaction_start = (await session.execute(text("SELECT now()"))).scalar_one()
+    async with async_sessionmaker(session.bind, expire_on_commit=False)() as heartbeat:
+        observed_at = (
+            await heartbeat.execute(
+                text(
+                    "UPDATE models SET observed_state = 'loaded', observed_at = clock_timestamp() "
+                    "RETURNING observed_at"
+                )
+            )
+        ).scalar_one()
+        await heartbeat.commit()
+    assert observed_at > transaction_start
+    # READ COMMITTED sees the new observation, despite the reader's older
+    # transaction start; availability must evaluate it against current time.
+    snapshot = await read(session)
+    assert snapshot.at >= observed_at
+    assert next(c for c in snapshot.capabilities if c.capability == "chat").available
+
+
 async def test_unresolved_operation_blocks_until_explicit_resolution(snapshot_db):
     session = snapshot_db
     await session.execute(

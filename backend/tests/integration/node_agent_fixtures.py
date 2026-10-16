@@ -32,6 +32,7 @@ class FakeOllama:
         self.chats = 0
         self.embeds = 0
         self.truncate = False
+        self.uncertain_lifecycle = False
         self.lifecycle: list[dict[str, Any]] = []
         self.digest = "a" * 64
         self.pulled_digest = "b" * 64
@@ -40,6 +41,8 @@ class FakeOllama:
     def handle(self, request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/generate":
             self.lifecycle.append(json.loads(request.content))
+            if self.uncertain_lifecycle:
+                raise httpx.ReadError("response lost after lifecycle submission", request=request)
             return httpx.Response(200, json={"done": True, "done_reason": "load"})
         if request.url.path == "/api/pull":
             self.digest = self.pulled_digest
@@ -48,6 +51,8 @@ class FakeOllama:
                 {"status": "downloading", "completed": 5, "total": 10},
                 {"status": "success"},
             ]
+            if self.uncertain_lifecycle:
+                lines.pop()  # A tag may have changed, but completion was not observed.
             return httpx.Response(200, content="".join(json.dumps(x) + "\n" for x in lines))
         if request.url.path == "/api/ps":
             return httpx.Response(200, json={"models": self.resident})

@@ -350,11 +350,9 @@ class Dispatcher:
         reopens when the operation ends, unless an operator's drain, a block
         or a lost role says otherwise.
 
-        Unlike inference, an operation whose outcome is uncertain fails rather
-        than blocks: it changes what the runtime holds, which the heartbeat
-        observes again, and a pull that may have rewritten a tag is caught by
-        the weights pin (final spec §3 blocks on inference, summary and
-        embedding).
+        An uncertain lifecycle outcome blocks just like inference (#49 §6).
+        Residency and a weights pin describe current state; neither proves
+        that a sent load, unload or pull has finished changing the scheduler.
         """
         if kind not in LIFECYCLE_KINDS:
             raise ValueError(f"{kind} is not a lifecycle operation")
@@ -632,7 +630,7 @@ class Dispatcher:
             outcome = Uncertain(reason=f"relay_error:{type(exc).__name__}")
         lifecycle = kind in LIFECYCLE_KINDS
         try:
-            await self._settle(op_id, outcome, blocking=not lifecycle)
+            await self._settle(op_id, outcome)
             if after is not None:
                 try:
                     await after(outcome)
@@ -653,7 +651,7 @@ class Dispatcher:
         if cancelled is not None:
             raise cancelled
 
-    async def _settle(self, op_id: str, outcome: Outcome, *, blocking: bool = True) -> None:
+    async def _settle(self, op_id: str, outcome: Outcome) -> None:
         """Commit the outcome, retrying until it is committed or the role is lost.
 
         A database error never turns into a different outcome (review on
@@ -661,7 +659,7 @@ class Dispatcher:
         unknown is committed, and the task, with its slot, is held until the
         commit, so drain and exit wait for it too.
         """
-        if isinstance(outcome, Uncertain) and blocking:
+        if isinstance(outcome, Uncertain):
             async with self._barrier:
                 self._uncommitted_unknown.add(op_id)
                 self._close_locked(GateState.BLOCKED)
@@ -679,10 +677,6 @@ class Dispatcher:
                 await self._store.finish(op_id, "failed", outcome.terminal, reason=outcome.reason)
             elif isinstance(outcome, NotSent):
                 await self._store.finish(op_id, "failed", {}, reason=f"not_sent:{outcome.reason}")
-            elif not blocking:
-                await self._store.finish(
-                    op_id, "failed", outcome.observed, reason=f"uncertain:{outcome.reason}"
-                )
             else:
                 await self._store.mark_unknown(op_id, outcome.reason, outcome.observed)
 
@@ -699,7 +693,7 @@ class Dispatcher:
                 delay = min(delay * 2, SETTLE_RETRY_CAP_S)
                 continue
             break
-        if isinstance(outcome, Uncertain) and blocking:
+        if isinstance(outcome, Uncertain):
             self._uncommitted_unknown.discard(op_id)
 
 

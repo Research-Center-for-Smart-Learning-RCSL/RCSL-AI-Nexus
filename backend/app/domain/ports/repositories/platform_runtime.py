@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 from app.domain.entities.model import Model, ModelState
@@ -50,10 +51,17 @@ class ModelRepositoryPort(Protocol):
         ...
 
     async def set_observed(
-        self, model_id: str, state: ModelState | None, memory_gb: float | None
+        self,
+        model_id: str,
+        state: ModelState | None,
+        memory_gb: float | None,
+        *,
+        observed_at: datetime | None,
     ) -> None:
         """Targeted observation write for the heartbeat, leaving intent alone.
 
+        `observed_at` is the database time captured before the runtime probe,
+        shared by every model in that answer; writing later never refreshes it.
         `state=None` records "not currently observable" and clears the
         timestamp with it: a stale observation must not keep the authority of
         a fresh one. Targeted for the same reason `set_status` on nodes is —

@@ -21,6 +21,7 @@ from app.node_agent.dispatch import (
     GateState,
     NotSent,
     Refused,
+    RuntimeRefused,
     Sink,
     Uncertain,
 )
@@ -644,20 +645,75 @@ async def test_only_one_lifecycle_operation_holds_the_node() -> None:
     await asyncio.wait_for(first.settled, 2)
 
 
-async def test_an_uncertain_lifecycle_operation_fails_and_does_not_block() -> None:
-    """It changes what the runtime holds, which is observed again; it is not
-    output nobody can account for (final spec §3 blocks on inference)."""
+@pytest.mark.parametrize("kind", ["load", "unload", "pull"])
+async def test_an_uncertain_lifecycle_operation_blocks_every_sender(kind: str) -> None:
     store = MemoryStore()
     dispatcher = Dispatcher(store)
-    attempt = await dispatcher.exclusive("l", "load", ScriptedRelay(Uncertain("transport:Read")))
+    attempt = await dispatcher.exclusive("l", kind, ScriptedRelay(Uncertain("transport:Read")))
     assert isinstance(attempt, Attempt)
     await asyncio.wait_for(attempt.settled, 2)
     await asyncio.sleep(0)
 
-    assert store.ops["l"].state == "failed"
-    assert store.ops["l"].reason == "uncertain:transport:Read"
+    assert store.ops["l"].state == "outcome_unknown"
+    assert store.ops["l"].reason == "transport:Read"
+    assert dispatcher.state is GateState.BLOCKED
+    assert await dispatcher.reopen() is GateState.BLOCKED
+    duplicate = await dispatcher.exclusive("l", kind, ScriptedRelay())
+    assert isinstance(duplicate, Existing) and duplicate.operation.state == "outcome_unknown"
+    for sender in ("inference", "embedding_batch", "summary", "load", "unload", "pull"):
+        relay = ScriptedRelay()
+        if sender in {"load", "unload", "pull"}:
+            refused = await dispatcher.exclusive(sender, sender, relay)
+        else:
+            refused = await dispatcher.submit(sender, sender, relay)
+        assert isinstance(refused, Refused) and refused.reason == "node_blocked"
+        assert refused.retry_after == 60 and relay.sends == 0
+
+
+@pytest.mark.parametrize("kind", ["load", "unload", "pull"])
+@pytest.mark.parametrize(
+    "outcome",
+    [Completed({"status": 200}), RuntimeRefused({"status": 400}, "rejected"), NotSent("connect")],
+)
+async def test_terminal_or_unsent_lifecycle_outcomes_reopen(kind: str, outcome: Any) -> None:
+    store = MemoryStore()
+    dispatcher = Dispatcher(store)
+    attempt = await dispatcher.exclusive("l", kind, ScriptedRelay(outcome))
+    assert isinstance(attempt, Attempt)
+    await asyncio.wait_for(attempt.settled, 2)
+    await asyncio.sleep(0)
+    assert store.ops["l"].state == ("completed" if isinstance(outcome, Completed) else "failed")
     assert dispatcher.state is GateState.SERVING
-    assert isinstance(await dispatcher.submit("x", "inference", ScriptedRelay()), Attempt)
+
+
+@pytest.mark.parametrize("kind", ["load", "unload", "pull"])
+async def test_lifecycle_stays_blocked_while_unknown_commit_is_unavailable(kind: str) -> None:
+    store = MemoryStore()
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = store.mark_unknown
+
+    async def delayed(op_id: str, reason: str, observed: dict[str, Any]) -> bool:
+        entered.set()
+        await release.wait()
+        return await original(op_id, reason, observed)
+
+    store.mark_unknown = delayed  # type: ignore[method-assign]
+    dispatcher = Dispatcher(store)
+    attempt = await dispatcher.exclusive("l", kind, ScriptedRelay(Uncertain("read_error")))
+    assert isinstance(attempt, Attempt)
+    await asyncio.wait_for(entered.wait(), 2)
+    assert store.ops["l"].state == "running", "the database cannot see the uncertainty yet"
+    assert dispatcher.state is GateState.BLOCKED
+    assert await dispatcher.reopen() is GateState.BLOCKED
+    assert not attempt.settled.done()
+    draining = asyncio.create_task(dispatcher.wait_idle())
+    await asyncio.sleep(0)
+    assert not draining.done()
+    release.set()
+    await asyncio.wait_for(attempt.settled, 2)
+    await asyncio.wait_for(draining, 2)
+    assert store.ops["l"].state == "outcome_unknown"
+    assert await dispatcher.reopen() is GateState.BLOCKED
 
 
 async def test_a_blocked_node_refuses_lifecycle_changes() -> None:

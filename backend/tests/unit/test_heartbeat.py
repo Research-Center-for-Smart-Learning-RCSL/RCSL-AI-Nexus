@@ -7,6 +7,13 @@ identical writes every interval.
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+
+import httpx
+import pytest
+
+from app.application.use_cases.capability_availability import assess_availability
 from app.domain.entities.model import (
     Model,
     ModelState,
@@ -15,7 +22,11 @@ from app.domain.entities.model import (
     RuntimeResidency,
 )
 from app.domain.entities.node import Node, NodeStatus
+from app.domain.entities.routing_policy import RoutingCandidate, RoutingPolicy
+from app.domain.services.routing_service import RoutingService
 from app.infrastructure.heartbeat import observe_models, sweep
+from app.infrastructure.runtime_directory import RuntimeDirectory
+from app.shared.clock import FixedClock
 from tests.unit.fakes import FakeNodeHealth, FakeRuntime
 
 
@@ -90,10 +101,17 @@ def _model(
 
 
 def _writer(writes: list[tuple[str, ModelState | None, float | None]]):
-    async def write(model_id: str, state: ModelState | None, gb: float | None) -> None:
+    async def write(
+        model_id: str, state: ModelState | None, gb: float | None, at: datetime | None
+    ) -> None:
+        assert (at is None) is (state is None)
         writes.append((model_id, state, gb))
 
     return write
+
+
+async def _observation_time() -> datetime:
+    return datetime(2026, 10, 14, tzinfo=UTC)
 
 
 async def test_observation_catches_the_registry_lie() -> None:
@@ -107,7 +125,13 @@ async def test_observation_catches_the_registry_lie() -> None:
     async def source() -> list[Model]:
         return models
 
-    changed = await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes), "a")
+    changed = await observe_models(
+        {RuntimeKind.OLLAMA: runtime},
+        source,
+        _writer(writes),
+        "a",
+        observation_time=_observation_time,
+    )
 
     assert changed == 1
     assert writes == [("id-qwen7b", ModelState.DOWNLOADED, None)]
@@ -123,7 +147,13 @@ async def test_observation_records_the_runtime_own_memory_figure() -> None:
     async def source() -> list[Model]:
         return models
 
-    changed = await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes), "a")
+    changed = await observe_models(
+        {RuntimeKind.OLLAMA: runtime},
+        source,
+        _writer(writes),
+        "a",
+        observation_time=_observation_time,
+    )
 
     assert changed == 1
     assert writes == [("id-glm", ModelState.LOADED, 38.0)]
@@ -153,7 +183,16 @@ async def test_unchanged_observation_is_rewritten_but_not_counted() -> None:
     async def source() -> list[Model]:
         return models
 
-    assert await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes), "a") == 0
+    assert (
+        await observe_models(
+            {RuntimeKind.OLLAMA: runtime},
+            source,
+            _writer(writes),
+            "a",
+            observation_time=_observation_time,
+        )
+        == 0
+    )
     assert writes == [("id-glm", ModelState.LOADED, 38.0)], "restamped, so the row stays readable"
 
 
@@ -168,7 +207,11 @@ async def test_unobservable_runtime_clears_a_stale_observation() -> None:
         return models
 
     changed = await observe_models(
-        {RuntimeKind.OLLAMA: FakeRuntime(residency=None)}, source, _writer(writes), "a"
+        {RuntimeKind.OLLAMA: FakeRuntime(residency=None)},
+        source,
+        _writer(writes),
+        "a",
+        observation_time=_observation_time,
     )
 
     assert changed == 1
@@ -185,7 +228,11 @@ async def test_a_raising_runtime_reads_as_unobservable_not_as_absent() -> None:
         return models
 
     changed = await observe_models(
-        {RuntimeKind.OLLAMA: FakeRuntime(fail_on="residency")}, source, _writer(writes), "a"
+        {RuntimeKind.OLLAMA: FakeRuntime(fail_on="residency")},
+        source,
+        _writer(writes),
+        "a",
+        observation_time=_observation_time,
     )
 
     assert changed == 1
@@ -201,7 +248,10 @@ async def test_a_runtime_with_no_adapter_leaves_no_observation() -> None:
     async def source() -> list[Model]:
         return models
 
-    assert await observe_models({}, source, _writer(writes), "a") == 0
+    assert (
+        await observe_models({}, source, _writer(writes), "a", observation_time=_observation_time)
+        == 0
+    )
     assert writes == []
 
 
@@ -221,11 +271,210 @@ async def test_another_node_s_models_are_left_unobserved_not_reported_absent() -
     async def source() -> list[Model]:
         return [local, remote]
 
-    changed = await observe_models({RuntimeKind.OLLAMA: runtime}, source, _writer(writes), "a")
+    changed = await observe_models(
+        {RuntimeKind.OLLAMA: runtime},
+        source,
+        _writer(writes),
+        "a",
+        observation_time=_observation_time,
+    )
 
     assert changed == 1, "only the local model's observation moved"
     assert writes == [("id-here", ModelState.LOADED, 4.0)]
     assert all(w[0] != "id-there" for w in writes), "a remote model must not be reported absent"
+
+
+@pytest.mark.parametrize("remote_status", [200, 503, None])
+async def test_agent_backed_nodes_are_observed_independently_before_routing(remote_status):
+    now = datetime(2026, 10, 14, tzinfo=UTC)
+    nodes = {
+        name: replace(_node(name, NodeStatus.ONLINE), agent_url=f"http://agent-{name}")
+        for name in ("a", "b")
+    }
+    if remote_status is None:
+        nodes["b"] = replace(nodes["b"], agent_url=None)
+    # Identical runtime refs on two nodes must not share one residency answer.
+    models = [
+        replace(
+            _model("shared", node_id=name),
+            id=f"m-{name}",
+            alias=name,
+            observed_state=ModelState.LOADED,
+            observed_at=now,
+        )
+        for name in nodes
+    ]
+    calls = []
+
+    def handle(request):
+        assert request.url.path == "/v1/residency"
+        calls.append(request.url.host)
+        assert request.headers["authorization"] == "Bearer " + "t" * 40
+        if request.url.host == "agent-b":
+            # The local answer must already be stamped before waiting on a
+            # different agent, whose request might consume its full timeout.
+            assert written == ["m-a"]
+            assert models[0].observed_state is ModelState.DOWNLOADED
+        if request.url.host == "agent-b" and remote_status != 200:
+            return httpx.Response(remote_status)
+        # A is on disk but cold; only B is resident.
+        resident = (
+            [{"name": "shared", "size": 8 * 1024**3}] if request.url.host == "agent-b" else []
+        )
+        return httpx.Response(200, json={"resident": resident, "on_disk": [{"name": "shared"}]})
+
+    directory = RuntimeDirectory({}, agent_token="t" * 40, transport=httpx.MockTransport(handle))
+    written = []
+
+    async def source():
+        return models
+
+    async def write(model_id, state, memory, observed_at):
+        written.append(model_id)
+        models[:] = [
+            replace(
+                m,
+                observed_state=state,
+                observed_memory_gb=memory,
+                observed_at=observed_at,
+            )
+            if m.id == model_id
+            else m
+            for m in models
+        ]
+
+    await observe_models(
+        directory, source, write, "a", nodes_by_id=nodes, observation_time=_observation_time
+    )
+    assert calls == (["agent-a", "agent-b"] if remote_status is not None else ["agent-a"])
+    assert written == ["m-a", "m-b"]
+    assert models[0].observed_state is ModelState.DOWNLOADED
+    assert models[1].observed_state is (ModelState.LOADED if remote_status == 200 else None)
+    policy = RoutingPolicy("chat", (RoutingCandidate("a", 100), RoutingCandidate("b", 1)))
+    status = next(
+        c
+        for c in assess_availability([policy], models, list(nodes.values()), {}, frozenset(), now)
+        if c.capability == "chat"
+    )
+    assert status.available is (remote_status == 200)
+    if remote_status == 200:
+        assert (
+            RoutingService(FixedClock(now))
+            .select(policy, {m.alias: m for m in models}, nodes)
+            .alias
+            == "b"
+        )
+
+
+async def test_agent_residency_is_queried_once_per_node_runtime():
+    node = replace(_node("a", NodeStatus.ONLINE), agent_url="http://agent-a")
+    calls = []
+
+    def handle(request):
+        calls.append(request.url.host)
+        return httpx.Response(200, json={"resident": [], "on_disk": []})
+
+    directory = RuntimeDirectory({}, agent_token="t" * 40, transport=httpx.MockTransport(handle))
+
+    async def source():
+        return [_model("one"), _model("two")]
+
+    await observe_models(
+        directory,
+        source,
+        _writer([]),
+        "a",
+        nodes_by_id={"a": node},
+        observation_time=_observation_time,
+    )
+    assert calls == ["agent-a"]
+
+
+@pytest.mark.parametrize("delay_at", ["probe", "first_write"])
+async def test_a_group_keeps_its_capture_time_despite_probe_or_write_delay(delay_at):
+    initial = await _observation_time()
+    current = initial
+    clock_calls = 0
+    models = [_model("one"), _model("two")]
+    stamped = []
+
+    async def timestamp():
+        nonlocal clock_calls
+        clock_calls += 1
+        return current
+
+    class SlowRuntime(FakeRuntime):
+        async def residency(self):
+            nonlocal current
+            assert clock_calls == 1, "capture database time before awaiting the runtime"
+            if delay_at == "probe":
+                current += timedelta(seconds=91)
+            return RuntimeResidency(resident={"one": 4.0, "two": 4.0})
+
+    async def source():
+        return models
+
+    async def write(model_id, state, memory, at):
+        nonlocal current
+        stamped.append(at)
+        models[:] = [
+            replace(m, observed_state=state, observed_memory_gb=memory, observed_at=at)
+            if m.id == model_id
+            else m
+            for m in models
+        ]
+        if delay_at == "first_write" and len(stamped) == 1:
+            current += timedelta(seconds=91)
+
+    await observe_models(
+        {RuntimeKind.OLLAMA: SlowRuntime()}, source, write, "a", observation_time=timestamp
+    )
+    assert clock_calls == 1 and stamped == [initial, initial]
+    node = _node("a", NodeStatus.ONLINE)
+    routing = RoutingService(FixedClock(current))
+    for model in models:
+        policy = RoutingPolicy("chat", (RoutingCandidate(model.alias, 100),))
+        status = next(
+            c
+            for c in assess_availability([policy], [model], [node], {}, frozenset(), current)
+            if c.capability == "chat"
+        )
+        assert not status.available and status.reasons == ("residency_stale",)
+        assert (
+            routing.rejection(policy.candidates[0].require, model, node, None, current)
+            == "residency_stale"
+        )
+
+
+async def test_a_failed_database_clock_never_falls_back_to_write_time():
+    async def timestamp():
+        raise ConnectionError("database clock unavailable")
+
+    async def source():
+        return [_model("one")]
+
+    written = []
+    with pytest.raises(ConnectionError, match="clock unavailable"):
+        await observe_models(
+            {RuntimeKind.OLLAMA: FakeRuntime()},
+            source,
+            _writer(written),
+            "a",
+            observation_time=timestamp,
+        )
+    assert written == []
+
+
+async def test_a_missing_adapter_does_not_need_a_database_clock():
+    async def timestamp():
+        raise AssertionError("no runtime to probe")
+
+    async def source():
+        return [_model("one", observed=ModelState.LOADED)]
+
+    written = []
+    await observe_models({}, source, _writer(written), "a", observation_time=timestamp)
+    assert written == [("id-one", None, None)]
 
 
 async def test_each_node_is_stamped_with_its_runtimes_version_and_cleared_when_silent() -> None:
