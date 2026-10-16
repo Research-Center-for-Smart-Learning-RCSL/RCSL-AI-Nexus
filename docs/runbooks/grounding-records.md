@@ -184,6 +184,17 @@ deadline does not manufacture `outcome_unknown`. Real transport loss, runtime
 EOF without terminal evidence, or loss of the owning process still retains the
 existing uncertainty/blocking rules. Runtime transport timeouts remain in force.
 
+A summary stream that has started and then sends nothing for two minutes
+(`SUMMARY_IDLE_SECONDS`) is a read timeout. The agent closes the stream and
+settles `outcome_unknown` with reason `transport:IdleTimeout`, which blocks the
+node like any other transport timeout. Ollama exposes no in-flight request to
+ask about, so the runtime may still be generating and nothing proves it
+stopped. The bound shortens how long a stalled runtime holds the summary slot,
+which the 25-minute request read timeout otherwise would; it does not make the
+outcome definite. The wait for the first line, which covers any cold load and
+the prefill, stays on the request timeout. Resolve the operation as for any
+other unknown outcome.
+
 ## Validation
 
 `test_grounding_replay.py` verifies three append-only turns using the actual

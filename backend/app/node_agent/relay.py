@@ -13,7 +13,9 @@ classification is the part that matters (design Q5, R5, U2 on #24):
   request byte is written. The transport has retries disabled, so nothing
   earlier could have sent it.
 - **Uncertain** for everything else after that point: a read error or
-  timeout, a protocol error, EOF without `done`. These block the node.
+  timeout, a protocol error, EOF without `done`. These block the node. A
+  summary's shorter idle bound between lines is such a read timeout: it
+  ends the wait sooner, not the uncertainty.
 
 A stream is read to its end whatever happens to the caller. The replay buffer
 is bounded; past the bound the output is discarded and the attempt is marked
@@ -22,9 +24,11 @@ replay-unavailable, and reading continues to `done`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -44,6 +48,15 @@ logger = logging.getLogger(__name__)
 
 REPLAY_CAP_BYTES = 4 * 1024 * 1024
 CHECKPOINT_SECONDS = 5.0
+SUMMARY_IDLE_SECONDS = 120.0
+"""Longest gap between two lines of a summary stream once it has started.
+
+A token on a 7B model arrives in tens of milliseconds, and in seconds even
+under memory pressure, so two minutes is only reached by a stall. It bounds
+how long a stalled runtime holds the node's one summary slot, which the
+request timeout (25 minutes per read) otherwise would. The first line, after
+any cold load and the prefill, still waits on the request timeout.
+"""
 _TERMINAL_FIELDS = (
     "done_reason",
     "eval_count",
@@ -53,6 +66,35 @@ _TERMINAL_FIELDS = (
     "prompt_eval_duration",
     "eval_duration",
 )
+
+
+class _IdleTimeout(Exception):
+    """No line arrived within the idle bound after the stream had started."""
+
+
+async def _idle_bounded(lines: AsyncIterator[str], idle_s: float | None) -> AsyncIterator[str]:
+    """`lines`, with each read after the first bounded by `idle_s`.
+
+    The first line waits on the client's own read timeout: a cold load and the
+    prefill both happen before the runtime sends anything. Once it streams, a
+    gap is between two generated tokens, so a short bound only cuts a stall.
+    Only the wait for a line is timed, never the consumer's handling of it.
+    """
+    started = False
+    while True:
+        try:
+            if started and idle_s is not None:
+                try:
+                    async with asyncio.timeout(idle_s):
+                        line = await anext(lines)
+                except TimeoutError as exc:
+                    raise _IdleTimeout from exc
+            else:
+                line = await anext(lines)
+        except StopAsyncIteration:
+            return
+        started = True
+        yield line
 
 
 def _tag(ref: str) -> str:
@@ -224,13 +266,20 @@ class OllamaRelay(LifecycleRelay):
         return version if isinstance(version, str) and version else None
 
     def chat(
-        self, payload: dict[str, Any], *, store_output: bool, expected_identity: str | None
+        self,
+        payload: dict[str, Any],
+        *,
+        store_output: bool,
+        expected_identity: str | None,
+        idle_timeout_s: float | None = None,
     ) -> Relay:
         async def run(sink: Sink) -> Outcome:
             mismatch = await self._revision_mismatch(payload["model"], expected_identity)
             if mismatch is not None:
                 return mismatch
-            return await self._stream_chat(payload, sink, store_output=store_output)
+            return await self._stream_chat(
+                payload, sink, store_output=store_output, idle_timeout_s=idle_timeout_s
+            )
 
         return run
 
@@ -264,7 +313,12 @@ class OllamaRelay(LifecycleRelay):
         return None
 
     async def _stream_chat(
-        self, payload: dict[str, Any], sink: Sink, *, store_output: bool
+        self,
+        payload: dict[str, Any],
+        sink: Sink,
+        *,
+        store_output: bool,
+        idle_timeout_s: float | None = None,
     ) -> Outcome:
         started = time.monotonic()
         last_checkpoint = started
@@ -288,7 +342,7 @@ class OllamaRelay(LifecycleRelay):
                         terminal={"status": response.status_code, "error": body},
                         reason=f"http_{response.status_code}",
                     )
-                async for line in response.aiter_lines():
+                async for line in _idle_bounded(response.aiter_lines(), idle_timeout_s):
                     if not line.strip():
                         continue
                     try:
@@ -342,6 +396,10 @@ class OllamaRelay(LifecycleRelay):
             return NotSent(type(exc).__name__)
         except httpx.HTTPError as exc:
             return Uncertain(f"transport:{type(exc).__name__}", observed())
+        except _IdleTimeout:
+            # Stopped reading, not seen to end: the runtime may still be
+            # generating, so this is a transport timeout like any other.
+            return Uncertain("transport:IdleTimeout", observed())
 
     async def _embed(self, payload: dict[str, Any], sink: Sink, *, store_output: bool) -> Outcome:
         try:
