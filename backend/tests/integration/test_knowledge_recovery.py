@@ -13,7 +13,8 @@ from app.adapters.persistence.knowledge_epochs import PostgresKnowledgeEpochs
 from app.adapters.persistence.repositories import PostgresKnowledgeRepository
 from app.adapters.persistence.sqlalchemy_models import AuditLogRow, KnowledgeTenantEpochRow
 from app.domain.entities.actor import Actor, Role
-from app.domain.entities.knowledge import KnowledgeDocument
+from app.domain.entities.knowledge import DocumentStatus, KnowledgeDocument
+from app.domain.exceptions import DocumentNotFoundError
 from app.infrastructure.recover_knowledge import rebuild, transition
 from tests.integration.test_knowledge_epochs import epochs_context as epochs_context
 from tests.unit.test_embedding_and_search import EMBEDDER
@@ -86,35 +87,107 @@ async def test_audit_failure_rolls_back_recovery(epochs_context):
     assert await epochs.read(None) == before
 
 
-@pytest.mark.parametrize("fail", [False, True])
-async def test_full_rebuild_verifies_every_document_or_stays_explicitly_rebuilding(
-    epochs_context, monkeypatch, fail
-):
-    sessions, tenant, collection = epochs_context
+async def seed_documents(sessions, tenant, collection, *statuses):
+    ids = [str(uuid.uuid4()) for _ in statuses]
     async with sessions() as session:
         session.add(KnowledgeTenantEpochRow(tenant_id=tenant, index_requires_rebuild=True))
-        for _ in range(2):
+        for document_id, status in zip(ids, statuses, strict=True):
             await PostgresKnowledgeRepository(session, tenant).save_document(
                 KnowledgeDocument(
-                    str(uuid.uuid4()), tenant, collection, "source.txt", "text/plain", 10
+                    document_id, tenant, collection, "source.txt", "text/plain", 10, status=status
                 )
             )
         await session.commit()
-    storage = SimpleNamespace(read_text=AsyncMock(return_value="source document"))
+    return ids
+
+
+def rebuild_doubles(monkeypatch, texts):
+    async def read_text(document_id):
+        if document_id not in texts:
+            raise DocumentNotFoundError(detail="no stored object")
+        return texts[document_id]
+
+    storage = SimpleNamespace(read_text=AsyncMock(side_effect=read_text))
     vectors = SimpleNamespace(reset_index=AsyncMock(), ensure_ready=AsyncMock(), upsert=AsyncMock())
     target = replace(EMBEDDER, manifest_digest="exact")
     embedder = SimpleNamespace(
         resolve=AsyncMock(return_value=(target, object())),
         embed_with=AsyncMock(return_value=[[0.1, 0.2]]),
     )
-    if fail:
-        embedder.embed_with.side_effect = RuntimeError("runtime failed")
     monkeypatch.setattr(
         "app.infrastructure.recover_knowledge.FilesystemDocumentStorage", lambda *a: storage
     )
     monkeypatch.setattr(
         "app.infrastructure.recover_knowledge.build_vector_store", lambda *a: vectors
     )
+    return vectors, embedder
+
+
+async def statuses(sessions, tenant, ids):
+    async with sessions() as session:
+        repo = PostgresKnowledgeRepository(session, tenant)
+        return [(await repo.get_document(i)).status for i in ids]
+
+
+async def test_rebuild_skips_unindexed_documents_and_keeps_their_status(
+    epochs_context, monkeypatch
+):
+    sessions, tenant, collection = epochs_context
+    kept = (DocumentStatus.UPLOADED, DocumentStatus.ERROR, DocumentStatus.ERROR)
+    ids = await seed_documents(
+        sessions, tenant, collection, DocumentStatus.INDEXED, DocumentStatus.EXTRACTED, *kept
+    )
+    # The first error document has stored text, the uploaded and second do not:
+    # neither may abort the rebuild, and neither may be relabelled indexed.
+    vectors, embedder = rebuild_doubles(monkeypatch, {i: "source document" for i in ids[:3]})
+    plans = []
+    await rebuild(
+        sessions,
+        admin(tenant),
+        0,
+        "full rebuild",
+        writers_stopped=True,
+        embedder=embedder,
+        announce=plans.append,
+    )
+    assert vectors.upsert.await_count == 2
+    assert await statuses(sessions, tenant, ids) == [DocumentStatus.INDEXED] * 2 + list(kept)
+    assert plans[0]["rebuild"] == 2
+    assert {s["id"] for s in plans[0]["skipped"]} == set(ids[2:])
+    assert (await PostgresKnowledgeEpochs(sessions, tenant).read(None)).clean
+
+
+async def test_rebuild_refuses_before_any_change_when_indexed_text_is_missing(
+    epochs_context, monkeypatch
+):
+    sessions, tenant, collection = epochs_context
+    ids = await seed_documents(
+        sessions, tenant, collection, DocumentStatus.INDEXED, DocumentStatus.INDEXED
+    )
+    vectors, embedder = rebuild_doubles(monkeypatch, {ids[0]: "source document"})
+    before = await PostgresKnowledgeEpochs(sessions, tenant).read(None)
+    with pytest.raises(ValueError, match=ids[1]):
+        await rebuild(
+            sessions, admin(tenant), 0, "full rebuild", writers_stopped=True, embedder=embedder
+        )
+    vectors.reset_index.assert_not_awaited()
+    assert await PostgresKnowledgeEpochs(sessions, tenant).read(None) == before
+    assert await statuses(sessions, tenant, ids) == [DocumentStatus.INDEXED] * 2
+    async with sessions() as session:
+        assert await session.scalar(select(AuditLogRow)) is None
+
+
+@pytest.mark.parametrize("fail", [False, True])
+async def test_full_rebuild_verifies_every_document_or_stays_explicitly_rebuilding(
+    epochs_context, monkeypatch, fail
+):
+    sessions, tenant, collection = epochs_context
+    ids = await seed_documents(
+        sessions, tenant, collection, DocumentStatus.INDEXED, DocumentStatus.INDEXED
+    )
+    vectors, embedder = rebuild_doubles(monkeypatch, dict.fromkeys(ids, "source document"))
+    if fail:
+        embedder.embed_with.side_effect = RuntimeError("runtime failed")
     if fail:
         with pytest.raises(RuntimeError):
             await rebuild(

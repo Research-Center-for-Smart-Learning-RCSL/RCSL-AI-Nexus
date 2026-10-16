@@ -1,5 +1,6 @@
 """C4 reads the selected host's declaration without widening counting profiles."""
 
+import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -172,3 +173,97 @@ async def test_capacity_result_does_not_validate_a_concurrently_changed_profile(
     harness.runtime.load = concurrent_edit
     await harness.use_case.load(ADMIN, model.id)
     assert not (await harness.models.get(model.id)).capacity_validated
+
+
+class GatedAgent:
+    """A capacity endpoint whose answers wait until the test releases them."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.gates: dict[str, asyncio.Event] = {}
+        self.fail: set[str] = set()
+
+    def gate(self, ref: str) -> asyncio.Event:
+        return self.gates.setdefault(ref, asyncio.Event())
+
+    async def respond(self, request: httpx.Request) -> httpx.Response:
+        ref = request.url.params["ref"]
+        self.calls.append(ref)
+        await self.gate(ref).wait()
+        if ref in self.fail:
+            return httpx.Response(503)
+        return httpx.Response(200, json={"declared_context_length": 4096, "manifest_digest": "a"})
+
+    def runtime(self) -> NodeAgentRuntime:
+        return NodeAgentRuntime(
+            "http://agent", "token", timeout_s=1, transport=httpx.MockTransport(self.respond)
+        )
+
+
+async def test_concurrent_capacity_lookups_for_one_key_share_one_fetch():
+    agent = GatedAgent()
+    runtime = agent.runtime()
+    lookups = [
+        asyncio.create_task(runtime.declared_context_for_manifest("model", "a")) for _ in range(3)
+    ]
+    await asyncio.sleep(0.01)
+    agent.gate("model").set()
+    assert await asyncio.gather(*lookups) == [4096] * 3
+    assert agent.calls == ["model"]
+
+
+async def test_a_slow_capacity_lookup_does_not_stall_another_ref():
+    agent = GatedAgent()
+    runtime = agent.runtime()
+    slow = asyncio.create_task(runtime.declared_context_for_manifest("slow", "a"))
+    await asyncio.sleep(0.01)
+    agent.gate("fast").set()
+    assert await asyncio.wait_for(runtime.declared_context_for_manifest("fast", "a"), 1) == 4096
+    assert not slow.done()
+    agent.gate("slow").set()
+    assert await slow == 4096
+
+
+async def test_a_waiter_that_gives_up_does_not_cancel_the_shared_fetch():
+    agent = GatedAgent()
+    runtime = agent.runtime()
+    impatient = asyncio.create_task(runtime.declared_context_for_manifest("model", "a"))
+    patient = asyncio.create_task(runtime.declared_context_for_manifest("model", "a"))
+    await asyncio.sleep(0.01)
+    impatient.cancel()
+    agent.gate("model").set()
+    assert await patient == 4096
+    assert agent.calls == ["model"]
+
+
+async def test_a_failed_capacity_lookup_reaches_every_waiter_and_is_not_cached():
+    agent = GatedAgent()
+    agent.fail.add("model")
+    runtime = agent.runtime()
+    lookups = [
+        asyncio.create_task(runtime.declared_context_for_manifest("model", "a")) for _ in range(2)
+    ]
+    await asyncio.sleep(0.01)
+    agent.gate("model").set()
+    results = await asyncio.gather(*lookups, return_exceptions=True)
+    assert all(isinstance(result, httpx.HTTPStatusError) for result in results)
+    agent.fail.clear()
+    assert await runtime.declared_context_for_manifest("model", "a") == 4096
+    assert agent.calls == ["model", "model"]
+
+
+async def test_a_lookup_straddling_a_lifecycle_invalidation_is_not_cached():
+    agent = GatedAgent()
+    runtime = agent.runtime()
+    before = asyncio.create_task(runtime.declared_context_for_manifest("model", "a"))
+    await asyncio.sleep(0.01)
+    runtime._invalidate_capacities()
+    # A lookup after the invalidation does not join the earlier fetch.
+    after = asyncio.create_task(runtime.declared_context_for_manifest("model", "a"))
+    await asyncio.sleep(0.01)
+    assert agent.calls == ["model", "model"]
+    agent.gate("model").set()
+    assert await before == 4096 and await after == 4096
+    assert list(runtime._capacities) == [("model", "a")]
+    assert await runtime.declared_context_for_manifest("model", "a") == 4096
+    assert len(agent.calls) == 2

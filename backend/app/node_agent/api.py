@@ -36,6 +36,7 @@ from app.application.use_cases.route_chat_request.compaction_tier2 import (
 )
 from app.node_agent.dispatch import Attempt, Completed, Existing, Outcome, Refused
 from app.node_agent.guard import GuardRefusal, check_generation, check_pin, registration
+from app.node_agent.relay import SUMMARY_IDLE_SECONDS
 from app.node_agent.resolution import ResolutionRefused
 from app.node_agent.settings import AgentSettings
 from app.node_agent.store import LIFECYCLE_KINDS, NotOwner, Operation
@@ -313,7 +314,12 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             envelope.op_id,
             "summary",
             bounded_summary(
-                agent.relay.chat(payload, store_output=False, expected_identity=verdict.identity),
+                agent.relay.chat(
+                    payload,
+                    store_output=False,
+                    expected_identity=verdict.identity,
+                    idle_timeout_s=SUMMARY_IDLE_SECONDS,
+                ),
                 agent.counter,
                 generation.ref,
             ),
