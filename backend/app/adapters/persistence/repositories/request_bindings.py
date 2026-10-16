@@ -3,6 +3,9 @@
 Its own transactions, never the request's session: a binding must be visible
 to a concurrent copy of the same keyed request **before** anything is
 forwarded, and the request's session commits only when the request ends.
+
+Each attempt stores its own immutable billing snapshot (review on #32).
+The binding's original snapshot remains the fallback for legacy attempts.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from app.domain.entities.attempt import Binding
 
 _LOOKUP = text(
     "SELECT b.tenant_id, b.request_id, b.payload_hash, b.hash_version, b.key_supplied, "
-    "b.version, b.current_seq, b.billing, a.node_id, a.op_id "
+    "b.version, b.current_seq, COALESCE(a.billing, b.billing) AS billing, a.node_id, a.op_id "
     "FROM request_bindings b JOIN request_attempts a "
     "ON a.tenant_id = b.tenant_id AND a.request_id = b.request_id AND a.seq = b.current_seq "
     "WHERE b.tenant_id = :tenant_id AND b.request_id = :request_id"
@@ -75,14 +78,17 @@ class PostgresRequestBindings:
             if won is not None:
                 await session.execute(
                     text(
-                        "INSERT INTO request_attempts (tenant_id, request_id, seq, node_id, op_id) "
-                        "VALUES (:tenant_id, :request_id, 1, :node_id, :op_id)"
+                        "INSERT INTO request_attempts "
+                        "(tenant_id, request_id, seq, node_id, op_id, billing) "
+                        "VALUES (:tenant_id, :request_id, 1, :node_id, :op_id, "
+                        "CAST(:billing AS jsonb))"
                     ),
                     {
                         "tenant_id": tenant_id,
                         "request_id": request_id,
                         "node_id": node_id,
                         "op_id": op_id,
+                        "billing": json.dumps(billing),
                     },
                 )
         found = await self.lookup(tenant_id, request_id)
@@ -90,7 +96,9 @@ class PostgresRequestBindings:
             raise RuntimeError(f"binding {request_id} vanished after it was written")
         return found
 
-    async def rebind(self, binding: Binding, *, node_id: str, op_id: str) -> Binding:
+    async def rebind(
+        self, binding: Binding, *, node_id: str, op_id: str, billing: dict[str, Any]
+    ) -> Binding:
         # Conditional on the version this caller saw: of two rebinds, one wins
         # and the other re-reads and converges on it (design S6).
         async with self._sessions() as session, session.begin():
@@ -113,8 +121,9 @@ class PostgresRequestBindings:
                 await session.execute(
                     text(
                         "INSERT INTO request_attempts (tenant_id, request_id, seq, node_id, "
-                        "op_id, retry_of_seq) "
-                        "VALUES (:tenant_id, :request_id, :seq, :node_id, :op_id, :retry_of)"
+                        "op_id, retry_of_seq, billing) "
+                        "VALUES (:tenant_id, :request_id, :seq, :node_id, :op_id, :retry_of, "
+                        "CAST(:billing AS jsonb))"
                     ),
                     {
                         "tenant_id": binding.tenant_id,
@@ -123,6 +132,7 @@ class PostgresRequestBindings:
                         "node_id": node_id,
                         "op_id": op_id,
                         "retry_of": binding.seq,
+                        "billing": json.dumps(billing),
                     },
                 )
         found = await self.lookup(binding.tenant_id, binding.request_id)

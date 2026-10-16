@@ -8,10 +8,11 @@ twice" is the property everything here exists for.
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import aclosing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -230,6 +231,57 @@ async def test_concurrent_copies_of_one_key_run_once(stack: dict[str, Any]) -> N
     assert stack["ollama"].chats == 1
 
 
+async def test_unsent_retry_bills_the_new_target_and_start_time(stack: dict[str, Any]) -> None:
+    """#32 post-merge review: an unsent request can retry after routing changes.
+
+    Its initial request snapshot must survive, but must not bill the new run.
+    """
+    lost = str(uuid.uuid4())
+    original = {
+        "actor_id": ACTOR.id,
+        "api_key_id": None,
+        "capability": "chat",
+        "model_alias": "old-model",
+        "model_ref": "old-model:latest",
+        "node_id": "old-node",
+        "started_at": "2026-10-08T00:00:00+00:00",
+        "compaction": {"tier": 1, "tokens_before": 100, "tokens_after": 10},
+    }
+    await stack["bindings"].create(
+        tenant_id=DEFAULT_TENANT_ID,
+        request_id=keyed_request_id("retry-billing"),
+        payload_hash=_payload("retry-billing"),
+        hash_version="v1",
+        key_supplied=True,
+        billing=original,
+        node_id=NODE,
+        op_id=lost,
+    )
+
+    first = await _ask(stack, _identity("retry-billing"))
+    replay = await _ask(stack, _identity("retry-billing"))
+    assert _text(first) == _text(replay) == "Hello"
+    assert stack["ollama"].chats == 1
+    bound = await stack["bindings"].lookup(DEFAULT_TENANT_ID, keyed_request_id("retry-billing"))
+    assert bound is not None and bound.seq == 2
+    assert bound.billing["model_ref"] == "qwen2.5:7b", "replay uses the new target"
+    [row] = await _usage(stack)
+    assert row["attempt_id"] == bound.op_id and row["model_alias"] == "qwen7b"
+    started = datetime(2026, 10, 9, tzinfo=UTC)
+    assert started <= row["at"] < started + timedelta(minutes=1)
+    assert row["compaction_tier"] is None
+    conn = await asyncpg.connect(stack["dsn"])
+    try:
+        saved = await conn.fetchval(
+            "SELECT billing FROM request_bindings WHERE request_id = $1", bound.request_id
+        )
+        assert json.loads(saved) == original, "initial snapshot is immutable"
+        state = await conn.fetchval("SELECT state FROM node_operations WHERE op_id = $1", lost)
+        assert state == "cancelled_unsent"
+    finally:
+        await conn.close()
+
+
 async def test_requests_without_a_key_are_bound_and_run_each_time(stack: dict[str, Any]) -> None:
     await _ask(stack, _identity(None))
     await _ask(stack, _identity(None))
@@ -411,6 +463,17 @@ async def test_racing_writers_leave_one_row(stack: dict[str, Any]) -> None:
 
     assert len(await _usage(stack)) == 1
     assert len(stack["observed"]) == 1, "only the writer that inserted counts it"
+
+
+async def test_legacy_attempt_settlement_uses_the_original_binding(stack: dict[str, Any]) -> None:
+    op_id = await _bound_attempt(stack, "legacy-usage")
+    # Old gateways omit the new column, leaving NULL even after schema upgrade.
+    await _owner(stack, "UPDATE request_attempts SET billing = NULL WHERE op_id = $1", op_id)
+    assert await stack["settlement"].sweep() == 1
+    await stack["settlement"].settle(op_id)
+    [row] = await _usage(stack)
+    assert row["attempt_id"] == op_id and row["model_alias"] == "qwen7b"
+    assert row["actor_id"] == ACTOR.id and row["totals_source"] == "runtime_final"
 
 
 async def test_a_client_that_left_is_billed_once_the_agent_finishes(
