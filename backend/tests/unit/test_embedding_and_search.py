@@ -10,6 +10,7 @@ refusals rather than approximations.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -31,7 +32,10 @@ from app.domain.exceptions import (
     VectorStoreError,
 )
 from app.domain.services.routing_service import RoutingService
+from app.shared.clock import FixedClock
 from tests.unit.fakes import FakeEmbedder, FakeModels, FakeNodes, FakePolicies, FakeVectorStore
+
+OBSERVED_AT = datetime(2026, 10, 13, tzinfo=UTC)
 
 TENANT = "11111111-1111-1111-1111-111111111111"
 ADMIN = Actor(
@@ -66,6 +70,8 @@ EMBEDDER = Model(
     runtime=RuntimeKind.OLLAMA,
     node_id="node-1",
     state=ModelState.LOADED,
+    observed_state=ModelState.LOADED,
+    observed_at=OBSERVED_AT,
     capabilities=frozenset({"embedding"}),
 )
 POLICY = RoutingPolicy(
@@ -102,7 +108,7 @@ def build_embedder(
             models=FakeModels((EMBEDDER,)),
             nodes=FakeNodes((NODE,)),
             runtimes={RuntimeKind.OLLAMA: stub},  # type: ignore[dict-item]
-            routing=RoutingService(),
+            routing=RoutingService(FixedClock(OBSERVED_AT)),
         ),
         stub,
     )

@@ -59,7 +59,8 @@ class Model:
     something moves weights behind the registry's back — a runtime restart, an
     out-of-band eviction, an `ollama run` nobody recorded. None means the
     runtime has not been observed (or cannot be: MLX has no residency
-    endpoint), in which case intent is all there is."""
+    endpoint). Only unobservable runtimes may route on intent alone; Ollama
+    requires a fresh positive observation."""
 
     observed_memory_gb: float | None = None
     """The runtime's own figure for the resident weights, which includes the

@@ -623,6 +623,7 @@ services:
       - --storage.tsdb.retention.time=30d
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/availability.rules.yml:/etc/prometheus/availability.rules.yml:ro
       - prometheus-data:/prometheus
     networks: [metrics-gateway, metrics-admin, metrics-viz]
     secrets:
