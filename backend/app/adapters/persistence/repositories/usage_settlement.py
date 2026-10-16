@@ -6,7 +6,7 @@ client left while the agent drained to `done`), and reconciliation of the
 delivery flag. All of them go through this class:
 
 - `settle` inserts the row once, keyed by the attempt, from the agent's
-  terminal commit and the binding's billing snapshot. A row that exists is
+  terminal commit and the attempt's billing snapshot. A row that exists is
   never rewritten, except by:
 - reconciliation, which only turns `completed` from false to true, and only
   when the gateway committed that the client received everything.
@@ -39,7 +39,8 @@ from app.domain.services.usage_settlement import BILLABLE_STATES, settle_usage
 logger = logging.getLogger(__name__)
 
 _FACTS = text(
-    "SELECT a.op_id, a.client_delivery_complete, b.billing, b.tenant_id, "
+    "SELECT a.op_id, a.client_delivery_complete, "
+    "COALESCE(a.billing, b.billing) AS billing, b.tenant_id, "
     "o.state, o.terminal, o.observed, o.provenance "
     "FROM request_attempts a "
     "JOIN request_bindings b ON b.tenant_id = a.tenant_id AND b.request_id = a.request_id "

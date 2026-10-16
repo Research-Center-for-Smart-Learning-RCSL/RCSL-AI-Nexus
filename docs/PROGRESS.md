@@ -38,6 +38,7 @@ separately at the end, marked as superseded.
 
 **[2026-10-14](./progress/2026-10-14.md)**
 - Jev feasibility (#20): defer production integration; correct reranking fit and define an offline local evaluation with data, quality and resource gates
+- #32 post-merge review: unsent retries keep per-attempt billing snapshots for correct attribution and replay
 
 **[2026-10-10](./progress/2026-10-10.md)**
 - 寫入改在回應送出前 commit（#45）；部署時 colima VM 記憶體不足（3 GiB）殺掉了正式服務的 worker
