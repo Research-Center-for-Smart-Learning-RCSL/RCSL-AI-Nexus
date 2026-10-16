@@ -31,8 +31,9 @@ from app.domain.entities.model import (
     RuntimeResidency,
 )
 from app.domain.entities.node import Node, NodeStatus
-from app.infrastructure.config import get_settings
+from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.db import dispose_engine, init_engine, session_scope
+from app.infrastructure.di.inference_runtime import manage_models_for
 from app.infrastructure.di.shared import build_audit
 from app.infrastructure.residency_reconciler import (
     HeartbeatObserver,
@@ -42,6 +43,7 @@ from app.infrastructure.residency_reconciler import (
 )
 from tests.integration.conftest import _alembic_config
 from tests.unit.fakes import FakeRuntime
+from tests.unit.manage_models_fixtures import ADMIN
 
 PREVIOUS_HEAD = "f2c7d9e40b31"
 
@@ -228,6 +230,78 @@ class SimulatedOllama(FakeRuntime):
         return RuntimeResidency(resident=dict(self.resident), on_disk=frozenset(self.on_disk))
 
 
+def _admin(runtime: FakeRuntime) -> tuple[SimpleNamespace, Settings]:
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            runtimes={RuntimeKind.OLLAMA: runtime},
+            authz=RoleAuthorization(),
+            audit=build_audit(),
+            token_counter=None,
+        )
+    )
+    settings = get_settings().model_copy(
+        update={"residency_reconciler_enabled": True, "host_metrics_url": ""}
+    )
+    return app, settings
+
+
+async def _stored(model_id: str) -> Model:
+    async with session_scope() as session:
+        stored = await PostgresModelRepository(session).get(model_id)
+    assert stored is not None
+    return stored
+
+
+async def test_operator_load_and_unload_complete_against_real_postgres(global_engine):
+    """The request transaction must not hold the row while an independent
+    transaction writes the same row: that waited for ever, because the request
+    was itself waiting for the independent write. A timeout, not a hang."""
+    model = _model("qwen", 6, state=ModelState.DOWNLOADED)
+    async with session_scope() as session:
+        await PostgresNodeRepository(session).save(_node())
+        await PostgresModelRepository(session).save(model)
+    runtime = SimulatedOllama({model.ref})
+    app, settings = _admin(runtime)
+
+    async def operator(action: str) -> Model:
+        async with session_scope() as session:
+            use_case = manage_models_for(app, session, settings)  # type: ignore[arg-type]
+            return await getattr(use_case, action)(ADMIN, model.id)
+
+    loaded = await asyncio.wait_for(operator("load"), 10)
+    assert loaded.state is ModelState.LOADED
+    stored = await _stored(model.id)
+    assert stored.state is ModelState.LOADED
+    assert (stored.desired_resident, stored.desired_version) == (True, 1)
+
+    unloaded = await asyncio.wait_for(operator("unload"), 10)
+    assert unloaded.state is ModelState.DOWNLOADED
+    stored = await _stored(model.id)
+    assert stored.state is ModelState.DOWNLOADED
+    assert (stored.desired_resident, stored.desired_version) == (False, 2)
+    assert runtime.loaded == [model.ref] and runtime.unloaded == [model.ref]
+
+
+async def test_a_failed_operator_load_keeps_its_intent_against_real_postgres(global_engine):
+    model = _model("qwen", 6, state=ModelState.DOWNLOADED)
+    async with session_scope() as session:
+        await PostgresNodeRepository(session).save(_node())
+        await PostgresModelRepository(session).save(model)
+    app, settings = _admin(FakeRuntime(fail_on="load"))
+
+    async def load() -> Model:
+        async with session_scope() as session:
+            use_case = manage_models_for(app, session, settings)  # type: ignore[arg-type]
+            return await use_case.load(ADMIN, model.id)
+
+    with pytest.raises(RuntimeError):
+        await asyncio.wait_for(load(), 10)
+    stored = await _stored(model.id)
+    # ERROR and the intent both survive the request's rollback.
+    assert stored.state is ModelState.ERROR
+    assert (stored.desired_resident, stored.desired_version) == (True, 1)
+
+
 async def test_restart_restores_the_desired_set_largest_first(global_engine):
     gemma, qwen, embedder, unwanted = (
         _model("gemma", 44),
@@ -245,17 +319,7 @@ async def test_restart_restores_the_desired_set_largest_first(global_engine):
 
     # After the restart: everything on disk, nothing held.
     runtime = SimulatedOllama({m.ref for m in (gemma, qwen, embedder, unwanted)})
-    app = SimpleNamespace(
-        state=SimpleNamespace(
-            runtimes={RuntimeKind.OLLAMA: runtime},
-            authz=RoleAuthorization(),
-            audit=build_audit(),
-            token_counter=None,
-        )
-    )
-    settings = get_settings().model_copy(
-        update={"residency_reconciler_enabled": True, "host_metrics_url": ""}
-    )
+    app, settings = _admin(runtime)
     observer = HeartbeatObserver(app)  # type: ignore[arg-type]
     reconciler = ReconcileResidency(
         PostgresReconcilerState(),

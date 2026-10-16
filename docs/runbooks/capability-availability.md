@@ -90,6 +90,15 @@ cancellation that works after a restart, when the model is observed
 model; use Unload for that. `desired_version` versions intent only; the weights
 pin remains `manifest_digest`.
 
+Load and Unload commit the intent in their own transaction, once the request's
+checks pass and before the runtime is called, never through the request
+transaction (that held the row lock while a second connection wrote the same
+row, and the request then waited on itself). So a refused Load or Unload (wrong
+state, over budget) leaves the intent unchanged. A Load the runtime fails
+leaves `state = error` and the intent set, and the reconciler retries it within
+its backoff. An Unload the runtime fails leaves the model `loaded` and the
+intent withdrawn.
+
 `RESIDENCY_RECONCILER_ENABLED` (default `false`) starts a loop in the tailnet
 admin, beside the heartbeat. It stays idle unless `NODE_AGENT_ENABLED` is on
 and the heartbeat interval is positive. For each Ollama node it:

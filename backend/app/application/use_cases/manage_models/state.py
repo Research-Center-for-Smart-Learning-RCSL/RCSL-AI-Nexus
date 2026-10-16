@@ -27,6 +27,16 @@ class ModelStateCommitterPort(Protocol):
 
     async def commit(self, model_id: str, state: ModelState) -> None: ...
 
+    async def commit_intent(self, model_id: str, desired: bool) -> int | None:
+        """Write residency intent and bump its version in its own committed
+        transaction, returning the new version, or None for an unknown model.
+
+        Not through the request session: that write would hold the row lock
+        until the request commits, and the `commit` that follows it on the
+        same row, from another connection, would then wait for it forever.
+        Unlike `commit` it raises, because a lost intent is not a log line."""
+        ...
+
 
 def _with_state(model: Model, state: ModelState) -> Model:
     """The model as it is after an intent write, observation included.

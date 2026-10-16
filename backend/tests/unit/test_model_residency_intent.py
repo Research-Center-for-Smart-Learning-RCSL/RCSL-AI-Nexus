@@ -11,10 +11,14 @@ from app.application.audit_subject import RESIDENCY_RECONCILER_ID
 from app.application.use_cases.manage_models import ManageModels
 from app.domain.entities.audit import AuditAction
 from app.domain.entities.model import ModelState, ResourceProfile, RuntimeKind
-from app.domain.exceptions import InsufficientMemoryError, NotAuthorizedError
+from app.domain.exceptions import (
+    InsufficientMemoryError,
+    ModelStateConflictError,
+    NotAuthorizedError,
+)
 from app.domain.services.memory_budget_service import MemoryBudgetService
 from app.shared.clock import FixedClock
-from tests.unit.fakes import FakeStateCommitter
+from tests.unit.fakes import FakeRuntime, FakeStateCommitter
 from tests.unit.manage_models_fixtures import ADMIN, READER, Harness, make_model
 
 NOW = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
@@ -33,6 +37,43 @@ async def test_an_operator_unload_withdraws_it() -> None:
     assert harness.models.rows["m1"].desired_resident is False
     assert harness.models.rows["m1"].desired_version == 1
     assert unloaded.state is ModelState.DOWNLOADED
+
+
+async def test_a_load_the_runtime_fails_keeps_the_intent() -> None:
+    """The wish outlives one failed attempt; that is why it is not `state`."""
+    harness = Harness([make_model()], runtime=FakeRuntime(fail_on="load"))
+    with pytest.raises(RuntimeError):
+        await harness.use_case.load(ADMIN, "m1")
+    row = harness.models.rows["m1"]
+    assert row.state is ModelState.ERROR
+    assert (row.desired_resident, row.desired_version) == (True, 1)
+
+
+async def test_a_refused_load_leaves_the_intent_as_it_was() -> None:
+    harness = Harness([make_model(state=ModelState.NOT_DOWNLOADED)])
+    with pytest.raises(ModelStateConflictError):
+        await harness.use_case.load(ADMIN, "m1")
+    assert harness.models.rows["m1"].desired_version == 0
+
+
+async def test_a_refused_unload_leaves_the_intent_as_it_was() -> None:
+    harness = Harness([make_model(desired_resident=True, desired_version=2)])
+    with pytest.raises(ModelStateConflictError):
+        await harness.use_case.unload(ADMIN, "m1")
+    row = harness.models.rows["m1"]
+    assert (row.desired_resident, row.desired_version) == (True, 2)
+
+
+async def test_an_unload_the_runtime_fails_keeps_the_intent_withdrawn() -> None:
+    harness = Harness(
+        [make_model(state=ModelState.LOADED, desired_resident=True)],
+        runtime=FakeRuntime(fail_on="unload"),
+    )
+    with pytest.raises(RuntimeError):
+        await harness.use_case.unload(ADMIN, "m1")
+    row = harness.models.rows["m1"]
+    assert row.state is ModelState.LOADED
+    assert (row.desired_resident, row.desired_version) == (False, 1)
 
 
 async def test_intent_changes_without_touching_the_runtime_and_is_audited_as_accepted() -> None:

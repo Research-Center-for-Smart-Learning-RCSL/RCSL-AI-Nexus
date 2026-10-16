@@ -370,6 +370,9 @@ class FakeStateCommitter:
             observed_at=None,
         )
 
+    async def commit_intent(self, model_id: str, desired: bool) -> int | None:
+        return await self._models.set_desired_residency(model_id, desired)
+
 
 class FakeNodes:
     def __init__(self, nodes: Sequence[Node] = ()) -> None:
