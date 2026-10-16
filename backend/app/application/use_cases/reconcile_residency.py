@@ -11,7 +11,10 @@ does, within bounds:
 - It restores **largest first** and, after each load, re-observes **the whole
   node** through the runtime, because a load can evict a sibling. Desired
   models still not resident are re-queued, for at most two repair rounds per
-  pass; then the node backs off, `30 s × 2^n` up to 15 minutes.
+  pass; then the node backs off, `30 s × 2^n` up to 15 minutes. After
+  `GIVE_UP_AFTER_WASTED_PASSES` such failures that each loaded weights, with
+  the intent unchanged, it **gives up** on the node and logs an error, until
+  the intent changes or the desired set is observed resident.
 - Every load is `ManageModels.restore`: the operator's checks, memory budget,
   state transitions and audit, and through the node agent's exclusive
   lifecycle path, which keeps production load options (registered `num_ctx`,
@@ -42,6 +45,7 @@ from typing import Protocol
 from app.domain.entities.model import Model, RuntimeKind
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.services.residency_reconciliation import (
+    GIVE_UP_AFTER_WASTED_PASSES,
     MAX_REPAIR_ROUNDS,
     REQUIRED_ABSENT_OBSERVATIONS,
     TRANSIENT_STATES,
@@ -116,6 +120,9 @@ class PassResult(enum.StrEnum):
     """A lifecycle operation is in flight, or another reconciler holds the node."""
     UNHEALTHY = "unhealthy"
     SUSPENDED = "suspended"
+    GAVE_UP = "gave_up"
+    """Restores kept failing after loading weights, for the same intent. The
+    node is left alone until its intent changes or the set is resident."""
 
 
 @dataclass(frozen=True)
@@ -131,6 +138,9 @@ class PassOutcome:
 class _Backoff:
     failures: int = 0
     until: datetime | None = None
+    wasted: int = 0
+    """Consecutive failed passes that loaded weights before failing."""
+    gave_up: bool = False
 
 
 @dataclass
@@ -160,6 +170,9 @@ class ReconcileResidency:
         # which can only delay a restore, never hasten one.
         self._evidence = AbsenceEvidence()
         self._backoff: dict[str, _Backoff] = {}
+        # Each node's desired set and versions as last seen. A change resets
+        # the backoff and any give-up: someone has asked for something new.
+        self._intents: dict[str, frozenset[tuple[str, int]]] = {}
 
     async def run_once(self) -> list[PassOutcome]:
         """One pass over every node. Never raises for one node's failure."""
@@ -174,7 +187,8 @@ class ReconcileResidency:
             except Exception as exc:  # noqa: BLE001 - one node must not stop the others
                 logger.exception("residency reconciliation of node %s failed", node.id)
                 outcome = await self._fail(node.id, f"error:{type(exc).__name__}", _Progress())
-            if outcome.result is not PassResult.IDLE:
+            # A give-up is logged once, loudly, when it happens.
+            if outcome.result not in (PassResult.IDLE, PassResult.GAVE_UP):
                 logger.info(
                     "residency pass node=%s result=%s restored=%s released=%s reason=%s",
                     outcome.node_id,
@@ -190,12 +204,21 @@ class ReconcileResidency:
         if await self._suspended():
             return PassOutcome(node.id, PassResult.SUSPENDED)
         now = await self._state.now()
+        models = [m for m in await self._state.models_on(node.id) if _reconcilable(m)]
+        desired = [m for m in models if m.desired_resident]
+        intent = frozenset((m.id, m.desired_version) for m in desired)
+        previous = self._intents.get(node.id)
+        self._intents[node.id] = intent
+        if previous is not None and previous != intent:
+            self._backoff.pop(node.id, None)
+        if all(observed_resident(m, now) for m in desired if restorable(m, now)):
+            self._backoff.pop(node.id, None)
         backoff = self._backoff.get(node.id)
+        if backoff is not None and backoff.gave_up:
+            return PassOutcome(node.id, PassResult.GAVE_UP)
         if backoff is not None and backoff.until is not None and now < backoff.until:
             return PassOutcome(node.id, PassResult.BACKING_OFF)
 
-        models = [m for m in await self._state.models_on(node.id) if _reconcilable(m)]
-        desired = [m for m in models if m.desired_resident]
         for model in models:
             if not model.desired_resident:
                 self._evidence.forget(model.id)
@@ -206,8 +229,6 @@ class ReconcileResidency:
             and m.state not in TRANSIENT_STATES
         ]
         if not due:
-            if all(observed_resident(m, now) for m in desired if restorable(m, now)):
-                self._backoff.pop(node.id, None)
             return PassOutcome(node.id, PassResult.IDLE)
         if node.status is not NodeStatus.ONLINE:
             return PassOutcome(node.id, PassResult.UNHEALTHY)
@@ -292,6 +313,21 @@ class ReconcileResidency:
         backoff.failures += 1
         now = await self._state.now()
         backoff.until = now + timedelta(seconds=backoff_seconds(backoff.failures))
+        # Only a pass that loaded weights and still failed counts towards
+        # giving up: that is the cost worth stopping. A refusal or an outage
+        # loads nothing, and backing off is enough for it.
+        if progress.restored:
+            backoff.wasted += 1
+        if backoff.wasted >= GIVE_UP_AFTER_WASTED_PASSES and not backoff.gave_up:
+            backoff.gave_up = True
+            logger.error(
+                "residency reconciler gave up on node %s after %d failed restores of the "
+                "same desired set (last: %s); it will not reload this node until its "
+                "residency intent changes or the desired set is observed resident",
+                node_id,
+                backoff.wasted,
+                reason,
+            )
         # After a failure, fresh evidence is required again: the load itself
         # cleared and rewrote observations, so older answers no longer chain.
         for model in await self._state.models_on(node_id):

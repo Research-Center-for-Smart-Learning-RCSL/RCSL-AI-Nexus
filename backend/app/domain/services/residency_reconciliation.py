@@ -23,6 +23,14 @@ A failed, missing or stale probe is not evidence and restarts the count."""
 MAX_REPAIR_ROUNDS = 2
 """Rounds after the first in one pass, for desired models a load evicted."""
 
+GIVE_UP_AFTER_WASTED_PASSES = 4
+"""Consecutive failed passes that did load weights, for one unchanged intent,
+before the reconciler stops restoring that node. A desired set that cannot
+co-reside would otherwise reload 30-40 GB every 15 minutes for ever. An intent
+change on the node (any Load, Unload or residency-intent write bumps a
+version), the whole desired set observed resident, or an admin restart starts
+it again."""
+
 BACKOFF_BASE_SECONDS = 30.0
 BACKOFF_CAP_SECONDS = 15 * 60.0
 

@@ -125,6 +125,16 @@ and the heartbeat interval is positive. For each Ollama node it:
 5. Re-queues any desired model still not resident, including evicted siblings,
    for at most two repair rounds. Then it backs off `30 s × 2^n` (cap 15 min)
    and needs two fresh observations again.
+6. Gives up on the node after four consecutive failed passes that each loaded
+   weights, while the node's intent is unchanged. A desired set that cannot
+   co-reside would otherwise reload 30-40 GB every 15 minutes indefinitely.
+   It logs `residency reconciler gave up on node ...` at error level once and
+   then leaves the node alone. Failures that load nothing (a budget refusal,
+   an outage) never count; they only back off. To retry, fix the cause (for
+   example withdraw one model's intent) and change any intent on the node:
+   Load, Unload or **Stop restoring** all bump a version. The give-up also
+   clears when the whole desired set is observed resident, or when
+   `admin-tailnet` restarts, since the count is held in memory.
 
 Loads on one node are serialised by that advisory lock, whether the flag is
 on or not: an operator's Load takes it for its own duration, and the

@@ -17,6 +17,7 @@ from app.application.use_cases.reconcile_residency import PassResult, ReconcileR
 from app.domain.entities.model import Model, ModelState, ResourceProfile, RuntimeKind
 from app.domain.entities.node import Node, NodeStatus
 from app.domain.exceptions import InsufficientMemoryError
+from app.domain.services.residency_reconciliation import GIVE_UP_AFTER_WASTED_PASSES
 from tests.unit.manage_models_fixtures import NODE, make_model
 
 START = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
@@ -388,3 +389,45 @@ async def test_nothing_to_do_when_everything_desired_is_resident():
     (outcome,) = await _settle(world, reconciler, beats=3)
     assert outcome.result is PassResult.IDLE
     assert world.loads == []
+
+
+async def _until(world: World, reconciler: ReconcileResidency, stop: PassResult, beats: int = 400):
+    """Heartbeats every 30 s until `stop`, returning every result that acted."""
+    seen = []
+    for _ in range(beats):
+        await world.heartbeat()
+        (outcome,) = await reconciler.run_once()
+        if outcome.result not in (PassResult.IDLE, PassResult.BACKING_OFF):
+            seen.append(outcome.result)
+        if outcome.result is stop:
+            break
+    return seen
+
+
+async def test_a_set_that_cannot_co_reside_is_given_up_on():
+    """Two repair rounds and a 15 min backoff would still reload it for ever."""
+    world = _restart_world()
+    world.evicts = {"q": {"e"}, "e": {"q"}}
+    reconciler = _reconciler(world)
+
+    seen = await _until(world, reconciler, PassResult.GAVE_UP)
+    assert seen == [PassResult.FAILED] * GIVE_UP_AFTER_WASTED_PASSES + [PassResult.GAVE_UP]
+    loads = len(world.loads)
+    await _until(world, reconciler, PassResult.RESTORED, beats=100)
+    assert len(world.loads) == loads, "nothing is reloaded once it has given up"
+
+    # An operator's change of intent is a new request: it tries again.
+    world.rows["e"] = replace(world.rows["e"], desired_version=2)
+    world.evicts = {}
+    assert await _until(world, reconciler, PassResult.RESTORED) == [PassResult.RESTORED]
+    assert world.resident == {"g", "q", "e"}
+
+
+async def test_failures_that_load_nothing_never_give_up():
+    """A refusal or an outage costs no reload; backing off is enough."""
+    world = _restart_world()
+    world.fail_loads = {"g"}
+    reconciler = _reconciler(world)
+    seen = await _until(world, reconciler, PassResult.GAVE_UP)
+    assert PassResult.GAVE_UP not in seen
+    assert len(seen) > GIVE_UP_AFTER_WASTED_PASSES
