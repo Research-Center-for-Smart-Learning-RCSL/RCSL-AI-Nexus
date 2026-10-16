@@ -4,7 +4,9 @@ on #24): which figure, from which source, and what `completed` means."""
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
+from app.adapters.persistence.repositories import PostgresUsageSettlement
 from app.domain.services.usage_settlement import settle_usage
 
 STARTED = datetime(2026, 10, 9, tzinfo=UTC)
@@ -136,3 +138,59 @@ def test_a_malformed_timing_is_null() -> None:
     )
 
     assert (usage.prompt_eval_ms, usage.eval_ms) == (None, None)
+
+
+class _Session:
+    def __init__(self, executed: list[dict[str, Any]]) -> None:
+        self._executed = executed
+
+    async def __aenter__(self) -> _Session:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    def begin(self) -> _Session:
+        return self
+
+    async def execute(self, _statement: Any, params: dict[str, Any]) -> None:
+        self._executed.append(params)
+
+
+class _Sweep(PostgresUsageSettlement):
+    """The sweep's loop, with the database queries replaced."""
+
+    def __init__(self, poison: set[str]) -> None:
+        self.reconciled: list[dict[str, Any]] = []
+        super().__init__(cast("Any", lambda: _Session(self.reconciled)))
+        self.poison = poison
+        self.ordered_with: list[set[str]] = []
+
+    async def _candidates(self, limit: int) -> tuple[list[str], list[str]]:
+        self.ordered_with.append(set(self._failing))
+        return ["bad", "good-1", "good-2"], ["late-1"]
+
+    async def settle(self, op_id: str) -> bool:
+        if op_id in self.poison:
+            raise RuntimeError("malformed billing snapshot")
+        return True
+
+
+async def test_one_attempt_that_raises_does_not_stall_the_sweep() -> None:
+    """Review on #32: the rest are settled, the late delivery reconciled."""
+    sweep = _Sweep(poison={"bad"})
+
+    assert await sweep.sweep() == 2
+    assert sweep.reconciled == [{"op_id": "late-1"}]
+
+
+async def test_an_attempt_that_raised_is_ordered_behind_the_rest_until_it_settles() -> None:
+    sweep = _Sweep(poison={"bad"})
+    await sweep.sweep()
+    await sweep.sweep()
+    assert sweep.ordered_with == [set(), {"bad"}]
+
+    sweep.poison.clear()
+    await sweep.sweep()
+    await sweep.sweep()
+    assert sweep.ordered_with[-1] == set(), "forgotten once it settles"

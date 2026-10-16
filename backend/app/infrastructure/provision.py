@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
+from collections.abc import Mapping
 
 from app.adapters.persistence.repositories import (
     PostgresKnowledgeRepository,
@@ -54,6 +56,14 @@ TRANSIENT_RECONCILIATION = {
 
 
 def build_local_node(settings: Settings) -> Node:
+    if settings.node_agent_enabled and not settings.node_agent_url:
+        # Refused rather than written as NULL (review on #32): with the agent
+        # on, a node without an address is refused, so the deploy would come
+        # up "healthy" and every chat request would find no runtime.
+        raise ValueError(
+            "NODE_AGENT_ENABLED is set but NODE_AGENT_URL is empty; deploy with "
+            "docker-compose.node-agent.yml, which sets it, or turn the agent off"
+        )
     return Node(
         id=settings.node_id,
         name=settings.node_name,
@@ -73,11 +83,32 @@ def build_local_node(settings: Settings) -> Node:
     )
 
 
+def agent_node_mismatch(settings: Settings, environ: Mapping[str, str]) -> str | None:
+    """The agent's node id when it is not the row provisioned here.
+
+    The address goes to `NODE_ID`'s row while the agent claims
+    `NODE_AGENT_NODE_ID`'s, so requests routed there reach an agent that
+    answers for another node. Warned rather than refused: the agent's own setting is only
+    visible here when `.env` carries it, so its absence proves nothing.
+    """
+    agent_node = environ.get("NODE_AGENT_NODE_ID")
+    if settings.node_agent_enabled and agent_node and agent_node != settings.node_id:
+        return agent_node
+    return None
+
+
 async def provision() -> None:
     settings = get_settings()
+    node = build_local_node(settings)
+    if (agent_node := agent_node_mismatch(settings, os.environ)) is not None:
+        logger.warning(
+            "NODE_AGENT_NODE_ID=%s differs from NODE_ID=%s; the agent address "
+            "goes to the NODE_ID row",
+            agent_node,
+            settings.node_id,
+        )
     init_engine(settings)
     try:
-        node = build_local_node(settings)
         async with session_scope() as session:
             # Rewritten on every run, so changing NODE_TOTAL_MEMORY_GB after
             # moving to different hardware takes effect without anyone editing
