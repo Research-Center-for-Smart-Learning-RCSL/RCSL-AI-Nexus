@@ -51,8 +51,8 @@ alone allocates 44.02 GiB at its registered 262144 context, and the set is
 within half a percent of what 64 GB holds. The fraction is 0.80, which is also
 the service's own default, and it is a setting because for two days it could
 not be: the 2026-09-05 Colima migration put the containers inside a VM whose
-host footprint reached 9.4 GiB, and **that VM is now capped at 3 GiB, which is
-load-bearing for every number in this paragraph**
+host footprint reached 9.4 GiB, and **that VM is now capped at 4 GiB (3 GiB until
+2026-10-10), which is load-bearing for every number in this paragraph**
 ([01-physical-components.md](./architecture/deployment/01-physical-components.md)). Keeping the deduction there rather than in the total is
 deliberate — a `nodes` row's `total_memory_gb` answers what the machine has,
 and netting the VM out of it (as 2026-09-07 briefly did) both hides the
