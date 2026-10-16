@@ -268,6 +268,23 @@ class FakeModels:
     async def save(self, model: Model) -> None:
         self.rows[model.id] = model
 
+    async def set_capacity_validated(self, model: Model, validated: bool) -> None:
+        current = self.rows[model.id]
+        if (
+            current.ref,
+            current.node_id,
+            current.runtime,
+            current.resource_profile.context_length,
+            current.manifest_digest,
+        ) == (
+            model.ref,
+            model.node_id,
+            model.runtime,
+            model.resource_profile.context_length,
+            model.manifest_digest,
+        ):
+            self.rows[model.id] = replace(current, capacity_validated=validated)
+
     async def set_state(self, model_id: str, state: ModelState) -> None:
         # Clears the observation with the intent write, as the Postgres
         # repository does: an observation taken before this transition must not

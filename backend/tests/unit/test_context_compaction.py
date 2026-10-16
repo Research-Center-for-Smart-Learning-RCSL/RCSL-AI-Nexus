@@ -42,7 +42,7 @@ from app.application.use_cases.route_chat_request.compaction_tier2 import (
 )
 from app.domain.entities.chat import Message, MessageRole, ToolDefinition
 from app.domain.entities.model import Model, ModelState, ResourceProfile, RuntimeKind
-from app.domain.exceptions import ContextTooLongError
+from app.domain.exceptions import ContextTooLongError, ServerOverloadedError
 from app.infrastructure.concurrency import SemaphoreConcurrencyLimiter
 from app.infrastructure.config import get_settings
 from app.infrastructure.di.inference_runtime import build_route_chat_request
@@ -475,6 +475,33 @@ async def test_a_different_prefix_is_a_different_key() -> None:
     assert len(backing.store) == 2
 
 
+async def test_a_tier2_cache_hit_does_not_need_summary_admission() -> None:
+    cache = CompactionCache(MemoryCache())
+    messages = _agent_history(14)
+    common = dict(
+        messages=messages,
+        tools=[],
+        counted=50_000,
+        limit=1000,
+        count_fn=_counter(900),
+        target=TARGET,
+        cache=cache,
+        lock=asyncio.Lock(),
+    )
+    assert await try_tier2(**common, summarise_fn=RecordingSummariser()) is not None
+
+    async def busy(messages):
+        raise ServerOverloadedError(retry_after_seconds=2, detail="summary_busy")
+
+    # Even with the obsolete gateway lock held, a cached prefix serves without
+    # contacting an agent whose summary slot could be occupied by another key.
+    await common["lock"].acquire()
+    try:
+        assert await try_tier2(**common, summarise_fn=busy) is not None
+    finally:
+        common["lock"].release()
+
+
 async def test_a_cached_prefix_survives_a_round_trip_through_redis() -> None:
     """The value is JSON in a string, so the roles and the tool pairing have to
     come back as they went in. They are read straight back into a prompt."""
@@ -546,6 +573,9 @@ class SteppedCounter:
 
     async def prepare(self, ref: str) -> bool:
         return True
+
+    async def native_context_length(self, ref: str) -> int | None:
+        return 8192
 
     async def count_prompt(self, ref, messages, tools) -> int | None:
         self.asked += 1
@@ -798,7 +828,7 @@ class DeclaringCounter:
         return self._counted
 
     async def count_parts(self, ref, texts) -> list[int] | None:
-        return None
+        return [len(text) for text in texts]
 
     async def native_context_length(self, ref: str) -> int | None:
         return self._declared
@@ -850,14 +880,13 @@ async def test_the_summariser_leaves_room_for_the_summary_itself() -> None:
     assert await under([Message(role=MessageRole.USER, content="x")]) != ""
 
 
-async def test_a_build_with_no_counter_sends_the_prompt_unchecked() -> None:
-    """Every build that has no GGUF to read, which is why the counter is
-    optional rather than required. The bound is declared and unenforced there,
-    exactly as the prompt ceiling is estimated rather than counted."""
+async def test_a_build_with_no_counter_refuses_before_sending() -> None:
     runtime = FakeRuntime(chunks=1)
     summarise = build_summarise_fn(runtime, "qwen2.5:7b", 32768, None)  # type: ignore[arg-type]
 
-    assert await summarise([Message(role=MessageRole.USER, content="x")]) != ""
+    with pytest.raises(SummaryTooLongError):
+        await summarise([Message(role=MessageRole.USER, content="x")])
+    assert runtime.seen_context_length is None
 
 
 async def test_the_runner_is_sized_by_what_was_asked_for() -> None:
@@ -865,7 +894,12 @@ async def test_the_runner_is_sized_by_what_was_asked_for() -> None:
     into `num_ctx` — the argument whose absence caused the 2026-08-07
     eviction."""
     runtime = FakeRuntime(chunks=1)
-    summarise = build_summarise_fn(runtime, "qwen2.5:7b", 32768, None)  # type: ignore[arg-type]
+    summarise = build_summarise_fn(
+        runtime,
+        "qwen2.5:7b",
+        32768,
+        DeclaringCounter(100),  # type: ignore[arg-type]
+    )
 
     await summarise([Message(role=MessageRole.USER, content="x")])
 

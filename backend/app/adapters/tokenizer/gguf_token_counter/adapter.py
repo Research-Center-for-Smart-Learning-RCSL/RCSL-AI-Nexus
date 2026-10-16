@@ -493,28 +493,48 @@ class GgufTokenCounter:
         so the model still gets real token counts rather than the character
         estimate.
         """
-        python_vocab = self._build_python(ref, blob)
-        if python_vocab is None:
-            return None
-
         cache_key = str(blob) + ":" + ref
-        result: tuple[bool, str | None] = _nexus_native.prepare(str(blob), cache_key)
-        success, error = result
-        if not success:
+        try:
+            # Only Rust builds the large vocabulary on the successful path.
+            # Python needs the small rendering metadata, not tokens or merges.
+            result: tuple[bool, str | None] = _nexus_native.prepare(str(blob), cache_key)
+            success, error = result
+            if not success:
+                raise RuntimeError(error)
+            metadata = read_metadata(blob, lambda key: key in (CHAT_TEMPLATE_KEY, ARCHITECTURE_KEY))
+            template, renderer = self._template_for(ref, metadata)
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Rust tokenizer build failed for %s: %s; falling back to Python tokenizer",
                 ref,
-                error,
+                exc,
             )
-            return python_vocab
+            return self._build_python(ref, blob)
 
         logger.info("counting %s with Rust encoder + Python template from %s", ref, blob.name)
         return _NativeVocabulary(
             blob_path=str(blob),
             cache_key=cache_key,
-            template=python_vocab._template,
-            renderer=python_vocab.renderer,
+            template=template,
+            renderer=renderer,
         )
+
+    async def measure_capacity(self, ref: str) -> Measurement:
+        """Identity and declaration from one snapshot, without a vocabulary build."""
+        snapshot = await asyncio.to_thread(self._resolve, ref)
+        declared = await self._declared_context(ref, snapshot)
+        return Measurement(identity=snapshot.identity, counted=None, declared_context=declared)
+
+    def _template_for(self, ref: str, metadata: dict[str, Any]) -> tuple[Any, str | None]:
+        source = metadata.get(CHAT_TEMPLATE_KEY)
+        self._fallback_template.discard(ref)
+        if isinstance(source, str):
+            return _build_template(source), fingerprint.jinja_renderer(source)
+        if metadata.get(ARCHITECTURE_KEY) == "gemma4":
+            variant = renderer_variant(ref)
+            return Gemma4Renderer(large=variant == "large"), fingerprint.gemma4_renderer(variant)
+        self._fallback_template.add(ref)
+        return _build_template(_CHATML_FALLBACK), None
 
     def _build_python(self, ref: str, blob: Path) -> _Vocabulary | None:
         try:
@@ -558,24 +578,7 @@ class GgufTokenCounter:
             return None
         try:
             tokenizer = build_tokenizer_for_model(metadata)
-            source = metadata.get(CHAT_TEMPLATE_KEY)
-            self._fallback_template.discard(ref)
-            template: Any
-            renderer: str | None = None
-            if isinstance(source, str):
-                template = _build_template(source)
-                renderer = fingerprint.jinja_renderer(source)
-            elif metadata.get(ARCHITECTURE_KEY) == "gemma4":
-                # No template in the weights: the runtime renders gemma4 with a
-                # built-in renderer, ported in `gemma4_renderer` and held to the
-                # runtime's bytes (C6c, #24). ChatML would be another format.
-                variant = renderer_variant(ref)
-                template = Gemma4Renderer(large=variant == "large")
-                renderer = fingerprint.gemma4_renderer(variant)
-            else:
-                # A guess at a format: never a renderer a profile can name.
-                template = _build_template(_CHATML_FALLBACK)
-                self._fallback_template.add(ref)
+            template, renderer = self._template_for(ref, metadata)
         except Exception as exc:  # noqa: BLE001
             logger.warning("could not build a tokeniser for %s from %s: %s", ref, blob.name, exc)
             return None

@@ -24,6 +24,7 @@ from app.domain.exceptions import (
     CapabilityNotIssuedError,
     ContextTooLongError,
     NoAvailableModelError,
+    ServerOverloadedError,
 )
 from app.domain.ports.infrastructure_ports import ConcurrencyLimiterPort
 from app.domain.ports.model_runtime_port import ModelRuntimePort, runtime_for
@@ -41,10 +42,20 @@ from app.shared.clock import Clock
 
 from .binding import RequestBinder, billing_snapshot
 from .compaction import CompactionDisclosure, try_compact
+from .compaction_admission import (
+    COMPACTION_TIMEOUT_SECONDS,
+    MAX_COMPACTION_PAYLOAD_BYTES,
+    payload_exceeds,
+)
 from .compaction_cache import CompactionCache
 from .compaction_tier2 import SummariseFn, try_tier2
 from .diagnostics import _warn_if_tools_dominate
-from .estimates import _counted_phrase, _floor_composition, _floor_prompt_tokens
+from .estimates import (
+    _counted_phrase,
+    _floor_composition,
+    _floor_prompt_tokens,
+    effective_max_tokens,
+)
 from .generation_session import GenerationSessionMixin
 from .guardrails import PromptGuardrailsMixin
 
@@ -79,7 +90,11 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
         compaction_cache: CompactionCache | None = None,
         compaction_lock: asyncio.Lock | None = None,
         binder: RequestBinder | None = None,
+        compaction_payload_bytes: int = MAX_COMPACTION_PAYLOAD_BYTES,
+        compaction_timeout_seconds: float = COMPACTION_TIMEOUT_SECONDS,
     ) -> None:
+        self._compaction_payload_bytes = compaction_payload_bytes
+        self._compaction_timeout_seconds = compaction_timeout_seconds
         self._binder = binder
         """Binds each request to one node agent attempt, or None while node
         agents are disabled, when `Idempotency-Key` has nothing to act on: a
@@ -109,14 +124,8 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
         """
 
         self._compaction_lock = compaction_lock or asyncio.Lock()
-        """Serialises Tier 2 so summarisation can never hold more than one of
-        the four gateway slots.
-
-        Must be process-wide to mean anything. The fallback here constructs a
-        lock per instance, and `RouteChatRequest` is a per-request FastAPI
-        dependency — so a build that relies on this default is not serialised
-        at all. Both composition roots put the real one on `app.state`.
-        """
+        """Legacy constructor compatibility. Tier 2 no longer waits on this
+        lock: the node agent owns the durable, non-queuing summary slot."""
         self._policies = policies
         self._models = models
         self._nodes = nodes
@@ -319,12 +328,20 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
         # here, before any model was chosen; it was about 99000 real tokens,
         # and the model that would have served it could read 131072.
         floor = _floor_prompt_tokens(messages, tools)
-        if floor > self._max_context_tokens:
+        over_bytes = actor.compaction_enabled and payload_exceeds(
+            messages, tools, self._compaction_payload_bytes
+        )
+        if over_bytes or (floor > self._max_context_tokens and not actor.compaction_enabled):
             composition = _floor_composition(messages, tools)
             raise ContextTooLongError(
                 detail=(
-                    f"{_counted_phrase(COUNT_BY_LOWER_BOUND, floor)} exceeds the configured "
-                    f"limit of {self._max_context_tokens}: {composition}"
+                    f"compaction payload exceeds {self._compaction_payload_bytes} bytes: "
+                    f"{composition}"
+                    if over_bytes
+                    else (
+                        f"{_counted_phrase(COUNT_BY_LOWER_BOUND, floor)} exceeds the configured "
+                        f"limit of {self._max_context_tokens}: {composition}"
+                    )
                 ),
                 estimated=floor,
                 limit=self._max_context_tokens,
@@ -369,93 +386,109 @@ class RouteChatRequest(PromptGuardrailsMixin, GenerationSessionMixin):
                 actor,
             )
             compaction_result = None
-            if counted > self._max_context_tokens:
-                if actor.compaction_enabled:
+            limit = self._max_context_tokens
+            if actor.compaction_enabled:
+                servable, judged, _ = await self._prompt_budget(
+                    counted,
+                    basis,
+                    target,
+                    messages,
+                    tools,
+                    max_tokens,
+                    node=nodes.get(target.node_id),
+                    thinking=self._resolve_thinking(thinking, policy),
+                )
+                limit = min(limit, servable)
+                counted = max(counted, judged)
+            if counted > limit:
+                if actor.compaction_enabled and limit > 0:
 
                     async def _recount(
-                        t: Model,
-                        m: Sequence[Message],
-                        tl: Sequence[ToolDefinition],
+                        t: Model, m: Sequence[Message], tl: Sequence[ToolDefinition]
                     ) -> int | None:
                         c, _ = await self._count_prompt(t, m, tl)
                         return c
 
-                    compaction_result = await try_compact(
-                        messages=messages,
-                        tools=tools,
-                        counted=counted,
-                        limit=self._max_context_tokens,
-                        count_fn=_recount,
-                        target=target,
-                    )
-                    if compaction_result is None and self._summarise_fn is not None:
-                        try:
-                            compaction_result = await try_tier2(
+                    try:
+                        async with asyncio.timeout(self._compaction_timeout_seconds):
+                            compaction_result = await try_compact(
                                 messages=messages,
                                 tools=tools,
                                 counted=counted,
-                                limit=self._max_context_tokens,
+                                limit=limit,
                                 count_fn=_recount,
                                 target=target,
-                                summarise_fn=self._summarise_fn,
-                                cache=self._compaction_cache,
-                                lock=self._compaction_lock,
                             )
-                        except Exception:
-                            # Broad on purpose, and the breadth is the decision.
-                            # Summarising reaches a routing policy, a registry,
-                            # a node and another model's runtime; every one of
-                            # those has its own way of being unavailable, and
-                            # none of them is a reason to answer this caller
-                            # with a 500. Failing here leaves
-                            # `compaction_result` None, so the request falls
-                            # through to the same `ContextTooLongError` it
-                            # would have met if compaction were switched off —
-                            # a refusal that names the ceiling, which is the
-                            # disclosure this platform owes an oversized
-                            # prompt. What is never acceptable is proceeding
-                            # with the uncompacted messages, and that is why
-                            # nothing is assigned in this branch.
-                            #
-                            # Logged with the traceback because a summariser
-                            # that is failing every time looks, from the
-                            # caller's side, exactly like a deployment with no
-                            # Tier 2 at all.
-                            logger.warning(
-                                "compaction tier 2 failed, refusing instead request_id=%s",
-                                self._request_id(),
-                                exc_info=True,
-                            )
+                            if compaction_result is None and self._summarise_fn is not None:
+                                compaction_result = await try_tier2(
+                                    messages=messages,
+                                    tools=tools,
+                                    counted=counted,
+                                    limit=limit,
+                                    count_fn=_recount,
+                                    target=target,
+                                    summarise_fn=self._summarise_fn,
+                                    cache=self._compaction_cache,
+                                    lock=self._compaction_lock,
+                                )
+                            if compaction_result is not None:
+                                # Recount the final transform, including a cache hit, before
+                                # running the guard. The basis may have changed with its shape.
+                                counted, basis = await self._count_prompt(
+                                    target, compaction_result.messages, compaction_result.tools
+                                )
+                    except ServerOverloadedError:
+                        # A busy summary slot is temporary: preserve its 503/Retry-After.
+                        raise
+                    except Exception:
+                        logger.warning(
+                            "compaction failed within its work bounds request_id=%s",
+                            self._request_id(),
+                            exc_info=True,
+                        )
+                        compaction_result = None
                 if compaction_result is not None:
                     messages = compaction_result.messages
                     tools = compaction_result.tools
-                    counted = compaction_result.tokens_after
-                    # Announced before a token is generated, because the HTTP
-                    # layer reads this while it still has a response object to
-                    # put a header on: `sse.prime` pulls the first chunk before
-                    # the `StreamingResponse` exists, and the first chunk is
-                    # downstream of this line.
                     self._report_compaction(compaction_result.to_disclosure())
                     logger.info(
-                        "compaction applied: tier=%d %d->%d tokens, %s request_id=%s",
+                        "compaction applied: tier=%d %d->%d tokens request_id=%s",
                         compaction_result.tier,
                         compaction_result.tokens_before,
-                        compaction_result.tokens_after,
-                        compaction_result.disclosure,
+                        counted,
                         self._request_id(),
                     )
                 else:
-                    composition = await self._prompt_composition(target, messages, tools, basis)
+                    # A floor-over-cap request that cannot be boundedly compacted
+                    # retains the original lower-bound composition and refusal.
+                    if floor > self._max_context_tokens:
+                        refusal_count, refusal_basis = floor, COUNT_BY_LOWER_BOUND
+                        refusal_limit = self._max_context_tokens
+                        composition = _floor_composition(messages, tools)
+                    else:
+                        refusal_count, refusal_basis, refusal_limit = counted, basis, limit
+                        composition = await self._prompt_composition(target, messages, tools, basis)
                     raise ContextTooLongError(
                         detail=(
-                            f"{_counted_phrase(basis, counted)} exceeds the configured limit "
-                            f"of {self._max_context_tokens}: {composition}"
+                            f"{_counted_phrase(refusal_basis, refusal_count)} exceeds the "
+                            f"servable limit of {refusal_limit}, reserving "
+                            f"{effective_max_tokens(max_tokens, self._max_tokens_ceiling)} "
+                            f"output tokens: {composition}"
                         ),
-                        estimated=counted,
-                        limit=self._max_context_tokens,
+                        estimated=refusal_count,
+                        limit=refusal_limit,
                         composition=composition,
-                        basis=basis,
+                        basis=refusal_basis,
                     )
+            if counted > self._max_context_tokens:
+                composition = await self._prompt_composition(target, messages, tools, basis)
+                raise ContextTooLongError(
+                    detail=f"prompt exceeds configured limit: {composition}",
+                    estimated=counted,
+                    limit=self._max_context_tokens,
+                    composition=composition,
+                    basis=basis,
+                )
             widened = await self._refuse_what_this_target_would_truncate(
                 counted,
                 basis,

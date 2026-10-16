@@ -18,7 +18,7 @@ import pytest
 
 from app.node_agent.election import ElectionRefused, claim, still_elected
 from app.node_agent.lock_domain import HostLock, initialise
-from app.node_agent.store import DISPATCH_NAMESPACE, NotOwner, OperationStore
+from app.node_agent.store import DISPATCH_NAMESPACE, NotOwner, OperationStore, SummaryBusy
 
 NODE = "11111111-1111-1111-1111-111111111111"
 
@@ -97,6 +97,49 @@ async def test_one_agent_wins_the_node(dsn: str, tmp_path: Path) -> None:
         await stray.close()
         other_lock._close_for_tests()  # noqa: SLF001
     await _die(lock, conn)
+
+
+async def test_summary_reservation_is_durable_and_atomic_per_node(
+    dsn: str, pool: asyncpg.Pool, tmp_path: Path
+) -> None:
+    lock, conn, elected = await _elect(dsn, _domain(tmp_path))
+    store = OperationStore(pool, elected.ownership)
+    try:
+        results = await asyncio.gather(
+            *(
+                store.insert_accepted(
+                    f"summary-{i}",
+                    "summary",
+                    request_id=None,
+                    payload_hash=None,
+                    store_output=False,
+                )
+                for i in range(5)
+            ),
+            return_exceptions=True,
+        )
+        admitted = [value for value in results if not isinstance(value, BaseException)]
+        refused = [value for value in results if isinstance(value, SummaryBusy)]
+        assert len(admitted) == 1 and len(refused) == 4
+        operation = admitted[0]
+        assert operation is not None
+        # Another store instance sees the accepted reservation; it cannot
+        # bypass the per-node limit by losing an in-process lock or restarting.
+        other = OperationStore(pool, elected.ownership)
+        with pytest.raises(SummaryBusy):
+            await other.insert_accepted(
+                "other", "summary", request_id=None, payload_hash=None, store_output=False
+            )
+        assert await store.promote(operation.op_id, {})
+        assert await store.finish(operation.op_id, "completed", {"eval_count": 3})
+        assert (
+            await other.insert_accepted(
+                "next", "summary", request_id=None, payload_hash=None, store_output=False
+            )
+            is not None
+        )
+    finally:
+        await _die(lock, conn)
 
 
 async def test_a_foreign_lock_domain_is_refused_after_the_owner_is_gone(

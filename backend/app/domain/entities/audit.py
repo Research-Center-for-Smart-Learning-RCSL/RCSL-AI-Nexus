@@ -68,6 +68,8 @@ class AuditAction(StrEnum):
     KNOWLEDGE_COLLECTION_DELETED = "knowledge.collection_deleted"
     KNOWLEDGE_DOCUMENT_UPLOADED = "knowledge.document_uploaded"
     KNOWLEDGE_DOCUMENT_DELETED = "knowledge.document_deleted"
+    KNOWLEDGE_RECOVERED = "knowledge.recovered"
+    KNOWLEDGE_REBUILD_STARTED = "knowledge.rebuild_started"
 
     MODEL_REGISTERED = "model.registered"
     MODEL_UPDATED = "model.updated"

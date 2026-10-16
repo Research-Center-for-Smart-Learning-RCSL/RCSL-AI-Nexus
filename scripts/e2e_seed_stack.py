@@ -20,11 +20,13 @@ migrations unexecuted by anything.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import sys
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -39,10 +41,15 @@ from app.domain.entities.actor import Role
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.model import Model, ModelState, ResourceProfile, RuntimeKind
 from app.domain.entities.node import Node, NodeStatus
-from app.domain.entities.routing_policy import Requirement, RoutingCandidate, RoutingPolicy
+from app.domain.entities.routing_policy import (
+    Requirement,
+    RoutingCandidate,
+    RoutingPolicy,
+)
 from app.domain.entities.user import User
 from app.domain.services.api_key_service import ApiKeyService
 from tests.integration.conftest import reset_schema
+from tests.unit.exact_token_counting_fixtures import write_store
 
 NODE_ID = "node-e2e"
 OPERATOR_LOGIN = "dev@localhost"
@@ -60,6 +67,23 @@ Aliases that shared a ref would make a policy change invisible at exactly the
 point this harness exists to observe."""
 
 INITIAL_ALIAS = "alpha"
+
+
+def seed_model_capacity(models_path: Path) -> None:
+    """Give the simulated models actual readable capacity metadata.
+
+    C4 refuses unresolved capacity. These are metadata-only fixtures, not
+    inference weights: counting deliberately stays on the estimate path.
+    """
+    (models_path / "blobs").mkdir(parents=True, exist_ok=True)
+    for _, _, ref in MODELS:
+        write_store(
+            models_path,
+            ref=ref,
+            digest=hashlib.sha256(ref.encode()).hexdigest(),
+            context_length=32768,
+            model="e2e-capacity-only",
+        )
 
 
 async def seed(database_url: str, pepper: str) -> dict[str, object]:
@@ -113,7 +137,9 @@ async def seed(database_url: str, pepper: str) -> dict[str, object]:
                     node_id=NODE_ID,
                     state=ModelState.LOADED,
                     capabilities=frozenset({"chat"}),
-                    resource_profile=ResourceProfile(memory_gb=8.0, context_length=32768),
+                    resource_profile=ResourceProfile(
+                        memory_gb=8.0, context_length=32768
+                    ),
                 )
             )
 
@@ -150,6 +176,13 @@ def main() -> None:
     pepper = os.environ.get("API_KEY_PEPPER", "")
     if not database_url or not pepper:
         raise SystemExit("DATABASE_URL and API_KEY_PEPPER must both be set.")
+
+    models_path = os.environ.get("OLLAMA_MODELS_PATH")
+    if not models_path:
+        raise SystemExit(
+            "OLLAMA_MODELS_PATH must name the harness's temporary model store."
+        )
+    seed_model_capacity(Path(models_path))
 
     # stdout carries the harness's only copy of the key, so anything the
     # seeding path wants to say goes to stderr instead of corrupting it.

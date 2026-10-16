@@ -46,6 +46,7 @@ class ModelResponse(BaseModel):
     state: str
     capabilities: list[str]
     resource_profile: ResourceProfileBody
+    capacity_validated: bool
 
     observed_state: str | None
     """What the runtime last reported holding, where `state` is the
@@ -73,6 +74,7 @@ class ModelResponse(BaseModel):
             observed_state=model.observed_state.value if model.observed_state else None,
             observed_memory_gb=model.observed_memory_gb,
             observed_at=model.observed_at,
+            capacity_validated=model.capacity_validated,
         )
 
 

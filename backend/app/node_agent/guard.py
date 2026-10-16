@@ -105,14 +105,15 @@ def check_generation(
     if pinned is not None:
         return pinned
 
-    window = request.context_length
-    if measured.declared_context is not None:
-        window = min(window, measured.declared_context)
+    if measured.declared_context is None or measured.declared_context <= 0:
+        return GuardRefusal("capacity_unresolved", "the model's declared capacity is unresolved")
+    window = min(request.context_length, measured.declared_context)
     if measured.counted is not None:
         counted, basis = measured.counted, "exact_counter"
     else:
         counted, _ = _estimated_prompt_tokens(request.messages, request.tools)
         basis = "estimate"
+    upper_bound = counted * 3 if basis == "estimate" else counted
     profile = _profile(request, measured, node_id, runtime_version, profiles)
     servable = validated_profiles.servable(
         window, request.max_tokens, widened=profile is not None and basis == "exact_counter"
@@ -120,6 +121,7 @@ def check_generation(
     provenance = {
         "manifest": measured.identity,
         "counted": counted,
+        "upper_bound": upper_bound,
         "basis": basis,
         "window": window,
         "servable": servable,
@@ -127,10 +129,11 @@ def check_generation(
         "validated_profile": profile.ref if profile is not None else None,
         "runtime_version": runtime_version,
     }
-    if servable <= 0 or counted > servable:
+    if servable <= 0 or upper_bound > servable:
         return GuardRefusal(
             "context_exceeded",
-            f"prompt {counted} ({basis}) exceeds the {servable} servable in a {window}-token "
+            f"prompt bound {upper_bound} ({basis}) exceeds the {servable} servable "
+            f"in a {window}-token "
             f"window with {request.max_tokens} reserved for output",
         )
     return GuardPass(provenance=provenance, identity=measured.identity)

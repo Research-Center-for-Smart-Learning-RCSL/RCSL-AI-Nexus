@@ -30,7 +30,7 @@ async def _collect(
     exists because the endpoint is public and a caller that sends
     `stream: false` must get an answer rather than a shape nobody wrote.
     """
-    text = ""
+    text_parts: list[str] = []
     calls: list[ToolCall] = []
     output_tokens = 0
     input_tokens = 0
@@ -38,7 +38,7 @@ async def _collect(
 
     async with aclosing(generation) as stream:
         async for chunk in stream:
-            text += chunk.delta
+            text_parts.append(chunk.delta)
             calls.extend(chunk.tool_calls)
             output_tokens += chunk.token_count
             if chunk.prompt_tokens:
@@ -51,6 +51,7 @@ async def _collect(
     # context window came back declared whole. See `responses_sse` for why
     # `"length"` is the only reason that means truncation.
     truncated = finish_reason == "length"
+    text = "".join(text_parts)
 
     output: list[OutputMessage | OutputFunctionCall] = []
     if text:

@@ -17,7 +17,7 @@ from app.domain.exceptions import (
     RuntimeUnavailableError,
 )
 from app.domain.ports.infrastructure_ports import MetricsPort
-from app.domain.ports.model_runtime_port import ModelRuntimePort, runtime_for
+from app.domain.ports.model_runtime_port import ModelRuntimePort, declared_context_for, runtime_for
 from app.domain.ports.repositories import (
     ModelRepositoryPort,
     NodeRepositoryPort,
@@ -112,13 +112,16 @@ class ModelRegistryMixin:
     ) -> Model:
         self._authz.require(actor, Scope.MODEL_WRITE)
 
-        await self._require_node(node_id)
+        node = await self._require_node(node_id)
         # Raises InvalidModelReferenceError, which the handler maps to 400.
         # The runtime is resolved first, because it owns the grammar.
         (await self._require_runtime(runtime)).validate_ref(ref)
 
         if await self._models.get_by_alias(alias) is not None:
             raise ModelStateConflictError(detail=f"alias {alias} is already registered")
+
+        declared = await declared_context_for(self._runtime_on(node, runtime), ref, self._tokens)
+        self._assert_declared_capacity(resource_profile, declared)
 
         model = Model(
             id=str(uuid.uuid4()),
@@ -132,6 +135,7 @@ class ModelRegistryMixin:
             state=ModelState.NOT_DOWNLOADED,
             capabilities=capabilities,
             resource_profile=resource_profile,
+            capacity_validated=declared is not None,
         )
         await self._models.save(model)
         await self._audit.record(
@@ -216,9 +220,24 @@ class ModelRegistryMixin:
                 resource_profile if resource_profile is not None else model.resource_profile
             ),
         )
+        node = await self._require_node(updated.node_id)
+        declared = await declared_context_for(
+            self._runtime_on(node, updated.runtime), updated.ref, self._tokens
+        )
+        self._assert_declared_capacity(updated.resource_profile, declared)
+        updated = replace(updated, capacity_validated=declared is not None)
         await self._models.save(updated)
         await self._audit.record(actor, AuditAction.MODEL_UPDATED, target=model.id)
         return updated
+
+    @staticmethod
+    def _assert_declared_capacity(profile: ResourceProfile, declared: int | None) -> None:
+        if declared is not None and profile.context_length > declared:
+            raise ModelStateConflictError(
+                detail=(
+                    f"context_length {profile.context_length} exceeds declared maximum {declared}"
+                )
+            )
 
     async def delete(self, actor: Actor, model_id: str) -> None:
         self._authz.require(actor, Scope.MODEL_WRITE)

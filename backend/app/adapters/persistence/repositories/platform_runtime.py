@@ -118,6 +118,20 @@ class PostgresModelRepository(_Base):
         await self._session.merge(m.model_to_row(model))
         await self._session.flush()
 
+    async def set_capacity_validated(self, model: Model, validated: bool) -> None:
+        await self._session.execute(
+            update(ModelRow)
+            .where(
+                ModelRow.id == model.id,
+                ModelRow.ref == model.ref,
+                ModelRow.node_id == model.node_id,
+                ModelRow.runtime == model.runtime.value,
+                ModelRow.context_length == model.resource_profile.context_length,
+                ModelRow.manifest_digest == model.manifest_digest,
+            )
+            .values(capacity_validated=validated)
+        )
+
     async def set_state(self, model_id: str, state: ModelState) -> None:
         # The observation is cleared with the intent write, because it now
         # predates it. Readers rank observation over intent, so a load that has

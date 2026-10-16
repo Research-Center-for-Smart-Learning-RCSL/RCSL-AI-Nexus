@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    false,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -66,6 +67,8 @@ class ModelRow(Base):
     capabilities: Mapped[list[str]] = mapped_column(JSON, default=list)
     memory_gb: Mapped[float] = mapped_column(Float, default=0.0)
     context_length: Mapped[int] = mapped_column(Integer, default=0)
+    capacity_validated: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    manifest_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # What the runtime last reported, written by the heartbeat; `state` above
     # is intent. All nullable: null means never observed, which is also what a

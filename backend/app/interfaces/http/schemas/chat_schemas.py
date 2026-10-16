@@ -223,7 +223,10 @@ class ChatCompletionRequest(BaseModel):
             "grounding costs an embedding call and a slice of the context "
             "window, so it is asked for rather than assumed. Cited documents "
             "come back in the X-Knowledge-Sources header, not in the frames, "
-            "which stay strictly OpenAI-shaped."
+            "which stay strictly OpenAI-shaped. The header is deduplicated and "
+            "capped at 2048 bytes, favoring recent citations. "
+            "X-Knowledge-Sources-Truncated: true signals omitted citations; "
+            "the model still receives the complete grounded context."
         ),
     )
     knowledge_collection: str | None = Field(

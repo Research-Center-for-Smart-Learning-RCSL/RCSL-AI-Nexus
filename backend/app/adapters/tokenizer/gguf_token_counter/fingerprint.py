@@ -32,7 +32,9 @@ def _digest(*parts: bytes) -> str:
 
 
 def _source(name: str) -> bytes:
-    return (_HERE / name).read_bytes()
+    # Python loads text source with universal newlines. Git's Windows CRLF
+    # checkout must name the same encoder as the identical LF deployment.
+    return (_HERE / name).read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
 
 @cache

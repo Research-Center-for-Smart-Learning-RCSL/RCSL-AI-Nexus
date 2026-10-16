@@ -159,6 +159,43 @@ async def test_a_duplicate_op_id_only_observes() -> None:
     assert second.sends == 0
 
 
+async def test_only_one_summary_is_outstanding_and_inference_can_run_beside_it() -> None:
+    store = MemoryStore()
+    dispatcher = Dispatcher(store, max_inflight=2)
+    release = asyncio.Event()
+    first = ScriptedRelay(hold=release)
+    summary = await dispatcher.submit("summary-1", "summary", first)
+    assert isinstance(summary, Attempt)
+    await first.started.wait()
+
+    refused = await dispatcher.submit("summary-2", "summary", ScriptedRelay())
+    assert isinstance(refused, Refused)
+    assert refused.reason == "summary_busy" and refused.retry_after == 2
+    assert "summary-2" not in store.ops
+    inference = await dispatcher.submit("inference", "inference", ScriptedRelay())
+    assert isinstance(inference, Attempt)
+    await inference.settled
+    release.set()
+    await summary.settled
+    next_summary = await dispatcher.submit("summary-3", "summary", ScriptedRelay())
+    assert isinstance(next_summary, Attempt)
+    await next_summary.settled
+
+
+async def test_an_uncertain_summary_blocks_all_dispatch() -> None:
+    store = MemoryStore()
+    dispatcher = Dispatcher(store)
+    summary = await dispatcher.submit("summary", "summary", ScriptedRelay(Uncertain("eof")))
+    assert isinstance(summary, Attempt)
+    await summary.settled
+    assert store.ops["summary"].state == "outcome_unknown"
+    for kind in ("summary", "inference", "embedding_batch"):
+        refused = await dispatcher.submit(f"new-{kind}", kind, ScriptedRelay())
+        assert isinstance(refused, Refused) and refused.reason == "node_blocked"
+    refused = await dispatcher.exclusive("load", "load", ScriptedRelay())
+    assert isinstance(refused, Refused) and refused.reason == "node_blocked"
+
+
 async def test_a_refusal_at_admission_leaves_no_row() -> None:
     store = MemoryStore()
     dispatcher = Dispatcher(store)

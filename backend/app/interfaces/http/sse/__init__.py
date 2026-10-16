@@ -3,6 +3,7 @@
 from .encoding import (
     CAPABILITY_DEFAULTED_HEADER,
     CITATION_HEADER,
+    CITATION_TRUNCATED_HEADER,
     COMPACTION_HEADER,
     DONE_SENTINEL,
     STREAM_HEADERS,
@@ -31,6 +32,7 @@ __all__ = [
     "Trailer",
     "streaming_response",
     "CITATION_HEADER",
+    "CITATION_TRUNCATED_HEADER",
     "citation_header",
     "CAPABILITY_DEFAULTED_HEADER",
     "COMPACTION_HEADER",

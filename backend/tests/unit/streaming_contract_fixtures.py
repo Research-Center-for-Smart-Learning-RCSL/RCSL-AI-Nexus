@@ -185,6 +185,12 @@ def build(
     part of every build. Passing them through here rather than adding three
     named parameters keeps this helper from growing a knob per feature.
     """
+    # These stream tests describe a resolved target even when token counting
+    # falls back to estimates. Explicit declared=None tests missing metadata.
+    if tokens is None:
+        tokens = FakeCounter(total=None, declared=context_length)
+    elif getattr(tokens, "_capacity_unspecified", False):
+        tokens._declared = context_length
     model = Model(
         id="m1",
         alias="primary",
@@ -338,15 +344,22 @@ def _cjk(chars: int) -> str:
     return "中" * chars
 
 
+_CAPACITY_UNSPECIFIED = object()
+
+
 class FakeCounter:
     """A counter with an opinion, and a record of whether it was consulted."""
 
     def __init__(
-        self, total: int | None, parts: list[int] | None = None, declared: int | None = None
+        self,
+        total: int | None,
+        parts: list[int] | None = None,
+        declared: int | None | object = _CAPACITY_UNSPECIFIED,
     ) -> None:
         self._total = total
         self._parts = parts
-        self._declared = declared
+        self._capacity_unspecified = declared is _CAPACITY_UNSPECIFIED
+        self._declared = None if self._capacity_unspecified else declared
         self.asked: list[str] = []
         self.parts_asked = 0
 

@@ -136,6 +136,8 @@ def build(
     ceiling: int = 1000,
     request_id: str | None = "req_abc123",
 ) -> RouteChatRequest:
+    from tests.unit.streaming_contract_fixtures import FakeCounter
+
     model = Model(
         id="m1",
         alias="primary",
@@ -164,6 +166,7 @@ def build(
         authz=RoleAuthorization(),
         clock=FixedClock(NOW),
         max_tokens_ceiling=ceiling,
+        tokens=FakeCounter(total=None, declared=8192),
         prompt_logs=transcripts,
         request_id=lambda: request_id,
     )

@@ -16,7 +16,9 @@ from app.domain.exceptions import (
     COUNT_BY_ESTIMATE,
     COUNT_BY_TOKENIZER,
     ContextTooLongError,
+    NoAvailableModelError,
 )
+from app.domain.ports.model_runtime_port import declared_context_for, runtime_for
 from app.domain.services import validated_profiles
 
 from .dependencies import RouteChatDependencies
@@ -85,26 +87,24 @@ class PromptGuardrailsMixin(RouteChatDependencies):
             counts = [_estimated_tokens(part) for part in parts]
         return _describe_prompt_composition(messages, tools, counts)
 
-    async def _effective_window(self, target: Model) -> int:
+    async def _effective_window(self, target: Model, node: Node | None = None) -> int:
         """The context this target can actually hold: its registration, bounded
         by the context its weights declare.
 
         A registration above the declared figure is clamped by the runtime
         (the qwen7b row registered at 262144 against 32768, until 2026-09-07),
         so judging against it would admit prompts the runtime then cuts. The
-        declared figure is read from the GGUF the counter already resolved;
-        where it is unavailable the registration stands, as before.
+        declared figure comes from the selected node's metadata snapshot.
+        Unresolved metadata cannot prove capacity and refuses admission.
         """
         registered = target.resource_profile.context_length
-        declared = None
-        if self._tokens is not None:
-            try:
-                declared = await self._tokens.native_context_length(target.ref)
-            except Exception:  # noqa: BLE001 - an unreadable header is not a refusal
-                declared = None
+        runtime = runtime_for(self._runtimes, node, target.runtime) if node is not None else None
+        declared = await declared_context_for(
+            runtime, target.ref, self._tokens, manifest=target.manifest_digest
+        )
         if declared and registered > 0:
             return min(registered, declared)
-        return registered
+        raise NoAvailableModelError(detail="capacity unresolved for the selected target")
 
     async def _widened_window(
         self,
@@ -147,6 +147,41 @@ class PromptGuardrailsMixin(RouteChatDependencies):
             )
         return window, int(measured.counted), profile
 
+    async def _prompt_budget(
+        self,
+        counted: int,
+        basis: str,
+        target: Model,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+        max_tokens: int | None,
+        *,
+        node: Node | None,
+        thinking: bool,
+    ) -> tuple[int, int, str | None]:
+        """The same limit for compaction and final admission, on the selected node.
+
+        Capacity resolution is independent of exact counting or empirical
+        profile validation. An estimate reserves three times its input count.
+        """
+        window = await self._effective_window(target, node)
+        output = effective_max_tokens(max_tokens, self._max_tokens_ceiling)
+        servable = validated_profiles.servable(
+            window, output, widened=target.runtime is not RuntimeKind.OLLAMA
+        )
+        if basis != COUNT_BY_TOKENIZER:
+            return servable // 3, counted, None
+        if counted > servable and target.runtime is RuntimeKind.OLLAMA:
+            widened = await self._widened_window(target, node, messages, tools, thinking)
+            if widened is not None:
+                window_w, counted_w, profile = widened
+                return (
+                    validated_profiles.servable(window_w, output, widened=True),
+                    max(counted, counted_w),
+                    profile.ref,
+                )
+        return servable, counted, None
+
     async def _refuse_what_this_target_would_truncate(
         self,
         counted: int,
@@ -160,115 +195,39 @@ class PromptGuardrailsMixin(RouteChatDependencies):
         node: Node | None = None,
         thinking: bool = True,
     ) -> validated_profiles.WidenedAdmission | None:
-        """The input ceiling again, against the model that will actually serve it.
+        """Run last, after every transform has been recounted.
 
-        Returns what was judged when the request was admitted under a
-        validated profile (PR2b), which the truncation backstop needs; None
-        for every other admission.
-
-        `max_context_length` is one number for the whole deployment, and its
-        docstring asks an operator to keep it below half the registered
-        `context_length` of *every* model that serves a capability — by hand,
-        across three values that live in three different places. On 2026-08-17
-        that invariant was not holding: the global ceiling was 98304 and exactly
-        half of `qwen36-35b-a3b-q8`'s registered 196608, so it sat *at* the
-        truncation point rather than below it, and `chat` still fell back to
-        `qwen7b`, whose 8192 put the same point at 4096 — twenty-four times
-        under the ceiling that admitted the request.
-
-        **The capability it actually bit was `assist`,** which routes to
-        `qwen7b` alone. The management assistant's own system prompt estimates
-        3551 tokens against that 4096, so the first reply longer than roughly
-        500 tokens made the second turn refuse — against a 1536-token reply
-        budget. Before this check the same conversation was served from a
-        prompt Ollama had cut the front off, which is where the instructions
-        and the nonce-delimited data boundary live. `qwen7b` was widened to its
-        native 32768 the same evening, putting that point at 16384; this check
-        is what turned an invisible truncation into a visible one.
-
-        Checked here because this is the first line where the target is known.
-        A fallback to a smaller model now refuses rather than answering from a
-        prompt whose beginning it never read, which is the failure the global
-        ceiling exists to prevent and the one an operator cannot see: the reply
-        is fluent, and only wrong.
-
-        **Only Ollama halves.** MLX serves its full registered context (see
-        `mlx_adapter.load`), so a target on any other runtime is bounded by the
-        global ceiling alone rather than by a rule that does not describe it.
-
-        A zero `context_length` is a row registered before the profile was
-        required, not a model that can serve nothing; `_set_num_ctx` declines to
-        send it for the same reason, and this declines to judge against it.
+        Only empirically validated exact profiles may drop Ollama's legacy
+        half-window rule. The caller sees the bound and composition, never
+        the selected alias. Widened admission carries the truncation backstop.
         """
-        if target.runtime is not RuntimeKind.OLLAMA:
+        limit, judged, profile = await self._prompt_budget(
+            counted, basis, target, messages, tools, max_tokens, node=node, thinking=thinking
+        )
+        if judged <= limit and limit > 0:
+            if profile is not None:
+                return validated_profiles.WidenedAdmission(
+                    profile=profile, counted=judged, limit=limit
+                )
             return None
-        window = await self._effective_window(target)
-        if window <= 0:
-            return None
-        output = effective_max_tokens(max_tokens, self._max_tokens_ceiling)
-        # Two bounds, and the tighter one decides (#24 final spec §6, PR2a).
-        # Half the window is the legacy rule, kept until a profile is shown to
-        # be counted exactly enough to drop it (PR2b). The second is new and is
-        # what the runtime actually does (E1/T1, 2026-10-07): a prompt is kept
-        # whole only below the window, and output that reaches the window
-        # shifts the context on qwen2.5, discarding the system prompt. So the
-        # prompt and the output this request may generate must both fit, one
-        # token short of the window.
-        servable = validated_profiles.servable(window, output, widened=False)
-        if counted <= servable:
-            return None
-        # PR2b: the half is dropped, the output bound kept, only for a profile
-        # shown to be counted at least as high as the runtime evaluates it.
-        # Asked only here, where the legacy rule would refuse, so an ordinary
-        # request pays nothing for it. The node agent decides again with the
-        # runtime's version read live; this is the gateway's own view of it.
-        if basis == COUNT_BY_TOKENIZER:
-            widened = await self._widened_window(target, node, messages, tools, thinking)
-            if widened is not None:
-                window_w, counted_w, profile = widened
-                limit = validated_profiles.servable(window_w, output, widened=True)
-                judged = max(counted, counted_w)
-                if judged <= limit:
-                    logger.info(
-                        "admitting %s to %s under validated profile %s (%s of %s) request_id=%s",
-                        _counted_phrase(basis, counted),
-                        target.alias,
-                        profile.ref,
-                        judged,
-                        limit,
-                        self._request_id(),
-                    )
-                    return validated_profiles.WidenedAdmission(
-                        profile=profile.ref, counted=judged, limit=limit
-                    )
-                servable = limit
-        # The alias is named to the operator and not to the caller. A refusal
-        # that named it would disclose the model inventory to anyone who could
-        # provoke one, which is the disclosure `NoAvailableModelError` is
-        # careful about a few lines above.
         logger.warning(
-            "refusing %s: %s would evaluate at most num_ctx/2=%s of "
-            "them and drop the rest request_id=%s actor=%s",
-            _counted_phrase(basis, counted),
+            "refusing %s: target=%s servable=%s request_id=%s actor=%s",
+            _counted_phrase(basis, judged),
             target.alias,
-            servable,
+            limit,
             self._request_id(),
             actor.display,
         )
         composition = await self._prompt_composition(target, messages, tools, basis)
-        # `limit` reaches the caller and is half this model's registered
-        # context, so a fallback refusal tells them roughly how large the model
-        # standing in is. Weighed and accepted on 2026-08-17 — a number they
-        # cannot see is a refusal they cannot act on — and the alias still is
-        # not sent. See `ContextTooLongError.__init__`.
+        output = effective_max_tokens(max_tokens, self._max_tokens_ceiling)
         raise ContextTooLongError(
             detail=(
-                f"{_counted_phrase(basis, counted)} exceeds the {servable} the model "
+                f"{_counted_phrase(basis, judged)} exceeds the {limit} the model "
                 f"serving this capability can read while leaving room for {output} "
                 f"output tokens: {composition}"
             ),
-            estimated=counted,
-            limit=servable,
+            estimated=judged,
+            limit=limit,
             composition=composition,
             basis=basis,
         )

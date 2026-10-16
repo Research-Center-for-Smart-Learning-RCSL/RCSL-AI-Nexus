@@ -22,7 +22,9 @@
  * a deployment.
  */
 
-import { join } from 'node:path';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 
 import { startFakeOllama } from './fake-ollama.mjs';
 import {
@@ -45,7 +47,7 @@ const PEPPER = 'e2e-harness-pepper';
  */
 const MAX_CONTEXT_LENGTH = '32768';
 
-function backendEnv(repoRoot, { databaseUrl, ollamaUrl }) {
+function backendEnv(repoRoot, { databaseUrl, ollamaUrl, ollamaModelsPath }) {
   return {
     ...process.env,
     ENV: 'development',
@@ -55,6 +57,7 @@ function backendEnv(repoRoot, { databaseUrl, ollamaUrl }) {
     CACHE_BACKEND: 'memory',
     COOKIE_SECURE: 'false',
     OLLAMA_BASE_URL: ollamaUrl,
+    OLLAMA_MODELS_PATH: ollamaModelsPath,
     MAX_CONTEXT_LENGTH,
     // uv resolves the project from the working directory, which is `backend`
     // for every child here; PYTHONPATH is what lets the seeder import `app`
@@ -158,7 +161,20 @@ export async function startFullStack({ repoRoot, databaseUrl }) {
   started.push(() => ollama.close());
 
   try {
-    const env = backendEnv(repoRoot, { databaseUrl, ollamaUrl: ollama.url });
+    const temporaryRoot = resolve(tmpdir());
+    const modelsPath = await mkdtemp(join(temporaryRoot, 'nexus-e2e-models-'));
+    started.push(async () => {
+      // The freshly allocated store is a direct child of this temp root.
+      if (dirname(resolve(modelsPath)) !== temporaryRoot) {
+        throw new Error('The E2E model store resolved outside its temporary root.');
+      }
+      await rm(modelsPath, { recursive: true, force: true });
+    });
+    const env = backendEnv(repoRoot, {
+      databaseUrl,
+      ollamaUrl: ollama.url,
+      ollamaModelsPath: modelsPath,
+    });
     const seeded = await seedDatabase(repoRoot, env, (stop) => started.push(stop));
 
     // The runtime can only claim the models once the seeder has decided what

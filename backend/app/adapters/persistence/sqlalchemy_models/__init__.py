@@ -18,6 +18,7 @@ from .identity import (
 from .knowledge import (
     KnowledgeCollectionRow,
     KnowledgeDocumentRow,
+    KnowledgeTenantEpochRow,
 )
 from .observability_retention import (
     AuditLogRow,
@@ -46,6 +47,7 @@ __all__ = [
     "ApiKeyRow",
     "KnowledgeCollectionRow",
     "KnowledgeDocumentRow",
+    "KnowledgeTenantEpochRow",
     "UsageRecordRow",
     "AuditLogRow",
     "RetentionPolicyRow",

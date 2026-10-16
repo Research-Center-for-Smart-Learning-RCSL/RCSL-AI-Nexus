@@ -13,24 +13,33 @@ goes away stops delivery and nothing else.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import Any
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.adapters.runtime.ollama_adapter.encoding import chat_payload, embed_payload
 from app.adapters.tokenizer.gguf_token_counter.adapter import Measurement
+from app.application.use_cases.route_chat_request.compaction_tier2 import (
+    SUMMARY_INPUT_MAX_BYTES,
+    SUMMARY_OUTPUT_TOKENS,
+    SUMMARY_TIMEOUT_SECONDS,
+    SummaryTooLongError,
+    build_summary_prompt,
+)
 from app.node_agent.dispatch import Attempt, Completed, Existing, Outcome, Refused
 from app.node_agent.guard import GuardRefusal, check_generation, check_pin, registration
 from app.node_agent.resolution import ResolutionRefused
-from app.node_agent.service import Agent, start, stop
 from app.node_agent.settings import AgentSettings
 from app.node_agent.store import LIFECYCLE_KINDS, NotOwner, Operation
+from app.node_agent.summary import bounded_summary
 from app.node_agent.wire import (
     Envelope,
     LifecycleRequest,
@@ -42,9 +51,12 @@ from app.node_agent.wire import (
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from app.node_agent.service import Agent
+
 MAX_BODY_BYTES = 64 * 1024 * 1024
 RUNTIME = "ollama"
-CANCELLABLE_KINDS = ("inference", "embedding_batch")
+CANCELLABLE_KINDS = ("inference", "embedding_batch", "summary")
 
 
 def _agent(request: Request) -> Agent:
@@ -60,12 +72,12 @@ async def _authorised(request: Request) -> None:
         raise HTTPException(status_code=401, detail="agent token required")
 
 
-async def _body(request: Request) -> Any:
+async def _body(request: Request, *, max_bytes: int = MAX_BODY_BYTES) -> Any:
     declared = request.headers.get("content-length")
     if declared is not None:
         if not declared.isdigit():
             raise HTTPException(status_code=400, detail="bad Content-Length")
-        if int(declared) > MAX_BODY_BYTES:
+        if int(declared) > max_bytes:
             raise HTTPException(status_code=413, detail="request body too large")
     # Read with the bound applied as it arrives, so a chunked body without a
     # length is cut off at the cap rather than buffered whole first.
@@ -73,7 +85,7 @@ async def _body(request: Request) -> Any:
     size = 0
     async for part in request.stream():
         size += len(part)
-        if size > MAX_BODY_BYTES:
+        if size > max_bytes:
             raise HTTPException(status_code=413, detail="request body too large")
         parts.append(part)
     raw = b"".join(parts)
@@ -132,6 +144,8 @@ def _guard_refused(refusal: GuardRefusal) -> JSONResponse:
 async def _measure(agent: Agent, ref: str, request: Any = None) -> Measurement:
     if agent.counter is None:
         return Measurement(identity=None, counted=None, declared_context=None)
+    if request is None:
+        return await agent.counter.measure_capacity(ref)
     messages = request.messages if request is not None else ()
     tools = request.tools if request is not None else ()
     return await agent.counter.measure(ref, messages, tools)
@@ -140,6 +154,8 @@ async def _measure(agent: Agent, ref: str, request: Any = None) -> Measurement:
 def create_app(settings: AgentSettings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        from app.node_agent.service import start, stop
+
         agent = await start(settings or AgentSettings())  # type: ignore[call-arg]
         app.state.agent = agent
         try:
@@ -231,6 +247,113 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             return _refused(submitted)
         return StreamingResponse(_stream(agent, submitted), media_type="application/x-ndjson")
 
+    @app.post("/v1/summary", dependencies=authorised)
+    async def summary(request: Request) -> JSONResponse:
+        agent = _agent(request)
+        try:
+            prefix, envelope = decode_generation(
+                await _body(request, max_bytes=SUMMARY_INPUT_MAX_BYTES)
+            )
+        except WireError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        existing = await agent.store.observe(envelope.op_id)
+        if existing is not None:
+            return await _existing(agent, existing, "summary", envelope)
+        admission = await agent.dispatcher.summary_admission_refusal()
+        if admission is not None:
+            return _refused(admission)
+        if agent.counter is None:
+            return _guard_refused(
+                GuardRefusal("summary_counter_unavailable", "exact counter required")
+            )
+        try:
+            async with asyncio.timeout(SUMMARY_TIMEOUT_SECONDS):
+                generation = replace(
+                    prefix,
+                    messages=tuple(build_summary_prompt(prefix.messages)),
+                    max_tokens=SUMMARY_OUTPUT_TOKENS,
+                    thinking=False,
+                    tools=(),
+                    tool_choice=None,
+                    sampling=None,
+                )
+                registered = await registration(
+                    agent.pool, agent.settings.node_id, RUNTIME, generation.ref
+                )
+                measured = await _measure(agent, generation.ref, generation)
+                if measured.counted is None or measured.declared_context is None:
+                    return _guard_refused(
+                        GuardRefusal(
+                            "summary_counter_unavailable", "exact count and capacity required"
+                        )
+                    )
+                verdict = check_generation(
+                    generation,
+                    registered,
+                    measured,
+                    node_id=agent.settings.node_id,
+                    runtime_version=await agent.relay.version(),
+                )
+        except (SummaryTooLongError, TimeoutError) as exc:
+            return _guard_refused(GuardRefusal("summary_input_exceeded", str(exc)))
+        if isinstance(verdict, GuardRefusal):
+            return _guard_refused(verdict)
+        payload = chat_payload(
+            generation.ref,
+            generation.messages,
+            max_tokens=SUMMARY_OUTPUT_TOKENS,
+            thinking=False,
+            context_length=generation.context_length,
+            keep_alive=agent.keep_alive,
+            tools=(),
+            tool_choice=None,
+            sampling=None,
+        )
+        submitted = await agent.dispatcher.submit(
+            envelope.op_id,
+            "summary",
+            bounded_summary(
+                agent.relay.chat(payload, store_output=False, expected_identity=verdict.identity),
+                agent.counter,
+                generation.ref,
+            ),
+            request_id=envelope.request_id,
+            payload_hash=envelope.payload_hash,
+            store_output=envelope.store_output,
+            provenance=verdict.provenance,
+            deadline_s=agent.settings.queue_deadline_s,
+        )
+        if isinstance(submitted, Existing):
+            return await _existing(agent, submitted.operation, "summary", envelope)
+        if isinstance(submitted, Refused):
+            return _refused(submitted)
+        text: str | None = None
+        try:
+            async with asyncio.timeout(SUMMARY_TIMEOUT_SECONDS):
+                async for event in submitted.events():
+                    if event.get("type") == "summary":
+                        text = event["text"]
+                await asyncio.shield(submitted.settled)
+        except TimeoutError:
+            # Stop waiting, never cancel the dispatcher's owned drain task.
+            return JSONResponse(
+                status_code=503,
+                content={"op_id": envelope.op_id, "refused": "summary_wait_deadline"},
+                headers={"Retry-After": "2"},
+            )
+        operation = await agent.store.observe(envelope.op_id)
+        if operation is None:
+            raise HTTPException(status_code=500, detail="summary attempt vanished")
+        described = await _describe(agent, operation)
+        if operation.state == "completed" and text is not None:
+            described["summary"] = text
+            return JSONResponse(described)
+        return JSONResponse(
+            status_code=502 if operation.state == "failed" else 503,
+            content=described,
+            headers={"Retry-After": "60"},
+        )
+
     @app.post("/v1/embeddings", dependencies=authorised)
     async def embeddings(request: Request) -> JSONResponse:
         agent = _agent(request)
@@ -247,6 +370,12 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
                 GuardRefusal("model_not_on_node", f"{batch.ref} is not registered on this node")
             )
         measured = await _measure(agent, batch.ref)
+        if batch.expected_manifest is not None and measured.identity != batch.expected_manifest:
+            return _guard_refused(
+                GuardRefusal(
+                    "embedding_revision_mismatch", "embedding weights differ from the index space"
+                )
+            )
         pinned = check_pin(registered, measured.identity)
         if pinned is not None:
             return _guard_refused(pinned)
@@ -324,6 +453,12 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
                         f"registered {registered.context_length}",
                     )
                 )
+            measured = await _measure(agent, wanted.ref)
+            pinned = check_pin(registered, measured.identity)
+            if pinned is not None:
+                return _guard_refused(pinned)
+            if measured.declared_context is not None and context_length is not None:
+                context_length = min(context_length, measured.declared_context)
         if action == "load":
             relay = agent.relay.load(
                 wanted.ref, keep_alive=agent.keep_alive, context_length=context_length
@@ -337,7 +472,9 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             action,
             relay,
             provenance={"ref": wanted.ref, "context_length": context_length},
-            after=_repin(agent, wanted) if action == "pull" else None,
+            after=_repin(agent, wanted)
+            if action == "pull"
+            else (_record_capacity(agent, wanted.ref) if action == "load" else None),
         )
         if isinstance(submitted, Existing):
             return await _existing_lifecycle(agent, submitted.operation, action)
@@ -361,6 +498,18 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
         if observed is None:
             return JSONResponse(status_code=503, content={"refused": "runtime_unobserved"})
         return JSONResponse(observed)
+
+    @app.get("/v1/model-capacity", dependencies=authorised)
+    async def model_capacity(
+        request: Request, ref: str = Query(min_length=1, max_length=255)
+    ) -> dict[str, Any]:
+        """Metadata on this host. Reads remain available while dispatch is blocked."""
+        measured = await _measure(_agent(request), ref)
+        return {
+            "manifest_digest": measured.identity,
+            "declared_context_length": measured.declared_context,
+            "embedding_manifest_pin": True,
+        }
 
     @app.get("/v1/attempts/{op_id}", dependencies=authorised)
     async def attempt(request: Request, op_id: str) -> JSONResponse:
@@ -450,6 +599,29 @@ def _repin(agent: Agent, wanted: LifecycleRequest) -> Callable[[Outcome], Awaita
         await agent.store.audit(
             "repin", wanted.op_id, {"ref": wanted.ref, "digest": digest, "models": moved}
         )
+        await _record_capacity(agent, wanted.ref)(outcome)
+
+    return after
+
+
+def _record_capacity(agent: Agent, ref: str) -> Callable[[Outcome], Awaitable[None]]:
+    async def after(outcome: Outcome) -> None:
+        if not isinstance(outcome, Completed):
+            return
+        measured = await _measure(agent, ref)
+        # A replacement manifest must not validate a row pinned to older weights.
+        # Reads and writes remain scoped to this agent's node and runtime.
+        async with agent.pool.acquire() as connection:
+            await connection.execute(
+                "UPDATE models SET capacity_validated = $4 "
+                "WHERE node_id = $1 AND runtime = $2 AND ref = $3 "
+                "AND (manifest_digest IS NULL OR manifest_digest = $5)",
+                agent.settings.node_id,
+                RUNTIME,
+                ref,
+                measured.declared_context is not None,
+                measured.identity,
+            )
 
     return after
 

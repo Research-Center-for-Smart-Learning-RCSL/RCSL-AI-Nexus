@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.audit import AuditAction
@@ -10,6 +11,7 @@ from app.domain.entities.model import Model, ModelState
 from app.domain.exceptions import (
     ModelStateConflictError,
 )
+from app.domain.ports.model_runtime_port import declared_context_for
 
 from .registry import ModelRegistryMixin
 from .state import _with_state
@@ -28,6 +30,13 @@ class ModelLifecycleMixin(ModelRegistryMixin):
         self._authz.require(actor, Scope.MODEL_WRITE)
         model = await self._require(model_id)
 
+        node = await self._require_node(model.node_id)
+        runtime = self._runtime_on(node, model.runtime)
+        declared = await declared_context_for(
+            runtime, model.ref, self._tokens, manifest=model.manifest_digest
+        )
+        model = replace(model, capacity_validated=declared is not None)
+
         # The observation outranks the intent, the same rule and for the same
         # reason as `RoutingService._satisfies`. Deciding on `state` alone made
         # this method a no-op in exactly the case it exists for: a runtime that
@@ -38,14 +47,12 @@ class ModelLifecycleMixin(ModelRegistryMixin):
         # pressing Load produced no request in its log.
         effective = model.observed_state or model.state
         if effective is ModelState.LOADED:
-            return model
+            await self._models.set_capacity_validated(model, model.capacity_validated)
+            return await self._require(model.id)
         if effective is not ModelState.DOWNLOADED:
             raise ModelStateConflictError(
                 detail=f"model {model.id} is {effective}; it must be downloaded first"
             )
-
-        node = await self._require_node(model.node_id)
-        runtime = self._runtime_on(node, model.runtime)
 
         live_free_gb: float | None = None
         if self._metrics is not None:
@@ -77,7 +84,7 @@ class ModelLifecycleMixin(ModelRegistryMixin):
         # sent: a warning that arrives after an oversized `num_ctx` has already
         # made the runtime reserve for a context the model cannot hold is a
         # warning about something the operator can no longer choose against.
-        await self._warn_if_registered_context_overstates(model)
+        self._warn_if_registered_context_overstates(model, declared)
         try:
             await runtime.load(model.ref, context_length=model.resource_profile.context_length)
         except Exception:
@@ -96,68 +103,33 @@ class ModelLifecycleMixin(ModelRegistryMixin):
         # not claim it did. Reconciliation at the next deploy would move a
         # LOADING left by such a failure to ERROR.
         await self._models.set_state(model.id, ModelState.LOADED)
+        await self._models.set_capacity_validated(model, model.capacity_validated)
+        model = await self._require(model.id)
         await self._audit.record(actor, AuditAction.MODEL_LOADED, target=model.id)
         await self._prepare_token_counter(model)
-        return _with_state(model, ModelState.LOADED)
+        return model
 
-    async def _warn_if_registered_context_overstates(self, model: Model) -> None:
-        """Say so when a registration claims more context than the model has.
+    def _warn_if_registered_context_overstates(self, model: Model, declared: int | None) -> None:
+        """Flag legacy registrations that exceed the selected model's declaration.
 
-        The registered figure is a claim an operator typed. The model's own
-        header is the fact, and until 2026-09-07 nothing compared them — so
-        `qwen7b` sat registered at 262144 against a declared 32768 for as long
-        as it took somebody to read `/api/ps` beside the `models` table.
-
-        Both consequences are silent, which is why this is a warning rather
-        than a note. `_refuse_what_this_target_would_truncate` refuses at half
-        the *registered* figure, so an overstatement holds that guard open by
-        the same factor — for `qwen7b` it refused at 131072 against a model
-        that cuts anything over 32768 down to 16384, reopening precisely what
-        that guard was added on 2026-08-17 to close. And the figure is sent to
-        the runtime as `num_ctx`, so the load reserves for a context that
-        cannot be used, which is the shape of the 2026-08-07 eviction.
-
-        **Registering below the declared maximum is not warned about**, because
-        it is the ordinary deliberate choice: four of this deployment's six
-        rows do it, to bound memory or to keep a model inside the platform's
-        ceiling. Only the direction that overstates is a defect.
-
-        Warning rather than refusing, and that is a decision rather than
-        timidity. A refusal here would make a wrong number in a table unable to
-        serve at all, on the strength of a file read that can fail for reasons
-        having nothing to do with the number — a missing mount, an unpulled
-        reference, an architecture whose header spells the key differently.
-        The load is the operator's; this makes sure they are told.
-
-        Swallows everything, for the reason `_prepare_token_counter` does: a
-        header that cannot be read must never be what stops a model loading.
+        New registrations and edits refuse this mismatch. Existing rows can
+        still load; agent admission clamps to the declaration and metadata
+        resolution remains separate from counting profile validation.
         """
-        if self._tokens is None:
-            return
         registered = model.resource_profile.context_length
         if registered <= 0:
             # A row from before the profile was required. `_set_num_ctx`
             # declines to send it and this declines to judge against it.
             return
-        try:
-            declared = await self._tokens.native_context_length(model.ref)
-        except Exception:  # noqa: BLE001
-            logger.exception("failed to read the declared context for %s", model.ref)
-            return
         if declared is None or registered <= declared:
             return
         logger.warning(
-            "%s is registered with context_length=%d but %s declares %d. The runtime will "
-            "silently truncate anything above %d, and the per-model guard refuses at %d "
-            "rather than %d, so prompts between those figures are served from a prompt the "
-            "model never fully read. Correct the registration to %d.",
+            "%s is registered with context_length=%d but %s declares %d. "
+            "Admission uses the smaller declared capacity. Correct the registration to %d.",
             model.alias,
             registered,
             model.ref,
             declared,
-            declared,
-            registered // 2,
-            declared // 2,
             declared,
         )
 

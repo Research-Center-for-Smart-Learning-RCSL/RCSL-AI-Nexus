@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Protocol
@@ -9,7 +10,9 @@ from typing import Protocol
 
 class CachePort(Protocol):
     async def get(self, key: str) -> str | None: ...
+    async def get_first(self, keys: Sequence[str]) -> tuple[str, str] | None: ...
     async def set(self, key: str, value: str, ttl_seconds: int) -> None: ...
+    async def set_if_absent(self, key: str, value: str, ttl_seconds: int) -> bool: ...
     async def delete(self, key: str) -> None: ...
     async def incr(self, key: str, ttl_seconds: int) -> int:
         """Increment and return the new value, setting a TTL on first use.
