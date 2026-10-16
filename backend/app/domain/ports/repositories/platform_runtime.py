@@ -69,6 +69,16 @@ class ModelRepositoryPort(Protocol):
         let them overwrite each other's whole row."""
         ...
 
+    async def set_desired_residency(self, model_id: str, desired: bool) -> int | None:
+        """Write residency intent and bump its version, returning the new
+        version, or None when the model does not exist.
+
+        Targeted, like `set_observed`: lifecycle `state` and the observation
+        are left alone, and a concurrent registry edit cannot revert it.
+        Always bumps, even when the value is unchanged, so a load sent under
+        the previous version can tell it was overtaken (#49 §3)."""
+        ...
+
     async def delete(self, model_id: str) -> None: ...
 
     async def reconcile_transient_states(self, mapping: dict[ModelState, ModelState]) -> int:

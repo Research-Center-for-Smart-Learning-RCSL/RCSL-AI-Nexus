@@ -13,6 +13,7 @@ import {
   useLoadModel,
   useModels,
   useNodes,
+  useResidencyIntent,
   useStartDownload,
   useUnloadModel,
 } from '@/features/models/hooks/use-models';
@@ -34,6 +35,7 @@ export function ModelTable() {
   const unload = useUnloadModel();
   const remove = useDeleteModel();
   const download = useStartDownload();
+  const intent = useResidencyIntent();
   const invalidateModels = useInvalidateModels();
 
   const [formOpen, setFormOpen] = useState(false);
@@ -82,7 +84,17 @@ export function ModelTable() {
   // separately, so it survives the reload above.
   const jobAlias = data?.find((model) => model.id === job.data?.model_id)?.alias;
 
-  const columns = useModelColumns({ mayWrite, load, unload, download, trackJob, setEditing, setFormOpen, setDeleting });
+  const columns = useModelColumns({
+    mayWrite,
+    load,
+    unload,
+    download,
+    intent,
+    trackJob,
+    setEditing,
+    setFormOpen,
+    setDeleting,
+  });
 
   return (
     <>

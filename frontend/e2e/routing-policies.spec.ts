@@ -48,6 +48,8 @@ function model(id: string, alias: string) {
     observed_state: 'loaded',
     observed_memory_gb: 8,
     observed_at: '2026-08-06T00:00:00Z',
+    desired_resident: true,
+    desired_version: 1,
   };
 }
 

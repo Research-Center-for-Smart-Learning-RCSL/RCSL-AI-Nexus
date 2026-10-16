@@ -34,6 +34,7 @@ export const AUDIT_ACTIONS = [
   'model.download_started',
   'model.loaded',
   'model.registered',
+  'model.residency_intent_changed',
   'model.unloaded',
   'model.updated',
   'node.registered',

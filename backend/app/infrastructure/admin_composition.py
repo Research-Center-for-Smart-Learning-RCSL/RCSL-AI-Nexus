@@ -40,6 +40,10 @@ from app.infrastructure.di import (
     build_totp,
 )
 from app.infrastructure.heartbeat import run_heartbeat
+from app.infrastructure.residency_reconciler import (
+    reconciler_should_run,
+    run_residency_reconciler,
+)
 from app.infrastructure.retention_sweep import run_retention_sweep
 from app.infrastructure.snapshot_recorder import run_snapshot_recorder
 from app.infrastructure.usage_sweeper import run_usage_sweeper
@@ -171,10 +175,17 @@ async def admin_lifespan(app: FastAPI, *, run_node_heartbeat: bool = True) -> As
     if run_node_heartbeat and app.state.runtimes.agents_enabled:
         usage_sweeper = asyncio.create_task(run_usage_sweeper(app.state.metrics))
 
+    # Restores desired residency after a runtime restart (#49). Off unless
+    # RESIDENCY_RECONCILER_ENABLED is set, and then only beside the heartbeat
+    # whose observations it acts on, with node agents to send its loads.
+    reconciler: asyncio.Task[None] | None = None
+    if run_node_heartbeat and reconciler_should_run(app, settings):
+        reconciler = asyncio.create_task(run_residency_reconciler(app, settings))
+
     try:
         yield
     finally:
-        for task in (heartbeat, availability, retention, snapshot, usage_sweeper):
+        for task in (heartbeat, availability, retention, snapshot, usage_sweeper, reconciler):
             if task is None:
                 continue
             task.cancel()

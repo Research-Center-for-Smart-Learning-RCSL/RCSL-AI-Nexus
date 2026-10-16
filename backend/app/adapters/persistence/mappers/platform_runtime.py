@@ -75,6 +75,8 @@ def model_to_domain(row: ModelRow) -> Model:
         observed_at=row.observed_at,
         capacity_validated=bool(row.capacity_validated),
         manifest_digest=row.manifest_digest,
+        desired_resident=bool(row.desired_resident),
+        desired_version=row.desired_version or 0,
     )
 
 

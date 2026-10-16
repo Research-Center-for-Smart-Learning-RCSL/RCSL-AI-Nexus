@@ -77,6 +77,11 @@ class AuditAction(StrEnum):
     MODEL_DOWNLOAD_STARTED = "model.download_started"
     MODEL_LOADED = "model.loaded"
     MODEL_UNLOADED = "model.unloaded"
+    MODEL_RESIDENCY_INTENT_CHANGED = "model.residency_intent_changed"
+    """An operator changed whether a model should be kept resident (#49 §3).
+    Recorded as `accepted`: nothing has been loaded or unloaded yet. What the
+    reconciler then does is audited as its own `model.loaded` or
+    `model.unloaded`, under the reconciler's subject."""
 
     NODE_REGISTERED = "node.registered"
     NODE_UPDATED = "node.updated"

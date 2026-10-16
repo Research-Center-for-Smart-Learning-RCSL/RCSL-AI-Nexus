@@ -176,6 +176,18 @@ class PostgresModelRepository(_Base):
             )
         )
 
+    async def set_desired_residency(self, model_id: str, desired: bool) -> int | None:
+        # One statement, so two writers each get their own version and the
+        # later commit is the one a reconciler re-reading after a load sees.
+        result = await self._session.execute(
+            update(ModelRow)
+            .where(ModelRow.id == model_id)
+            .values(desired_resident=desired, desired_version=ModelRow.desired_version + 1)
+            .returning(ModelRow.desired_version)
+        )
+        version = result.scalar_one_or_none()
+        return int(version) if version is not None else None
+
     async def delete(self, model_id: str) -> None:
         await self._session.execute(delete(ModelRow).where(ModelRow.id == model_id))
 

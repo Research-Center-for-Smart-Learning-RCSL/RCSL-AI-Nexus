@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -76,6 +77,17 @@ class ModelRow(Base):
     observed_state: Mapped[str | None] = mapped_column(String(24), nullable=True)
     observed_memory_gb: Mapped[float | None] = mapped_column(Float, nullable=True)
     observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Residency intent (#49 §1). Read into the entity, never written by
+    # `model_to_row`: a registry edit or a provisioning merge must not revert
+    # an operator's intent change made in between. Only the targeted
+    # `set_desired_residency` writes them, bumping the version each time.
+    desired_resident: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
+    desired_version: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0", nullable=False
+    )
 
     __table_args__ = (
         # A runtime identifier is unique per node, unlike the alias which is

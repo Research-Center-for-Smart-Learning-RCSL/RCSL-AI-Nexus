@@ -107,6 +107,21 @@ class RuntimeSettings(BaseSettings):
     so a routing requirement of an online node reflects reality rather than the
     value provisioning wrote once. Zero or negative disables the loop."""
 
+    residency_reconciler_enabled: bool = False
+    """Restore models an operator wants resident after a runtime restart (#49).
+
+    Off by default, so a deploy changes nothing: no model is loaded that an
+    operator did not load. On, the tailnet admin restores desired Ollama
+    models, largest first, through the node agent, and the memory budget stops
+    charging a model the runtime has freshly reported as not resident. It also
+    needs `node_agent_enabled` and the heartbeat, and stays idle without them.
+    Resolve every model left in `error`, `loading` or `unloading` first."""
+
+    residency_reconciler_interval_seconds: int = Field(default=30, gt=0)
+    """How often the reconciler reads the latest observations. Two distinct
+    heartbeat answers are needed before it acts, so it cannot act faster than
+    the heartbeat however small this is."""
+
     max_concurrent_inference: int = 4
     """Sized to the deployment: a lab whose peak is four people at once.
 

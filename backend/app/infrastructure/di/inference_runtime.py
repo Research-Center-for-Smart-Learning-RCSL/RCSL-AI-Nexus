@@ -5,11 +5,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, FastAPI, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.http.metrics_port import HttpMetricsAdapter
 from app.adapters.metrics.prometheus import MeteredUsageRepository
 from app.adapters.persistence.model_state import ModelStateCommitter
+from app.adapters.persistence.node_serialisation import PostgresNodeSerialisation
 from app.adapters.persistence.repositories import (
     PostgresModelRepository,
     PostgresNodeRepository,
@@ -39,7 +41,8 @@ from app.domain.ports.model_runtime_port import runtime_for
 from app.domain.ports.repositories import UsageRepositoryPort
 from app.domain.services.memory_budget_service import MemoryBudgetService
 from app.domain.services.routing_service import RoutingService
-from app.infrastructure.db import get_session_factory
+from app.infrastructure.config import Settings
+from app.infrastructure.db import get_engine, get_session_factory
 from app.interfaces.http.request_context import current_request_id, report_compaction
 from app.shared.clock import SystemClock
 
@@ -262,22 +265,32 @@ MemoryBudgetDep = Annotated[MemoryBudgetService, Depends(build_memory_budget)]
 def build_manage_models(
     request: Request, session: SessionDep, settings: SettingsDep
 ) -> ManageModels:
+    return manage_models_for(request.app, session, settings)
+
+
+def manage_models_for(app: FastAPI, session: AsyncSession, settings: Settings) -> ManageModels:
+    """Shared by the routes and the residency reconciler, which must load
+    with exactly the checks and runtime path an operator's load has."""
     return ManageModels(
         models=PostgresModelRepository(session),
         nodes=PostgresNodeRepository(session),
         policies=PostgresRoutingPolicyRepository(session),
-        runtimes=request.app.state.runtimes,
+        runtimes=app.state.runtimes,
         budget=MemoryBudgetService(headroom_fraction=settings.node_memory_headroom_fraction),
         # Its own session factory, so a terminal state write survives the
         # request transaction rolling back when a load or unload raises.
         state_committer=ModelStateCommitter(get_session_factory()),
-        authz=request.app.state.authz,
-        audit=request.app.state.audit,
+        authz=app.state.authz,
+        audit=app.state.audit,
         # The same process-wide counter the chat path uses, so a model warmed
         # here is warm for the requests that follow. A per-request instance
         # would build a vocabulary and then throw it away.
-        tokens=getattr(request.app.state, "token_counter", None),
+        tokens=getattr(app.state, "token_counter", None),
         metrics=HttpMetricsAdapter(settings.host_metrics_url),
+        observed_absence_frees_memory=settings.residency_reconciler_enabled,
+        # The reconciler's per-node lock, so an operator's Load and a
+        # restore never pass the memory budget together.
+        node_lock=PostgresNodeSerialisation(get_engine),
     )
 
 
