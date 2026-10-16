@@ -223,6 +223,14 @@ No open decisions block Phase 1.
 
 Settled:
 
+- **Jev / System One feasibility (#20), surveyed 2026-10-14:** recommend deferring
+  production integration. Typed decisions cannot replace chat or embedding;
+  passage reranking is a viable future experiment rather than a vector-producing
+  capability. Reopen for a demonstrated retrieval problem and an agreed resource
+  budget, a concrete decision-API consumer, or approved provider/data terms.
+  [Survey and proposed acceptance gates](../plans/system-one-feasibility.md);
+  evidence in [PROGRESS.md](../PROGRESS.md) 2026-10-14. No runtime integration or
+  host benchmark is claimed.
 - Backend structure: full hexagonal architecture ([backend.md](../architecture/backend.md))
 - Frontend component library: shadcn/ui ([frontend.md](../architecture/frontend.md))
 - Gateway and admin split into separate containers; the admin entrances are two more ([security.md](../architecture/security.md) §1)
