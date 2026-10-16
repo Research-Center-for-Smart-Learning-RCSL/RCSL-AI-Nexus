@@ -36,12 +36,15 @@ class RequestBindingPort(Protocol):
         """
         ...
 
-    async def rebind(self, binding: Binding, *, node_id: str, op_id: str) -> Binding:
+    async def rebind(
+        self, binding: Binding, *, node_id: str, op_id: str, billing: dict[str, Any]
+    ) -> Binding:
         """Point the binding at a new attempt, only if it is still `binding`.
 
         Called only once the current attempt is provably unsent. A caller that
         loses the race gets the winner's binding back and converges on it; the
-        old attempt stays in the history, with lineage.
+        old attempt stays in the history, with lineage. The winning attempt
+        stores its own billing snapshot; no existing snapshot is rewritten.
         """
         ...
 
