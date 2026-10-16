@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.adapters.persistence.repositories import PostgresModelRepository, PostgresNodeRepository
@@ -26,7 +27,8 @@ async def test_capacity_update_changes_only_a_matching_snapshot(database_url):
                 await other.save(
                     replace(original, alias="edited", capabilities=frozenset({"assist"}))
                 )
-                await other.set_observed(original.id, ModelState.LOADED, 9.5)
+                at = (await concurrent.execute(text("SELECT clock_timestamp()"))).scalar_one()
+                await other.set_observed(original.id, ModelState.LOADED, 9.5, observed_at=at)
                 await concurrent.commit()
             await repo.set_capacity_validated(snapshot, True)
             await loader.commit()
