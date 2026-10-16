@@ -81,7 +81,9 @@ class RuntimeSettings(BaseSettings):
     guest's page cache, which grows to fill it. Capped at 3 GiB the footprint
     settles between 1.4 and 3.6 GiB, and that is the whole of the margin the
     model set needs — so **the VM's 3 GiB cap is load-bearing for this figure**
-    and raising it back to 6 makes the arrangement below stop fitting.
+    and raising it back to 6 makes the arrangement below stop fitting. The cap
+    went to 4 GiB on 2026-10-10, after a rebuild at 3 OOM-killed production
+    workers; the fit below was measured at 3 and is yet to be re-measured at 4.
 
     What the arrangement is, from `common_memory_breakdown_print` in the Ollama
     log, which reports what llama.cpp actually allocates:
