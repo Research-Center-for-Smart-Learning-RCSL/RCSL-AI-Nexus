@@ -46,7 +46,6 @@ async def read_availability(
 ) -> AvailabilitySnapshot:
     # One short repeatable-read transaction is used by the periodic caller.
     # The request reader likewise performs no network I/O or runtime actions.
-    now = (await session.execute(text("SELECT now()"))).scalar_one()
     models = await PostgresModelRepository(session).list_all()
     nodes = await PostgresNodeRepository(session).list_all()
     policies = await PostgresRoutingPolicyRepository(session).list_all()
@@ -58,14 +57,21 @@ async def read_availability(
     )
     unresolved = {n.id: 0 for n in nodes}
     unresolved.update({row[0]: row[1] for row in counts})
+    # Request authentication may have started this READ COMMITTED transaction
+    # before the latest heartbeat committed. Transaction-start now() would
+    # incorrectly classify that fresh observation as future evidence. Read the
+    # database wall clock after the model rows, also for the rolling window.
+    now = (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
     silent = (
         await session.execute(
             text(
                 "SELECT NOT EXISTS (SELECT 1 FROM usage_records "
-                "WHERE completed AND at >= now() - interval '24 hours') "
+                "WHERE completed AND at >= CAST(:at AS timestamptz) - interval '24 hours') "
                 "AND EXISTS (SELECT 1 FROM refusals "
-                "WHERE surface = 'gateway' AND at >= now() - interval '24 hours')"
-            )
+                "WHERE surface = 'gateway' "
+                "AND at >= CAST(:at AS timestamptz) - interval '24 hours')"
+            ),
+            {"at": now},
         )
     ).scalar_one()
     by_node = {n.id: n for n in nodes}

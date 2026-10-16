@@ -14,12 +14,10 @@ this is the read-back that catches it. A runtime that cannot answer (MLX) or
 cannot be reached leaves the observation null. Routing may trust intent only
 for unobservable runtimes; Ollama requires fresh positive residency evidence.
 
-**It runs in the admin application, and both facts about how matter.** The
+**It runs in the tailnet admin application.** The
 gateway cannot host it: section 6's least-privilege split lets the gateway write
-only `usage_records`, never `nodes`. And the two admin entrances both run it,
-because they are the same image with no natural single owner, which is why the
-write is the idempotent targeted `set_status` and why a status is written only
-when it actually changed rather than every sweep.
+only `usage_records`, never `nodes`. The public entrance does not run this
+loop. Status is written through the targeted `set_status` only when changed.
 
 The loop sleeps before its first sweep so that a process which starts and stops
 the lifespan quickly (every test that builds the admin app) cancels the task
@@ -31,8 +29,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import datetime
+from typing import cast
 
 from fastapi import FastAPI
+from sqlalchemy import text
 
 from app.adapters.http.node_health import RuntimeNodeHealth
 from app.adapters.persistence.repositories import PostgresModelRepository, PostgresNodeRepository
@@ -48,7 +49,10 @@ logger = logging.getLogger(__name__)
 NodesSource = Callable[[], Awaitable[list[Node]]]
 StatusWriter = Callable[[str, NodeStatus], Awaitable[None]]
 ModelsSource = Callable[[], Awaitable[list[Model]]]
-ObservationWriter = Callable[[str, ModelState | None, float | None], Awaitable[None]]
+ObservationWriter = Callable[
+    [str, ModelState | None, float | None, datetime | None], Awaitable[None]
+]
+ObservationTime = Callable[[], Awaitable[datetime]]
 
 
 async def sweep(health: NodeHealthPort, nodes: NodesSource, write_status: StatusWriter) -> int:
@@ -76,98 +80,85 @@ async def observe_models(
     write_observation: ObservationWriter,
     local_node_id: str,
     *,
+    observation_time: ObservationTime,
     local_node: Node | None = None,
+    nodes_by_id: dict[str, Node] | None = None,
 ) -> int:
     """Ask each runtime what it holds and reconcile every registered model.
 
-    Returns the count of models whose observation moved. Same single-node scope
-    as `RuntimeNodeHealth`, and `local_node_id` is what makes it explicit: the
-    adapters point at the configured host runtime, so only that node's models
-    can be observed and every other node's are left unobserved rather than
-    guessed at.
+    Returns the count of models whose observation moved. With agents enabled,
+    each node is observed through its own adapter. Direct adapters still point
+    at one configured host: only local_node_id may use those, so the local
+    host's answer can never be attributed to a different node.
 
     A runtime that raises or answers None contributes no observation, and the
     models it serves are written back to "not observed" rather than left
     holding a stale one: a claim that cannot be re-checked must not keep the
     authority of one that just was.
     """
-    residencies: dict[RuntimeKind, RuntimeResidency | None] = {}
-    for kind in runtimes:
-        # The local node's runtime for the kind, its agent when agents are
-        # enabled (PR4b); a kind with none there is simply not observed.
-        adapter = runtime_for(runtimes, local_node, kind)
-        if adapter is None:
-            residencies[kind] = None
-            continue
-        try:
-            residencies[kind] = await adapter.residency()
-        except Exception:  # noqa: BLE001 - one broken runtime must not stop the sweep
-            logger.warning("a runtime residency probe raised", exc_info=True)
-            residencies[kind] = None
+    registered = await models()
+    nodes_by_id = dict(nodes_by_id or {})
+    if local_node is not None:
+        nodes_by_id.setdefault(local_node.id, local_node)
+    agents_enabled = bool(getattr(runtimes, "agents_enabled", False))
+    groups: dict[tuple[str, RuntimeKind], list[Model]] = {}
+    for model in registered:
+        groups.setdefault((model.node_id, model.runtime), []).append(model)
 
     changed = 0
-    for model in await models():
-        residency = residencies.get(model.runtime)
-        observed: ModelState | None
-        observed_gb: float | None = None
-        if model.node_id != local_node_id:
-            # The adapters are built pointing at the configured host runtime, not
-            # at `node.address`, so a second node's residency is not something
-            # this sweep can see. Left unobserved rather than reported absent:
-            # `not_downloaded` here would be a *confident wrong answer*, and
-            # because routing now ranks observation over intent it would refuse
-            # every model on that node and make the memory budget count node B's
-            # rows against node A's runtime. `RuntimeNodeHealth` carries the same
-            # single-node limitation, where the cost is only a wrong node status.
-            # Per-node runtime endpoints land with multi-node routing.
-            observed = None
-        elif residency is None:
-            observed = None
-        elif model.ref in residency.resident:
-            observed = ModelState.LOADED
-            observed_gb = residency.resident[model.ref]
-        elif model.ref in residency.on_disk:
-            observed = ModelState.DOWNLOADED
-        else:
-            observed = ModelState.NOT_DOWNLOADED
+    for (node_id, kind), group in groups.items():
+        # A direct adapter has no endpoint for a different node. Only an
+        # agent-backed directory may resolve that node's own residency.
+        adapter = None
+        if node_id == local_node_id or agents_enabled:
+            adapter = runtime_for(runtimes, nodes_by_id.get(node_id), kind)
+        residency: RuntimeResidency | None = None
+        observed_at = None
+        if adapter is not None:
+            # Database time before the probe conservatively includes probe
+            # and write latency. One frozen time for the whole answer prevents
+            # a delayed first write from freshening its siblings' old evidence.
+            # The provider closes its transaction before runtime network I/O.
+            observed_at = await observation_time()
+            try:
+                residency = await adapter.residency()
+            except Exception:  # noqa: BLE001 - one broken runtime must not stop the sweep
+                logger.warning("a runtime residency probe raised", exc_info=True)
 
-        unchanged = model.observed_state is observed and model.observed_memory_gb == observed_gb
+        # Write this answer before awaiting another node. Otherwise a slow
+        # later probe could delay an old positive observation for minutes and
+        # then stamp it as newly observed, defeating the routing age limit.
+        for model in group:
+            observed: ModelState | None
+            observed_gb: float | None = None
+            if residency is None:
+                observed = None
+            elif model.ref in residency.resident:
+                observed = ModelState.LOADED
+                observed_gb = residency.resident[model.ref]
+            elif model.ref in residency.on_disk:
+                observed = ModelState.DOWNLOADED
+            else:
+                observed = ModelState.NOT_DOWNLOADED
 
-        # An unchanged observation is still rewritten, so that `observed_at`
-        # means *last observed* rather than *last changed*. Writing only on
-        # change left these rows stamped 2026-07-30 for five days while the
-        # sweep ran every thirty seconds, which made a model steadily observed
-        # for five days and a heartbeat dead for five days the same row — the
-        # ambiguity `check-platform-health.sh` argues against in its own
-        # header.
-        #
-        # It is not free, and the first version of this comment understated it
-        # by calling the cost "halved". The sweep running in one entrance
-        # rather than two is a halving; this write is 0 → N per sweep, each in
-        # its own `session_scope()` transaction, so it is a steady floor of N
-        # transactions every thirty seconds where there was none. N is the
-        # model count — three here — and a single batched UPDATE would buy the
-        # same freshness if that ever stops being small.
-        #
-        # Except when there is nothing to stamp: `set_observed` nulls
-        # `observed_at` along with the state, so rewriting an already-null row
-        # buys no freshness and is pure churn. A model on another node, or one
-        # whose runtime has no adapter, stays untouched.
-        if unchanged and observed is None:
-            continue
-        await write_observation(model.id, observed, observed_gb)
-        if unchanged:
-            continue
-        # Counted and logged only on a change: the return value feeds the
-        # "what did this sweep do" line, and logging an unchanged observation
-        # thirty times a minute would bury the transitions that matter.
-        changed += 1
-        logger.info(
-            "model %s observed %s (intent %s)",
-            model.alias,
-            observed.value if observed else "nothing",
-            model.state.value,
-        )
+            unchanged = model.observed_state is observed and model.observed_memory_gb == observed_gb
+            # A repeated positive observation refreshes observed_at, while an
+            # already-null observation has no timestamp to refresh. Only an
+            # actual transition is counted and logged.
+            if unchanged and observed is None:
+                continue
+            await write_observation(
+                model.id, observed, observed_gb, observed_at if observed else None
+            )
+            if unchanged:
+                continue
+            changed += 1
+            logger.info(
+                "model %s observed %s (intent %s)",
+                model.alias,
+                observed.value if observed else "nothing",
+                model.state.value,
+            )
     return changed
 
 
@@ -210,10 +201,21 @@ async def run_heartbeat(app: FastAPI, interval_seconds: int) -> None:
             return await PostgresModelRepository(session).list_all()
 
     async def write_observation(
-        model_id: str, state: ModelState | None, memory_gb: float | None
+        model_id: str,
+        state: ModelState | None,
+        memory_gb: float | None,
+        observed_at: datetime | None,
     ) -> None:
         async with session_scope() as session:
-            await PostgresModelRepository(session).set_observed(model_id, state, memory_gb)
+            await PostgresModelRepository(session).set_observed(
+                model_id, state, memory_gb, observed_at=observed_at
+            )
+
+    async def observation_time() -> datetime:
+        async with session_scope() as session:
+            return cast(
+                datetime, (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
+            )
 
     async def write_version(node_id: str, version: str | None) -> None:
         async with session_scope() as session:
@@ -235,13 +237,14 @@ async def run_heartbeat(app: FastAPI, interval_seconds: int) -> None:
             logger.exception("runtime version sweep failed")
         try:
             local_id = get_settings().node_id
-            local = next((n for n in await load_nodes() if n.id == local_id), None)
+            nodes_by_id = {n.id: n for n in await load_nodes()}
             await observe_models(
                 app.state.runtimes,
                 load_models,
                 write_observation,
                 local_id,
-                local_node=local,
+                observation_time=observation_time,
+                nodes_by_id=nodes_by_id,
             )
         except asyncio.CancelledError:
             raise

@@ -298,10 +298,20 @@ class FakeModels:
         )
 
     async def set_observed(
-        self, model_id: str, state: ModelState | None, memory_gb: float | None
+        self,
+        model_id: str,
+        state: ModelState | None,
+        memory_gb: float | None,
+        *,
+        observed_at: datetime | None,
     ) -> None:
+        if state is not None and observed_at is None:
+            raise ValueError("a positive residency observation requires its capture time")
         self.rows[model_id] = replace(
-            self.rows[model_id], observed_state=state, observed_memory_gb=memory_gb
+            self.rows[model_id],
+            observed_state=state,
+            observed_memory_gb=memory_gb,
+            observed_at=observed_at if state else None,
         )
 
     async def delete(self, model_id: str) -> None:
