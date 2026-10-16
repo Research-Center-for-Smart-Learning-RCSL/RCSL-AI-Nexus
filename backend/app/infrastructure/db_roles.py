@@ -216,6 +216,7 @@ $do$;""",
             f"GRANT UPDATE (lock_domain_id) ON {_quote_ident('nodes')} TO {ident};",
             # The weights pin, set by the agent's own pull (PR4b, design S5).
             f"GRANT UPDATE (manifest_digest) ON {_quote_ident('models')} TO {ident};",
+            f"GRANT UPDATE (capacity_validated) ON {_quote_ident('models')} TO {ident};",
             f"GRANT USAGE, SELECT ON SEQUENCE node_operation_audit_id_seq TO {ident};",
         ]
     elif spec.profile == "admin":

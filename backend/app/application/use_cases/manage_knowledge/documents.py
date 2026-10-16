@@ -111,8 +111,6 @@ class DocumentManagementMixin(CollectionManagementMixin):
         safe_name = sanitise_filename(filename)
 
         document_id = str(uuid.uuid4())
-        await self._storage.put_original(document_id, data)
-
         document = KnowledgeDocument(
             id=document_id,
             tenant_id=actor.tenant_id,
@@ -123,20 +121,21 @@ class DocumentManagementMixin(CollectionManagementMixin):
             status=DocumentStatus.UPLOADED,
             uploaded_by=actor.id,
         )
-        await self._knowledge.save_document(document)
-        # The filename and size are metadata; the document's content is not
-        # recorded here and must not be. security.md section 9.2.
-        await self._audit.record(
-            actor,
-            AuditAction.KNOWLEDGE_DOCUMENT_UPLOADED,
-            target=document_id,
-            detail={
-                "filename": safe_name,
-                "media_type": media_type,
-                "bytes": str(len(data)),
-                "collection": collection_id,
-            },
-        )
+        async with self._mutation(collection_id):
+            await self._storage.put_original(document_id, data)
+            await self._knowledge.save_document(document)
+            # Metadata only; document content never enters the audit log.
+            await self._audit.record(
+                actor,
+                AuditAction.KNOWLEDGE_DOCUMENT_UPLOADED,
+                target=document_id,
+                detail={
+                    "filename": safe_name,
+                    "media_type": media_type,
+                    "bytes": str(len(data)),
+                    "collection": collection_id,
+                },
+            )
         stored = await self._knowledge.get_document(document_id)
         return stored if stored is not None else document
 
@@ -147,10 +146,11 @@ class DocumentManagementMixin(CollectionManagementMixin):
             raise DocumentStateConflictError(
                 detail=f"document {document_id} is still being ingested"
             )
-        await self._forget_document(document)
-        await self._audit.record(
-            actor,
-            AuditAction.KNOWLEDGE_DOCUMENT_DELETED,
-            target=document_id,
-            detail={"filename": document.filename},
-        )
+        async with self._mutation(document.collection_id):
+            await self._forget_document(document)
+            await self._audit.record(
+                actor,
+                AuditAction.KNOWLEDGE_DOCUMENT_DELETED,
+                target=document_id,
+                detail={"filename": document.filename},
+            )

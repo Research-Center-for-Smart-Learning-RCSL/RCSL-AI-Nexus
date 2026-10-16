@@ -19,6 +19,7 @@ from app.adapters.persistence.repositories import (
     PostgresUsageRepository,
     PostgresUsageSettlement,
 )
+from app.adapters.runtime.node_agent_adapter import NodeAgentRuntime
 from app.application.use_cases.assist_operator import AssistOperator
 from app.application.use_cases.assist_operator.prompt import ASSIST_CAPABILITY
 from app.application.use_cases.download_model import DownloadModel
@@ -30,7 +31,7 @@ from app.application.use_cases.route_chat_request.binding import RequestBinder
 from app.application.use_cases.route_chat_request.compaction_cache import CompactionCache
 from app.application.use_cases.route_chat_request.compaction_tier2 import (
     SummariseFn,
-    build_summarise_fn,
+    SummaryTooLongError,
 )
 from app.domain.entities.chat import Message
 from app.domain.exceptions import NoAvailableModelError
@@ -85,27 +86,15 @@ def build_assist_summariser(
         if runtime is None:
             raise NoAvailableModelError(detail=f"no adapter for runtime={target.runtime}")
 
-        # The smaller of what the registry claims and what the model's own
-        # header declares — never the registration alone.
-        #
-        # That distinction was theoretical until 2026-09-07, when `qwen7b` was
-        # found registered at 262144 against a declared 32768. This is the one
-        # caller for which it is not theoretical: the prefix Tier 2 sends is
-        # what remains of a conversation two cheaper tiers could not rescue, so
-        # it is large by construction, and above the real figure the runtime
-        # truncates to half of it in silence and reports a clean stop. A
-        # summary written from that is a summary of part of the history
-        # describing itself as the whole of it — inside the feature built to
-        # make that class of loss visible.
-        #
-        # The counter is also handed down so the bound is enforced rather than
-        # merely declared; see `build_summarise_fn`.
-        counter = getattr(request.app.state, "token_counter", None)
-        registered = target.resource_profile.context_length or None
-        declared = await counter.native_context_length(target.ref) if counter else None
-        bounds = [n for n in (registered, declared) if n]
-        context_length = min(bounds) if bounds else None
-        return await build_summarise_fn(runtime, target.ref, context_length, counter)(messages)
+        # Summarisation is owned by the selected node, including its exact
+        # counter, capacity validation, admission and terminal settlement.
+        # A direct-adapter fallback would bypass the per-node summary limit.
+        if not isinstance(runtime, NodeAgentRuntime):
+            raise SummaryTooLongError("Tier 2 requires a node agent")
+        context_length = target.resource_profile.context_length
+        if not context_length:
+            raise SummaryTooLongError("summary capacity is unresolved")
+        return await runtime.summarise(target.ref, messages, context_length)
 
     return _summarise
 

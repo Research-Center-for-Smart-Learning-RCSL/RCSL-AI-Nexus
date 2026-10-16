@@ -244,6 +244,13 @@ export function GroundingSection({ section }: ApiReferenceSectionProps) {
           <strong>absent where nothing was retrieved</strong>.
         </p>
         <p className="text-sm text-muted-foreground">
+          Citations are deduplicated and the header value is capped at 2048
+          bytes, favoring recent citations.{' '}
+          <code>X-Knowledge-Sources-Truncated: true</code> indicates that some
+          citations were omitted from the header. The model still receives the
+          complete grounded context.
+        </p>
+        <p className="text-sm text-muted-foreground">
           <strong>Retrieval degrades rather than failing.</strong> Where the
           vector store is unreachable, where the deployment has no embedding
           model routed, or where the question matched nothing, the result is an

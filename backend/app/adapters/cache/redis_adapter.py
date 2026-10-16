@@ -13,9 +13,35 @@ it is not inferred from anything else.
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from typing import cast
 
 from redis.asyncio import Redis
+
+from app.domain.services.grounding_records import (
+    MAX_GROUNDING_RECORD_BYTES,
+    MAX_GROUNDING_RECORDS_PER_TENANT,
+    MAX_GROUNDING_RECORDS_TOTAL,
+)
+
+GROUNDING_QUOTA_PREFIX = "grounding-quota"
+
+_GROUNDING_QUOTA_SCRIPT = """
+if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+local now = redis.call('TIME')
+local seconds = tonumber(now[1]) + tonumber(now[2]) / 1000000
+for i = 2, 3 do redis.call('ZREMRANGEBYSCORE', KEYS[i], '-inf', seconds) end
+if redis.call('ZCARD', KEYS[2]) >= tonumber(ARGV[3]) or
+   redis.call('ZCARD', KEYS[3]) >= tonumber(ARGV[4]) then return 0 end
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2], 'NX')
+for i = 2, 3 do
+    redis.call('ZADD', KEYS[i], seconds + tonumber(ARGV[2]), KEYS[1])
+    if redis.call('TTL', KEYS[i]) < tonumber(ARGV[2]) then
+        redis.call('EXPIRE', KEYS[i], ARGV[2])
+    end
+end
+return 1
+"""
 
 
 class RedisCache:
@@ -27,8 +53,46 @@ class RedisCache:
         # as bytes | str | None regardless.
         return cast("str | None", await self._redis.get(key))
 
+    async def get_first(self, keys: Sequence[str]) -> tuple[str, str] | None:
+        if not keys:
+            return None
+        # One result, not MGET's potentially 256 x 256KiB response. The caller
+        # bounds KEYS; Redis scans these in requested newest-first order.
+        result = await self._redis.eval(
+            "for _, key in ipairs(KEYS) do "
+            "local value = redis.call('GET', key); "
+            "if value then return {key, value} end end return nil",
+            len(keys),
+            *keys,
+        )
+        if result is None:
+            return None
+        return str(result[0]), str(result[1])
+
     async def set(self, key: str, value: str, ttl_seconds: int) -> None:
         await self._redis.set(key, value, ex=ttl_seconds)
+
+    async def set_if_absent(self, key: str, value: str, ttl_seconds: int) -> bool:
+        return bool(await self._redis.set(key, value, ex=ttl_seconds, nx=True))
+
+    async def set_grounding_if_absent(
+        self, bucket: str, key: str, value: str, ttl_seconds: int
+    ) -> bool:
+        if len(value.encode()) > MAX_GROUNDING_RECORD_BYTES:
+            return False
+        return bool(
+            await self._redis.eval(
+                _GROUNDING_QUOTA_SCRIPT,
+                3,
+                key,
+                f"{GROUNDING_QUOTA_PREFIX}:{bucket}",
+                f"{GROUNDING_QUOTA_PREFIX}:global",
+                value,
+                ttl_seconds,
+                MAX_GROUNDING_RECORDS_PER_TENANT,
+                MAX_GROUNDING_RECORDS_TOTAL,
+            )
+        )
 
     async def delete(self, key: str) -> None:
         await self._redis.delete(key)
@@ -55,6 +119,7 @@ class InMemoryCache:
 
     def __init__(self) -> None:
         self._values: dict[str, tuple[str, float]] = {}
+        self._grounding: dict[str, tuple[str, float]] = {}
 
     def _live(self, key: str) -> str | None:
         entry = self._values.get(key)
@@ -69,8 +134,40 @@ class InMemoryCache:
     async def get(self, key: str) -> str | None:
         return self._live(key)
 
+    async def get_first(self, keys: Sequence[str]) -> tuple[str, str] | None:
+        for key in keys:
+            value = self._live(key)
+            if value is not None:
+                return key, value
+        return None
+
     async def set(self, key: str, value: str, ttl_seconds: int) -> None:
         self._values[key] = (value, time.monotonic() + ttl_seconds)
+
+    async def set_if_absent(self, key: str, value: str, ttl_seconds: int) -> bool:
+        # No await between checking and writing: atomic within this event loop.
+        if self._live(key) is not None:
+            return False
+        self._values[key] = (value, time.monotonic() + ttl_seconds)
+        return True
+
+    async def set_grounding_if_absent(
+        self, bucket: str, key: str, value: str, ttl_seconds: int
+    ) -> bool:
+        now = time.monotonic()
+        self._grounding = {k: v for k, v in self._grounding.items() if v[1] > now}
+        if (
+            len(value.encode()) > MAX_GROUNDING_RECORD_BYTES
+            or self._live(key) is not None
+            or len(self._grounding) >= MAX_GROUNDING_RECORDS_TOTAL
+            or sum(v[0] == bucket for v in self._grounding.values())
+            >= MAX_GROUNDING_RECORDS_PER_TENANT
+        ):
+            return False
+        # No await: one admission and insertion in this event loop.
+        self._values[key] = (value, now + ttl_seconds)
+        self._grounding[key] = (bucket, now + ttl_seconds)
+        return True
 
     async def delete(self, key: str) -> None:
         self._values.pop(key, None)
@@ -83,3 +180,4 @@ class InMemoryCache:
 
     async def close(self) -> None:
         self._values.clear()
+        self._grounding.clear()

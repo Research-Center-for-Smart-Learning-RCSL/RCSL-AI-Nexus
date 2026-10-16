@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from contextlib import AbstractAsyncContextManager, nullcontext
 
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.audit import AuditAction
@@ -17,6 +18,7 @@ from app.domain.exceptions import (
     DocumentNotFoundError,
     DocumentStateConflictError,
 )
+from app.domain.ports.grounding_ports import KnowledgeEpochPort
 from app.domain.ports.knowledge_ports import DocumentStoragePort, VectorStorePort
 from app.domain.ports.repositories import KnowledgeRepositoryPort
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
@@ -34,12 +36,17 @@ class CollectionManagementMixin:
         vectors: VectorStorePort,
         authz: AuthorizationPort,
         audit: AuditPort,
+        epochs: KnowledgeEpochPort | None = None,
     ) -> None:
         self._knowledge = knowledge
         self._storage = storage
         self._vectors = vectors
         self._authz = authz
         self._audit = audit
+        self._epochs = epochs
+
+    def _mutation(self, collection_id: str) -> AbstractAsyncContextManager[None]:
+        return self._epochs.mutation(collection_id) if self._epochs else nullcontext()
 
     def assert_may_read(self, actor: Actor) -> None:
         """The scope check on its own, for the one caller that needs the check
@@ -77,13 +84,14 @@ class CollectionManagementMixin:
             name=name,
             description=description,
         )
-        await self._knowledge.save_collection(collection)
-        await self._audit.record(
-            actor,
-            AuditAction.KNOWLEDGE_COLLECTION_CREATED,
-            target=collection.id,
-            detail={"name": name},
-        )
+        async with self._mutation(collection.id):
+            await self._knowledge.save_collection(collection)
+            await self._audit.record(
+                actor,
+                AuditAction.KNOWLEDGE_COLLECTION_CREATED,
+                target=collection.id,
+                detail={"name": name},
+            )
         # Read back, so the caller receives the server-assigned `created_at`
         # rather than the null the unsaved entity carries. The create paths that
         # returned the unsaved entity produced a body the frontend's parse
@@ -109,15 +117,16 @@ class CollectionManagementMixin:
                 detail=f"collection {collection_id} has documents still being ingested"
             )
 
-        for document in documents:
-            await self._forget_document(document)
-        await self._knowledge.delete_collection(collection.id)
-        await self._audit.record(
-            actor,
-            AuditAction.KNOWLEDGE_COLLECTION_DELETED,
-            target=collection.id,
-            detail={"name": collection.name, "documents": str(len(documents))},
-        )
+        async with self._mutation(collection.id):
+            for document in documents:
+                await self._forget_document(document)
+            await self._knowledge.delete_collection(collection.id)
+            await self._audit.record(
+                actor,
+                AuditAction.KNOWLEDGE_COLLECTION_DELETED,
+                target=collection.id,
+                detail={"name": collection.name, "documents": str(len(documents))},
+            )
 
     async def _forget_document(self, document: KnowledgeDocument) -> None:
         """Passages, then bytes, then the row.

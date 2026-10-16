@@ -28,6 +28,8 @@ export const AUDIT_ACTIONS = [
   'knowledge.collection_deleted',
   'knowledge.document_deleted',
   'knowledge.document_uploaded',
+  'knowledge.rebuild_started',
+  'knowledge.recovered',
   'model.deleted',
   'model.download_started',
   'model.loaded',

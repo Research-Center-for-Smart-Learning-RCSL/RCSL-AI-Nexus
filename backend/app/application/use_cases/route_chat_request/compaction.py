@@ -127,6 +127,8 @@ def _compact_tool_results(
     result = list(messages)
     total = len(result)
     cutoff = max(total - RECENT_MESSAGE_WINDOW, 0)
+    # The same anchored block stays byte-stable through the next ten turns.
+    cutoff = (cutoff // RECENT_MESSAGE_WINDOW) * RECENT_MESSAGE_WINDOW
 
     replaced = 0
     chars_saved = 0

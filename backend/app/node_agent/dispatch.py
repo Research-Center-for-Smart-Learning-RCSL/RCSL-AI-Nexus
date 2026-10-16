@@ -34,7 +34,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from app.node_agent.store import LIFECYCLE_KINDS, NotOwner, Operation
+from app.node_agent.store import LIFECYCLE_KINDS, NotOwner, Operation, SummaryBusy
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +236,7 @@ class Dispatcher:
         self._slots = asyncio.Semaphore(max_inflight)
         self._max_queued = max_queued
         self._queued = 0
+        self._summary_op: str | None = None
         self._admitted: dict[str, asyncio.Task[None]] = {}
         self._idle = asyncio.Event()
         self._idle.set()
@@ -313,6 +314,19 @@ class Dispatcher:
 
     async def wait_idle(self) -> None:
         await self._idle.wait()
+
+    async def summary_admission_refusal(self) -> Refused | None:
+        """Fast preflight before expensive local counting.
+
+        Final submission rechecks under the barrier and durable dispatch lock;
+        this read gives already-busy callers the required immediate 503.
+        """
+        async with self._barrier:
+            if self._state is not GateState.SERVING:
+                return Refused(f"node_{self._state.value}", retry_after=_retry_after(self._state))
+            if self._summary_op is not None:
+                return Refused("summary_busy", retry_after=2)
+        return None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -444,6 +458,10 @@ class Dispatcher:
                 return Refused(f"node_{self._state.value}", retry_after=_retry_after(self._state))
             if self._queued >= self._max_queued:
                 return Refused("overloaded", retry_after=2)
+            if kind == "summary":
+                if self._summary_op is not None:
+                    return Refused("summary_busy", retry_after=2)
+                self._summary_op = op_id
             self._queued += 1
         try:
             try:
@@ -457,6 +475,8 @@ class Dispatcher:
             except NotOwner:
                 await self.lose_role("not_owner_at_insert")
                 return Refused("node_lost", retry_after=None)
+            except SummaryBusy:
+                return Refused("summary_busy", retry_after=2)
             except asyncio.CancelledError:
                 # The insert may or may not have committed. A tombstone or a
                 # cancellation of the accepted row covers both, and a late
@@ -469,6 +489,8 @@ class Dispatcher:
             return await self._promote(op_id, kind, relay, provenance or {}, deadline_s)
         finally:
             self._queued -= 1
+            if self._summary_op == op_id and op_id not in self._admitted:
+                self._summary_op = None
 
     async def _wait_for_slot(self, op_id: str, deadline_s: float) -> str | None:
         """A held slot (None), or the reason the attempt will not be sent."""
@@ -622,6 +644,8 @@ class Dispatcher:
                 attempt.settled.set_result(outcome)
             self._slots.release()
             self._admitted.pop(op_id, None)
+            if self._summary_op == op_id:
+                self._summary_op = None
             if not self._admitted:
                 self._idle.set()
             if lifecycle:

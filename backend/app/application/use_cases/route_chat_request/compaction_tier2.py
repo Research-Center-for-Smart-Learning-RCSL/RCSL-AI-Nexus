@@ -5,9 +5,8 @@ of the conversation to a small, already-resident model (``qwen2.5:7b`` on
 the ``assist`` capability), replaces the summarised messages with a single
 system message carrying the summary, and returns the shorter conversation.
 
-**Serialised.** At most one summarisation runs at a time, so compaction
-can never consume more than one of the four gateway slots. The lock is an
-``asyncio.Lock`` held for the duration of the call.
+**Node admission.** The selected node agent admits at most one outstanding
+summary and refuses further misses with 503. Gateway cache hits need no slot.
 
 **Cached.** The prefix-hash cache from ``compaction_cache.py`` is checked
 before summarising, so a conversation that was already compacted on a
@@ -149,76 +148,59 @@ async def try_tier2(
                     disclosure=cached.disclosure,
                 )
 
-    async with lock:
-        # Re-check the cache inside the lock: another request may have
-        # populated it while we were waiting.
-        if cache is not None:
-            cached = await cache.get(prefix_messages, tools, tier=2)
-            if cached is not None:
-                compacted_messages = (*cached.messages, *messages[n_to_summarise:])
-                recount = await count_fn(target, compacted_messages, tools)
-                if recount is not None and recount <= limit:
-                    logger.info(
-                        "compaction tier 2 cache hit (after lock): %d -> %d",
-                        tokens_before,
-                        recount,
-                    )
-                    return CompactionResult(
-                        tier=2,
-                        messages=compacted_messages,
-                        tools=tools,
-                        tokens_before=tokens_before,
-                        tokens_after=recount,
-                        disclosure=cached.disclosure,
-                    )
+    # Admission belongs to the agent; waiting on a gateway lock would hide
+    # its fast concurrency refusal and would not coordinate gateway workers.
+    summary_msg = await _do_summarise(messages, n_to_summarise, summarise_fn)
+    compacted_messages = (summary_msg, *messages[n_to_summarise:])
 
-        summary_msg = await _do_summarise(messages, n_to_summarise, summarise_fn)
-        compacted_messages = (summary_msg, *messages[n_to_summarise:])
+    recount = await count_fn(target, compacted_messages, tools)
+    disclosure = (
+        f"Tier 2: {n_to_summarise} oldest messages summarised into "
+        f"{len(summary_msg.content)} characters"
+    )
 
-        recount = await count_fn(target, compacted_messages, tools)
-        disclosure = (
-            f"Tier 2: {n_to_summarise} oldest messages summarised into "
-            f"{len(summary_msg.content)} characters"
-        )
-
-        if recount is not None and recount <= limit:
-            logger.info(
-                "compaction tier 2 sufficient: %d -> %d (limit %d)",
-                tokens_before,
-                recount,
-                limit,
-            )
-            result = CompactionResult(
-                tier=2,
-                messages=compacted_messages,
-                tools=tools,
-                tokens_before=tokens_before,
-                tokens_after=recount,
-                disclosure=disclosure,
-            )
-            if cache is not None:
-                await cache.put(
-                    prefix_messages,
-                    tools,
-                    tier=2,
-                    result=CachedPrefix(
-                        messages=tuple(compacted_messages[:1]),
-                        disclosure=disclosure,
-                        tier=2,
-                        tokens_before=tokens_before,
-                        tokens_after=recount,
-                    ),
-                )
-            return result
-
-        logger.warning(
-            "compaction tier 2 was not enough: %d -> %s (limit %d)",
+    if recount is not None and recount <= limit:
+        logger.info(
+            "compaction tier 2 sufficient: %d -> %d (limit %d)",
             tokens_before,
             recount,
             limit,
         )
-        return None
+        result = CompactionResult(
+            tier=2,
+            messages=compacted_messages,
+            tools=tools,
+            tokens_before=tokens_before,
+            tokens_after=recount,
+            disclosure=disclosure,
+        )
+        if cache is not None:
+            await cache.put(
+                prefix_messages,
+                tools,
+                tier=2,
+                result=CachedPrefix(
+                    messages=tuple(compacted_messages[:1]),
+                    disclosure=disclosure,
+                    tier=2,
+                    tokens_before=tokens_before,
+                    tokens_after=recount,
+                ),
+            )
+        return result
 
+    logger.warning(
+        "compaction tier 2 was not enough: %d -> %s (limit %d)",
+        tokens_before,
+        recount,
+        limit,
+    )
+    return None
+
+
+SUMMARY_TIMEOUT_SECONDS = 30.0
+SUMMARY_MAX_BYTES = 64 * 1024
+SUMMARY_INPUT_MAX_BYTES = 4 * 1024 * 1024
 
 SUMMARY_OUTPUT_TOKENS = 600
 """Reserved for the summary itself, and subtracted from what may be sent.
@@ -260,53 +242,55 @@ def build_summarise_fn(
     registration that overstates the model is a summary written from a prompt
     the runtime quietly cut in half.
 
-    ``counter`` is what makes that bound enforceable rather than merely
-    declared. Without it the prompt is sent unchecked, which is the behaviour
-    of every build that has no GGUF to read and is why it is optional.
+    Without an exact ``counter`` or known context this refuses to summarise.
     """
 
     async def _summarise(messages: Sequence[Message]) -> str:
-        prompt: list[Message] = [
-            Message(role=MessageRole.SYSTEM, content=_SUMMARISE_SYSTEM),
-            Message(
-                role=MessageRole.USER,
-                content="\n\n".join(f"[{m.role.value}] {m.content}" for m in messages if m.content),
-            ),
-        ]
-        if counter is not None and context_length:
+        if counter is None or not context_length:
+            raise SummaryTooLongError("summary requires an exact counter and a known context")
+        prompt = build_summary_prompt(messages)
+        async with asyncio.timeout(SUMMARY_TIMEOUT_SECONDS):
             counted = await counter.count_prompt(ref, prompt, [])
-            # The same boundary the request guard uses (#24 §6): prompt and
-            # output both fit, one token short of the window, because the
-            # runtime keeps a prompt whole only below it and shifts the context
-            # when output reaches it. A prefix this counter cannot count is
-            # refused rather than sent unchecked, since Tier 2's input is large
-            # by construction.
             budget = context_length - 1 - SUMMARY_OUTPUT_TOKENS
-            if counted is None:
-                raise SummaryTooLongError(
-                    f"could not count the prefix to summarise for {ref}; refusing "
-                    "rather than sending a prompt of unknown size"
+            if counted is None or counted > budget:
+                raise SummaryTooLongError("summary input cannot be counted or exceeds its budget")
+            parts: list[str] = []
+            size = 0
+            async with aclosing(
+                runtime.generate(
+                    ref,
+                    prompt,
+                    max_tokens=SUMMARY_OUTPUT_TOKENS,
+                    thinking=False,
+                    context_length=context_length,
                 )
-            if counted > budget:
-                raise SummaryTooLongError(
-                    f"the {counted} tokens to summarise exceed the {budget} "
-                    f"{ref} can read; refusing rather than summarising a prompt "
-                    "the runtime would truncate"
-                )
-
-        parts: list[str] = []
-        async with aclosing(
-            runtime.generate(
-                ref,
-                prompt,
-                max_tokens=SUMMARY_OUTPUT_TOKENS,
-                thinking=False,
-                context_length=context_length,
-            )
-        ) as stream:
-            async for chunk in stream:
-                if chunk.delta:
-                    parts.append(chunk.delta)
-        return "".join(parts)
+            ) as stream:
+                async for chunk in stream:
+                    if chunk.delta:
+                        size += len(chunk.delta.encode("utf-8"))
+                        if size > SUMMARY_MAX_BYTES:
+                            raise SummaryTooLongError("summary output exceeds its byte budget")
+                        parts.append(chunk.delta)
+            text = "".join(parts)
+            output_counts = await counter.count_parts(ref, [text])
+            if output_counts is None or len(output_counts) != 1:
+                raise SummaryTooLongError("summary output could not be counted")
+            if output_counts[0] > SUMMARY_OUTPUT_TOKENS:
+                raise SummaryTooLongError("summary output exceeds its token budget")
+            return text
 
     return _summarise
+
+
+def build_summary_prompt(messages: Sequence[Message]) -> list[Message]:
+    """Build the bounded summary input inside the node agent."""
+    size = sum(len(m.content.encode("utf-8")) for m in messages)
+    if size > SUMMARY_INPUT_MAX_BYTES:
+        raise SummaryTooLongError("summary input exceeds its byte budget")
+    return [
+        Message(role=MessageRole.SYSTEM, content=_SUMMARISE_SYSTEM),
+        Message(
+            role=MessageRole.USER,
+            content="\n\n".join(f"[{m.role.value}] {m.content}" for m in messages if m.content),
+        ),
+    ]

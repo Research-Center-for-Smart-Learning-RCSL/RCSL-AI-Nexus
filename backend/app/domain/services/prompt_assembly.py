@@ -39,7 +39,9 @@ Chunking already bounds this; the second bound is here because the passages
 arrive from a store whose contents this process did not produce."""
 
 
-def build_context_message(passages: list[RetrievedPassage]) -> Message | None:
+def build_context_message(
+    passages: list[RetrievedPassage], *, nonce: str | None = None
+) -> Message | None:
     """One system message carrying the passages as data, or None if there are
     none. Returning None rather than an empty block matters: an empty
     "here is your reference material" section invites the model to invent some.
@@ -49,7 +51,7 @@ def build_context_message(passages: list[RetrievedPassage]) -> Message | None:
 
     # Per request, so a document cannot contain the closing fence: it would have
     # to guess 128 bits. A fixed marker is one an uploaded file can simply write.
-    nonce = secrets.token_hex(8)
+    nonce = nonce or secrets.token_hex(16)
     opening = f"<<<SOURCE-{nonce}"
     closing = f"SOURCE-{nonce}>>>"
 

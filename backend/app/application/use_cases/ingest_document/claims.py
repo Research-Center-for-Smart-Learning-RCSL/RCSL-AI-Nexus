@@ -7,6 +7,7 @@ import logging
 from app.application.use_cases.embed_texts import TextEmbedderPort
 from app.domain.entities.knowledge import DocumentStatus, KnowledgeDocument
 from app.domain.exceptions import DocumentNotFoundError, DocumentStateConflictError
+from app.domain.ports.grounding_ports import KnowledgeEpochPort
 from app.domain.ports.infrastructure_ports import JobProgressPort, JobStatus
 from app.domain.ports.knowledge_ports import (
     DocumentParserPort,
@@ -35,6 +36,7 @@ class IngestionClaimsMixin:
         vectors: VectorStorePort,
         embedder: TextEmbedderPort,
         knowledge: KnowledgeRepositoryPort | None = None,
+        epochs: KnowledgeEpochPort | None = None,
     ) -> None:
         self._state = state_committer
         self._storage = storage
@@ -46,6 +48,7 @@ class IngestionClaimsMixin:
         # detached and must not touch it, so it is optional and None there,
         # exactly as `DownloadModel` carries `models` for `start` alone.
         self._knowledge = knowledge
+        self._epochs = epochs
 
     async def claim(self, document: KnowledgeDocument, job_id: str) -> JobStatus:
         """Move the document into `EXTRACTING` while the caller is still waiting.

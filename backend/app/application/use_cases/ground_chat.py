@@ -20,19 +20,48 @@ who never asked for it.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 
-from app.application.use_cases.search_knowledge import DEFAULT_TOP_K, SearchKnowledge
+from app.application.use_cases.search_knowledge import DEFAULT_TOP_K, MAX_TOP_K, SearchKnowledge
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.chat import Message
 from app.domain.entities.knowledge import RetrievedPassage
-from app.domain.services.prompt_assembly import ground, query_from
+from app.domain.ports.grounding_ports import GroundingRecordStorePort, KnowledgeEpochPort
+from app.domain.services.grounding_records import (
+    GROUNDING_RECORD_TTL,
+    MAX_GROUNDING_LOOKBACK,
+    MAX_GROUNDING_RECORD_BYTES,
+    RETRIEVAL_CONFIG_VERSION,
+    GroundingAnchor,
+    anchor_hashes,
+    decode_chain,
+    encode_chain,
+    keyed_digest,
+    replay,
+)
+from app.domain.services.prompt_assembly import (
+    MAX_PASSAGE_CHARS,
+    build_context_message,
+    ground,
+    query_from,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class GroundChat:
-    def __init__(self, search: SearchKnowledge) -> None:
+    def __init__(
+        self,
+        search: SearchKnowledge,
+        *,
+        records: GroundingRecordStorePort | None = None,
+        epochs: KnowledgeEpochPort | None = None,
+        server_key: bytes | None = None,
+    ) -> None:
         self._search = search
+        self._records = records
+        self._epochs = epochs
+        self._server_key = server_key
 
     async def execute(
         self,
@@ -60,9 +89,31 @@ class GroundChat:
         query = query_from(messages)
         if not query:
             return list(messages), []
+        if self._records is not None and self._epochs is not None and self._server_key:
+            self._search.authorize_grounding(actor)
+            try:
+                return await self._stable_ground(actor, messages, collection_id, top_k)
+            except Exception as exc:
+                # Shared-state availability is optional grounding, never a
+                # reason to reuse stale content or fail an otherwise valid chat.
+                logger.warning("grounding_replay_unavailable reason=%s", type(exc).__name__)
+                try:
+                    return await self._fresh_ground(actor, messages, collection_id, top_k)
+                except Exception:
+                    # Fresh retrieval may also need the unavailable epoch DB.
+                    return list(messages), []
 
+        return await self._fresh_ground(actor, messages, collection_id, top_k)
+
+    async def _fresh_ground(
+        self, actor: Actor, messages: list[Message], collection_id: str | None, top_k: int
+    ) -> tuple[list[Message], list[RetrievedPassage]]:
         passages = await self._search.execute_or_empty(
-            actor, query, scope=Scope.CHAT_USE, collection_id=collection_id, top_k=top_k
+            actor,
+            query_from(messages),
+            scope=Scope.CHAT_USE,
+            collection_id=collection_id,
+            top_k=top_k,
         )
         if not passages:
             return list(messages), []
@@ -76,3 +127,110 @@ class GroundChat:
             len({p.document_id for p in passages}),
         )
         return ground(messages, passages), passages
+
+    async def _stable_ground(
+        self, actor: Actor, messages: list[Message], collection_id: str | None, top_k: int
+    ) -> tuple[list[Message], list[RetrievedPassage]]:
+        if self._epochs is None or self._records is None or not self._server_key:
+            raise RuntimeError("stable grounding requires shared epochs, records and server key")
+        before = await self._epochs.read(collection_id)
+        if before is None or (
+            before.embedding_identity is None and not before.index_requires_rebuild
+        ):
+            return list(messages), []
+        if not before.clean or before.index_requires_rebuild or before.embedding_identity is None:
+            # Epoch/provenance fences govern replay, not live retrieval.
+            return await self._fresh_ground(actor, messages, collection_id, top_k)
+        top_k = max(1, min(top_k, MAX_TOP_K))
+        identity = keyed_digest(
+            self._server_key,
+            "grounding-record",
+            [
+                actor.tenant_id,
+                actor.api_key_id or actor.id,
+                "collection" if collection_id is not None else "tenant",
+                collection_id,
+                top_k,
+                RETRIEVAL_CONFIG_VERSION,
+                before.embedding_identity,
+                before.epoch,
+            ],
+        )
+        # Look backwards through raw user anchors. A record stores its complete
+        # ordered chain, so replay never relies on the lifetime of older keys.
+        hashes = anchor_hashes(messages)
+        indexes = list(hashes)
+        anchors: list[GroundingAnchor] = []
+        last_index = indexes[-1]
+        keys = {
+            f"grounding:{identity}:{hashes[index]}": index
+            for index in reversed(indexes[-MAX_GROUNDING_LOOKBACK:])
+        }
+        latest_key = next(iter(keys))
+        stored = await self._records.get_first(list(keys))
+        if stored is not None:
+            key, raw = stored
+            candidate = decode_chain(raw, messages)
+            if candidate and key in keys and candidate[-1].index == keys[key]:
+                anchors = candidate
+        if not anchors and len(indexes) > MAX_GROUNDING_LOOKBACK:
+            # A long quota-exhausted conversation can outlive the retained
+            # lookup window. Bound cache work without dropping live grounding.
+            logger.warning("grounding_record_not_stored reason=history_unavailable")
+            return await self._fresh_ground(actor, messages, collection_id, top_k)
+
+        if not anchors or anchors[-1].index != last_index:
+            passages = await self._search.execute_or_empty(
+                actor,
+                query_from(messages),
+                scope=Scope.CHAT_USE,
+                collection_id=collection_id,
+                top_k=top_k,
+                expected_identity=before.embedding_identity,
+            )
+            if await self._epochs.read(collection_id) != before:
+                return list(messages), []
+            # Citations are stored beside their canonical rendering and capped
+            # too; retaining uncapped source text would defeat the byte limit.
+            passages = [replace(p, text=p.text[:MAX_PASSAGE_CHARS]) for p in passages]
+            prefix = hashes[last_index]
+            nonce = keyed_digest(self._server_key, "grounding-fence", [identity, prefix])[:32]
+            context = build_context_message(passages, nonce=nonce)
+            # Empty retrieval is also an immutable anchor. If it later succeeds
+            # without an epoch change it must not inject bytes into old history.
+            proposal = [
+                *anchors,
+                GroundingAnchor(
+                    prefix, last_index, context.content if context else "", tuple(passages)
+                ),
+            ]
+            unrecorded = list(proposal)
+            raw = encode_chain(proposal)
+            while passages and len(raw.encode()) > MAX_GROUNDING_RECORD_BYTES:
+                passages.pop()
+                context = build_context_message(passages, nonce=nonce)
+                proposal[-1] = GroundingAnchor(
+                    prefix, last_index, context.content if context else "", tuple(passages)
+                )
+                raw = encode_chain(proposal)
+            if len(raw.encode()) <= MAX_GROUNDING_RECORD_BYTES:
+                bucket = keyed_digest(self._server_key, "grounding-tenant", actor.tenant_id)
+                won = await self._records.set_grounding_if_absent(
+                    bucket, latest_key, raw, GROUNDING_RECORD_TTL
+                )
+                if won:
+                    anchors = proposal
+                else:
+                    winner = await self._records.get(latest_key)
+                    if winner is not None:
+                        anchors = decode_chain(winner, messages)
+                    else:
+                        # Admission limits storage, not current-turn retrieval.
+                        # Retain any committed prefix and use this result only
+                        # for this request; a retry may retrieve different data.
+                        anchors = unrecorded
+                        logger.warning("grounding_record_not_stored reason=quota_full")
+            # Chains exceeding the per-record byte cap retain existing history.
+        if await self._epochs.read(collection_id) != before:
+            return list(messages), []
+        return replay(messages, anchors)

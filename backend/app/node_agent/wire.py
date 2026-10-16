@@ -50,6 +50,7 @@ class GenerationRequest:
 class EmbeddingRequest:
     ref: str
     texts: tuple[str, ...]
+    expected_manifest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +120,7 @@ def encode_embedding(request: EmbeddingRequest, envelope: Envelope) -> dict[str,
         **_envelope(envelope),
         "ref": request.ref,
         "texts": list(request.texts),
+        **({"expected_manifest": request.expected_manifest} if request.expected_manifest else {}),
     }
 
 
@@ -179,7 +181,13 @@ def decode_embedding(body: Any) -> tuple[EmbeddingRequest, Envelope]:
     texts = _list(data, "texts")
     if not texts or not all(isinstance(t, str) for t in texts):
         raise WireError("texts must be a non-empty list of strings")
-    return EmbeddingRequest(ref=_str(data, "ref"), texts=tuple(texts)), _decode_envelope(data)
+    expected = _optional_str(data, "expected_manifest")
+    if expected is not None and (not expected or len(expected) > 80):
+        raise WireError("expected_manifest must be a non-empty digest of at most 80 characters")
+    return (
+        EmbeddingRequest(ref=_str(data, "ref"), texts=tuple(texts), expected_manifest=expected),
+        _decode_envelope(data),
+    )
 
 
 def decode_lifecycle(body: Any) -> LifecycleRequest:

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 
+from app.application.use_cases.embed_texts import embedding_identity
 from app.domain.entities.knowledge import DocumentChunk, DocumentStatus, KnowledgeDocument
+from app.domain.exceptions import NoAvailableModelError
 from app.domain.ports.infrastructure_ports import JobStatus
 from app.domain.services.chunking import chunk_text
 
@@ -160,33 +163,53 @@ class IngestionStagesMixin(IngestionClaimsMixin):
             # layer is the common case. Indexed with zero passages rather than
             # failed, because nothing went wrong and an operator seeing a zero
             # count learns more than one seeing an error.
+            async with (
+                self._epochs.mutation(document.collection_id) if self._epochs else nullcontext()
+            ):
+                await self._vectors.delete_document(document.id)
             return 0
 
-        target, runtime = await self._embedder.resolve()
-        vectors = await self._embedder.embed_with(runtime, [c.text for c in chunks], target.ref)
-
-        # The index is sized for the model that fills it, which is why this
-        # happens here rather than at startup: the vector size is a property of
-        # the routed model and is not known until one has been resolved.
-        await self._vectors.ensure_ready(len(vectors[0]))
-
-        # Replaces this document's passages rather than adding to them: point
-        # ids are derived from (document, index), so a re-index of a document
-        # that produced fewer chunks would leave the tail behind. Deleting
-        # first is what stops a stale passage being retrieved forever.
-        await self._vectors.delete_document(document.id)
-        await self._vectors.upsert(
-            [
-                DocumentChunk(
-                    document_id=document.id,
-                    collection_id=document.collection_id,
-                    index=chunk.index,
-                    text=chunk.text,
-                    vector=vector,
+        identity = None
+        if self._epochs:
+            current = await self._epochs.read(None)
+            if current and current.index_rebuilding:
+                raise NoAvailableModelError(
+                    detail="knowledge index is undergoing an operator rebuild"
                 )
-                for chunk, vector in zip(chunks, vectors, strict=True)
-            ]
-        )
+            required_identity = current.embedding_identity if current else None
+            target, runtime = await self._embedder.resolve(required_identity=required_identity)
+            identity = embedding_identity(target)
+            if identity is None:
+                raise NoAvailableModelError(detail="embedding manifest identity is unresolved")
+        else:
+            target, runtime = await self._embedder.resolve()
+        if self._epochs:
+            vectors = await self._embedder.embed_with(
+                runtime, [c.text for c in chunks], target.ref, expected_identity=identity
+            )
+        else:
+            vectors = await self._embedder.embed_with(runtime, [c.text for c in chunks], target.ref)
+
+        # Resolve/embedding failures happen before Begin. Only publication can
+        # change searchable content; Begin stays dirty if its outcome is unknown.
+        async with self._epochs.mutation(document.collection_id) if self._epochs else nullcontext():
+            if self._epochs and identity is not None:
+                await self._epochs.bind_embedding_identity(identity)
+            await self._vectors.ensure_ready(len(vectors[0]))
+            # Remove the old tail before publishing a shorter re-index.
+            await self._vectors.delete_document(document.id)
+            await self._vectors.upsert(
+                [
+                    DocumentChunk(
+                        document_id=document.id,
+                        collection_id=document.collection_id,
+                        index=chunk.index,
+                        text=chunk.text,
+                        vector=vector,
+                    )
+                    for chunk, vector in zip(chunks, vectors, strict=True)
+                ]
+            )
         return len(chunks)
 
     async def _extract(self, document: KnowledgeDocument, job_id: str) -> str:
