@@ -90,7 +90,11 @@ class NodeAgentRuntime:
         self._timeout = httpx.Timeout(timeout_s, connect=5.0)
         self._transport = transport
         self._capacities: dict[tuple[str, str | None], tuple[float, dict[str, Any]]] = {}
-        self._capacity_lock = asyncio.Lock()
+        # Single flight per (ref, manifest): one slow lookup must not stall
+        # admission for every other model on the node. The epoch stops a fetch
+        # that straddles a lifecycle invalidation from caching its answer.
+        self._capacity_flights: dict[tuple[str, str | None], asyncio.Task[dict[str, Any]]] = {}
+        self._capacity_epoch = 0
         # Grammar only, no I/O: what a reference is does not depend on who sends.
         self._grammar = OllamaAdapter(base_url="http://unused.invalid")
 
@@ -105,23 +109,49 @@ class NodeAgentRuntime:
     async def _capacity(self, ref: str, manifest: str | None = None) -> dict[str, Any]:
         self.validate_ref(ref)
         key = (ref, manifest)
-        async with self._capacity_lock:
-            cached = self._capacities.get(key)
-            if cached is not None and cached[0] > time.monotonic():
-                return cached[1]
-            # Short, bounded cache per node/ref/registered manifest. A new pin
-            # misses immediately; agent admission still measures every send.
-            async with self._client() as client:
-                response = await client.get("/v1/model-capacity", params={"ref": ref}, timeout=5.0)
-                response.raise_for_status()
-                document: dict[str, Any] = response.json()
-            for old in list(self._capacities):
-                if old[0] == ref or self._capacities[old][0] <= time.monotonic():
-                    del self._capacities[old]
-            if len(self._capacities) >= 256:
-                del self._capacities[next(iter(self._capacities))]
-            self._capacities[key] = (time.monotonic() + 60.0, document)
+        cached = self._capacities.get(key)
+        if cached is not None and cached[0] > time.monotonic():
+            return cached[1]
+        flight = self._capacity_flights.get(key)
+        if flight is None:
+            flight = asyncio.create_task(self._fetch_capacity(key))
+            self._capacity_flights[key] = flight
+            flight.add_done_callback(lambda done: self._capacity_flight_done(key, done))
+        # Shielded: a caller that gives up does not cancel the others' fetch.
+        return await asyncio.shield(flight)
+
+    def _capacity_flight_done(
+        self, key: tuple[str, str | None], done: asyncio.Task[dict[str, Any]]
+    ) -> None:
+        if self._capacity_flights.get(key) is done:
+            del self._capacity_flights[key]
+        if not done.cancelled():
+            # Retrieved here so a failure every waiter abandoned is not logged
+            # as never retrieved; waiters still receive it from the task.
+            done.exception()
+
+    async def _fetch_capacity(self, key: tuple[str, str | None]) -> dict[str, Any]:
+        epoch = self._capacity_epoch
+        # Short, bounded cache per node/ref/registered manifest. A new pin
+        # misses immediately; agent admission still measures every send.
+        async with self._client() as client:
+            response = await client.get("/v1/model-capacity", params={"ref": key[0]}, timeout=5.0)
+            response.raise_for_status()
+            document: dict[str, Any] = response.json()
+        if epoch != self._capacity_epoch:
             return document
+        for old in list(self._capacities):
+            if old[0] == key[0] or self._capacities[old][0] <= time.monotonic():
+                del self._capacities[old]
+        if len(self._capacities) >= 256:
+            del self._capacities[next(iter(self._capacities))]
+        self._capacities[key] = (time.monotonic() + 60.0, document)
+        return document
+
+    def _invalidate_capacities(self) -> None:
+        self._capacities.clear()
+        self._capacity_flights.clear()
+        self._capacity_epoch += 1
 
     async def declared_context_length(self, ref: str) -> int | None:
         return await self.declared_context_for_manifest(ref, None)
@@ -482,7 +512,7 @@ class NodeAgentRuntime:
         whether the pull completed, and only then does this return normally.
         """
         self.validate_ref(ref)
-        self._capacities.clear()
+        self._invalidate_capacities()
         op_id = str(uuid.uuid4())
         body = encode_lifecycle(LifecycleRequest(op_id=op_id, ref=ref, context_length=None))
         async with self._client() as client:
@@ -537,7 +567,7 @@ class NodeAgentRuntime:
 
     async def _lifecycle(self, action: str, ref: str, context_length: int | None) -> None:
         self.validate_ref(ref)
-        self._capacities.clear()
+        self._invalidate_capacities()
         op_id = str(uuid.uuid4())
         body = encode_lifecycle(
             LifecycleRequest(op_id=op_id, ref=ref, context_length=context_length)
