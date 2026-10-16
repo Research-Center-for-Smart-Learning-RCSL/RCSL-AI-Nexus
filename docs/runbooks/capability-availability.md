@@ -40,11 +40,11 @@ Direct adapters still observe only their configured local host. The request read
 wall clock after reading observations, so authentication's earlier transaction
 start cannot make a newly committed heartbeat appear to come from the future.
 
-This closes the observation fallback part of #49. It does not add desired
-residency, automatic reload or runtime reset. After a real restart an operator
-still restores the models in the documented largest-first order until the rest
-of #49 ships. Unknown-operation blocks still require existing audited resolution;
-an expired lease never clears them.
+This closes the observation fallback part of #49. Desired residency and the
+reconciler below are implemented but **off by default**; until they are enabled
+and accepted on the host, an operator still restores the models after a real
+restart in the documented largest-first order. Unknown-operation blocks still
+require existing audited resolution; an expired lease never clears them.
 
 ### Uncertain lifecycle operations
 
@@ -61,8 +61,9 @@ an absent model proves an earlier operation has finished. The unresolved gauge
 and capability alert therefore persist even on a quiet host, until the existing
 audited resolution path verifies the ordered sender-gone, quiescence, baseline
 and runtime-reset evidence. A reset before the baseline does not qualify. Use
-the resolution procedure in [first deployment](./first-deploy.md); the automated
-admin reset action and residency reconciler remain unfinished parts of #49.
+the resolution procedure in [first deployment](./first-deploy.md). The automated
+admin reset action remains an unfinished part of #49. The residency reconciler
+never loads while any operation on the node is unknown.
 If the Colima VM restarted while such an operation was open, the agent refuses
 election until the previous kernel is released; see
 [node-agent-kernel-change.md](./node-agent-kernel-change.md).
@@ -74,6 +75,69 @@ still allows reopening. This increases operator-visible blocking after a lost
 lifecycle response; recovery requires evidence instead of a repeat load.
 Historical rows already recorded as `failed` by the earlier implementation
 are not reclassified, because their remote outcome cannot be reconstructed.
+
+## Desired residency and the reconciler (#49)
+
+Each model carries `desired_resident` and `desired_version`, separate from
+lifecycle `state`. The migration backfilled `desired_resident` from
+`state = 'loaded'`. An operator's Load sets it; Unload clears it; both bump
+the version. `PUT /admin/models/{id}/residency-intent` (`model:write`, the
+models table's **Stop restoring** button) changes it without touching the
+runtime and answers `202` once the new version is committed. It is audited as
+`model.residency_intent_changed` with outcome `accepted`. This is the
+cancellation that works after a restart, when the model is observed
+`downloaded` and Unload refuses. Withdrawing intent never unloads a resident
+model; use Unload for that. `desired_version` versions intent only; the weights
+pin remains `manifest_digest`.
+
+`RESIDENCY_RECONCILER_ENABLED` (default `false`) starts a loop in the tailnet
+admin, beside the heartbeat. It stays idle unless `NODE_AGENT_ENABLED` is on
+and the heartbeat interval is positive. For each Ollama node it:
+
+1. Acts only on a desired model with **two consecutive, distinct, fresh**
+   `downloaded` observations. A failed, missing or stale probe restarts the
+   count; MLX is never reloaded.
+2. Skips the pass if the node is not online, has any `outcome_unknown`
+   operation, has a model in `downloading`/`loading`/`unloading`, or another
+   reconciler holds the node's advisory lock. Elapsed time is never a reason
+   to proceed.
+3. Restores largest `memory_gb` first, through `ManageModels.restore`: the same
+   state transitions, memory budget, live free-memory check and audit as an
+   operator's Load, and the agent's exclusive lifecycle path with the
+   registered `num_ctx` and the deployment's `keep_alive` (production `-1`).
+4. Re-reads intent and the block before every load. After each load it re-reads
+   intent; weights whose intent was withdrawn during the load are unloaded
+   (`model.unloaded` under the `residency-reconciler` subject). It then
+   re-observes the whole node.
+5. Re-queues any desired model still not resident, including evicted siblings,
+   for at most two repair rounds. Then it backs off `30 s × 2^n` (cap 15 min)
+   and needs two fresh observations again.
+
+With the flag on, the memory budget also stops charging a model the runtime has
+freshly reported as not resident. A mid-load model, a resident model, or one
+with unknown or stale residency is still charged at its intent. With the flag
+off, budgeting is unchanged.
+
+**Before enabling:** resolve every model in `error`, `loading` or `unloading`.
+Check that each desired model is one you want loaded at boot (`SELECT alias,
+state, desired_resident FROM models`). Confirm no `outcome_unknown` operation
+is open. A reconciler load in flight when the admin stops is treated like an
+interrupted operator load: the agent still settles it. The stranded `loading`
+row then holds the node's reconciler (it waits on any transient state) until
+deploy-time provisioning moves it to `error`, which is retried on fresh
+evidence.
+
+**Suspension.** The loop takes a `suspended` hook that is checked before each
+pass and before each load. Nothing supplies it yet; maintenance mode (#61) is
+meant to. Until then, disable the flag and restart `admin-tailnet` to stop it.
+
+**Not yet done.** The admin "reset runtime" action is not built. The witness
+CLI resolution remains the only path, because the agent cannot restart the
+host runtime and resolves one operation per witnessed restart. Residency-mismatch
+and reconcile-outcome metrics (#50) are not added. Host acceptance has not been
+run: restart Ollama with no traffic in an operator-owned window, observe
+gemma4, then qwen2.5:7b, then nomic-embed-text restored, and gate on an
+authenticated gateway request, plus the five #23 gates.
 
 ## Metrics and delivery
 
