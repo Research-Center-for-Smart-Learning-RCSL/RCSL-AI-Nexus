@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
 
@@ -28,12 +30,60 @@ from app.application.use_cases.embed_texts import TextEmbedderPort, embedding_id
 from app.domain.entities.actor import Actor, Role
 from app.domain.entities.audit import AuditAction
 from app.domain.entities.knowledge import DocumentChunk, DocumentStatus, KnowledgeDocument
+from app.domain.entities.user import User
+from app.domain.exceptions import DocumentNotFoundError
 from app.domain.services.chunking import chunk_text
 from app.infrastructure.config import get_settings
 from app.infrastructure.db import dispose_engine, get_session_factory, init_engine
 from app.infrastructure.di.knowledge import build_vector_store
 from app.infrastructure.di.shared import build_runtimes
 from app.infrastructure.jobs import _DetachedEmbedder
+
+REBUILT_STATES = frozenset({DocumentStatus.INDEXED, DocumentStatus.EXTRACTED})
+"""Documents whose stored text the rebuild republishes. `INDEXED` vectors are
+dropped with the index, so each must come back; `EXTRACTED` has stored text and
+lacks only publication. `UPLOADED` has no text, `ERROR` records a failure the
+rebuild must not overwrite, and a transient row is a stranded job the deploy
+reconciles: each is reported, skipped, and keeps its status."""
+
+
+def checked_actor(user: User | None, tenant: str) -> Actor:
+    """The CLI's actor, refused unless `--tenant` names the account's own tenant.
+
+    The login alone is self-asserted, and epochs are small integers that can
+    coincide across tenants, so neither catches naming the wrong administrator
+    before rebuild drops that tenant's index.
+    """
+    if (
+        user is None
+        or user.disabled_at is not None
+        or user.role not in (Role.ADMIN, Role.TENANT_ADMIN)
+    ):
+        raise ValueError("an active administrator account is required")
+    if user.tenant_id != tenant:
+        raise ValueError("--tenant does not match the administrator's tenant")
+    return Actor(
+        user.id,
+        user.login,
+        user.role,
+        "local",
+        RoleAuthorization().scopes_for(user.role.value),
+        tenant_id=user.tenant_id,
+    )
+
+
+def plan_rebuild(
+    documents: list[KnowledgeDocument],
+) -> tuple[list[KnowledgeDocument], list[KnowledgeDocument]]:
+    """Split the tenant's documents into those rebuilt and those skipped."""
+    return (
+        [d for d in documents if d.status in REBUILT_STATES],
+        [d for d in documents if d.status not in REBUILT_STATES],
+    )
+
+
+def _ignore(plan: dict[str, object]) -> None:
+    return None
 
 
 async def transition(
@@ -127,10 +177,15 @@ async def rebuild(
     *,
     writers_stopped: bool,
     embedder: TextEmbedderPort,
+    announce: Callable[[dict[str, object]], None] = _ignore,
 ) -> int:
     # A transaction-scoped lock survives the short commits made by the worker
     # and releases on crashes. It prevents two recovery CLIs rebuilding at once.
+    # Its connection idles in that transaction for the whole rebuild, so a server
+    # or role `idle_in_transaction_session_timeout` would end the session and
+    # silently release the lock; disable that timeout for this transaction only.
     async with sessions() as lock:
+        await lock.execute(text("SET LOCAL idle_in_transaction_session_timeout = 0"))
         acquired = await lock.scalar(
             text("SELECT pg_try_advisory_xact_lock(hashtextextended(:tenant, 56))"),
             {"tenant": actor.tenant_id},
@@ -144,6 +199,7 @@ async def rebuild(
             reason,
             writers_stopped=writers_stopped,
             embedder=embedder,
+            announce=announce,
         )
 
 
@@ -155,11 +211,13 @@ async def _rebuild(
     *,
     writers_stopped: bool,
     embedder: TextEmbedderPort,
+    announce: Callable[[dict[str, object]], None],
 ) -> int:
-    """Rebuild every document from stored text; failure leaves replay fenced.
+    """Rebuild indexed documents from stored text; failure leaves replay fenced.
 
     Preflight all source text before deleting anything, then re-read one
     document at a time to avoid retaining the tenant corpus in memory.
+    Documents outside `REBUILT_STATES` are skipped and keep their status.
     """
     settings = get_settings()
     storage = FilesystemDocumentStorage(settings.document_storage_path, actor.tenant_id)
@@ -173,13 +231,33 @@ async def _rebuild(
         repo = PostgresKnowledgeRepository(session, actor.tenant_id)
         while page := await repo.list_documents(limit=100, offset=len(documents)):
             documents.extend(page)
-    for document in documents:
-        await storage.read_text(document.id)
+    rebuilt, skipped = plan_rebuild(documents)
+    missing = []
+    for document in rebuilt:
+        try:
+            await storage.read_text(document.id)
+        except DocumentNotFoundError:
+            missing.append(document.id)
+    if missing:
+        # Before Begin and the reset: an indexed document without its text
+        # would otherwise lose its vectors for good while still claiming them.
+        raise ValueError(
+            "stored text missing for documents that must be rebuilt; nothing was "
+            f"changed. Restore the text or delete the documents: {', '.join(missing)}"
+        )
+    announce(
+        {
+            "tenant_id": actor.tenant_id,
+            "action": "rebuild",
+            "rebuild": len(rebuilt),
+            "skipped": [{"id": d.id, "status": str(d.status)} for d in skipped],
+        }
+    )
     epoch = await transition(
         sessions, actor, expected_epoch, reason, writers_stopped=writers_stopped, begin_rebuild=True
     )
     await vectors.reset_index()
-    for document in documents:
+    for document in rebuilt:
         chunks = chunk_text(await storage.read_text(document.id))
         if chunks:
             embeddings = await embedder.embed_with(
@@ -209,20 +287,7 @@ async def run(args: argparse.Namespace) -> None:
         sessions = get_session_factory()
         async with sessions() as session:
             user = await PostgresUserRepository.unscoped(session).get_by_login(args.actor)
-        if (
-            user is None
-            or user.disabled_at is not None
-            or user.role not in (Role.ADMIN, Role.TENANT_ADMIN)
-        ):
-            raise ValueError("an active administrator account is required")
-        actor = Actor(
-            user.id,
-            user.login,
-            user.role,
-            "local",
-            RoleAuthorization().scopes_for(user.role.value),
-            tenant_id=user.tenant_id,
-        )
+        actor = checked_actor(user, args.tenant)
         if args.action == "status":
             current = await PostgresKnowledgeEpochs(sessions, actor.tenant_id).read(None)
             print(json.dumps(asdict(current) if current else None))
@@ -237,8 +302,10 @@ async def run(args: argparse.Namespace) -> None:
                 args.reason,
                 writers_stopped=True,
                 embedder=_DetachedEmbedder(build_runtimes(settings)),
+                announce=_print_plan,
             )
         else:
+            _print_plan({"tenant_id": actor.tenant_id, "action": "recover"})
             epoch = await transition(
                 sessions, actor, args.expected_epoch, args.reason, writers_stopped=True
             )
@@ -247,10 +314,18 @@ async def run(args: argparse.Namespace) -> None:
         await dispose_engine()
 
 
+def _print_plan(plan: dict[str, object]) -> None:
+    # On stderr so stdout stays the one result line; printed before any change.
+    print(json.dumps({"plan": plan}), file=sys.stderr, flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("status", "recover", "rebuild"))
     parser.add_argument("--actor", required=True, help="active administrator login; scopes tenant")
+    parser.add_argument(
+        "--tenant", required=True, help="tenant ID to affect; must be the actor's own tenant"
+    )
     parser.add_argument("--expected-epoch", type=int)
     parser.add_argument("--reason", help="audited recovery reason, without document content")
     parser.add_argument(
