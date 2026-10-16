@@ -113,16 +113,22 @@ secrets 設定見 [secrets/README.md](../../secrets/README.md)。
 - [ ] 啟動 Colima：
 
   ```sh
-  colima start --cpu 4 --memory 3 --disk 60 --vm-type vz --mount-type virtiofs --network-address
+  colima start --cpu 4 --memory 4 --disk 60 --vm-type vz --mount-type virtiofs --network-address
   ```
 
-  **`--memory 3` 不是省小錢。** 十一個容器在 guest 裡只用 1.3 GiB，而 VM 的
+  **VM 的記憶體上限不是省小錢。** 十一個容器在 guest 裡只用 1.3 GiB，而 VM 的
   *host* 佔用是「配額 + 會長到填滿配額的 guest page cache」。原本配 6 GiB 時
   host 佔用達到 9.4 GiB，那是模型拿不到的記憶體：`gemma4-31b-q8` 在註冊的
   262144 context 下要 44.02 GiB，這 6 GiB 的差就是「三個模型同時常駐」與
   「Ollama 每次載入都趕走一個」的分界。`NODE_MEMORY_HEADROOM_FRACTION` 是照
   這個上限訂的，所以調回 6 不是一個局部的改動；`online.rcsl.colima.plist`
-  也帶著 `--memory 3`，這裡和那裡必須一起改。
+  也帶著同一個值，這裡和那裡必須一起改。
+
+  **2026-10-10 起改為 `--memory 4`（維護者決定）。** 3 GiB 時，正式服務運作中
+  的一次重新建置把 VM 記憶體用完，殺掉了正式服務的 worker（見
+  [2026-10-10 進度](../progress/2026-10-10.md)）。上面「三個模型同時常駐」的
+  餘裕是在 3 GiB 下量的，4 GiB 下還沒有重新量；恢復三個模型後要重新確認
+  host 佔用與 swap。
 
   `--vm-type vz` 用 Apple Virtualization Framework，`--mount-type virtiofs` 用 VirtioFS
   掛載家目錄。`--network-address` 給 VM 一個可路由的 IP。驗證：
