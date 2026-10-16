@@ -141,6 +141,15 @@ export const modelSchema = z.object({
   observed_state: modelStateSchema.nullable(),
   observed_memory_gb: z.number().nullable(),
   observed_at: z.string().nullable(),
+  /**
+   * Whether an operator wants the model kept resident. Separate from `state`,
+   * which a failed load sets to `error`; the residency reconciler restores
+   * this after a runtime restart when it is enabled on the deployment. Load
+   * sets it, Unload clears it, and it can be changed on its own without
+   * touching the runtime.
+   */
+  desired_resident: z.boolean(),
+  desired_version: z.number().int().nonnegative(),
 });
 export type Model = z.infer<typeof modelSchema>;
 

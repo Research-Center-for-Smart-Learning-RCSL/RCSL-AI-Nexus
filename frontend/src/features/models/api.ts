@@ -52,6 +52,22 @@ export async function unloadModel(id: string): Promise<void> {
   await api.post<void>(`${BASE}/${id}/unload`);
 }
 
+/**
+ * Accepted, not done: the backend commits the new intent and answers 202
+ * without loading or unloading anything. This is how a restore is cancelled
+ * after a runtime restart, when the model is not resident and Unload refuses.
+ */
+export async function setResidencyIntent(
+  id: string,
+  desiredResident: boolean,
+): Promise<Model> {
+  return modelSchema.parse(
+    await api.put<unknown>(`${BASE}/${id}/residency-intent`, {
+      desired_resident: desiredResident,
+    }),
+  );
+}
+
 export async function startDownload(id: string): Promise<DownloadJob> {
   return downloadJobSchema.parse(await api.post<unknown>(`${BASE}/${id}/download`));
 }
