@@ -45,12 +45,14 @@ class SummaryRelay:
         self.hold = hold
         self.started = asyncio.Event()
         self.payloads: list[Any] = []
+        self.options: list[Any] = []
 
     async def version(self) -> str:
         return "0.0.test"
 
     def chat(self, payload: Any, **kwargs: Any) -> Any:
         self.payloads.append(payload)
+        self.options.append(kwargs)
 
         async def run(sink: Sink) -> Any:
             self.started.set()
@@ -322,3 +324,53 @@ async def test_output_counter_exception_does_not_erase_known_runtime_completion(
     assert isinstance(outcome, RuntimeRefused) and outcome.reason == "summary_output_count_failed"
     assert store.ops["count-failed"].state == "failed"
     assert dispatcher.state.value == "serving"
+
+
+async def test_summary_relays_carry_the_idle_bound(monkeypatch):
+    from app.node_agent.relay import SUMMARY_IDLE_SECONDS
+
+    relay = SummaryRelay()
+    app = summary_app(monkeypatch, Counter(), relay)
+    assert await runtime_for(app).summarise("qwen2.5:7b", [Message(MessageRole.USER, "x")], 32768)
+    assert relay.options[0]["idle_timeout_s"] == SUMMARY_IDLE_SECONDS
+
+
+async def test_a_stalled_summary_stream_frees_the_slot_as_an_unknown_outcome():
+    from app.node_agent.relay import OllamaRelay
+
+    async def stalled():
+        yield b'{"message": {"content": "Sum"}, "done": false}\n'
+        await asyncio.Event().wait()
+
+    relay = OllamaRelay(
+        "http://runtime",
+        timeout_s=60,
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=stalled())),
+    )
+    store = MemoryStore()
+    dispatcher = Dispatcher(store)
+    try:
+        attempt = await dispatcher.submit(
+            "stalled",
+            "summary",
+            bounded_summary(
+                relay.chat(
+                    {"model": "ref"},
+                    store_output=False,
+                    expected_identity=None,
+                    idle_timeout_s=0.05,
+                ),
+                Counter(),
+                "ref",
+            ),
+        )
+        outcome = await asyncio.wait_for(attempt.settled, 2)
+    finally:
+        await relay.aclose()
+    # The slot is released long before the request timeout, but the runtime
+    # may still be generating: the uncertainty contract is unchanged.
+    assert isinstance(outcome, Uncertain) and outcome.reason == "transport:IdleTimeout"
+    assert store.ops["stalled"].state == "outcome_unknown"
+    assert dispatcher.state.value == "blocked"
+    refusal = await dispatcher.summary_admission_refusal()
+    assert refusal is not None and refusal.reason == "node_blocked"

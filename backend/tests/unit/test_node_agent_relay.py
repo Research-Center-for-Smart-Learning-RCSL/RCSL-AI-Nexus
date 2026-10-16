@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -342,3 +343,57 @@ async def test_residency_is_none_when_the_runtime_cannot_be_asked() -> None:
 
     relay, _ = _relay(handler)
     assert await relay.residency() is None
+
+
+def _paced(*steps: bytes | float) -> AsyncIterator[bytes]:
+    """A body that sleeps for each float and sends each bytes, then hangs."""
+
+    async def body() -> AsyncIterator[bytes]:
+        for step in steps:
+            if isinstance(step, float):
+                await asyncio.sleep(step)
+            else:
+                yield step
+        await asyncio.Event().wait()
+
+    return body()
+
+
+async def test_a_stall_after_the_stream_started_is_an_uncertain_idle_timeout() -> None:
+    relay, _ = _relay(lambda r: httpx.Response(200, content=_paced(_line("a"), _line("b"))))
+
+    outcome = await asyncio.wait_for(
+        relay.chat(PAYLOAD, store_output=False, expected_identity=None, idle_timeout_s=0.05)(
+            RecordingSink()
+        ),
+        2,
+    )
+
+    # Nothing proves the runtime stopped generating: never a definite failure.
+    assert isinstance(outcome, Uncertain) and outcome.reason == "transport:IdleTimeout"
+    assert outcome.observed["observed_chunk_count"] == 2
+
+
+async def test_the_wait_for_the_first_line_is_not_the_idle_bound() -> None:
+    # A cold load and the prefill come before the first byte.
+    relay, _ = _relay(
+        lambda r: httpx.Response(
+            200, content=_paced(0.2, _line("a"), 0.01, _line(done=True, eval_count=1))
+        )
+    )
+
+    outcome = await relay.chat(
+        PAYLOAD, store_output=False, expected_identity=None, idle_timeout_s=0.05
+    )(RecordingSink())
+
+    assert isinstance(outcome, Completed)
+
+
+async def test_without_an_idle_bound_a_slow_gap_still_completes() -> None:
+    relay, _ = _relay(
+        lambda r: httpx.Response(200, content=_paced(_line("a"), 0.1, _line(done=True)))
+    )
+
+    outcome = await relay.chat(PAYLOAD, store_output=False, expected_identity=None)(RecordingSink())
+
+    assert isinstance(outcome, Completed)

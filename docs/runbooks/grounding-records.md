@@ -79,14 +79,20 @@ New empty indexes pin their first verified embedding identity as before.
 Run `python -m app.infrastructure.recover_knowledge` from a backend environment
 with the admin database and Qdrant credentials and the document storage volume.
 `--actor` must name an active `admin` or `tenant_admin`; its tenant is the only
-tenant affected. The gateway's database account cannot perform this operation.
+tenant affected. Every action also requires `--tenant` with that tenant's ID,
+and the command refuses before reading or changing anything else when the two
+disagree: the login is self-asserted and epochs can coincide across tenants, so
+neither alone catches naming another tenant's administrator. Before `recover`
+or `rebuild` changes anything, the command prints a JSON `plan` line on stderr
+naming the tenant and, for rebuild, the documents affected; the result line on
+stdout follows. The gateway's database account cannot perform this operation.
 The CLI writes the audit and epoch changes in the same transaction. No SQL needs
 to be written by the operator.
 
 Read state before deciding on recovery:
 
 ```sh
-python -m app.infrastructure.recover_knowledge status --actor ADMIN_LOGIN
+python -m app.infrastructure.recover_knowledge status --actor ADMIN_LOGIN --tenant TENANT_ID
 ```
 
 For a failed mutation, first stop **all** writer entrances and detached ingestion
@@ -94,7 +100,7 @@ jobs, confirm outstanding Qdrant requests have terminated, and reconcile their
 vector/document effects with committed metadata. Then use the epoch from status:
 
 ```sh
-python -m app.infrastructure.recover_knowledge recover --actor ADMIN_LOGIN \
+python -m app.infrastructure.recover_knowledge recover --actor ADMIN_LOGIN --tenant TENANT_ID \
   --expected-epoch EPOCH --writers-stopped --reason "Verified failed mutation effects"
 ```
 
@@ -110,23 +116,34 @@ metadata/document backup, stop all entrances and jobs, and pin the desired
 embedding model in its node agent. Inspect status, then run:
 
 ```sh
-python -m app.infrastructure.recover_knowledge rebuild --actor ADMIN_LOGIN \
+python -m app.infrastructure.recover_knowledge rebuild --actor ADMIN_LOGIN --tenant TENANT_ID \
   --expected-epoch EPOCH --writers-stopped --reason "Rebuild legacy index with verified embedder"
 ```
 
-The command checks every document has stored text before deleting any vectors,
-marks the tenant `index_rebuilding=true`, drops the entire tenant Qdrant index
-(including orphan vectors), and embeds every retained document from stored text.
-Each batch carries the exact manifest. Only complete acknowledged publication
-clears the legacy marker and all fences and publishes the verified identity.
-A per-tenant PostgreSQL advisory lock prevents concurrent rebuild commands.
+The command rebuilds documents in `indexed` or `extracted` status. Documents in
+`uploaded`, `error`, `extracting` or `indexing` are listed under `skipped` in
+the plan and keep their status; they are not searchable before the rebuild and
+are not after it. Any vectors an `error` document still had are dropped with the
+index, so re-index such documents through the normal path once entrances resume.
+The command checks every document it will rebuild has stored text before
+deleting any vectors, marks the tenant `index_rebuilding=true`, drops the entire
+tenant Qdrant index (including orphan vectors), and embeds those documents from
+stored text, setting each to `indexed`. Each batch carries the exact manifest.
+Only complete acknowledged publication clears the legacy marker and all fences
+and publishes the verified identity.
+A per-tenant PostgreSQL advisory lock prevents concurrent rebuild commands. Its
+connection stays idle in a transaction for the whole rebuild, so the command
+sets `idle_in_transaction_session_timeout = 0` for that transaction only; a
+server or role timeout cannot drop the lock part-way through.
 
 An explicit rebuild is maintenance: while `index_rebuilding=true`, search and
 new indexing refuse to use a partially rebuilt space. A failure leaves that flag
 and the dirty fence in place; keep entrances stopped, fix the cause, inspect the
 new epoch, and rerun **rebuild**. `recover` refuses to clear an interrupted rebuild.
-Missing extracted text must be restored or its document removed deliberately;
-no source is silently skipped. Verify retrieval before resuming traffic.
+If an `indexed` or `extracted` document has no stored text, the command refuses
+before the reset, names those document IDs and changes nothing: restore the
+text or remove the document deliberately, then rerun. Such a source is never
+silently skipped. Verify retrieval before resuming traffic.
 
 ## Deployment and capacity decisions
 
@@ -167,6 +184,17 @@ deadline does not manufacture `outcome_unknown`. Real transport loss, runtime
 EOF without terminal evidence, or loss of the owning process still retains the
 existing uncertainty/blocking rules. Runtime transport timeouts remain in force.
 
+A summary stream that has started and then sends nothing for two minutes
+(`SUMMARY_IDLE_SECONDS`) is a read timeout. The agent closes the stream and
+settles `outcome_unknown` with reason `transport:IdleTimeout`, which blocks the
+node like any other transport timeout. Ollama exposes no in-flight request to
+ask about, so the runtime may still be generating and nothing proves it
+stopped. The bound shortens how long a stalled runtime holds the summary slot,
+which the 25-minute request read timeout otherwise would; it does not make the
+outcome definite. The wait for the first line, which covers any cold load and
+the prefill, stays on the request timeout. Resolve the operation as for any
+other unknown outcome.
+
 ## Validation
 
 `test_grounding_replay.py` verifies three append-only turns using the actual
@@ -185,7 +213,8 @@ and dispatch, per-batch propagation and context cleanup. Optional runtime prefix
 timings require the host's normal owned-window probe procedure.
 
 `test_knowledge_recovery.py` covers audited recovery, stale epochs, tenant/role
-checks, audit rollback, complete rebuild and interrupted rebuild refusal.
+checks, audit rollback, complete rebuild, skipped unindexed documents, refusal
+before the reset on missing text and interrupted rebuild refusal.
 `test_grounding_cache.py` checks concurrent quotas and expiry against real Redis.
 Tier 2 tests drive compaction through the agent and Ollama wire protocol (a
 synthetic runtime transport), settle terminal evidence, and verify the cache hit.
