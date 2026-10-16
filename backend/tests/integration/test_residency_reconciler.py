@@ -1,7 +1,7 @@
 """Residency intent and the reconciler against real PostgreSQL (#49).
 
 The runtime is simulated in process; nothing here reaches Ollama or an agent.
-What is real is everything the reconciler trusts: the migration's backfill,
+What is real is everything the reconciler trusts: the migration's empty intent,
 the targeted intent write, the observation stamps, the `node_operations`
 block, the advisory lock that keeps two reconcilers apart, and the
 `ManageModels` load path with its budget and audit rows.
@@ -48,7 +48,7 @@ from tests.unit.manage_models_fixtures import ADMIN
 PREVIOUS_HEAD = "f2c7d9e40b31"
 
 
-def test_migration_backfills_intent_from_loaded_state_and_downgrades(database_url):
+def test_migration_starts_every_row_without_intent_and_downgrades(database_url):
     config = _alembic_config(database_url)
     command.downgrade(config, PREVIOUS_HEAD)
 
@@ -106,9 +106,10 @@ def test_migration_backfills_intent_from_loaded_state_and_downgrades(database_ur
 
     asyncio.run(seed())
     command.upgrade(config, "head")
-    # Only `loaded` was recorded intent; an `error` row is for an operator.
+    # Not even `loaded`: a row can say so for weights unloaded outside the
+    # registry, and the reconciler would reload them unasked.
     assert asyncio.run(intents()) == {
-        "kept": (True, 1),
+        "kept": (False, 0),
         "idle": (False, 0),
         "bad": (False, 0),
     }

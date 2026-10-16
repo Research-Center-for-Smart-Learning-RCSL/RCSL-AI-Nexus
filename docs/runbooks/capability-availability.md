@@ -79,8 +79,12 @@ are not reclassified, because their remote outcome cannot be reconstructed.
 ## Desired residency and the reconciler (#49)
 
 Each model carries `desired_resident` and `desired_version`, separate from
-lifecycle `state`. The migration backfilled `desired_resident` from
-`state = 'loaded'`. An operator's Load sets it; Unload clears it; both bump
+lifecycle `state`. The migration sets `desired_resident = false` on every
+row, deliberately not copied from `state = 'loaded'`: production models were
+unloaded outside the registry, so a row can still say `loaded` for weights
+nobody wants, and the reconciler would reload them unasked. Intent therefore
+starts empty and the first operator Load after the upgrade records it. An
+operator's Load sets it; Unload clears it; both bump
 the version. `PUT /admin/models/{id}/residency-intent` (`model:write`, the
 models table's **Stop restoring** button) changes it without touching the
 runtime and answers `202` once the new version is committed. It is audited as
@@ -128,8 +132,9 @@ with unknown or stale residency is still charged at its intent. With the flag
 off, budgeting is unchanged.
 
 **Before enabling:** resolve every model in `error`, `loading` or `unloading`.
-Check that each desired model is one you want loaded at boot (`SELECT alias,
-state, desired_resident FROM models`). Confirm no `outcome_unknown` operation
+Press Load on each model that should be kept resident (nothing is desired after
+the upgrade), then check that the desired set is exactly what you want loaded
+at boot (`SELECT alias, state, desired_resident FROM models`). Confirm no `outcome_unknown` operation
 is open. A reconciler load in flight when the admin stops is treated like an
 interrupted operator load: the agent still settles it. The stranded `loading`
 row then holds the node's reconciler (it waits on any transient state) until

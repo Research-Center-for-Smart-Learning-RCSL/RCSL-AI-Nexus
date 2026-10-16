@@ -1,8 +1,10 @@
 """Residency intent, separate from lifecycle state (#49 §1).
 
-Backfilled from `state = 'loaded'`, the only intent the registry has recorded
-so far. Rows left in `error`, `loading` or `unloading` are not guessed at: an
-operator resolves them before `RESIDENCY_RECONCILER_ENABLED` is turned on.
+Every row starts with no intent (`desired_resident = false`, version 0); the
+first operator Load records it. Not backfilled from `state = 'loaded'`: models
+have been unloaded outside the registry, so a row can still say `loaded` for
+weights nobody wants resident, and enabling `RESIDENCY_RECONCILER_ENABLED`
+would then reload them without anyone asking.
 
 Revision ID: a4d81c6e9f27
 Revises: f2c7d9e40b31
@@ -28,9 +30,6 @@ def upgrade() -> None:
         sa.Column("desired_version", sa.BigInteger(), nullable=False, server_default="0"),
     )
     op.create_check_constraint("ck_models_desired_version", "models", "desired_version >= 0")
-    op.execute(
-        "UPDATE models SET desired_resident = true, desired_version = 1 WHERE state = 'loaded'"
-    )
 
 
 def downgrade() -> None:
