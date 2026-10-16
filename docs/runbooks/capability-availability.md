@@ -63,6 +63,9 @@ audited resolution path verifies the ordered sender-gone, quiescence, baseline
 and runtime-reset evidence. A reset before the baseline does not qualify. Use
 the resolution procedure in [first deployment](./first-deploy.md); the automated
 admin reset action and residency reconciler remain unfinished parts of #49.
+If the Colima VM restarted while such an operation was open, the agent refuses
+election until the previous kernel is released; see
+[node-agent-kernel-change.md](./node-agent-kernel-change.md).
 
 This supersedes PR4b's uncertainty exception recorded on 2026-10-09 and resolves
 the decision requested by #49 section 6 in favor of #24 section 3's uniform

@@ -724,6 +724,9 @@ docstring 裡，那是估算器本身所在的地方。
   `backend/app/node_agent/resolve.py` 開頭：`start` 取基準 → 重啟 Ollama
   （`sudo launchctl kickstart -k system/online.rcsl.ollama`）→ `complete`，再依序把常駐模型
   載回去（gemma4 → qwen → embedder，正式的 `num_ctx`、`keep_alive: -1`）。
+  如果是 Colima VM 重開（kernel boot id 變了）之後 agent 拒絕接管、log 寫著 `the kernel changed
+  since the last owner`，resolve CLI 也連不上 agent，照
+  [node-agent-kernel-change.md](./node-agent-kernel-change.md) 處理，不要手改資料庫。
 
   **打開 `NODE_AGENT_ENABLED`（維護者下令才做）。** PR4b 之後，所有對 runtime 的送出都經過
   節點的 agent：生成、Tier 2、embedding、`/readyz`、residency 掃描、節點健康、下載、load 和
