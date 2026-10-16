@@ -166,6 +166,7 @@ HTTP_5XX_MIN_SAMPLE=20       # below this a single error is 100% and means nothi
 . "$REPO/launchd/lib/health/service_checks.sh"
 . "$REPO/launchd/lib/health/probes.sh"
 . "$REPO/launchd/lib/health/metrics.sh"
+. "$REPO/launchd/lib/health/availability.sh"
 . "$REPO/launchd/lib/health/backup_check.sh"
 . "$REPO/launchd/lib/health/transitions.sh"
 . "$REPO/launchd/lib/health/mail.sh"

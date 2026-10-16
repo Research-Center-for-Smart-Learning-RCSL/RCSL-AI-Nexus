@@ -117,6 +117,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/capabilities/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Availability */
+        get: operations["availability_admin_capabilities_availability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/chat": {
         parameters: {
             query?: never;
@@ -1625,6 +1642,16 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** AvailabilityResponse */
+        AvailabilityResponse: {
+            /** Capabilities */
+            capabilities: components["schemas"]["CapabilityStatus"][];
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+        };
         /** BeginTotpRequest */
         BeginTotpRequest: {
             /** Current Password */
@@ -1643,6 +1670,17 @@ export interface components {
             capability: string;
             /** Points */
             points: components["schemas"]["UsagePointResponse"][];
+        };
+        /** CapabilityStatus */
+        CapabilityStatus: {
+            /** Available */
+            available: boolean;
+            /** Capability */
+            capability: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Reasons */
+            reasons: string[];
         };
         /** ChangePasswordRequest */
         ChangePasswordRequest: {
@@ -3018,6 +3056,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    availability_admin_capabilities_availability_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AvailabilityResponse"];
                 };
             };
             /** @description Unprocessable Entity */

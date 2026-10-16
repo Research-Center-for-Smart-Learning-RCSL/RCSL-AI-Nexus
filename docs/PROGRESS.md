@@ -43,6 +43,9 @@ separately at the end, marked as superseded.
 - Jev feasibility (#20): defer production integration; correct reranking fit and define an offline local evaluation with data, quality and resource gates
 - #32 post-merge review: unsent retries keep per-attempt billing snapshots for correct attribution and replay
 
+**[2026-10-13](./progress/2026-10-13.md)**
+- Require fresh Ollama residency and report quiet-host capability outages (#49, #50)
+
 **[2026-10-12](./progress/2026-10-12.md)**
 - Compact before refusal, bound node summaries and capacity, and replay grounded prefixes with shared epochs (#51, #52)
 

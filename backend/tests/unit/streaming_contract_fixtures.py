@@ -198,6 +198,8 @@ def build(
         runtime=runtime_kind,
         node_id="n1",
         state=ModelState.LOADED,
+        observed_state=ModelState.LOADED,
+        observed_at=datetime.now(UTC),
         capabilities=frozenset({"chat"}),
         resource_profile=ResourceProfile(memory_gb=8.0, context_length=context_length),
     )

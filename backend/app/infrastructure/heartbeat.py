@@ -11,8 +11,8 @@ asked what it actually holds, and the answer lands in the registry's
 `loaded` for hours on 2026-07-27 while Ollama held nothing — a restart, an
 out-of-band `ollama rm`, or an eviction all leave that assertion standing, and
 this is the read-back that catches it. A runtime that cannot answer (MLX) or
-cannot be reached leaves the observation null, which readers treat as "trust
-intent", the pre-observation behaviour.
+cannot be reached leaves the observation null. Routing may trust intent only
+for unobservable runtimes; Ollama requires fresh positive residency evidence.
 
 **It runs in the admin application, and both facts about how matter.** The
 gateway cannot host it: section 6's least-privilege split lets the gateway write

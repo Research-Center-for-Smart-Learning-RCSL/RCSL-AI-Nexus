@@ -15,8 +15,16 @@ from app.domain.entities.model import ModelState
 from app.domain.entities.routing_policy import RoutingCandidate
 from app.domain.exceptions import NoAvailableModelError
 from app.domain.services.routing_service import RoutingService
+from app.shared.clock import FixedClock
 from tests.unit.fakes import FakeModels, FakeNodes, FakePolicies, FakeVectorStore
-from tests.unit.test_embedding_and_search import EMBEDDER, NODE, PLAIN_USER, POLICY, StubRuntime
+from tests.unit.test_embedding_and_search import (
+    EMBEDDER,
+    NODE,
+    OBSERVED_AT,
+    PLAIN_USER,
+    POLICY,
+    StubRuntime,
+)
 
 
 class PinAwareRuntime(StubRuntime):
@@ -42,13 +50,24 @@ def embedder(models, policy, nodes=(NODE,)):
         models=FakeModels(models),
         nodes=FakeNodes(nodes),
         runtimes={next(iter(NODE.runtimes)): runtime},
-        routing=RoutingService(),
+        routing=RoutingService(FixedClock(OBSERVED_AT)),
     ), runtime
 
 
 async def test_failover_selects_same_weights_and_space_on_another_node():
-    primary = replace(EMBEDDER, manifest_digest="exact", state=ModelState.DOWNLOADED)
-    compatible = replace(primary, alias="replica", id="replica", state=ModelState.LOADED)
+    primary = replace(
+        EMBEDDER,
+        manifest_digest="exact",
+        state=ModelState.DOWNLOADED,
+        observed_state=ModelState.DOWNLOADED,
+    )
+    compatible = replace(
+        primary,
+        alias="replica",
+        id="replica",
+        state=ModelState.LOADED,
+        observed_state=ModelState.LOADED,
+    )
     second_node = replace(NODE, id="node-2", name="replica-node")
     compatible = replace(compatible, node_id=second_node.id)
     unrelated = replace(
@@ -58,6 +77,7 @@ async def test_failover_selects_same_weights_and_space_on_another_node():
         ref="another-model",
         manifest_digest="different",
         state=ModelState.LOADED,
+        observed_state=ModelState.LOADED,
     )
     policy = replace(
         POLICY,

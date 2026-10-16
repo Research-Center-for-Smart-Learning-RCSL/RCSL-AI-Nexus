@@ -90,6 +90,8 @@ async def stack(
             runtime=RuntimeKind.OLLAMA,
             node_id=NODE,
             state=ModelState.LOADED,
+            observed_state=ModelState.LOADED,
+            observed_at=datetime.now(UTC),
             capabilities=frozenset({"chat"}),
             resource_profile=ResourceProfile(memory_gb=1.0, context_length=32768),
         )
