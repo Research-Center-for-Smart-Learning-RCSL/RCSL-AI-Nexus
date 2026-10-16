@@ -185,52 +185,77 @@ async def observe_runtime_version(
             await write_version(node.id, version)
 
 
+async def load_nodes() -> list[Node]:
+    async with session_scope() as session:
+        return await PostgresNodeRepository(session).list_all()
+
+
+async def _write_status(node_id: str, status: NodeStatus) -> None:
+    async with session_scope() as session:
+        await PostgresNodeRepository(session).set_status(node_id, status)
+
+
+async def load_models() -> list[Model]:
+    async with session_scope() as session:
+        return await PostgresModelRepository(session).list_all()
+
+
+async def _write_observation(
+    model_id: str,
+    state: ModelState | None,
+    memory_gb: float | None,
+    observed_at: datetime | None,
+) -> None:
+    async with session_scope() as session:
+        await PostgresModelRepository(session).set_observed(
+            model_id, state, memory_gb, observed_at=observed_at
+        )
+
+
+async def database_time() -> datetime:
+    async with session_scope() as session:
+        return cast(
+            datetime, (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
+        )
+
+
+async def _write_version(node_id: str, version: str | None) -> None:
+    async with session_scope() as session:
+        await PostgresNodeRepository(session).set_runtime_version(node_id, version)
+
+
+async def observe_node(runtimes: dict[RuntimeKind, ModelRuntimePort], node: Node) -> int:
+    """One node's residency, observed and written exactly as a sweep does.
+
+    The residency reconciler calls this after each load, so the evidence it
+    judges the next load by is the heartbeat's own kind, stamped the same way.
+    """
+
+    async def node_models() -> list[Model]:
+        return [m for m in await load_models() if m.node_id == node.id]
+
+    return await observe_models(
+        runtimes,
+        node_models,
+        _write_observation,
+        get_settings().node_id,
+        observation_time=database_time,
+        nodes_by_id={node.id: node},
+    )
+
+
 async def run_heartbeat(app: FastAPI, interval_seconds: int) -> None:
     health = RuntimeNodeHealth(app.state.runtimes)
-
-    async def load_nodes() -> list[Node]:
-        async with session_scope() as session:
-            return await PostgresNodeRepository(session).list_all()
-
-    async def write_status(node_id: str, status: NodeStatus) -> None:
-        async with session_scope() as session:
-            await PostgresNodeRepository(session).set_status(node_id, status)
-
-    async def load_models() -> list[Model]:
-        async with session_scope() as session:
-            return await PostgresModelRepository(session).list_all()
-
-    async def write_observation(
-        model_id: str,
-        state: ModelState | None,
-        memory_gb: float | None,
-        observed_at: datetime | None,
-    ) -> None:
-        async with session_scope() as session:
-            await PostgresModelRepository(session).set_observed(
-                model_id, state, memory_gb, observed_at=observed_at
-            )
-
-    async def observation_time() -> datetime:
-        async with session_scope() as session:
-            return cast(
-                datetime, (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
-            )
-
-    async def write_version(node_id: str, version: str | None) -> None:
-        async with session_scope() as session:
-            await PostgresNodeRepository(session).set_runtime_version(node_id, version)
-
     while True:
         await asyncio.sleep(interval_seconds)
         try:
-            await sweep(health, load_nodes, write_status)
+            await sweep(health, load_nodes, _write_status)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - a failed sweep must not kill the loop
             logger.exception("node heartbeat sweep failed")
         try:
-            await observe_runtime_version(app.state.runtimes, load_nodes, write_version)
+            await observe_runtime_version(app.state.runtimes, load_nodes, _write_version)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - a failed sweep must not kill the loop
@@ -241,9 +266,9 @@ async def run_heartbeat(app: FastAPI, interval_seconds: int) -> None:
             await observe_models(
                 app.state.runtimes,
                 load_models,
-                write_observation,
+                _write_observation,
                 local_id,
-                observation_time=observation_time,
+                observation_time=database_time,
                 nodes_by_id=nodes_by_id,
             )
         except asyncio.CancelledError:

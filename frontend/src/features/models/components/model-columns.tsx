@@ -5,7 +5,12 @@ import type { ColumnDef } from '@tanstack/react-table';
 
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/composed/status-badge';
-import { useLoadModel, useStartDownload, useUnloadModel } from '@/features/models/hooks/use-models';
+import {
+  useLoadModel,
+  useResidencyIntent,
+  useStartDownload,
+  useUnloadModel,
+} from '@/features/models/hooks/use-models';
 import { RUNTIME_LABELS, type Model } from '@/features/models/schema';
 
 type Params = {
@@ -13,6 +18,7 @@ type Params = {
   load: ReturnType<typeof useLoadModel>;
   unload: ReturnType<typeof useUnloadModel>;
   download: ReturnType<typeof useStartDownload>;
+  intent: ReturnType<typeof useResidencyIntent>;
   trackJob: (jobId: string | null) => void;
   setEditing: (model: Model) => void;
   setFormOpen: (open: boolean) => void;
@@ -20,7 +26,17 @@ type Params = {
 };
 
 export function useModelColumns(params: Params): ColumnDef<Model>[] {
-  const { mayWrite, load, unload, download, trackJob, setEditing, setFormOpen, setDeleting } = params;
+  const {
+    mayWrite,
+    load,
+    unload,
+    download,
+    intent,
+    trackJob,
+    setEditing,
+    setFormOpen,
+    setDeleting,
+  } = params;
   return useMemo<ColumnDef<Model>[]>(
     () => [
       {
@@ -81,6 +97,11 @@ export function useModelColumns(params: Params): ColumnDef<Model>[] {
                 <span className="text-xs text-destructive">
                   runtime reports {observed_state.replace(/_/g, ' ')}
                 </span>
+              )}
+              {/* The intent the reconciler restores, which `state` cannot
+                  carry: a failed load turns `state` into `error`. */}
+              {row.original.desired_resident && (
+                <span className="text-xs text-muted-foreground">kept resident</span>
               )}
             </div>
           );
@@ -156,6 +177,19 @@ export function useModelColumns(params: Params): ColumnDef<Model>[] {
                   Load
                 </Button>
               )}
+              {/* Works whatever the runtime holds, so it is the way to stop
+                  a restore after a restart, when Unload has nothing to unload.
+                  It never unloads a resident model itself. */}
+              {model.desired_resident && (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  disabled={intent.isPending}
+                  onClick={() => intent.mutate({ id: model.id, desired: false })}
+                >
+                  Stop restoring
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="xs"
@@ -184,6 +218,7 @@ export function useModelColumns(params: Params): ColumnDef<Model>[] {
       load,
       unload,
       download,
+      intent,
       trackJob,
       setEditing,
       setFormOpen,

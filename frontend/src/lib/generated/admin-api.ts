@@ -799,6 +799,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/models/{model_id}/residency-intent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Residency Intent
+         * @description 202: the intent is committed, nothing has been loaded or unloaded.
+         *
+         *     The cancellation that works whatever the runtime holds (#49 §3): after a
+         *     restart `unload` refuses a model that is not resident, and this is how an
+         *     operator still stops it from being restored. The residency reconciler acts
+         *     on the new value, and audits what it does, on its own schedule.
+         */
+        put: operations["set_residency_intent_admin_models__model_id__residency_intent_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/models/{model_id}/unload": {
         parameters: {
             query?: never;
@@ -2286,6 +2311,10 @@ export interface components {
             capabilities: string[];
             /** Capacity Validated */
             capacity_validated: boolean;
+            /** Desired Resident */
+            desired_resident: boolean;
+            /** Desired Version */
+            desired_version: number;
             /** Id */
             id: string;
             /** Node Id */
@@ -2517,6 +2546,11 @@ export interface components {
         ResetTargetResponse: {
             /** Login */
             login: string;
+        };
+        /** ResidencyIntentRequest */
+        ResidencyIntentRequest: {
+            /** Desired Resident */
+            desired_resident: boolean;
         };
         /** ResourceProfileBody */
         ResourceProfileBody: {
@@ -4316,6 +4350,41 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    set_residency_intent_admin_models__model_id__residency_intent_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResidencyIntentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -12,6 +12,7 @@ import {
   listNodes,
   loadModel,
   readModelReference,
+  setResidencyIntent,
   startDownload,
   unloadModel,
   updateModel,
@@ -125,6 +126,23 @@ export function useUnloadModel() {
     onSuccess: async () => {
       await invalidate();
       toast.success('Unload requested.');
+    },
+    onError: (error) => toast.error(describeError(error)),
+  });
+}
+
+export function useResidencyIntent() {
+  const invalidate = useInvalidateModels();
+  return useMutation({
+    mutationFn: ({ id, desired }: { id: string; desired: boolean }) =>
+      setResidencyIntent(id, desired),
+    onSuccess: async (model) => {
+      await invalidate();
+      toast.success(
+        model.desired_resident
+          ? `${model.alias} will be kept resident.`
+          : `${model.alias} will no longer be restored.`,
+      );
     },
     onError: (error) => toast.error(describeError(error)),
   });

@@ -11,7 +11,8 @@ The audit adapter has the same shape and the same answer: a write that must
 survive the request's rollback goes in its own transaction. This is that, for
 model state.
 
-It is used only for the failure transitions and for `LOADING`. The success
+It is used only for the failure transitions, for `LOADING`, and for the
+residency intent an operator's Load or Unload records (#49 §3). The success
 transition rides the request transaction as before, because if that commit
 fails the operation genuinely did not happen and the state should not claim
 it did.
@@ -25,6 +26,7 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.adapters.persistence import mappers as m
+from app.adapters.persistence.repositories import PostgresModelRepository
 from app.adapters.persistence.sqlalchemy_models import ModelRow, NodeRow
 from app.domain.entities.model import Model, ModelState
 from app.domain.entities.node import Node
@@ -78,3 +80,11 @@ class ModelStateCommitter:
             # already returned. Logging is the floor; the deploy-time
             # reconciliation is the backstop for a state left wrong here.
             logger.exception("model_state_commit_failed model=%s state=%s", model_id, state.value)
+
+    async def commit_intent(self, model_id: str, desired: bool) -> int | None:
+        async with self._sessions() as session:
+            version = await PostgresModelRepository(session).set_desired_residency(
+                model_id, desired
+            )
+            await session.commit()
+            return version

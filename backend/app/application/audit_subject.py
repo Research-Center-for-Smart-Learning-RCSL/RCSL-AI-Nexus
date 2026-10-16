@@ -22,6 +22,9 @@ from app.domain.entities.user import User
 UNKNOWN_ACTOR_ID = "unknown"
 """Not a user id, and deliberately not one that could collide with a uuid."""
 
+RESIDENCY_RECONCILER_ID = "residency-reconciler"
+"""The control-plane loop that restores desired residency (#49). Not a uuid."""
+
 
 def subject_for(user: User) -> Actor:
     """The account holder, acting on their own account.
@@ -88,3 +91,19 @@ def _is_login_shaped(presented: str) -> bool:
 
 def _redacted(presented: str) -> str:
     return f"redacted:{hashlib.sha256(presented.encode()).hexdigest()[:32]}"
+
+
+def reconciler_subject() -> Actor:
+    """The residency reconciler, for the audit rows of the loads it performs.
+
+    It reaches `ManageModels.restore` and `release`, which are not routed and
+    check no scope; like every subject here, it could not pass `require`. It
+    runs in the tailnet admin, so that is its source.
+    """
+    return Actor(
+        id=RESIDENCY_RECONCILER_ID,
+        display="residency reconciler",
+        role=Role.OPERATOR,
+        source="tailnet",
+        scopes=frozenset(),
+    )
