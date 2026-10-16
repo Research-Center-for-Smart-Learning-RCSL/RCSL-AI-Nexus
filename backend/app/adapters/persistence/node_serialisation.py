@@ -13,11 +13,15 @@ refuses instead.
 
 from __future__ import annotations
 
+import contextlib
+import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+
+logger = logging.getLogger(__name__)
 
 NODE_LOAD_NAMESPACE = 0x4E58_0003
 """First key of the per-node session advisory lock; the agent's election and
@@ -48,8 +52,16 @@ class PostgresNodeSerialisation:
                 yield held
             finally:
                 if held:
-                    await connection.execute(
-                        text("SELECT pg_advisory_unlock(:ns, hashtext(:node))"),
-                        {"ns": NODE_LOAD_NAMESPACE, "node": node_id},
-                    )
-                    await connection.commit()
+                    try:
+                        await connection.execute(
+                            text("SELECT pg_advisory_unlock(:ns, hashtext(:node))"),
+                            {"ns": NODE_LOAD_NAMESPACE, "node": node_id},
+                        )
+                        await connection.commit()
+                    except BaseException:
+                        # Never back to the pool still holding the node: a
+                        # discarded connection takes its session locks with it.
+                        logger.warning("node lock release failed node=%s", node_id)
+                        with contextlib.suppress(Exception):
+                            await connection.invalidate()
+                        raise
