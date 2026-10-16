@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import replace
 
 from app.application.audit_subject import reconciler_subject
@@ -39,12 +40,29 @@ class ModelLifecycleMixin(ModelRegistryMixin):
         retries it within its backoff (#49 §2, step 5).
         """
         self._authz.require(actor, Scope.MODEL_WRITE)
-        await self._require(model_id)
-        return await self._load(actor, model_id, record_intent=True)
+        model = await self._require(model_id)
+        # The reconciler's per-node lock, so this load and a restore (or a
+        # second operator's load) never both read the occupying set before
+        # either has committed LOADING. Tried, never waited for, and taken on
+        # its own idle connection: nothing below needs it again. The
+        # reconciler's `restore` runs under the lock its pass already holds.
+        async with self._hold_node(model.node_id) as held:
+            if not held:
+                raise ModelStateConflictError(
+                    detail=f"another load is in progress on node {model.node_id}; retry shortly"
+                )
+            return await self._load(actor, model_id, record_intent=True)
+
+    def _hold_node(self, node_id: str) -> AbstractAsyncContextManager[bool]:
+        if self._node_lock is None:
+            return nullcontext(True)
+        return self._node_lock.hold(node_id)
 
     async def restore(self, model_id: str) -> Model:
         """The residency reconciler's load: the same checks, budget and
         runtime path as an operator's, under the reconciler's audit subject.
+        The caller already holds the node's lock for its pass; taking it
+        again here, on another connection, would refuse its own holder.
 
         Unrouted and unscoped, and it never writes intent: a load already in
         flight must not restore a flag the operator has since withdrawn

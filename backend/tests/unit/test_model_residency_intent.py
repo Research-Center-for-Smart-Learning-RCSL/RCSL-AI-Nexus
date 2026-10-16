@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager, nullcontext
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -174,3 +175,50 @@ async def test_a_stale_absence_is_still_charged_when_it_is_on() -> None:
     harness = _after_restart(NOW - timedelta(minutes=10))
     with pytest.raises(InsufficientMemoryError):
         await _budgeted(harness, frees=True).restore("m1")
+
+
+class _HeldNode:
+    def __init__(self, held: bool) -> None:
+        self._held = held
+        self.taken: list[str] = []
+
+    def hold(self, node_id: str) -> AbstractAsyncContextManager[bool]:
+        self.taken.append(node_id)
+        return nullcontext(self._held)
+
+
+def _locked(harness: Harness, lock: _HeldNode) -> ManageModels:
+    return ManageModels(
+        models=harness.models,
+        nodes=harness.nodes,
+        policies=harness.policies,
+        runtimes={RuntimeKind.OLLAMA: harness.runtime},
+        budget=MemoryBudgetService(),
+        state_committer=FakeStateCommitter(harness.models),
+        authz=RoleAuthorization(),
+        audit=harness.audit,
+        node_lock=lock,
+    )
+
+
+async def test_an_operator_load_takes_the_node_lock() -> None:
+    harness = Harness([make_model()])
+    lock = _HeldNode(True)
+    await _locked(harness, lock).load(ADMIN, "m1")
+    assert lock.taken == ["node-1"]
+    assert harness.runtime.loaded == ["library/qwen2.5:7b"]
+
+
+async def test_an_operator_load_is_refused_while_the_node_is_held() -> None:
+    harness = Harness([make_model()])
+    with pytest.raises(ModelStateConflictError):
+        await _locked(harness, _HeldNode(False)).load(ADMIN, "m1")
+    assert harness.runtime.loaded == []
+    assert harness.models.rows["m1"].desired_version == 0
+
+
+async def test_a_restore_runs_under_the_lock_its_pass_holds() -> None:
+    harness = Harness([make_model()])
+    lock = _HeldNode(False)
+    await _locked(harness, lock).restore("m1")
+    assert lock.taken == []

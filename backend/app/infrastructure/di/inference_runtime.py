@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapters.http.metrics_port import HttpMetricsAdapter
 from app.adapters.metrics.prometheus import MeteredUsageRepository
 from app.adapters.persistence.model_state import ModelStateCommitter
+from app.adapters.persistence.node_serialisation import PostgresNodeSerialisation
 from app.adapters.persistence.repositories import (
     PostgresModelRepository,
     PostgresNodeRepository,
@@ -41,7 +42,7 @@ from app.domain.ports.repositories import UsageRepositoryPort
 from app.domain.services.memory_budget_service import MemoryBudgetService
 from app.domain.services.routing_service import RoutingService
 from app.infrastructure.config import Settings
-from app.infrastructure.db import get_session_factory
+from app.infrastructure.db import get_engine, get_session_factory
 from app.interfaces.http.request_context import current_request_id, report_compaction
 from app.shared.clock import SystemClock
 
@@ -287,6 +288,9 @@ def manage_models_for(app: FastAPI, session: AsyncSession, settings: Settings) -
         tokens=getattr(app.state, "token_counter", None),
         metrics=HttpMetricsAdapter(settings.host_metrics_url),
         observed_absence_frees_memory=settings.residency_reconciler_enabled,
+        # The reconciler's per-node lock, so an operator's Load and a
+        # restore never pass the memory budget together.
+        node_lock=PostgresNodeSerialisation(get_engine),
     )
 
 

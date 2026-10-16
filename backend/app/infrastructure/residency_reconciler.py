@@ -7,21 +7,21 @@ is held across a runtime call except the load's own, as on the operator path.
 
 Two admin processes, or a restarted one overlapping its predecessor, are kept
 apart per node by a session advisory lock on a dedicated connection that is
-idle, not in a transaction, while the pass runs. The pass is skipped, never
-queued, when another holder has the node.
+idle, not in a transaction, while the pass runs. An operator's Load takes the
+same lock, so the two never pass the memory budget together. The pass is
+skipped, never queued, when another holder has the node.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from datetime import datetime
 
 from fastapi import FastAPI
 from sqlalchemy import text
 
+from app.adapters.persistence.node_serialisation import PostgresNodeSerialisation
 from app.adapters.persistence.repositories import PostgresModelRepository, PostgresNodeRepository
 from app.application.use_cases.reconcile_residency import (
     ReconcileResidency,
@@ -35,10 +35,6 @@ from app.infrastructure.di.inference_runtime import manage_models_for
 from app.infrastructure.heartbeat import database_time, observe_node
 
 logger = logging.getLogger(__name__)
-
-RECONCILER_NAMESPACE = 0x4E58_0003
-"""First key of the per-node session advisory lock; the agent's election and
-dispatch locks use ...0001 and ...0002."""
 
 
 class PostgresReconcilerState:
@@ -91,32 +87,6 @@ class ManageModelsRestorer:
             return await manage_models_for(self._app, session, self._settings).release(model_id)
 
 
-class PostgresNodeSerialisation:
-    @asynccontextmanager
-    async def hold(self, node_id: str) -> AsyncIterator[bool]:
-        async with get_engine().connect() as connection:
-            held = bool(
-                (
-                    await connection.execute(
-                        text("SELECT pg_try_advisory_lock(:ns, hashtext(:node))"),
-                        {"ns": RECONCILER_NAMESPACE, "node": node_id},
-                    )
-                ).scalar_one()
-            )
-            # A session lock survives the commit; the connection then waits
-            # outside any transaction for as long as the pass takes.
-            await connection.commit()
-            try:
-                yield held
-            finally:
-                if held:
-                    await connection.execute(
-                        text("SELECT pg_advisory_unlock(:ns, hashtext(:node))"),
-                        {"ns": RECONCILER_NAMESPACE, "node": node_id},
-                    )
-                    await connection.commit()
-
-
 async def _not_suspended() -> bool:
     # Maintenance mode (#61) replaces this. Until then the flag is the switch.
     return False
@@ -147,7 +117,7 @@ async def run_residency_reconciler(
         PostgresReconcilerState(),
         HeartbeatObserver(app),
         ManageModelsRestorer(app, settings),
-        PostgresNodeSerialisation(),
+        PostgresNodeSerialisation(get_engine),
         enabled=settings.residency_reconciler_enabled,
         suspended=suspended,
     )

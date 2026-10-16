@@ -126,6 +126,13 @@ and the heartbeat interval is positive. For each Ollama node it:
    for at most two repair rounds. Then it backs off `30 s × 2^n` (cap 15 min)
    and needs two fresh observations again.
 
+Loads on one node are serialised by that advisory lock, whether the flag is
+on or not: an operator's Load takes it for its own duration, and the
+reconciler for its whole pass. Neither waits for the other. A Load while the
+node is held answers `409` ("another load is in progress"); retry once the
+pass or the other load finishes. Without the lock, two loads could each read
+the occupying set before either recorded `loading`, and both pass the budget.
+
 With the flag on, the memory budget also stops charging a model the runtime has
 freshly reported as not resident. A mid-load model, a resident model, or one
 with unknown or stale residency is still charged at its intent. With the flag

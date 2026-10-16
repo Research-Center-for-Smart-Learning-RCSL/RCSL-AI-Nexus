@@ -6,6 +6,7 @@ import logging
 import uuid
 from dataclasses import replace
 
+from app.application.use_cases.reconcile_residency import NodeSerialisationPort
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.audit import AuditAction
 from app.domain.entities.model import Model, ModelState, ResourceProfile, RuntimeKind
@@ -49,6 +50,7 @@ class ModelRegistryMixin:
         *,
         observed_absence_frees_memory: bool = False,
         clock: Clock | None = None,
+        node_lock: NodeSerialisationPort | None = None,
     ) -> None:
         self._models = models
         self._nodes = nodes
@@ -65,6 +67,8 @@ class ModelRegistryMixin:
         # what changes how a load is budgeted; off, the budget is as before.
         self._observed_absence_frees_memory = observed_absence_frees_memory
         self._clock = clock or SystemClock()
+        # None only where nothing else can load concurrently: unit tests.
+        self._node_lock = node_lock
 
     async def list_all(self, actor: Actor) -> list[Model]:
         self._authz.require(actor, Scope.MODEL_READ)

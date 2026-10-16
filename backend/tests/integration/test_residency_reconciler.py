@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from alembic import command
 from app.adapters.authz.role_authorization import RoleAuthorization
+from app.adapters.persistence.node_serialisation import PostgresNodeSerialisation
 from app.adapters.persistence.repositories import PostgresModelRepository, PostgresNodeRepository
 from app.application.audit_subject import RESIDENCY_RECONCILER_ID
 from app.application.use_cases.reconcile_residency import PassResult, ReconcileResidency
@@ -31,14 +32,14 @@ from app.domain.entities.model import (
     RuntimeResidency,
 )
 from app.domain.entities.node import Node, NodeStatus
+from app.domain.exceptions import ModelStateConflictError
 from app.infrastructure.config import Settings, get_settings
-from app.infrastructure.db import dispose_engine, init_engine, session_scope
+from app.infrastructure.db import dispose_engine, get_engine, init_engine, session_scope
 from app.infrastructure.di.inference_runtime import manage_models_for
 from app.infrastructure.di.shared import build_audit
 from app.infrastructure.residency_reconciler import (
     HeartbeatObserver,
     ManageModelsRestorer,
-    PostgresNodeSerialisation,
     PostgresReconcilerState,
 )
 from tests.integration.conftest import _alembic_config
@@ -200,14 +201,14 @@ async def test_unknown_operation_blocks_the_node(global_engine):
 
 
 async def test_a_second_reconciler_is_kept_off_the_node(global_engine):
-    serialisation = PostgresNodeSerialisation()
+    serialisation = PostgresNodeSerialisation(get_engine)
     async with serialisation.hold("local") as first:
         assert first
-        async with PostgresNodeSerialisation().hold("local") as second:
+        async with PostgresNodeSerialisation(get_engine).hold("local") as second:
             assert not second
         async with serialisation.hold("other") as unrelated:
             assert unrelated
-    async with PostgresNodeSerialisation().hold("local") as again:
+    async with PostgresNodeSerialisation(get_engine).hold("local") as again:
         assert again
 
 
@@ -303,6 +304,71 @@ async def test_a_failed_operator_load_keeps_its_intent_against_real_postgres(glo
     assert (stored.desired_resident, stored.desired_version) == (True, 1)
 
 
+class HeldOllama(SimulatedOllama):
+    """A load that does not return until the test lets it."""
+
+    def __init__(self, on_disk: set[str]) -> None:
+        super().__init__(on_disk)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def load(self, ref: str, *, context_length: int | None = None) -> None:
+        self.started.set()
+        await self.release.wait()
+        await super().load(ref, context_length=context_length)
+
+
+async def test_two_loads_on_one_node_never_pass_the_budget_together(global_engine):
+    """Each read the occupying set before the other committed LOADING; the
+    node lock now refuses the second instead of letting both over-commit."""
+    first, second = (
+        _model("first", 6, state=ModelState.DOWNLOADED),
+        _model("second", 6, state=ModelState.DOWNLOADED),
+    )
+    async with session_scope() as session:
+        await PostgresNodeRepository(session).save(_node())
+        for model in (first, second):
+            await PostgresModelRepository(session).save(model)
+    runtime = HeldOllama({first.ref, second.ref})
+    app, settings = _admin(runtime)
+
+    async def load(model_id: str) -> Model:
+        async with session_scope() as session:
+            use_case = manage_models_for(app, session, settings)  # type: ignore[arg-type]
+            return await use_case.load(ADMIN, model_id)
+
+    in_flight = asyncio.create_task(load(first.id))
+    await asyncio.wait_for(runtime.started.wait(), 10)
+    with pytest.raises(ModelStateConflictError):
+        await asyncio.wait_for(load(second.id), 10)
+    # The reconciler is kept off the node the same way.
+    async with PostgresNodeSerialisation(get_engine).hold("local") as held:
+        assert not held
+    runtime.release.set()
+    assert (await asyncio.wait_for(in_flight, 10)).state is ModelState.LOADED
+    assert (await _stored(second.id)).desired_version == 0, "a refusal records no intent"
+
+    # Released with the load: the next one goes through.
+    assert (await asyncio.wait_for(load(second.id), 10)).state is ModelState.LOADED
+
+
+async def test_an_operator_load_is_refused_while_the_reconciler_holds_the_node(global_engine):
+    model = _model("qwen", 6, state=ModelState.DOWNLOADED)
+    async with session_scope() as session:
+        await PostgresNodeRepository(session).save(_node())
+        await PostgresModelRepository(session).save(model)
+    runtime = SimulatedOllama({model.ref})
+    app, settings = _admin(runtime)
+
+    async with PostgresNodeSerialisation(get_engine).hold("local") as held:
+        assert held
+        async with session_scope() as session:
+            use_case = manage_models_for(app, session, settings)  # type: ignore[arg-type]
+            with pytest.raises(ModelStateConflictError):
+                await asyncio.wait_for(use_case.load(ADMIN, model.id), 10)
+    assert runtime.loaded == []
+
+
 async def test_restart_restores_the_desired_set_largest_first(global_engine):
     gemma, qwen, embedder, unwanted = (
         _model("gemma", 44),
@@ -326,7 +392,7 @@ async def test_restart_restores_the_desired_set_largest_first(global_engine):
         PostgresReconcilerState(),
         observer,
         ManageModelsRestorer(app, settings),  # type: ignore[arg-type]
-        PostgresNodeSerialisation(),
+        PostgresNodeSerialisation(get_engine),
         enabled=True,
     )
     node = _node()
