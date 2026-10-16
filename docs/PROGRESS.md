@@ -36,6 +36,9 @@ separately at the end, marked as superseded.
 
 ### October 2026
 
+**[2026-10-14](./progress/2026-10-14.md)**
+- Jev feasibility (#20): defer production integration; correct reranking fit and define an offline local evaluation with data, quality and resource gates
+
 **[2026-10-12](./progress/2026-10-12.md)**
 - Compact before refusal, bound node summaries and capacity, and replay grounded prefixes with shared epochs (#51, #52)
 
