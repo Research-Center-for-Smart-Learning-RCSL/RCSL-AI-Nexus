@@ -326,10 +326,13 @@ async def test_cold_large_history_uses_one_bounded_lookup_without_large_record_f
     cache = TrackingCache()
     ground, search, _, _ = setup(cache=cache)
     messages = [Message(MessageRole.USER, f"turn {i}") for i in range(2000)]
-    assert await ground.execute(ACTOR, messages) == (messages, [])
+    grounded, citations = await ground.execute(ACTOR, messages)
+    assert grounded != messages
+    assert citations == [passage()]
+    assert not cache._values
     assert len(cache.lookups) == 1
     assert len(cache.lookups[0]) == MAX_GROUNDING_LOOKBACK
-    assert search.calls == 0
+    assert search.calls == 1
 
 
 async def test_multibyte_passages_are_pruned_to_the_full_record_byte_cap():
@@ -340,7 +343,7 @@ async def test_multibyte_passages_are_pruned_to_the_full_record_byte_cap():
     assert len(next(iter(cache._values.values()))[0].encode()) <= MAX_GROUNDING_RECORD_BYTES
 
 
-async def test_full_grounding_quota_preserves_existing_chain_without_new_context(monkeypatch):
+async def test_full_grounding_quota_preserves_prefix_and_grounds_new_turn(monkeypatch, caplog):
     monkeypatch.setattr("app.adapters.cache.redis_adapter.MAX_GROUNDING_RECORDS_PER_TENANT", 1)
     ground, search, cache, _ = setup()
     first, _ = await ground.execute(ACTOR, conversation())
@@ -348,9 +351,57 @@ async def test_full_grounding_quota_preserves_existing_chain_without_new_context
         Message(MessageRole.ASSISTANT, "answer"),
         Message(MessageRole.USER, "next"),
     ]
-    search.passages = [passage("must not be added without persistence")]
+    search.passages = [passage("fresh knowledge for the new question")]
     result, citations = await ground.execute(ACTOR, later)
     assert result[: len(first)] == first
     assert len(cache._values) == 1
-    assert citations[0].text == "reference" and len(citations) == 1
-    assert all("must not be added" not in m.content for m in result)
+    assert [p.text for p in citations] == ["reference", "fresh knowledge for the new question"]
+    assert any("fresh knowledge for the new question" in m.content for m in result)
+    assert "grounding_record_not_stored reason=quota_full" in caplog.text
+    assert "fresh knowledge for the new question" not in caplog.text
+    search.passages = [passage("fresh retry result")]
+    retried, citations = await ground.execute(ACTOR, later)
+    assert retried[: len(first)] == first
+    assert [p.text for p in citations] == ["reference", "fresh retry result"]
+    assert search.calls == 3 and len(cache._values) == 1
+
+
+@pytest.mark.parametrize("global_quota", [False, True])
+async def test_full_quota_grounds_a_new_conversation_without_recording(monkeypatch, global_quota):
+    limit = "MAX_GROUNDING_RECORDS_TOTAL" if global_quota else "MAX_GROUNDING_RECORDS_PER_TENANT"
+    monkeypatch.setattr(f"app.adapters.cache.redis_adapter.{limit}", 1)
+    ground, search, cache, _ = setup()
+    await ground.execute(ACTOR, conversation())
+    stored = dict(cache._values)
+    actor = replace(ACTOR, tenant_id="tenant-b") if global_quota else ACTOR
+    messages = [Message(MessageRole.USER, "new unrelated question")]
+    search.passages = [passage("new conversation knowledge")]
+    grounded, citations = await ground.execute(actor, messages)
+    assert any("new conversation knowledge" in m.content for m in grounded)
+    assert citations == search.passages
+    assert cache._values == stored
+    assert search.calls == 2
+
+
+async def test_quota_fallback_still_checks_epoch_before_returning(monkeypatch):
+    monkeypatch.setattr("app.adapters.cache.redis_adapter.MAX_GROUNDING_RECORDS_TOTAL", 0)
+    ground, _, cache, epochs = setup()
+    original_get = cache.get
+
+    async def mutate_after_retrieval(key):
+        epochs.begin("collection-a")
+        return await original_get(key)
+
+    monkeypatch.setattr(cache, "get", mutate_after_retrieval)
+    assert await ground.execute(ACTOR, conversation()) == (conversation(), [])
+    assert not cache._values
+
+
+async def test_full_quota_does_not_prune_fresh_results_to_the_storage_byte_cap(monkeypatch):
+    monkeypatch.setattr("app.adapters.cache.redis_adapter.MAX_GROUNDING_RECORDS_TOTAL", 0)
+    passages = [passage("語" * 4000) for _ in range(20)]
+    ground, _, cache, _ = setup(Search(passages))
+    grounded, citations = await ground.execute(ACTOR, conversation(), top_k=20)
+    assert grounded != conversation()
+    assert citations == passages
+    assert not cache._values

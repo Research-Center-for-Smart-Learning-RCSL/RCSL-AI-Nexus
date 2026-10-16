@@ -174,9 +174,10 @@ class GroundChat:
             if candidate and key in keys and candidate[-1].index == keys[key]:
                 anchors = candidate
         if not anchors and len(indexes) > MAX_GROUNDING_LOOKBACK:
-            # Expired/absent older chain: preserve bounded cold-path work and
-            # omit grounding rather than shift untracked historical context.
-            return list(messages), []
+            # A long quota-exhausted conversation can outlive the retained
+            # lookup window. Bound cache work without dropping live grounding.
+            logger.warning("grounding_record_not_stored reason=history_unavailable")
+            return await self._fresh_ground(actor, messages, collection_id, top_k)
 
         if not anchors or anchors[-1].index != last_index:
             passages = await self._search.execute_or_empty(
@@ -203,6 +204,7 @@ class GroundChat:
                     prefix, last_index, context.content if context else "", tuple(passages)
                 ),
             ]
+            unrecorded = list(proposal)
             raw = encode_chain(proposal)
             while passages and len(raw.encode()) > MAX_GROUNDING_RECORD_BYTES:
                 passages.pop()
@@ -222,9 +224,13 @@ class GroundChat:
                     winner = await self._records.get(latest_key)
                     if winner is not None:
                         anchors = decode_chain(winner, messages)
-                    # Quota full: keep the committed prefix, add no new anchor.
-            # An over-cap contender replays existing history only; it never
-            # adds context that cannot be persisted for the following turn.
+                    else:
+                        # Admission limits storage, not current-turn retrieval.
+                        # Retain any committed prefix and use this result only
+                        # for this request; a retry may retrieve different data.
+                        anchors = unrecorded
+                        logger.warning("grounding_record_not_stored reason=quota_full")
+            # Chains exceeding the per-record byte cap retain existing history.
         if await self._epochs.read(collection_id) != before:
             return list(messages), []
         return replay(messages, anchors)

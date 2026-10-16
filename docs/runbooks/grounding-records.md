@@ -9,7 +9,11 @@ citations; when the chain reaches that cap, existing history is preserved and
 additional passages are omitted. Atomic admission also caps live records at
 64 per tenant and 256 globally (16 MiB per tenant and 64 MiB globally of record
 values, plus bounded key/index overhead). Full quotas preserve existing chains
-without inserting new context; they do not evict another conversation's prefix.
+and still add freshly retrieved context and citations for the current question,
+without recording that turn or evicting another conversation's prefix. Such
+turns emit `grounding_record_not_stored reason=quota_full` without document or
+question content. Retries and later turns may retrieve different context:
+prefix stability degrades, but grounding remains available.
 Expired quota entries are reclaimed using Redis time in the same Lua operation.
 Prefix reuse is therefore bounded by record
 retention, unchanged history, selection settings, embedding identity and a
@@ -26,7 +30,8 @@ stored context and citations still replay into the model's prompt.
 Cold lookup scans at most the 256 most recent user anchors in one Redis
 round trip and returns only the first stored chain (at most 256 KiB), rather
 than fetching every chain. If no chain is retained inside that bound for a
-longer conversation, the request proceeds ungrounded. Prefix hashing runs in
+longer conversation, the request uses fresh grounding without recording and
+logs `grounding_record_not_stored reason=history_unavailable`. Prefix hashing runs in
 one pass. Redis Lua and the development memory adapter use the same
 newest-first lookup semantics.
 
