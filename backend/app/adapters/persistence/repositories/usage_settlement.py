@@ -91,6 +91,9 @@ class PostgresUsageSettlement:
     ) -> None:
         self._sessions = sessions
         self._observe = observe
+        # Attempts whose settlement raised, ordered last by the next sweep.
+        # In memory: a restart retries them first, once.
+        self._failing: set[str] = set()
 
     async def mark_delivery(self, op_id: str, complete: bool) -> None:
         """What the gateway saw of delivery, recorded once.
@@ -196,7 +199,32 @@ class PostgresUsageSettlement:
         dying between the agent's terminal commit and its own usage write.
         Only attempts inside `SWEEP_HORIZON_DAYS` are considered, so a row
         retention removed stays removed. Returns how many attempts it settled.
+
+        Each attempt is settled on its own: one that raises is logged and
+        passed over, so it cannot stop the rest of the sweep or the delivery
+        reconciliation behind it. It is retried on later sweeps, but behind
+        every attempt that has not failed, so it cannot hold the oldest slot
+        of each batch forever either.
         """
+        pending, late = await self._candidates(limit)
+        settled = 0
+        for op_id in pending:
+            try:
+                settled += await self.settle(op_id)
+            except Exception:  # noqa: BLE001 - one attempt must not stall the others
+                logger.exception("usage settlement failed for attempt %s", op_id)
+                self._failing.add(op_id)
+            else:
+                self._failing.discard(op_id)
+        for op_id in late:
+            try:
+                async with self._sessions() as session, session.begin():
+                    await session.execute(_RECONCILE, {"op_id": op_id})
+            except Exception:  # noqa: BLE001 - as above
+                logger.exception("usage reconciliation failed for attempt %s", op_id)
+        return settled
+
+    async def _candidates(self, limit: int) -> tuple[list[str], list[str]]:
         async with self._sessions() as session:
             pending = (
                 (
@@ -208,9 +236,13 @@ class PostgresUsageSettlement:
                             "AND a.created_at > now() - make_interval(days => :horizon) "
                             "AND NOT EXISTS (SELECT 1 FROM usage_records u "
                             "WHERE u.attempt_id = a.op_id) "
-                            "ORDER BY a.created_at LIMIT :limit"
+                            "ORDER BY a.op_id = ANY(:failing), a.created_at LIMIT :limit"
                         ),
-                        {"limit": limit, "horizon": SWEEP_HORIZON_DAYS},
+                        {
+                            "limit": limit,
+                            "horizon": SWEEP_HORIZON_DAYS,
+                            "failing": sorted(self._failing),
+                        },
                     )
                 )
                 .scalars()
@@ -231,13 +263,7 @@ class PostgresUsageSettlement:
                 .scalars()
                 .all()
             )
-        settled = 0
-        for op_id in pending:
-            settled += await self.settle(op_id)
-        for op_id in late:
-            async with self._sessions() as session, session.begin():
-                await session.execute(_RECONCILE, {"op_id": op_id})
-        return settled
+        return list(pending), list(late)
 
 
 def _json(value: Any) -> dict[str, Any]:
