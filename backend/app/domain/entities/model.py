@@ -76,6 +76,17 @@ class Model:
     manifest_digest: str | None = None
     """The node agent's pinned weights identity, not a client-editable field."""
 
+    desired_resident: bool = False
+    """Residency intent, separate from lifecycle `state` (#49 §1). A failed
+    load writes ERROR to `state`; a reconciler selecting `state == loaded`
+    would then silently stop retrying, so the wish to keep a model resident
+    lives here and only an operator changes it."""
+
+    desired_version: int = 0
+    """Bumped on every change of `desired_resident`, so a load that was sent
+    under an older intent can tell that it has been overtaken. It versions the
+    intent only; the weights pin is `manifest_digest`."""
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeResidency:

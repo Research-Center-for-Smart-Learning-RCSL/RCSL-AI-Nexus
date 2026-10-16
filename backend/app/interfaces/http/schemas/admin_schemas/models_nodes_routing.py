@@ -55,6 +55,12 @@ class ModelResponse(BaseModel):
     observed_memory_gb: float | None
     observed_at: datetime | None
 
+    desired_resident: bool
+    """Whether an operator wants the model kept resident: what the residency
+    reconciler restores after a runtime restart, when it is enabled. Separate
+    from `state`, which a failed load sets to `error`."""
+    desired_version: int
+
     @classmethod
     def of(cls, model: Model) -> ModelResponse:
         return cls(
@@ -75,7 +81,13 @@ class ModelResponse(BaseModel):
             observed_memory_gb=model.observed_memory_gb,
             observed_at=model.observed_at,
             capacity_validated=model.capacity_validated,
+            desired_resident=model.desired_resident,
+            desired_version=model.desired_version,
         )
+
+
+class ResidencyIntentRequest(BaseModel):
+    desired_resident: bool
 
 
 class CreateModelRequest(BaseModel):

@@ -1,0 +1,292 @@
+"""Residency intent and the reconciler against real PostgreSQL (#49).
+
+The runtime is simulated in process; nothing here reaches Ollama or an agent.
+What is real is everything the reconciler trusts: the migration's backfill,
+the targeted intent write, the observation stamps, the `node_operations`
+block, the advisory lock that keeps two reconcilers apart, and the
+`ManageModels` load path with its budget and audit rows.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+from dataclasses import replace
+from types import SimpleNamespace
+
+import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from alembic import command
+from app.adapters.authz.role_authorization import RoleAuthorization
+from app.adapters.persistence.repositories import PostgresModelRepository, PostgresNodeRepository
+from app.application.audit_subject import RESIDENCY_RECONCILER_ID
+from app.application.use_cases.reconcile_residency import PassResult, ReconcileResidency
+from app.domain.entities.model import (
+    Model,
+    ModelState,
+    ResourceProfile,
+    RuntimeKind,
+    RuntimeResidency,
+)
+from app.domain.entities.node import Node, NodeStatus
+from app.infrastructure.config import get_settings
+from app.infrastructure.db import dispose_engine, init_engine, session_scope
+from app.infrastructure.di.shared import build_audit
+from app.infrastructure.residency_reconciler import (
+    HeartbeatObserver,
+    ManageModelsRestorer,
+    PostgresNodeSerialisation,
+    PostgresReconcilerState,
+)
+from tests.integration.conftest import _alembic_config
+from tests.unit.fakes import FakeRuntime
+
+PREVIOUS_HEAD = "f2c7d9e40b31"
+
+
+def test_migration_backfills_intent_from_loaded_state_and_downgrades(database_url):
+    config = _alembic_config(database_url)
+    command.downgrade(config, PREVIOUS_HEAD)
+
+    async def seed() -> None:
+        engine = create_async_engine(database_url)
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "INSERT INTO nodes (id, name, address, status, total_memory_gb, runtimes) "
+                        "VALUES ('n1', 'n1', '100.64.0.1', 'online', 64, '[\"ollama\"]')"
+                    )
+                )
+                for alias, state in [("kept", "loaded"), ("idle", "downloaded"), ("bad", "error")]:
+                    await connection.execute(
+                        text(
+                            "INSERT INTO models (id, alias, ref, runtime, node_id, state, "
+                            "capabilities, memory_gb, context_length) VALUES "
+                            "(:id, :alias, :ref, 'ollama', 'n1', :state, '[]', 1, 2048)"
+                        ),
+                        {
+                            "id": str(uuid.uuid4()),
+                            "alias": alias,
+                            "ref": f"{alias}:t",
+                            "state": state,
+                        },
+                    )
+        finally:
+            await engine.dispose()
+
+    async def intents() -> dict[str, tuple[bool, int]]:
+        engine = create_async_engine(database_url)
+        try:
+            async with engine.connect() as connection:
+                rows = await connection.execute(
+                    text("SELECT alias, desired_resident, desired_version FROM models")
+                )
+                return {r[0]: (r[1], r[2]) for r in rows}
+        finally:
+            await engine.dispose()
+
+    async def columns() -> set[str]:
+        engine = create_async_engine(database_url)
+        try:
+            async with engine.connect() as connection:
+                rows = await connection.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'models'"
+                    )
+                )
+                return {r[0] for r in rows}
+        finally:
+            await engine.dispose()
+
+    asyncio.run(seed())
+    command.upgrade(config, "head")
+    # Only `loaded` was recorded intent; an `error` row is for an operator.
+    assert asyncio.run(intents()) == {
+        "kept": (True, 1),
+        "idle": (False, 0),
+        "bad": (False, 0),
+    }
+    command.downgrade(config, PREVIOUS_HEAD)
+    assert not {"desired_resident", "desired_version"} & asyncio.run(columns())
+    command.upgrade(config, "head")
+
+
+def _node(node_id: str = "local") -> Node:
+    return Node(
+        id=node_id,
+        name=f"name-{node_id}",
+        address="100.64.0.1",
+        status=NodeStatus.ONLINE,
+        total_memory_gb=64.0,
+        runtimes=frozenset({RuntimeKind.OLLAMA}),
+    )
+
+
+def _model(alias: str, memory_gb: float, *, node_id: str = "local", **overrides: object) -> Model:
+    defaults: dict[str, object] = {
+        "id": str(uuid.uuid4()),
+        "alias": alias,
+        "ref": f"{alias}:tag",
+        "runtime": RuntimeKind.OLLAMA,
+        "node_id": node_id,
+        "state": ModelState.LOADED,
+        "capabilities": frozenset({"chat"}),
+        "resource_profile": ResourceProfile(memory_gb=memory_gb, context_length=4096),
+    }
+    defaults.update(overrides)
+    return Model(**defaults)  # type: ignore[arg-type]
+
+
+async def test_intent_is_versioned_and_a_registry_save_does_not_revert_it(database_url):
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    model = _model("kept", 6)
+    try:
+        async with sessions() as session:
+            await PostgresNodeRepository(session).save(_node())
+            await PostgresModelRepository(session).save(model)
+            await session.commit()
+        async with sessions() as session:
+            stale = await PostgresModelRepository(session).get(model.id)
+        async with sessions() as session:
+            repo = PostgresModelRepository(session)
+            assert await repo.set_desired_residency(model.id, True) == 1
+            assert await repo.set_desired_residency(model.id, False) == 2
+            assert await repo.set_desired_residency("missing", True) is None
+            await session.commit()
+        async with sessions() as session:
+            # A provisioning merge or an edit made from an older read.
+            await PostgresModelRepository(session).save(replace(stale, alias="edited"))
+            await session.commit()
+        async with sessions() as session:
+            stored = await PostgresModelRepository(session).get(model.id)
+            assert stored.alias == "edited"
+            assert (stored.desired_resident, stored.desired_version) == (False, 2)
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture
+async def global_engine(database_url):
+    """The reconciler's adapters use the process-wide engine, as in the admin."""
+    await dispose_engine()
+    get_settings.cache_clear()
+    init_engine(get_settings())
+    yield
+    await dispose_engine()
+
+
+async def test_unknown_operation_blocks_the_node(global_engine):
+    async with session_scope() as session:
+        await PostgresNodeRepository(session).save(_node())
+    state = PostgresReconcilerState()
+    assert not await state.node_blocked("local")
+    async with session_scope() as session:
+        await session.execute(
+            text(
+                "INSERT INTO node_operations (node_id, op_id, kind, state, origin_generation, "
+                "origin_boot_id, owner_generation, submitted_at) VALUES "
+                "('local', 'op', 'load', 'outcome_unknown', 1, 'boot', 1, now())"
+            )
+        )
+    assert await state.node_blocked("local")
+
+
+async def test_a_second_reconciler_is_kept_off_the_node(global_engine):
+    serialisation = PostgresNodeSerialisation()
+    async with serialisation.hold("local") as first:
+        assert first
+        async with PostgresNodeSerialisation().hold("local") as second:
+            assert not second
+        async with serialisation.hold("other") as unrelated:
+            assert unrelated
+    async with PostgresNodeSerialisation().hold("local") as again:
+        assert again
+
+
+class SimulatedOllama(FakeRuntime):
+    """Holds what it was told to load, and says so when asked."""
+
+    def __init__(self, on_disk: set[str]) -> None:
+        super().__init__()
+        self.on_disk = on_disk
+        self.resident: dict[str, float] = {}
+
+    async def load(self, ref: str, *, context_length: int | None = None) -> None:
+        await super().load(ref, context_length=context_length)
+        self.resident[ref] = 1.0
+
+    async def unload(self, ref: str) -> None:
+        await super().unload(ref)
+        self.resident.pop(ref, None)
+
+    async def residency(self) -> RuntimeResidency | None:
+        return RuntimeResidency(resident=dict(self.resident), on_disk=frozenset(self.on_disk))
+
+
+async def test_restart_restores_the_desired_set_largest_first(global_engine):
+    gemma, qwen, embedder, unwanted = (
+        _model("gemma", 44),
+        _model("qwen", 6),
+        _model("embedder", 1),
+        _model("unwanted", 2),
+    )
+    async with session_scope() as session:
+        await PostgresNodeRepository(session).save(_node())
+        repo = PostgresModelRepository(session)
+        for model in (gemma, qwen, embedder, unwanted):
+            await repo.save(model)
+        for model in (gemma, qwen, embedder):
+            await repo.set_desired_residency(model.id, True)
+
+    # After the restart: everything on disk, nothing held.
+    runtime = SimulatedOllama({m.ref for m in (gemma, qwen, embedder, unwanted)})
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            runtimes={RuntimeKind.OLLAMA: runtime},
+            authz=RoleAuthorization(),
+            audit=build_audit(),
+            token_counter=None,
+        )
+    )
+    settings = get_settings().model_copy(
+        update={"residency_reconciler_enabled": True, "host_metrics_url": ""}
+    )
+    observer = HeartbeatObserver(app)  # type: ignore[arg-type]
+    reconciler = ReconcileResidency(
+        PostgresReconcilerState(),
+        observer,
+        ManageModelsRestorer(app, settings),  # type: ignore[arg-type]
+        PostgresNodeSerialisation(),
+        enabled=True,
+    )
+    node = _node()
+
+    await observer.observe(node)
+    assert [o.result for o in await reconciler.run_once()] == [PassResult.IDLE]
+    assert runtime.loaded == []
+    await asyncio.sleep(0.01)
+    await observer.observe(node)
+    (outcome,) = await reconciler.run_once()
+
+    assert outcome.result is PassResult.RESTORED
+    assert runtime.loaded == ["gemma:tag", "qwen:tag", "embedder:tag"]
+    # The registered context, nothing else chosen here.
+    assert runtime.load_context_lengths == [4096, 4096, 4096]
+    async with session_scope() as session:
+        rows = {m.alias: m for m in await PostgresModelRepository(session).list_all()}
+        audited = await session.execute(
+            text(
+                "SELECT count(*) FROM audit_log WHERE actor_id = :actor AND action = 'model.loaded'"
+            ),
+            {"actor": RESIDENCY_RECONCILER_ID},
+        )
+        assert audited.scalar_one() == 3
+    for alias in ("gemma", "qwen", "embedder"):
+        assert rows[alias].observed_state is ModelState.LOADED
+        assert rows[alias].desired_resident and rows[alias].desired_version == 1
+    assert rows["unwanted"].observed_state is ModelState.DOWNLOADED

@@ -27,6 +27,7 @@ from app.interfaces.http.schemas.admin_schemas import (
     DownloadJobResponse,
     ModelReferenceResponse,
     ModelResponse,
+    ResidencyIntentRequest,
     UpdateModelRequest,
 )
 
@@ -147,6 +148,25 @@ async def unload_model(
     models: Annotated[ManageModels, Depends(build_manage_models)],
 ) -> ModelResponse:
     return ModelResponse.of(await models.unload(actor, model_id))
+
+
+@router.put("/models/{model_id}/residency-intent", status_code=202)
+async def set_residency_intent(
+    model_id: str,
+    payload: ResidencyIntentRequest,
+    actor: Annotated[Actor, Depends(current_actor)],
+    models: Annotated[ManageModels, Depends(build_manage_models)],
+) -> ModelResponse:
+    """202: the intent is committed, nothing has been loaded or unloaded.
+
+    The cancellation that works whatever the runtime holds (#49 §3): after a
+    restart `unload` refuses a model that is not resident, and this is how an
+    operator still stops it from being restored. The residency reconciler acts
+    on the new value, and audits what it does, on its own schedule.
+    """
+    return ModelResponse.of(
+        await models.set_desired_residency(actor, model_id, payload.desired_resident)
+    )
 
 
 @router.post("/models/{model_id}/download", status_code=202)

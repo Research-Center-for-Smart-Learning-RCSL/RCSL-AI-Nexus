@@ -26,6 +26,7 @@ from app.domain.ports.repositories import (
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
 from app.domain.ports.token_counter_port import TokenCounterPort
 from app.domain.services.memory_budget_service import MemoryBudgetService
+from app.shared.clock import Clock, SystemClock
 
 from .state import DELETABLE_STATES, ModelStateCommitterPort
 
@@ -45,6 +46,9 @@ class ModelRegistryMixin:
         audit: AuditPort,
         tokens: TokenCounterPort | None = None,
         metrics: MetricsPort | None = None,
+        *,
+        observed_absence_frees_memory: bool = False,
+        clock: Clock | None = None,
     ) -> None:
         self._models = models
         self._nodes = nodes
@@ -56,6 +60,11 @@ class ModelRegistryMixin:
         self._audit = audit
         self._tokens = tokens
         self._metrics = metrics
+        # The final spec's occupancy rule (#49 §2). Wired to
+        # RESIDENCY_RECONCILER_ENABLED, so turning the reconciler on is also
+        # what changes how a load is budgeted; off, the budget is as before.
+        self._observed_absence_frees_memory = observed_absence_frees_memory
+        self._clock = clock or SystemClock()
 
     async def list_all(self, actor: Actor) -> list[Model]:
         self._authz.require(actor, Scope.MODEL_READ)

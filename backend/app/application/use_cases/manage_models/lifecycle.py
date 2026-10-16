@@ -5,13 +5,16 @@ from __future__ import annotations
 import logging
 from dataclasses import replace
 
+from app.application.audit_subject import reconciler_subject
 from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.audit import AuditAction
 from app.domain.entities.model import Model, ModelState
 from app.domain.exceptions import (
+    ModelNotFoundError,
     ModelStateConflictError,
 )
 from app.domain.ports.model_runtime_port import declared_context_for
+from app.domain.services.residency_reconciliation import charges_memory
 
 from .registry import ModelRegistryMixin
 from .state import _with_state
@@ -26,8 +29,59 @@ class ModelLifecycleMixin(ModelRegistryMixin):
         A refusal rather than a warning: on unified memory an over-commit does
         not fail cleanly, it drives the machine into swap and takes every other
         model down with it.
+
+        An operator's load is also the wish to keep the model resident, so it
+        records that intent (#49 §1). The write rides the request transaction:
+        a load that fails rolls it back and leaves the intent as it was.
         """
         self._authz.require(actor, Scope.MODEL_WRITE)
+        await self._require(model_id)
+        await self._models.set_desired_residency(model_id, True)
+        return await self._load(actor, model_id)
+
+    async def restore(self, model_id: str) -> Model:
+        """The residency reconciler's load: the same checks, budget and
+        runtime path as an operator's, under the reconciler's audit subject.
+
+        Unrouted and unscoped, and it never writes intent: a load already in
+        flight must not restore a flag the operator has since withdrawn
+        (#49 §3). The reconciler re-reads the intent once this returns.
+        """
+        return await self._load(reconciler_subject(), model_id)
+
+    async def release(self, model_id: str) -> Model:
+        """Unload weights the reconciler restored after their intent was
+        withdrawn. Like `restore`, it leaves the intent alone."""
+        return await self._unload(reconciler_subject(), model_id)
+
+    async def set_desired_residency(self, actor: Actor, model_id: str, desired: bool) -> Model:
+        """Change residency intent without touching the runtime (#49 §3).
+
+        This is the cancellation that does not depend on residency: after a
+        runtime restart the model is observed `downloaded`, which `unload`
+        refuses, yet the operator must still be able to stop it coming back.
+        It commits a new intent version and returns at once; the outcome is
+        `accepted`, not done. A restore already in flight is not interrupted,
+        but the reconciler re-reads the intent when it returns and unloads the
+        weights it just made resident, audited as its own `model.unloaded`.
+        Withdrawing intent never unloads a model that is resident now; that is
+        what `unload` is for.
+        """
+        self._authz.require(actor, Scope.MODEL_WRITE)
+        await self._require(model_id)
+        version = await self._models.set_desired_residency(model_id, desired)
+        if version is None:
+            raise ModelNotFoundError(detail=f"model {model_id} not found")
+        await self._audit.record(
+            actor,
+            AuditAction.MODEL_RESIDENCY_INTENT_CHANGED,
+            target=model_id,
+            outcome="accepted",
+            detail={"desired_resident": str(desired).lower(), "desired_version": str(version)},
+        )
+        return await self._require(model_id)
+
+    async def _load(self, actor: Actor, model_id: str) -> Model:
         model = await self._require(model_id)
 
         node = await self._require_node(model.node_id)
@@ -68,12 +122,11 @@ class ModelLifecycleMixin(ModelRegistryMixin):
         # holds (or is about to hold) its memory. LOADING is then committed
         # independently below, so a second load started moments later sees it
         # in this same count rather than a budget that ignores it.
-        self._budget.assert_can_load(
-            model,
-            node,
-            await self._models.list_occupying_memory(node.id),
-            live_free_gb=live_free_gb,
-        )
+        occupying = await self._models.list_occupying_memory(node.id)
+        if self._observed_absence_frees_memory:
+            now = self._clock.now()
+            occupying = [m for m in occupying if charges_memory(m, now)]
+        self._budget.assert_can_load(model, node, occupying, live_free_gb=live_free_gb)
 
         # Committed in its own transaction, not the request's. The request's
         # write would be invisible to a concurrent load until it commits at the
@@ -164,7 +217,14 @@ class ModelLifecycleMixin(ModelRegistryMixin):
             )
 
     async def unload(self, actor: Actor, model_id: str) -> Model:
+        """Also withdraws residency intent, in the request transaction, so a
+        refused or failed unload leaves the intent as it was."""
         self._authz.require(actor, Scope.MODEL_WRITE)
+        await self._require(model_id)
+        await self._models.set_desired_residency(model_id, False)
+        return await self._unload(actor, model_id)
+
+    async def _unload(self, actor: Actor, model_id: str) -> Model:
         model = await self._require(model_id)
 
         # Observation over intent here too, and it is the mirror of the defect

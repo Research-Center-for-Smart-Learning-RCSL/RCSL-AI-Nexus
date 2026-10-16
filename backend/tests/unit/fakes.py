@@ -314,6 +314,14 @@ class FakeModels:
             observed_at=observed_at if state else None,
         )
 
+    async def set_desired_residency(self, model_id: str, desired: bool) -> int | None:
+        current = self.rows.get(model_id)
+        if current is None:
+            return None
+        version = current.desired_version + 1
+        self.rows[model_id] = replace(current, desired_resident=desired, desired_version=version)
+        return version
+
     async def delete(self, model_id: str) -> None:
         self.rows.pop(model_id, None)
 

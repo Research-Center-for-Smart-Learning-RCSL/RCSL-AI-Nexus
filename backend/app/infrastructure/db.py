@@ -60,6 +60,14 @@ def init_engine(settings: Settings) -> AsyncEngine:
     return _engine
 
 
+def get_engine() -> AsyncEngine:
+    """For the few callers that need a connection outside any session, such
+    as a session advisory lock that must outlive its transactions."""
+    if _engine is None:
+        raise RuntimeError("init_engine has not been called")
+    return _engine
+
+
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
     if _session_factory is None:
         raise RuntimeError("init_engine has not been called")
