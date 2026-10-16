@@ -82,3 +82,5 @@ class KnowledgeTenantEpochRow(Base):
     index_requires_rebuild: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+
+    index_rebuilding: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")

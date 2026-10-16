@@ -328,10 +328,19 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
         if isinstance(submitted, Refused):
             return _refused(submitted)
         text: str | None = None
-        async for event in submitted.events():
-            if event.get("type") == "summary":
-                text = event["text"]
-        await submitted.settled
+        try:
+            async with asyncio.timeout(SUMMARY_TIMEOUT_SECONDS):
+                async for event in submitted.events():
+                    if event.get("type") == "summary":
+                        text = event["text"]
+                await asyncio.shield(submitted.settled)
+        except TimeoutError:
+            # Stop waiting, never cancel the dispatcher's owned drain task.
+            return JSONResponse(
+                status_code=503,
+                content={"op_id": envelope.op_id, "refused": "summary_wait_deadline"},
+                headers={"Retry-After": "2"},
+            )
         operation = await agent.store.observe(envelope.op_id)
         if operation is None:
             raise HTTPException(status_code=500, detail="summary attempt vanished")
@@ -499,6 +508,7 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
         return {
             "manifest_digest": measured.identity,
             "declared_context_length": measured.declared_context,
+            "embedding_manifest_pin": True,
         }
 
     @app.get("/v1/attempts/{op_id}", dependencies=authorised)

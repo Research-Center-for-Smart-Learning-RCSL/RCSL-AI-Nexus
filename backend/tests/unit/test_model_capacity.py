@@ -115,3 +115,60 @@ def test_capacity_round_trip_preserves_agent_owned_manifest_pin() -> None:
     assert "manifest_digest" not in row.__dict__
     row.manifest_digest = model.manifest_digest
     assert model_to_domain(row) == model
+
+
+async def test_capacity_cache_is_shared_by_calls_but_new_manifest_misses(monkeypatch):
+    calls = []
+    manifest = "a"
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(
+            200, json={"declared_context_length": 4096, "manifest_digest": manifest}
+        )
+
+    runtime = NodeAgentRuntime(
+        "http://agent", "token", timeout_s=1, transport=httpx.MockTransport(respond)
+    )
+    assert await declared_context_for(runtime, "model", None, manifest="a") == 4096
+    assert await declared_context_for(runtime, "model", None, manifest="a") == 4096
+    assert len(calls) == 1
+    manifest = "b"
+    assert await declared_context_for(runtime, "model", None, manifest="b") == 4096
+    assert len(calls) == 2
+    for key, (_, value) in list(runtime._capacities.items()):
+        runtime._capacities[key] = (0, value)
+    assert await declared_context_for(runtime, "model", None, manifest="b") == 4096
+    assert len(calls) == 3
+
+
+async def test_load_preserves_concurrent_admin_edits_and_does_not_restore_old_observation():
+    model = make_model(observed_state=ModelState.DOWNLOADED, observed_memory_gb=3)
+    harness = Harness([model], tokens=DeclaringCounter(PROFILE.context_length))
+
+    async def concurrent_edit(ref, **kwargs):
+        current = await harness.models.get(model.id)
+        await harness.models.save(
+            replace(current, alias="renamed", capabilities=frozenset({"assist"}))
+        )
+
+    harness.runtime.load = concurrent_edit
+    result = await harness.use_case.load(ADMIN, model.id)
+    stored = await harness.models.get(model.id)
+    assert stored.alias == result.alias == "renamed"
+    assert stored.capabilities == frozenset({"assist"})
+    assert stored.observed_state is None and stored.observed_memory_gb is None
+    assert stored.capacity_validated and stored.state is ModelState.LOADED
+
+
+async def test_capacity_result_does_not_validate_a_concurrently_changed_profile():
+    model = make_model()
+    harness = Harness([model], tokens=DeclaringCounter(PROFILE.context_length))
+
+    async def concurrent_edit(ref, **kwargs):
+        current = await harness.models.get(model.id)
+        await harness.models.save(replace(current, resource_profile=ResourceProfile(20, 16384)))
+
+    harness.runtime.load = concurrent_edit
+    await harness.use_case.load(ADMIN, model.id)
+    assert not (await harness.models.get(model.id)).capacity_validated

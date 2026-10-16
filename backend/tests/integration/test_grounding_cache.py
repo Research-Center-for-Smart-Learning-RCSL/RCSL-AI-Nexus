@@ -45,3 +45,53 @@ async def test_first_lookup_returns_only_the_newest_available_record():
         for key in (keys[1], keys[255]):
             await client.delete(key)
         await client.close()
+
+
+async def test_atomic_quotas_bound_concurrent_tenants_and_reject_oversized_records(monkeypatch):
+    from app.domain.services.grounding_records import MAX_GROUNDING_RECORD_BYTES
+
+    monkeypatch.setattr("app.adapters.cache.redis_adapter.MAX_GROUNDING_RECORDS_PER_TENANT", 2)
+    monkeypatch.setattr("app.adapters.cache.redis_adapter.MAX_GROUNDING_RECORDS_TOTAL", 3)
+    client = RedisCache(REDIS_URL or "")
+    prefix = f"grounding-test:{uuid.uuid4()}"
+    monkeypatch.setattr(
+        "app.adapters.cache.redis_adapter.GROUNDING_QUOTA_PREFIX", prefix + ":quota"
+    )
+    try:
+        assert not await client.set_grounding_if_absent(
+            "a", prefix, "x" * (MAX_GROUNDING_RECORD_BYTES + 1), 30
+        )
+        won = await asyncio.gather(
+            *[client.set_grounding_if_absent("a", f"{prefix}:{i}", "record", 30) for i in range(8)]
+        )
+        assert sum(won) == 2
+        assert await client.set_grounding_if_absent("b", f"{prefix}:b", "record", 30)
+        assert not await client.set_grounding_if_absent("c", f"{prefix}:c", "record", 30)
+        assert await client._redis.zcard(prefix + ":quota:global") == 3
+    finally:
+        keys = [key async for key in client._redis.scan_iter(match=prefix + "*")]
+        if keys:
+            await client._redis.delete(*keys)
+        await client.close()
+
+
+async def test_expired_quota_reopens_without_shortening_other_records(monkeypatch):
+    monkeypatch.setattr("app.adapters.cache.redis_adapter.MAX_GROUNDING_RECORDS_TOTAL", 2)
+    client = RedisCache(REDIS_URL or "")
+    prefix = f"grounding-test:{uuid.uuid4()}"
+    monkeypatch.setattr(
+        "app.adapters.cache.redis_adapter.GROUNDING_QUOTA_PREFIX", prefix + ":quota"
+    )
+    try:
+        assert await client.set_grounding_if_absent("long", prefix + ":long", "record", 60)
+        assert await client.set_grounding_if_absent("short", prefix + ":short", "record", 1)
+        assert await client._redis.ttl(prefix + ":quota:global") > 50
+        await asyncio.sleep(1.05)
+        assert await client.set_grounding_if_absent("new", prefix + ":new", "record", 30)
+        assert await client.get(prefix + ":long") == "record"
+        assert not await client.set_grounding_if_absent("new2", prefix + ":new2", "record", 30)
+    finally:
+        keys = [key async for key in client._redis.scan_iter(match=prefix + "*")]
+        if keys:
+            await client._redis.delete(*keys)
+        await client.close()

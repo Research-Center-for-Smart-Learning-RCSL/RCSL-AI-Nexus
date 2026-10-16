@@ -259,3 +259,17 @@ async def test_the_api_key_is_sent_on_every_request(monkeypatch) -> None:
     await subject.search([0.1], limit=1)
 
     assert seen == ["a-key", "a-key"]
+
+
+async def test_offline_rebuild_resets_only_its_tenants_index(recorder):
+    await store(TENANT_A).reset_index()
+    assert recorder.calls == [("DELETE", f"/collections/{COLLECTION_PREFIX}{TENANT_A}", None, None)]
+
+
+async def test_offline_rebuild_does_not_ignore_failed_delete(monkeypatch):
+    async def fail(self, method, path, **kwargs):
+        return httpx.Response(503, json={"status": "error"})
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", fail)
+    with pytest.raises(VectorStoreError):
+        await store().reset_index()

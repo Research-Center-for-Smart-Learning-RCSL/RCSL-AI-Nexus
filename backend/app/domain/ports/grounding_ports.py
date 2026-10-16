@@ -14,6 +14,7 @@ class KnowledgeEpoch:
     mutations_in_progress: int
     embedding_identity: str | None = None
     index_requires_rebuild: bool = False
+    index_rebuilding: bool = False
 
     @property
     def clean(self) -> bool:
@@ -41,6 +42,8 @@ class GroundingRecordStorePort(Protocol):
         """One bounded round trip, returning only the most recent stored chain."""
         ...
 
-    async def set_if_absent(self, key: str, value: str, ttl_seconds: int) -> bool:
-        """Atomic SET NX. Losers read and replay the committed winner."""
+    async def set_grounding_if_absent(
+        self, bucket: str, key: str, value: str, ttl_seconds: int
+    ) -> bool:
+        """Atomic SET NX with tenant/global quotas; false also means quota full."""
         ...

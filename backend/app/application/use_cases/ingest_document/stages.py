@@ -172,8 +172,10 @@ class IngestionStagesMixin(IngestionClaimsMixin):
         identity = None
         if self._epochs:
             current = await self._epochs.read(None)
-            if current and current.index_requires_rebuild:
-                raise NoAvailableModelError(detail="legacy knowledge index requires a full rebuild")
+            if current and current.index_rebuilding:
+                raise NoAvailableModelError(
+                    detail="knowledge index is undergoing an operator rebuild"
+                )
             required_identity = current.embedding_identity if current else None
             target, runtime = await self._embedder.resolve(required_identity=required_identity)
             identity = embedding_identity(target)

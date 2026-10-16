@@ -93,7 +93,7 @@ class Search:
 
     async def execute_or_empty(self, actor, query, **kwargs):
         self.calls += 1
-        assert kwargs["expected_identity"] == SPACE
+        assert kwargs.get("expected_identity", SPACE) == SPACE
         if self.start:
             self.start.set()
             await self.release.wait()
@@ -192,14 +192,16 @@ async def test_deletion_begin_mid_retrieval_prevents_publication_and_replay_afte
     search.release.set()
     assert await task == (conversation(), [])
     assert not cache._values
-    # No replay or retrieval while a deletion's Begin is outstanding.
-    assert await ground.execute(ACTOR, conversation()) == (conversation(), [])
-    assert search.calls == 1
+    # Dirty fences stop replay/recording; current retrieval is still available.
+    search.passages = [passage("current live result")]
+    _, live = await ground.execute(ACTOR, conversation())
+    assert live[0].text == "current live result"
+    assert search.calls == 2 and not cache._values
     search.start = None
     search.passages = []
     epochs.end("collection-a")
     assert await ground.execute(ACTOR, conversation()) == (conversation(), [])
-    assert search.calls == 2
+    assert search.calls == 3
 
 
 async def test_deletion_end_invalidates_already_stored_chain():
@@ -282,8 +284,10 @@ async def test_rebuild_flag_disables_replay_even_with_a_previous_identity():
     ground, search, _, epochs = setup()
     await ground.execute(ACTOR, conversation())
     epochs.tenant = replace(epochs.tenant, index_requires_rebuild=True)
-    assert await ground.execute(ACTOR, conversation()) == (conversation(), [])
-    assert search.calls == 1
+    search.passages = [passage("live legacy result")]
+    _, citations = await ground.execute(ACTOR, conversation())
+    assert citations[0].text == "live legacy result"
+    assert search.calls == 2
 
 
 async def test_context_and_citations_are_byte_capped_and_nonce_is_stable_server_keyed():
@@ -334,3 +338,19 @@ async def test_multibyte_passages_are_pruned_to_the_full_record_byte_cap():
     assert grounded != conversation()
     assert 0 < len(citations) < 20
     assert len(next(iter(cache._values.values()))[0].encode()) <= MAX_GROUNDING_RECORD_BYTES
+
+
+async def test_full_grounding_quota_preserves_existing_chain_without_new_context(monkeypatch):
+    monkeypatch.setattr("app.adapters.cache.redis_adapter.MAX_GROUNDING_RECORDS_PER_TENANT", 1)
+    ground, search, cache, _ = setup()
+    first, _ = await ground.execute(ACTOR, conversation())
+    later = conversation() + [
+        Message(MessageRole.ASSISTANT, "answer"),
+        Message(MessageRole.USER, "next"),
+    ]
+    search.passages = [passage("must not be added without persistence")]
+    result, citations = await ground.execute(ACTOR, later)
+    assert result[: len(first)] == first
+    assert len(cache._values) == 1
+    assert citations[0].text == "reference" and len(citations) == 1
+    assert all("must not be added" not in m.content for m in result)

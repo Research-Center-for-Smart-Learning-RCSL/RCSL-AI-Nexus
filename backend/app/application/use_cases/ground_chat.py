@@ -97,10 +97,23 @@ class GroundChat:
                 # Shared-state availability is optional grounding, never a
                 # reason to reuse stale content or fail an otherwise valid chat.
                 logger.warning("grounding_replay_unavailable reason=%s", type(exc).__name__)
-                return list(messages), []
+                try:
+                    return await self._fresh_ground(actor, messages, collection_id, top_k)
+                except Exception:
+                    # Fresh retrieval may also need the unavailable epoch DB.
+                    return list(messages), []
 
+        return await self._fresh_ground(actor, messages, collection_id, top_k)
+
+    async def _fresh_ground(
+        self, actor: Actor, messages: list[Message], collection_id: str | None, top_k: int
+    ) -> tuple[list[Message], list[RetrievedPassage]]:
         passages = await self._search.execute_or_empty(
-            actor, query, scope=Scope.CHAT_USE, collection_id=collection_id, top_k=top_k
+            actor,
+            query_from(messages),
+            scope=Scope.CHAT_USE,
+            collection_id=collection_id,
+            top_k=top_k,
         )
         if not passages:
             return list(messages), []
@@ -121,13 +134,13 @@ class GroundChat:
         if self._epochs is None or self._records is None or not self._server_key:
             raise RuntimeError("stable grounding requires shared epochs, records and server key")
         before = await self._epochs.read(collection_id)
-        if (
-            before is None
-            or not before.clean
-            or before.index_requires_rebuild
-            or before.embedding_identity is None
+        if before is None or (
+            before.embedding_identity is None and not before.index_requires_rebuild
         ):
             return list(messages), []
+        if not before.clean or before.index_requires_rebuild or before.embedding_identity is None:
+            # Epoch/provenance fences govern replay, not live retrieval.
+            return await self._fresh_ground(actor, messages, collection_id, top_k)
         top_k = max(1, min(top_k, MAX_TOP_K))
         identity = keyed_digest(
             self._server_key,
@@ -199,12 +212,17 @@ class GroundChat:
                 )
                 raw = encode_chain(proposal)
             if len(raw.encode()) <= MAX_GROUNDING_RECORD_BYTES:
-                won = await self._records.set_if_absent(latest_key, raw, GROUNDING_RECORD_TTL)
+                bucket = keyed_digest(self._server_key, "grounding-tenant", actor.tenant_id)
+                won = await self._records.set_grounding_if_absent(
+                    bucket, latest_key, raw, GROUNDING_RECORD_TTL
+                )
                 if won:
                     anchors = proposal
                 else:
                     winner = await self._records.get(latest_key)
-                    anchors = decode_chain(winner, messages) if winner is not None else []
+                    if winner is not None:
+                        anchors = decode_chain(winner, messages)
+                    # Quota full: keep the committed prefix, add no new anchor.
             # An over-cap contender replays existing history only; it never
             # adds context that cannot be persisted for the following turn.
         if await self._epochs.read(collection_id) != before:

@@ -32,7 +32,9 @@ class ModelLifecycleMixin(ModelRegistryMixin):
 
         node = await self._require_node(model.node_id)
         runtime = self._runtime_on(node, model.runtime)
-        declared = await declared_context_for(runtime, model.ref, self._tokens)
+        declared = await declared_context_for(
+            runtime, model.ref, self._tokens, manifest=model.manifest_digest
+        )
         model = replace(model, capacity_validated=declared is not None)
 
         # The observation outranks the intent, the same rule and for the same
@@ -45,8 +47,8 @@ class ModelLifecycleMixin(ModelRegistryMixin):
         # pressing Load produced no request in its log.
         effective = model.observed_state or model.state
         if effective is ModelState.LOADED:
-            await self._models.save(model)
-            return model
+            await self._models.set_capacity_validated(model, model.capacity_validated)
+            return await self._require(model.id)
         if effective is not ModelState.DOWNLOADED:
             raise ModelStateConflictError(
                 detail=f"model {model.id} is {effective}; it must be downloaded first"
@@ -101,8 +103,8 @@ class ModelLifecycleMixin(ModelRegistryMixin):
         # not claim it did. Reconciliation at the next deploy would move a
         # LOADING left by such a failure to ERROR.
         await self._models.set_state(model.id, ModelState.LOADED)
-        model = _with_state(model, ModelState.LOADED)
-        await self._models.save(model)
+        await self._models.set_capacity_validated(model, model.capacity_validated)
+        model = await self._require(model.id)
         await self._audit.record(actor, AuditAction.MODEL_LOADED, target=model.id)
         await self._prepare_token_counter(model)
         return model

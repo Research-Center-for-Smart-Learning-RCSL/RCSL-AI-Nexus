@@ -73,10 +73,14 @@ class SearchKnowledge:
 
         if expected_identity is None and self._epochs is not None:
             epoch = await self._epochs.read(collection_id)
-            if epoch is None or not epoch.clean or epoch.index_requires_rebuild:
+            if epoch is None:
                 return []
+            if epoch.index_rebuilding:
+                raise NoAvailableModelError(
+                    detail="knowledge index is undergoing an operator rebuild"
+                )
             expected_identity = epoch.embedding_identity
-            if expected_identity is None:
+            if expected_identity is None and not epoch.index_requires_rebuild:
                 raise NoAvailableModelError(
                     detail="knowledge index embedding identity is unresolved"
                 )

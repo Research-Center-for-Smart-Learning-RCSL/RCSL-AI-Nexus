@@ -45,8 +45,9 @@ class PostgresKnowledgeEpochs:
                     KnowledgeEpoch(
                         tenant.epoch,
                         tenant.mutations_in_progress,
-                        tenant.embedding_identity if not tenant.index_requires_rebuild else None,
+                        tenant.embedding_identity,
                         tenant.index_requires_rebuild,
+                        tenant.index_rebuilding,
                     )
                     if tenant
                     else KnowledgeEpoch(0, 0)
@@ -60,6 +61,7 @@ class PostgresKnowledgeEpochs:
                         KnowledgeCollectionRow.mutations_in_progress,
                         KnowledgeTenantEpochRow.embedding_identity,
                         KnowledgeTenantEpochRow.index_requires_rebuild,
+                        KnowledgeTenantEpochRow.index_rebuilding,
                     )
                     .select_from(KnowledgeCollectionRow)
                     .outerjoin(
@@ -74,12 +76,13 @@ class PostgresKnowledgeEpochs:
             ).one_or_none()
             if row is None:
                 return None
-            epoch, mutations, identity, requires_rebuild = row
+            epoch, mutations, identity, requires_rebuild, rebuilding = row
             return KnowledgeEpoch(
                 epoch,
                 mutations,
-                identity if not requires_rebuild else None,
+                identity,
                 bool(requires_rebuild),
+                bool(rebuilding),
             )
 
     @asynccontextmanager
@@ -157,7 +160,7 @@ class PostgresKnowledgeEpochs:
                 update(KnowledgeTenantEpochRow)
                 .where(
                     KnowledgeTenantEpochRow.tenant_id == self._tenant,
-                    KnowledgeTenantEpochRow.index_requires_rebuild.is_(False),
+                    KnowledgeTenantEpochRow.index_rebuilding.is_(False),
                     (KnowledgeTenantEpochRow.embedding_identity.is_(None))
                     | (KnowledgeTenantEpochRow.embedding_identity == identity),
                 )
@@ -165,7 +168,5 @@ class PostgresKnowledgeEpochs:
                 .returning(KnowledgeTenantEpochRow.tenant_id)
             )
             if accepted is None:
-                raise NoAvailableModelError(
-                    detail="knowledge index space is incompatible or requires a full legacy rebuild"
-                )
+                raise NoAvailableModelError(detail="knowledge index space is incompatible")
             await session.commit()

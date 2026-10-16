@@ -178,6 +178,8 @@ async def declared_context_for(
     runtime: ModelRuntimePort | None,
     ref: str,
     tokens: TokenCounterPort | None,
+    *,
+    manifest: str | None = None,
 ) -> int | None:
     """Resolve capacity on the selected host, never from a different node's GGUF.
 
@@ -186,7 +188,15 @@ async def declared_context_for(
     to store the row or refuse inference.
     """
     read = getattr(runtime, "declared_context_length", None)
+    pinned_read = getattr(runtime, "declared_context_for_manifest", None)
     try:
+        if callable(pinned_read):
+            value = await pinned_read(ref, manifest)
+            return (
+                value
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0
+                else None
+            )
         value = (
             await read(ref)
             if callable(read)

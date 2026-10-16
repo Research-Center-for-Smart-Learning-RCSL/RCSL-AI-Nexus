@@ -26,8 +26,10 @@ retry, and never spliced with output from anywhere else.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 import uuid
 from collections.abc import AsyncGenerator, Sequence
 from typing import Any
@@ -37,7 +39,10 @@ import httpx
 from app.adapters.runtime.ollama_adapter import OllamaAdapter
 from app.adapters.runtime.ollama_adapter.decoding import ChatStreamDecoder
 from app.adapters.runtime.ollama_adapter.lifecycle import residency_from
-from app.application.use_cases.route_chat_request.compaction_tier2 import SUMMARY_OUTPUT_TOKENS
+from app.application.use_cases.route_chat_request.compaction_tier2 import (
+    SUMMARY_OUTPUT_TOKENS,
+    SUMMARY_TIMEOUT_SECONDS,
+)
 from app.domain.entities.attempt import AttemptIdentity, current_attempt
 from app.domain.entities.chat import (
     CompletionChunk,
@@ -84,6 +89,8 @@ class NodeAgentRuntime:
         self._headers = {"Authorization": f"Bearer {token}"}
         self._timeout = httpx.Timeout(timeout_s, connect=5.0)
         self._transport = transport
+        self._capacities: dict[tuple[str, str | None], tuple[float, dict[str, Any]]] = {}
+        self._capacity_lock = asyncio.Lock()
         # Grammar only, no I/O: what a reference is does not depend on who sends.
         self._grammar = OllamaAdapter(base_url="http://unused.invalid")
 
@@ -95,13 +102,35 @@ class NodeAgentRuntime:
             transport=self._transport,
         )
 
-    async def declared_context_length(self, ref: str) -> int | None:
-        """The selected agent's current metadata, including before registration."""
+    async def _capacity(self, ref: str, manifest: str | None = None) -> dict[str, Any]:
         self.validate_ref(ref)
-        async with self._client() as client:
-            response = await client.get("/v1/model-capacity", params={"ref": ref})
-            response.raise_for_status()
-            value = response.json().get("declared_context_length")
+        key = (ref, manifest)
+        async with self._capacity_lock:
+            cached = self._capacities.get(key)
+            if cached is not None and cached[0] > time.monotonic():
+                return cached[1]
+            # Short, bounded cache per node/ref/registered manifest. A new pin
+            # misses immediately; agent admission still measures every send.
+            async with self._client() as client:
+                response = await client.get("/v1/model-capacity", params={"ref": ref}, timeout=5.0)
+                response.raise_for_status()
+                document: dict[str, Any] = response.json()
+            for old in list(self._capacities):
+                if old[0] == ref or self._capacities[old][0] <= time.monotonic():
+                    del self._capacities[old]
+            if len(self._capacities) >= 256:
+                del self._capacities[next(iter(self._capacities))]
+            self._capacities[key] = (time.monotonic() + 60.0, document)
+            return document
+
+    async def declared_context_length(self, ref: str) -> int | None:
+        return await self.declared_context_for_manifest(ref, None)
+
+    async def declared_context_for_manifest(self, ref: str, manifest: str | None) -> int | None:
+        document = await self._capacity(ref, manifest)
+        if manifest is not None and document.get("manifest_digest") != manifest:
+            return None
+        value = document.get("declared_context_length")
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             return value
         return None
@@ -122,6 +151,15 @@ class NodeAgentRuntime:
     # -- generation --------------------------------------------------------
 
     async def summarise(self, ref: str, messages: Sequence[Message], context_length: int) -> str:
+        try:
+            async with asyncio.timeout(SUMMARY_TIMEOUT_SECONDS):
+                return await self._summarise(ref, messages, context_length)
+        except TimeoutError as exc:
+            raise NoAvailableModelError(
+                detail="summary caller wait expired; agent is draining"
+            ) from exc
+
+    async def _summarise(self, ref: str, messages: Sequence[Message], context_length: int) -> str:
         """The agent constructs, counts and executes the Tier 2 prompt.
 
         A fresh operation identity keeps this internal summary separate from
@@ -362,6 +400,16 @@ class NodeAgentRuntime:
 
     async def embed(self, ref: str, texts: Sequence[str]) -> list[list[float]]:
         self.validate_ref(ref)
+        expected = current_embedding_manifest.get()
+        if expected is not None:
+            try:
+                capabilities = await self._capacity(ref, expected)
+            except httpx.HTTPError as exc:
+                raise NoAvailableModelError(
+                    detail="agent manifest-pin capability unavailable"
+                ) from exc
+            if capabilities.get("embedding_manifest_pin") is not True:
+                raise NoAvailableModelError(detail="agent does not enforce embedding manifest pins")
         identity = self._identity()
         body = encode_embedding(
             EmbeddingRequest(
@@ -434,6 +482,7 @@ class NodeAgentRuntime:
         whether the pull completed, and only then does this return normally.
         """
         self.validate_ref(ref)
+        self._capacities.clear()
         op_id = str(uuid.uuid4())
         body = encode_lifecycle(LifecycleRequest(op_id=op_id, ref=ref, context_length=None))
         async with self._client() as client:
@@ -488,6 +537,7 @@ class NodeAgentRuntime:
 
     async def _lifecycle(self, action: str, ref: str, context_length: int | None) -> None:
         self.validate_ref(ref)
+        self._capacities.clear()
         op_id = str(uuid.uuid4())
         body = encode_lifecycle(
             LifecycleRequest(op_id=op_id, ref=ref, context_length=context_length)

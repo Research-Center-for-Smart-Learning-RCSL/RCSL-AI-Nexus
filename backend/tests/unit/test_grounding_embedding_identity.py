@@ -144,3 +144,34 @@ async def test_indexing_refuses_a_changed_manifest_before_begin_or_vector_public
         await context.use_case._index(document(), "document text", "job")
     assert epochs.tenant.clean and epochs.tenant.epoch == 0
     assert not context.vectors.points and not runtime.calls
+
+
+@pytest.mark.parametrize("dirty,legacy", [(1, False), (0, True), (2, True)])
+async def test_dirty_or_legacy_epochs_do_not_disable_current_search(dirty, legacy):
+    from tests.unit.test_grounding_replay import Epochs
+
+    pinned = replace(EMBEDDER, manifest_digest="exact")
+    use_case, runtime = embedder([pinned], POLICY)
+    epochs = Epochs()
+    epochs.tenant = replace(
+        epochs.tenant,
+        mutations_in_progress=dirty,
+        index_requires_rebuild=legacy,
+        embedding_identity=embedding_identity(pinned),
+    )
+    search = SearchKnowledge(FakeVectorStore(), use_case, RoleAuthorization(), epochs)
+    await search.execute(PLAIN_USER, "question", scope=Scope.CHAT_USE)
+    assert runtime.calls == [["question"]]
+    assert runtime.expected == ["exact"]
+
+
+async def test_unpinned_legacy_index_keeps_pre_upgrade_retrieval():
+    from tests.unit.test_grounding_replay import Epochs
+
+    use_case, runtime = embedder([replace(EMBEDDER, manifest_digest="exact")], POLICY)
+    epochs = Epochs()
+    epochs.tenant = replace(epochs.tenant, index_requires_rebuild=True, embedding_identity=None)
+    await SearchKnowledge(FakeVectorStore(), use_case, RoleAuthorization(), epochs).execute(
+        PLAIN_USER, "question", scope=Scope.CHAT_USE
+    )
+    assert runtime.calls == [["question"]]

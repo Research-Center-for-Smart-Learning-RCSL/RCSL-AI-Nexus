@@ -34,6 +34,10 @@ class ModelRepositoryPort(Protocol):
 
     async def save(self, model: Model) -> None: ...
 
+    async def set_capacity_validated(self, model: Model, validated: bool) -> None:
+        """Update only capacity, if ref/node/context/manifest still match."""
+        ...
+
     async def set_state(self, model_id: str, state: ModelState) -> None:
         """Write intent, and clear the observation that now predates it.
 

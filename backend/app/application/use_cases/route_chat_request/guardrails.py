@@ -99,7 +99,9 @@ class PromptGuardrailsMixin(RouteChatDependencies):
         """
         registered = target.resource_profile.context_length
         runtime = runtime_for(self._runtimes, node, target.runtime) if node is not None else None
-        declared = await declared_context_for(runtime, target.ref, self._tokens)
+        declared = await declared_context_for(
+            runtime, target.ref, self._tokens, manifest=target.manifest_digest
+        )
         if declared and registered > 0:
             return min(registered, declared)
         raise NoAvailableModelError(detail="capacity unresolved for the selected target")

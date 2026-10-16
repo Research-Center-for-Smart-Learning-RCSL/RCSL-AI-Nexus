@@ -161,7 +161,7 @@ async def test_same_dimensions_cannot_change_the_persisted_embedding_space(epoch
     assert (await epochs.read(None)).embedding_identity == SPACE
 
 
-async def test_legacy_untyped_index_cannot_be_adopted_by_first_new_upload(epochs_context):
+async def test_legacy_upload_pins_future_writes_without_claiming_old_provenance(epochs_context):
     sessions, tenant, collection = epochs_context
     epochs = PostgresKnowledgeEpochs(sessions, tenant)
     async with sessions() as session:
@@ -169,9 +169,10 @@ async def test_legacy_untyped_index_cannot_be_adopted_by_first_new_upload(epochs
         await session.commit()
     current = await epochs.read(None)
     assert current.index_requires_rebuild and current.embedding_identity is None
-    with pytest.raises(NoAvailableModelError):
-        await epochs.bind_embedding_identity(SPACE)
-    assert (await epochs.read(collection)).embedding_identity is None
+    await epochs.bind_embedding_identity(SPACE)
+    current = await epochs.read(collection)
+    assert current.embedding_identity == SPACE
+    assert current.index_requires_rebuild  # Still legacy: no immutable replay.
 
 
 async def test_another_tenant_cannot_observe_or_fence_this_collection(epochs_context):
@@ -187,3 +188,47 @@ async def test_another_tenant_cannot_observe_or_fence_this_collection(epochs_con
         assert (await ours.read(None)).clean
         assert (await ours.read(collection)).epoch == 0
     assert (await ours.read(collection)).epoch == 0
+
+
+async def test_migration_marks_existing_documents_as_legacy_without_a_rebuild_in_progress(
+    epochs_context, database_url
+):
+    from alembic import command
+    from tests.integration.conftest import _alembic_config
+
+    sessions, tenant, collection = epochs_context
+    async with sessions() as session:
+        await PostgresKnowledgeRepository(session, tenant).save_document(
+            KnowledgeDocument(str(uuid.uuid4()), tenant, collection, "old.txt", "text/plain", 1)
+        )
+        await session.commit()
+    config = _alembic_config(database_url)
+    await asyncio.to_thread(command.downgrade, config, "f1b6c8d39a20")
+    await asyncio.to_thread(command.upgrade, config, "head")
+    current = await PostgresKnowledgeEpochs(sessions, tenant).read(None)
+    assert current.index_requires_rebuild and not current.index_rebuilding
+    assert current.clean and current.embedding_identity is None
+
+
+async def test_legacy_tenant_can_publish_new_or_reindexed_document(epochs_context):
+    from dataclasses import replace
+
+    from tests.unit.manage_knowledge_fixtures import build_ingest, document
+    from tests.unit.test_embedding_and_search import EMBEDDER, POLICY
+    from tests.unit.test_grounding_embedding_identity import embedder
+
+    sessions, tenant, collection = epochs_context
+    async with sessions() as session:
+        session.add(KnowledgeTenantEpochRow(tenant_id=tenant, index_requires_rebuild=True))
+        await session.commit()
+    doc = replace(document(), tenant_id=tenant, collection_id=collection)
+    context = build_ingest(doc)
+    context.use_case._embedder, runtime = embedder(
+        [replace(EMBEDDER, manifest_digest="exact")], POLICY
+    )
+    context.use_case._epochs = PostgresKnowledgeEpochs(sessions, tenant)
+    assert await context.use_case._index(doc, "new source text", "job") == 1
+    assert runtime.calls and context.vectors.points
+    current = await context.use_case._epochs.read(None)
+    assert current.clean and current.embedding_identity is not None
+    assert current.index_requires_rebuild

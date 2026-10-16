@@ -172,8 +172,9 @@ async def test_summary_output_budget_refuses_after_terminal_evidence(text, outpu
     assert not sink.events
 
 
-async def test_summary_execution_timeout_is_uncertain_and_blocks_the_node():
-    relay = SummaryRelay(hold=asyncio.Event())
+async def test_summary_deadline_drains_to_failure_without_blocking_the_node():
+    release = asyncio.Event()
+    relay = SummaryRelay(hold=release)
     store = MemoryStore()
     dispatcher = Dispatcher(store)
     attempt = await dispatcher.submit(
@@ -181,10 +182,17 @@ async def test_summary_execution_timeout_is_uncertain_and_blocks_the_node():
         "summary",
         bounded_summary(relay.chat({}), Counter(), "ref", timeout_s=0.01),
     )
-    outcome = await attempt.settled
-    assert isinstance(outcome, Uncertain) and outcome.reason == "summary_deadline"
-    assert store.ops["summary"].state == "outcome_unknown"
-    assert dispatcher.state.value == "blocked"
+    await relay.started.wait()
+    await asyncio.sleep(0.02)
+    assert not attempt.settled.done()
+    assert store.ops["summary"].state == "running"
+    assert dispatcher.state.value == "serving"
+    release.set()
+    outcome = await asyncio.wait_for(attempt.settled, 1)
+    assert isinstance(outcome, RuntimeRefused) and outcome.reason == "summary_deadline"
+    assert store.ops["summary"].state == "failed"
+    assert dispatcher.state.value == "serving"
+    assert await dispatcher.summary_admission_refusal() is None
 
 
 async def test_output_count_timeout_after_done_preserves_terminal_evidence():
@@ -197,3 +205,120 @@ async def test_output_count_timeout_after_done_preserves_terminal_evidence():
     )
     assert isinstance(outcome, RuntimeRefused)
     assert outcome.reason == "summary_output_count_deadline"
+
+
+async def test_caller_timeout_leaves_owned_summary_to_settle_and_next_request_works(monkeypatch):
+    release = asyncio.Event()
+    relay = SummaryRelay(hold=release)
+    app = summary_app(monkeypatch, Counter(), relay)
+    runtime = runtime_for(app)
+    monkeypatch.setattr("app.adapters.runtime.node_agent_adapter.SUMMARY_TIMEOUT_SECONDS", 0.02)
+    with pytest.raises(NoAvailableModelError, match="caller wait expired"):
+        await runtime.summarise("qwen2.5:7b", [Message(MessageRole.USER, "prefix")], 32768)
+    store = app.state.agent.store
+    assert next(iter(store.ops.values())).state == "running"
+    assert app.state.agent.dispatcher.state.value == "serving"
+    release.set()
+    async with asyncio.timeout(1):
+        while next(iter(store.ops.values())).state == "running":
+            await asyncio.sleep(0)
+    assert next(iter(store.ops.values())).state == "completed"
+    monkeypatch.setattr("app.adapters.runtime.node_agent_adapter.SUMMARY_TIMEOUT_SECONDS", 1)
+    assert await runtime.summarise("qwen2.5:7b", [Message(MessageRole.USER, "next")], 32768)
+
+
+async def test_real_transport_loss_remains_uncertain():
+    async def lost(sink):
+        return Uncertain("transport:ReadError")
+
+    store = MemoryStore()
+    dispatcher = Dispatcher(store)
+    attempt = await dispatcher.submit("lost", "summary", bounded_summary(lost, Counter(), "ref"))
+    outcome = await attempt.settled
+    assert isinstance(outcome, Uncertain)
+    assert store.ops["lost"].state == "outcome_unknown"
+    assert dispatcher.state.value == "blocked"
+
+
+async def test_tier2_compacts_through_agent_and_runtime_terminal_then_reuses_cache(monkeypatch):
+    import json
+
+    from app.adapters.cache.redis_adapter import InMemoryCache
+    from app.application.use_cases.route_chat_request.compaction_cache import CompactionCache
+    from app.application.use_cases.route_chat_request.compaction_tier2 import try_tier2
+    from app.node_agent.relay import OllamaRelay
+    from tests.unit.manage_models_fixtures import make_model
+
+    sends = []
+
+    def respond(request):
+        if request.url.path == "/api/version":
+            return httpx.Response(200, json={"version": "0.0.test"})
+        if request.url.path == "/api/tags":
+            return httpx.Response(
+                200, json={"models": [{"name": "qwen2.5:7b", "digest": "manifest"}]}
+            )
+        assert request.url.path == "/api/chat"
+        sends.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            text=json.dumps(
+                {
+                    "message": {"content": "Summary."},
+                    "done": True,
+                    "eval_count": 5,
+                    "done_reason": "stop",
+                }
+            )
+            + "\n",
+        )
+
+    relay = OllamaRelay("http://runtime", timeout_s=1, transport=httpx.MockTransport(respond))
+    app = summary_app(monkeypatch, Counter(), relay)
+    runtime = runtime_for(app)
+
+    async def summarise(messages):
+        return await runtime.summarise("qwen2.5:7b", messages, 32768)
+
+    async def recount(target, messages, tools):
+        assert messages[0].content.endswith("Summary.")
+        return 100
+
+    messages = [Message(MessageRole.USER, "history " + str(i)) for i in range(16)]
+    cache = CompactionCache(InMemoryCache())
+    try:
+        for _ in range(2):
+            result = await try_tier2(
+                messages=messages,
+                tools=(),
+                counted=900,
+                limit=200,
+                count_fn=recount,
+                target=make_model(),
+                summarise_fn=summarise,
+                cache=cache,
+                lock=asyncio.Lock(),
+            )
+            assert result.tier == 2 and result.tokens_after == 100
+            assert list(result.messages[1:]) == messages[10:]
+        assert len(sends) == 1
+        assert len(app.state.agent.store.ops) == 1
+        assert next(iter(app.state.agent.store.ops.values())).state == "completed"
+    finally:
+        await relay.aclose()
+
+
+async def test_output_counter_exception_does_not_erase_known_runtime_completion():
+    class BrokenCounter(Counter):
+        async def count_parts(self, ref, texts):
+            raise OSError("tokenizer unavailable")
+
+    store = MemoryStore()
+    dispatcher = Dispatcher(store)
+    attempt = await dispatcher.submit(
+        "count-failed", "summary", bounded_summary(SummaryRelay().chat({}), BrokenCounter(), "ref")
+    )
+    outcome = await attempt.settled
+    assert isinstance(outcome, RuntimeRefused) and outcome.reason == "summary_output_count_failed"
+    assert store.ops["count-failed"].state == "failed"
+    assert dispatcher.state.value == "serving"

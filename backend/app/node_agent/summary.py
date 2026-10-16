@@ -11,12 +11,13 @@ from app.application.use_cases.route_chat_request.compaction_tier2 import (
     SUMMARY_TIMEOUT_SECONDS,
 )
 from app.domain.ports.token_counter_port import TokenCounterPort
-from app.node_agent.dispatch import Completed, Outcome, Relay, RuntimeRefused, Sink, Uncertain
+from app.node_agent.dispatch import Completed, Outcome, Relay, RuntimeRefused, Sink
 
 
 class _SummarySink:
-    def __init__(self, sink: Sink) -> None:
+    def __init__(self, sink: Sink, deadline: float) -> None:
         self.sink = sink
+        self.deadline = deadline
         self.parts: list[str] = []
         self.size = 0
         self.overflow = False
@@ -24,7 +25,11 @@ class _SummarySink:
     def emit(self, event: dict[str, Any]) -> None:
         # Keep reading to terminal evidence after overflow. No partial summary
         # crosses to the caller, and buffering has a separate hard byte cap.
-        if self.overflow or event.get("type") != "line":
+        if (
+            self.overflow
+            or asyncio.get_running_loop().time() >= self.deadline
+            or event.get("type") != "line"
+        ):
             return
         message = (event.get("data") or {}).get("message") or {}
         text = message.get("content") or ""
@@ -47,13 +52,18 @@ def bounded_summary(
     timeout_s: float = SUMMARY_TIMEOUT_SECONDS,
 ) -> Relay:
     async def run(sink: Sink) -> Outcome:
-        collected = _SummarySink(sink)
-        outcome: Outcome | None = None
+        deadline = asyncio.get_running_loop().time() + timeout_s
+        collected = _SummarySink(sink, deadline)
+        # The agent owns the stream independently of the HTTP caller. A local
+        # deadline stops accepting output, but is not lost runtime evidence.
+        # Drain to done/error; only a real transport loss remains uncertain.
+        outcome = await relay(collected)
+        if not isinstance(outcome, Completed):
+            return outcome
+        if asyncio.get_running_loop().time() >= deadline:
+            return RuntimeRefused(outcome.terminal, "summary_deadline")
         try:
-            async with asyncio.timeout(timeout_s):
-                outcome = await relay(collected)
-                if not isinstance(outcome, Completed):
-                    return outcome
+            async with asyncio.timeout_at(deadline):
                 if collected.overflow:
                     return RuntimeRefused(outcome.terminal, "summary_output_bytes_exceeded")
                 text = "".join(collected.parts).strip()
@@ -72,10 +82,10 @@ def bounded_summary(
                 sink.emit({"type": "summary", "text": text})
                 return Completed(outcome.terminal, result={"summary": text})
         except TimeoutError:
-            if isinstance(outcome, Completed):
-                return RuntimeRefused(outcome.terminal, "summary_output_count_deadline")
-            # Cancelling a send is not runtime terminal evidence. Retain the
-            # node-wide block even though this task stops holding a local slot.
-            return Uncertain("summary_deadline")
+            return RuntimeRefused(outcome.terminal, "summary_output_count_deadline")
+        except Exception:
+            # Runtime completion is already known. Local counting failure must
+            # not turn it into a node-wide unknown either.
+            return RuntimeRefused(outcome.terminal, "summary_output_count_failed")
 
     return run

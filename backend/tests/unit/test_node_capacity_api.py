@@ -56,4 +56,8 @@ async def test_missing_model_store_returns_unresolved_capacity() -> None:
             params={"ref": "primary:latest"},
             headers={"Authorization": "Bearer capacity-token"},
         )
-    assert response.json() == {"manifest_digest": None, "declared_context_length": None}
+    assert response.json() == {
+        "manifest_digest": None,
+        "declared_context_length": None,
+        "embedding_manifest_pin": True,
+    }

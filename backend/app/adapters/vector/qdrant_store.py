@@ -76,6 +76,10 @@ class QdrantVectorStore:
 
     # --- lifecycle -------------------------------------------------------
 
+    async def reset_index(self) -> None:
+        """Offline tenant rebuild only: discard unknown vectors, including orphans."""
+        await self._request("DELETE", f"/collections/{self._collection}", allow=(404,))
+
     async def ensure_ready(self, vector_size: int) -> None:
         """Create the collection if absent, sized for the embedding model.
 

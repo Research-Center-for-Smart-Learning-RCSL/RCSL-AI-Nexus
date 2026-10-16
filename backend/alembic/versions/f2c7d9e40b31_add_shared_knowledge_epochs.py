@@ -24,12 +24,13 @@ def upgrade() -> None:
         sa.Column(
             "index_requires_rebuild", sa.Boolean(), nullable=False, server_default=sa.false()
         ),
+        sa.Column("index_rebuilding", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.CheckConstraint(
             "epoch >= 0 AND mutations_in_progress >= 0", name="ck_knowledge_tenant_epoch"
         ),
     )
-    # Untyped legacy vectors cannot be adopted from today's routing policy:
-    # equal dimensions provide no proof that their embedding spaces agree.
+    # Legacy provenance disables replay only. Retrieval and indexing remain
+    # available until the supported tenant rebuild establishes provenance.
     op.execute("""
         INSERT INTO knowledge_tenant_epochs (tenant_id, index_requires_rebuild)
         SELECT t.id, EXISTS (SELECT 1 FROM knowledge_documents d WHERE d.tenant_id = t.id)

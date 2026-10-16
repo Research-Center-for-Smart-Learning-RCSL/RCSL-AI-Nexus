@@ -74,3 +74,25 @@ async def test_matching_index_manifest_reaches_agent_and_settles_normally(monkey
         current_embedding_manifest.reset(token)
     assert relay.sends == 1
     assert list(app.state.agent.store.ops.values())[0].kind == "embedding_batch"
+
+
+async def test_old_agent_cannot_silently_ignore_requested_embedding_pin():
+    sends = []
+
+    def respond(request):
+        sends.append(request.url.path)
+        # An older capacity endpoint has no positive capability declaration.
+        return httpx.Response(
+            200, json={"manifest_digest": "manifest", "declared_context_length": 4096}
+        )
+
+    runtime = NodeAgentRuntime(
+        "http://agent", "token", timeout_s=1, transport=httpx.MockTransport(respond)
+    )
+    token = current_embedding_manifest.set("manifest")
+    try:
+        with pytest.raises(NoAvailableModelError, match="does not enforce"):
+            await runtime.embed("model", ["text"])
+    finally:
+        current_embedding_manifest.reset(token)
+    assert sends == ["/v1/model-capacity"]
