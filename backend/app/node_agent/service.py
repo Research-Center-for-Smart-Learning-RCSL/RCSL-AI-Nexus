@@ -64,12 +64,21 @@ class Agent:
                 if not await still_elected(self.election_conn, self.elected.backend_pid):
                     await self._lost("election session lost")
                     return
+                await self._recheck_drain()
         except asyncio.CancelledError:
             raise
         except Exception:
             # An unsupervised agent is worse than a stopped one.
             logger.exception("watchdog failed; treating the role as lost")
             await self._lost("watchdog failed")
+
+    async def _recheck_drain(self) -> None:
+        # Apart from the lock checks: a database error here is the reason a
+        # drain was stranded, not a lost role.
+        try:
+            await self.dispatcher.recheck_drain()
+        except Exception:  # noqa: BLE001 - retried on the next tick
+            logger.warning("could not re-check a stranded drain", exc_info=True)
 
     async def _lost(self, reason: str) -> None:
         """Close the gate and end the process, whatever else fails.

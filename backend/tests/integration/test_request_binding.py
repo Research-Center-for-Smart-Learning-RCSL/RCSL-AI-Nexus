@@ -23,10 +23,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.adapters.authz.role_authorization import RoleAuthorization
 from app.adapters.persistence.repositories import (
+    PostgresRecordPurge,
     PostgresRequestBindings,
     PostgresUsageRepository,
     PostgresUsageSettlement,
 )
+from app.adapters.persistence.sqlalchemy_models import UsageRecordRow
 from app.application.use_cases.list_capabilities import ListCapabilities
 from app.application.use_cases.route_chat_request import RouteChatRequest
 from app.application.use_cases.route_chat_request.binding import RequestBinder, keyed_request_id
@@ -516,3 +518,25 @@ async def test_an_unknown_attempt_is_billed_only_once_resolved(stack: dict[str, 
     assert row["prompt_tokens_basis"] in {"exact_counter", "estimate"}
     assert row["runtime_completed"] is False and row["completed"] is False
     assert (row["prompt_eval_ms"], row["eval_ms"], row["load_ms"]) == (None, None, None)
+
+
+async def test_a_row_retention_purged_is_not_settled_again(stack: dict[str, Any]) -> None:
+    """Review on #32: retention deletes usage rows but keeps the attempts, so
+    a sweep that took "no row" for "unsettled" re-billed every purged attempt
+    under its old `at`, daily."""
+    op_id = await _bound_attempt(stack, "key-u8")
+    assert await stack["settlement"].sweep() == 1
+    # A year on: the attempt and its row have aged past the default window.
+    aged = datetime.now(UTC) - timedelta(days=400)
+    await _owner(stack, "UPDATE usage_records SET at = $1 WHERE attempt_id = $2", aged, op_id)
+    await _owner(stack, "UPDATE request_attempts SET created_at = $1 WHERE op_id = $2", aged, op_id)
+    sessions = async_sessionmaker(stack["engine"], expire_on_commit=False)
+    async with sessions() as session, session.begin():
+        purged = await PostgresRecordPurge(session, UsageRecordRow).delete_older_than(
+            datetime.now(UTC) - timedelta(days=360)
+        )
+    assert purged == 1
+
+    assert await stack["settlement"].sweep() == 0
+    assert await _usage(stack) == []
+    assert len(stack["observed"]) == 1, "nothing re-counted"

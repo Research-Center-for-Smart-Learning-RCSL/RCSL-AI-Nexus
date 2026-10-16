@@ -768,3 +768,84 @@ async def test_an_operators_drain_outlasts_a_lifecycle_operation() -> None:
 async def test_inference_kinds_are_not_lifecycle_operations() -> None:
     with pytest.raises(ValueError, match="lifecycle"):
         await Dispatcher(MemoryStore()).exclusive("x", "inference", ScriptedRelay())
+
+
+# -- a drain nothing holds (review on #32) -------------------------------------
+
+
+class FlakyUnknownStore(MemoryStore):
+    """`any_unknown` raises the next `failures` times it is read."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures = 0
+
+    async def any_unknown(self) -> bool:
+        if self.failures:
+            self.failures -= 1
+            raise ConnectionError("database unavailable")
+        return await super().any_unknown()
+
+
+async def test_a_failed_reopen_after_a_lifecycle_operation_is_retried() -> None:
+    store = FlakyUnknownStore()
+    dispatcher = Dispatcher(store)
+    attempt = await dispatcher.exclusive("l", "load", ScriptedRelay(Completed({"status": 200})))
+    assert isinstance(attempt, Attempt)
+    store.failures = 2  # the reopen, and the watchdog's first re-check
+    await asyncio.wait_for(attempt.settled, 2)
+    await asyncio.sleep(0.01)
+    assert dispatcher.state is GateState.DRAINING, "nothing reopens it by itself"
+
+    with pytest.raises(ConnectionError):
+        await dispatcher.recheck_drain()
+    assert dispatcher.state is GateState.DRAINING, "a failed read never reopens"
+
+    assert await dispatcher.recheck_drain() is GateState.SERVING
+
+
+async def test_a_stranded_drain_reopens_to_blocked_when_something_is_unknown() -> None:
+    store = FlakyUnknownStore()
+    dispatcher = Dispatcher(store)
+    attempt = await dispatcher.exclusive("l", "load", ScriptedRelay(Completed({"status": 200})))
+    assert isinstance(attempt, Attempt)
+    store.failures = 1
+    await asyncio.wait_for(attempt.settled, 2)
+    await asyncio.sleep(0.01)
+    # An unknown committed elsewhere, say by a resolution, while it was stranded.
+    await store.insert_accepted("x", "inference")
+    store.ops["x"] = replace(store.ops["x"], state="outcome_unknown")
+
+    assert await dispatcher.recheck_drain() is GateState.BLOCKED
+
+
+async def test_a_lifecycle_insert_that_fails_leaves_a_drain_the_watchdog_reopens() -> None:
+    store = FlakyUnknownStore()
+
+    async def broken(op_id: str, kind: str, **kw: Any) -> Operation | None:
+        raise ConnectionError("database unavailable")
+
+    store.insert_accepted = broken  # type: ignore[method-assign]
+    store.failures = 1
+    dispatcher = Dispatcher(store)
+
+    with pytest.raises(ConnectionError):
+        await dispatcher.exclusive("l", "load", relay := ScriptedRelay())
+    assert relay.sends == 0 and dispatcher.state is GateState.DRAINING
+
+    assert await dispatcher.recheck_drain() is GateState.SERVING
+
+
+async def test_the_re_check_leaves_held_drains_alone() -> None:
+    store = MemoryStore()
+    dispatcher = Dispatcher(store)
+    await dispatcher.drain()
+    assert await dispatcher.recheck_drain() is GateState.DRAINING, "an operator's drain"
+
+    await dispatcher.reopen()
+    hold = asyncio.Event()
+    attempt = await dispatcher.exclusive("l", "load", ScriptedRelay(hold=hold))
+    assert isinstance(attempt, Attempt)
+    assert await dispatcher.recheck_drain() is GateState.DRAINING, "a running operation"
+    hold.set()
+    await asyncio.wait_for(attempt.settled, 2)

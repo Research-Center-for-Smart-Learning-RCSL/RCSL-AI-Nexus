@@ -33,6 +33,7 @@ from typing import Any, cast
 from sqlalchemy import CursorResult, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.domain.entities.retention import RetentionDataset, bounds_for
 from app.domain.entities.usage import UsageRecord
 from app.domain.services.usage_settlement import BILLABLE_STATES, settle_usage
 
@@ -60,6 +61,16 @@ _INSERT = text(
     "ON CONFLICT (attempt_id) DO NOTHING"
 )
 
+# How far back the sweeper looks for an attempt with no row (review on #32).
+# Retention deletes `usage_records` but never the attempts, so "no row" also
+# means "purged", and settling those again would re-bill them under their old
+# `at`, every day. No purge, scheduled or by hand, may reach inside the usage
+# floor, so an attempt younger than it with no row was never settled. A day
+# short of the floor, because `at` is the request's start, which an attempt
+# bound on an unsent retry postdates. The stored policy is not consulted: it is
+# never tighter than the floor, and a manual purge can be.
+SWEEP_HORIZON_DAYS = bounds_for(RetentionDataset.USAGE_RECORDS).minimum_days - 1
+
 # Monotonic and idempotent: false to true, nothing else, and only on the
 # attempt's own delivery evidence (revision 6; `request_attempts.op_id` is
 # unique, so no other attempt can be reached through it).
@@ -80,6 +91,9 @@ class PostgresUsageSettlement:
     ) -> None:
         self._sessions = sessions
         self._observe = observe
+        # Attempts whose settlement raised, ordered last by the next sweep.
+        # In memory: a restart retries them first, once.
+        self._failing: set[str] = set()
 
     async def mark_delivery(self, op_id: str, complete: bool) -> None:
         """What the gateway saw of delivery, recorded once.
@@ -183,8 +197,34 @@ class PostgresUsageSettlement:
 
         Run by the admin entrance, never the gateway: it covers the gateway
         dying between the agent's terminal commit and its own usage write.
-        Returns how many attempts it settled.
+        Only attempts inside `SWEEP_HORIZON_DAYS` are considered, so a row
+        retention removed stays removed. Returns how many attempts it settled.
+
+        Each attempt is settled on its own: one that raises is logged and
+        passed over, so it cannot stop the rest of the sweep or the delivery
+        reconciliation behind it. It is retried on later sweeps, but behind
+        every attempt that has not failed, so it cannot hold the oldest slot
+        of each batch forever either.
         """
+        pending, late = await self._candidates(limit)
+        settled = 0
+        for op_id in pending:
+            try:
+                settled += await self.settle(op_id)
+            except Exception:  # noqa: BLE001 - one attempt must not stall the others
+                logger.exception("usage settlement failed for attempt %s", op_id)
+                self._failing.add(op_id)
+            else:
+                self._failing.discard(op_id)
+        for op_id in late:
+            try:
+                async with self._sessions() as session, session.begin():
+                    await session.execute(_RECONCILE, {"op_id": op_id})
+            except Exception:  # noqa: BLE001 - as above
+                logger.exception("usage reconciliation failed for attempt %s", op_id)
+        return settled
+
+    async def _candidates(self, limit: int) -> tuple[list[str], list[str]]:
         async with self._sessions() as session:
             pending = (
                 (
@@ -193,11 +233,16 @@ class PostgresUsageSettlement:
                             "SELECT a.op_id FROM request_attempts a "
                             "JOIN node_operations o ON o.node_id = a.node_id AND o.op_id = a.op_id "
                             "WHERE o.state IN ('completed', 'failed') "
+                            "AND a.created_at > now() - make_interval(days => :horizon) "
                             "AND NOT EXISTS (SELECT 1 FROM usage_records u "
                             "WHERE u.attempt_id = a.op_id) "
-                            "ORDER BY a.created_at LIMIT :limit"
+                            "ORDER BY a.op_id = ANY(:failing), a.created_at LIMIT :limit"
                         ),
-                        {"limit": limit},
+                        {
+                            "limit": limit,
+                            "horizon": SWEEP_HORIZON_DAYS,
+                            "failing": sorted(self._failing),
+                        },
                     )
                 )
                 .scalars()
@@ -218,13 +263,7 @@ class PostgresUsageSettlement:
                 .scalars()
                 .all()
             )
-        settled = 0
-        for op_id in pending:
-            settled += await self.settle(op_id)
-        for op_id in late:
-            async with self._sessions() as session, session.begin():
-                await session.execute(_RECONCILE, {"op_id": op_id})
-        return settled
+        return list(pending), list(late)
 
 
 def _json(value: Any) -> dict[str, Any]:

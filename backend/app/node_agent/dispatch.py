@@ -431,7 +431,29 @@ class Dispatcher:
                 return
             self._exclusive = None
             if self._state is GateState.DRAINING and not self._held_by_operator:
-                await self._reopen_locked()
+                try:
+                    await self._reopen_locked()
+                except Exception:  # noqa: BLE001 - left draining for `recheck_drain`
+                    logger.exception("could not reopen after %s; the watchdog retries", op_id)
+
+    async def recheck_drain(self) -> GateState:
+        """Reopen a drain that nothing holds any more (review on #32).
+
+        Ending a lifecycle operation, or a resume, reopens through
+        `any_unknown`; if that read fails the gate stays draining with no
+        operation and no operator left to reopen it. The watchdog calls this
+        on every tick: it reopens only once the read succeeds, and to
+        `BLOCKED` if anything is unknown. A read that fails again raises and
+        changes nothing.
+        """
+        async with self._barrier:
+            if (
+                self._state is not GateState.DRAINING
+                or self._exclusive is not None
+                or self._held_by_operator
+            ):
+                return self._state
+            return await self._reopen_locked()
 
     # -- one attempt -------------------------------------------------------
 
