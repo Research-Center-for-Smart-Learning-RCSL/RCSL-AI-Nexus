@@ -36,6 +36,9 @@ separately at the end, marked as superseded.
 
 ### October 2026
 
+**[2026-10-17](./progress/2026-10-17.md)**
+- Platform restored on `main`; three-model set does not fit with a 4 GiB Colima VM, so `qwen7b` is not kept resident and `assist` falls back to gemma4
+
 **[2026-10-16](./progress/2026-10-16.md)**
 - PR #56 review: preserve availability across summary deadlines and knowledge fences; add audited recovery, cache bounds, and explicit rollout decisions
 
