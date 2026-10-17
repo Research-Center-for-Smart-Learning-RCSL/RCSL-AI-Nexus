@@ -34,8 +34,9 @@
              this number. Change it here and in docs/runbooks/first-deploy.md
              together. Raised from 3 to 4 on 2026-10-10 (maintainer decision)
              after a 3 GiB VM OOM-killed production workers during a rebuild
-             (docs/progress/2026-10-10.md); the three-model fit was measured
-             at 3 and has not yet been re-measured at 4. -->
+             (docs/progress/2026-10-10.md); re-measured at 4 on 2026-10-17,
+             the three-model set no longer fits and qwen7b is not kept
+             resident (docs/progress/2026-10-17.md). -->
         <string>--memory</string>
         <string>4</string>
     </array>

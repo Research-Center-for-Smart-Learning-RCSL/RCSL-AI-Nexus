@@ -127,8 +127,9 @@ secrets 設定見 [secrets/README.md](../../secrets/README.md)。
   **2026-10-10 起改為 `--memory 4`（維護者決定）。** 3 GiB 時，正式服務運作中
   的一次重新建置把 VM 記憶體用完，殺掉了正式服務的 worker（見
   [2026-10-10 進度](../progress/2026-10-10.md)）。上面「三個模型同時常駐」的
-  餘裕是在 3 GiB 下量的，4 GiB 下還沒有重新量；恢復三個模型後要重新確認
-  host 佔用與 swap。
+  餘裕是在 3 GiB 下量的。2026-10-17 在 4 GiB 下重新量：載入 qwen7b 會趕走 gemma4，
+  三個模型放不下，所以 qwen7b 不再常駐，`assist` 加上 gemma4 當後備（見
+  [2026-10-17 進度](../progress/2026-10-17.md)）。
 
   `--vm-type vz` 用 Apple Virtualization Framework，`--mount-type virtiofs` 用 VirtioFS
   掛載家目錄。`--network-address` 給 VM 一個可路由的 IP。驗證：

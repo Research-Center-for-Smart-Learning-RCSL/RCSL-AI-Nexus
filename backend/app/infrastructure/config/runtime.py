@@ -83,7 +83,8 @@ class RuntimeSettings(BaseSettings):
     model set needs — so **the VM's 3 GiB cap is load-bearing for this figure**
     and raising it back to 6 makes the arrangement below stop fitting. The cap
     went to 4 GiB on 2026-10-10, after a rebuild at 3 OOM-killed production
-    workers; the fit below was measured at 3 and is yet to be re-measured at 4.
+    workers. Re-measured at 4 on 2026-10-17, the three-model set no longer fits:
+    loading qwen7b evicts gemma4, so qwen7b is not kept resident.
 
     What the arrangement is, from `common_memory_breakdown_print` in the Ollama
     log, which reports what llama.cpp actually allocates:
