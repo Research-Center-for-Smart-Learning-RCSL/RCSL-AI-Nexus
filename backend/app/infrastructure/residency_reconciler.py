@@ -24,6 +24,7 @@ from sqlalchemy import text
 from app.adapters.persistence.node_serialisation import PostgresNodeSerialisation
 from app.adapters.persistence.repositories import PostgresModelRepository, PostgresNodeRepository
 from app.application.use_cases.reconcile_residency import (
+    PassResult,
     ReconcileResidency,
     Suspension,
 )
@@ -35,6 +36,10 @@ from app.infrastructure.di.inference_runtime import manage_models_for
 from app.infrastructure.heartbeat import database_time, observe_node
 
 logger = logging.getLogger(__name__)
+
+RAISED_OUTCOME = "error"
+"""The outcome label for a pass that raised before any node was judged, such
+as the node list being unreadable. Per-node failures are `failed`."""
 
 
 class PostgresReconcilerState:
@@ -121,13 +126,22 @@ async def run_residency_reconciler(
         enabled=settings.residency_reconciler_enabled,
         suspended=suspended,
     )
+    passes = app.state.metrics.residency_reconcile
+    # Every outcome exported at zero from the start, so `increase()` sees the
+    # first give-up rather than a series that appears already at one.
+    for result in (*PassResult, RAISED_OUTCOME):
+        passes.labels(result)
     while True:
         # Sleep first, as the heartbeat does, so a lifespan that opens and
         # closes quickly never reaches the database or a runtime.
         await asyncio.sleep(settings.residency_reconciler_interval_seconds)
         try:
-            await reconciler.run_once()
+            outcomes = await reconciler.run_once()
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - a failed pass must not kill the loop
             logger.exception("residency reconciliation pass failed")
+            passes.labels(RAISED_OUTCOME).inc()
+            continue
+        for outcome in outcomes:
+            passes.labels(outcome.result.value).inc()

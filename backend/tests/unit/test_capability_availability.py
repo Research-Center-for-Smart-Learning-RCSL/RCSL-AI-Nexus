@@ -114,7 +114,7 @@ async def test_endpoint_requires_routing_scope_before_reading_inventory(monkeypa
 
     async def read(*args):
         calls.append(True)
-        return AvailabilitySnapshot(NOW, list(assess().values()), {}, False)
+        return AvailabilitySnapshot(NOW, list(assess().values()), {}, False, {"primary": True})
 
     monkeypatch.setattr(route, "read_availability", read)
 
@@ -171,7 +171,8 @@ async def test_periodic_metrics_refresh_without_requests_and_failures_keep_old_t
         if steps == 3:
             raise OSError("database unreachable")
         capabilities = list(assess(policies=[POLICY] if steps == 1 else []).values())
-        return observation.AvailabilitySnapshot(NOW, capabilities, {"n1": 1}, True)
+        mismatch = {"primary": True, "gone": False} if steps == 1 else {"primary": True}
+        return observation.AvailabilitySnapshot(NOW, capabilities, {"n1": 1}, True, mismatch)
 
     monkeypatch.setattr(observation.asyncio, "sleep", sleep)
     monkeypatch.setattr(observation, "session_scope", scope)
@@ -183,4 +184,7 @@ async def test_periodic_metrics_refresh_without_requests_and_failures_keep_old_t
     assert registry.get_sample_value("nexus_capability_available", {"capability": "chat"}) is None
     assert registry.get_sample_value("nexus_node_operation_unresolved", {"node": "n1"}) == 1
     assert registry.get_sample_value("nexus_inference_silent_outage") == 1
+    # A deleted model's label goes with it, as a deleted policy's does.
+    assert registry.get_sample_value("nexus_model_residency_mismatch", {"alias": "primary"}) == 1
+    assert registry.get_sample_value("nexus_model_residency_mismatch", {"alias": "gone"}) is None
     assert registry.get_sample_value("nexus_availability_observed_at_seconds") == NOW.timestamp()

@@ -36,6 +36,9 @@ separately at the end, marked as superseded.
 
 ### October 2026
 
+**[2026-10-18](./progress/2026-10-18.md)**
+- #50: residency-mismatch gauge and alert, reconciler outcome counter and give-up alert, delivered through the health job
+
 **[2026-10-17](./progress/2026-10-17.md)**
 - Platform restored on `main`; three-model set does not fit with a 4 GiB Colima VM, so `qwen7b` is not kept resident and `assist` falls back to gemma4
 

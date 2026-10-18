@@ -74,6 +74,20 @@ class Metrics:
             ["node"],
             registry=registry,
         )
+        self.model_residency_mismatch = Gauge(
+            "nexus_model_residency_mismatch",
+            "Model is desired resident but not shown resident by fresh evidence.",
+            ["alias"],
+            registry=registry,
+        )
+        # Every reconciler pass outcome per node, by result. Not labelled by
+        # node or reason: a failure's reason is free text and is in the log.
+        self.residency_reconcile = Counter(
+            "nexus_residency_reconcile_total",
+            "Residency reconciler node passes, by outcome.",
+            ["outcome"],
+            registry=registry,
+        )
         self.silent_outage = Gauge(
             "nexus_inference_silent_outage",
             "No completed usage and gateway refusals in 24 hours.",
