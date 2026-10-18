@@ -65,3 +65,52 @@ tests:
         exp_alerts:
           - exp_labels: {job: admin-tailnet, severity: critical}
             exp_annotations: {summary: Availability is unknown because its observer is absent or stale.}
+  - name: quiet-host residency mismatch fires after ten minutes and clears
+    interval: 15s
+    input_series:
+      - series: 'nexus_model_residency_mismatch{job="admin-tailnet",alias="big"}'
+        values: '1x48 0x8'
+      - series: 'nexus_model_residency_mismatch{job="admin-tailnet",alias="small"}'
+        values: '0x56'
+      - series: 'nexus_availability_observed_at_seconds{job="admin-tailnet"}'
+        values: '0+15x56'
+    alert_rule_test:
+      - eval_time: 9m45s
+        alertname: NexusModelResidencyMismatch
+        exp_alerts: []
+      - eval_time: 10m15s
+        alertname: NexusModelResidencyMismatch
+        exp_alerts:
+          - exp_labels: {job: admin-tailnet, alias: big, severity: critical}
+            exp_annotations: {summary: A model wanted resident has not been shown resident for 10 minutes.}
+      - eval_time: 13m
+        alertname: NexusModelResidencyMismatch
+        exp_alerts: []
+  - name: a brief mismatch during a reload does not fire
+    interval: 15s
+    input_series:
+      - series: 'nexus_model_residency_mismatch{job="admin-tailnet",alias="big"}'
+        values: '0x4 1x20 0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: NexusModelResidencyMismatch
+        exp_alerts: []
+  - name: reconciler give-up fires while it holds and clears after
+    interval: 30s
+    input_series:
+      - series: 'nexus_residency_reconcile_total{job="admin-tailnet",outcome="gave_up"}'
+        values: '0x10 1+1x10 11x20'
+      - series: 'nexus_residency_reconcile_total{job="admin-tailnet",outcome="idle"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: NexusResidencyReconcilerGaveUp
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: NexusResidencyReconcilerGaveUp
+        exp_alerts:
+          - exp_labels: {job: admin-tailnet, outcome: gave_up, severity: critical}
+            exp_annotations: {summary: The residency reconciler stopped restoring a node; an operator must act.}
+      - eval_time: 18m
+        alertname: NexusResidencyReconcilerGaveUp
+        exp_alerts: []

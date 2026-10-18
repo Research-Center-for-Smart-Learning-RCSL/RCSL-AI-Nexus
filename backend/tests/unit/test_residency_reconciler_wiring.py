@@ -42,3 +42,54 @@ def test_runs_only_when_enabled_with_agents_and_heartbeat(
     agents: bool, enabled: bool, heartbeat: int, runs: bool
 ) -> None:
     assert reconciler_should_run(_app(agents), _settings(enabled, heartbeat)) is runs
+
+
+async def test_every_pass_outcome_is_counted_and_a_failed_pass_is_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from prometheus_client import CollectorRegistry
+
+    from app.adapters.metrics.prometheus import Metrics
+    from app.application.use_cases.reconcile_residency import PassOutcome, PassResult
+    from app.infrastructure import residency_reconciler as wiring
+
+    registry = CollectorRegistry()
+    app = SimpleNamespace(state=SimpleNamespace(metrics=Metrics(registry), runtimes={}))
+    passes: list[list[PassOutcome] | Exception] = [
+        [PassOutcome("n1", PassResult.GAVE_UP), PassOutcome("n2", PassResult.IDLE)],
+        OSError("database unreachable"),
+        [PassOutcome("n1", PassResult.GAVE_UP)],
+    ]
+
+    class Reconciler:
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+
+        async def run_once(self) -> list[PassOutcome]:
+            result = passes.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+    async def sleep(_: float) -> None:
+        if not passes:
+            raise asyncio.CancelledError
+
+    def sample(outcome: str) -> float | None:
+        return registry.get_sample_value("nexus_residency_reconcile_total", {"outcome": outcome})
+
+    settings = SimpleNamespace(
+        residency_reconciler_enabled=True, residency_reconciler_interval_seconds=1
+    )
+    monkeypatch.setattr(wiring, "ReconcileResidency", Reconciler)
+    monkeypatch.setattr(wiring, "PostgresNodeSerialisation", lambda *_: None)
+    monkeypatch.setattr(wiring.asyncio, "sleep", sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await wiring.run_residency_reconciler(app, settings)  # type: ignore[arg-type]
+    assert sample("gave_up") == 2
+    assert sample("idle") == 1
+    assert sample("error") == 1
+    # Exported at zero from the start, so a first give-up is an increase.
+    assert sample("restored") == 0

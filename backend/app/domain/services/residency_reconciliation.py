@@ -62,6 +62,22 @@ def observed_resident(model: Model, now: datetime) -> bool:
     return _fresh(model, now) and model.observed_state is ModelState.LOADED
 
 
+def residency_mismatch(model: Model, now: datetime) -> bool:
+    """Wanted resident, and not shown resident by the evidence routing uses.
+
+    Ollama needs a fresh positive `loaded` observation, as routing does since
+    #57; unknown or stale evidence is a mismatch, not a pass. MLX cannot report
+    residency, so, again as routing does, its intent stands in. A model whose
+    weights are gone is still a mismatch: the reconciler skips it, which is
+    exactly why someone has to be told.
+    """
+    if not model.desired_resident:
+        return False
+    if model.runtime is RuntimeKind.OLLAMA:
+        return not observed_resident(model, now)
+    return (model.observed_state or model.state) is not ModelState.LOADED
+
+
 def restorable(model: Model, now: datetime) -> bool:
     """Wanted resident, and not freshly reported as having no weights on disk.
 

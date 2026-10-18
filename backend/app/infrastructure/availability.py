@@ -27,6 +27,7 @@ from app.application.use_cases.capability_availability import (
 )
 from app.domain.entities.model import RuntimeKind
 from app.domain.ports.model_runtime_port import ModelRuntimePort, runtime_for
+from app.domain.services.residency_reconciliation import residency_mismatch
 from app.infrastructure.db import session_scope
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,10 @@ class AvailabilitySnapshot:
     capabilities: list[CapabilityAvailability]
     unresolved: dict[str, int]
     silent_outage: bool
+    residency_mismatch: dict[str, bool]
+    """By alias, for every registered model: desired resident but not shown
+    resident. Read in the same snapshot as availability, so a quiet host
+    still reports it."""
 
 
 async def read_availability(
@@ -83,6 +88,7 @@ async def read_availability(
         assess_availability(policies, models, nodes, unresolved, unavailable, now),
         unresolved,
         bool(silent),
+        {m.alias: residency_mismatch(m, now) for m in models},
     )
 
 
@@ -104,6 +110,9 @@ async def run_availability(app: FastAPI) -> None:
             instruments.node_operation_unresolved.clear()
             for node, count in snapshot.unresolved.items():
                 instruments.node_operation_unresolved.labels(node).set(count)
+            instruments.model_residency_mismatch.clear()
+            for alias, mismatched in snapshot.residency_mismatch.items():
+                instruments.model_residency_mismatch.labels(alias).set(int(mismatched))
             instruments.silent_outage.set(int(snapshot.silent_outage))
             instruments.availability_observed_at.set(snapshot.at.timestamp())
         except Exception:

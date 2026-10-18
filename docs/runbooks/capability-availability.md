@@ -164,8 +164,7 @@ meant to. Until then, disable the flag and restart `admin-tailnet` to stop it.
 
 **Not yet done.** The admin "reset runtime" action is not built. The witness
 CLI resolution remains the only path, because the agent cannot restart the
-host runtime and resolves one operation per witnessed restart. Residency-mismatch
-and reconcile-outcome metrics (#50) are not added. Host acceptance has not been
+host runtime and resolves one operation per witnessed restart. Host acceptance has not been
 run: restart Ollama with no traffic in an operator-owned window, observe
 gemma4, then qwen2.5:7b, then nomic-embed-text restored, and gate on an
 authenticated gateway request, plus the five #23 gates.
@@ -183,6 +182,22 @@ agent need not be scraped. The loop publishes:
 | `nexus_node_operation_unresolved{node}` | Number of durable `outcome_unknown` operations |
 | `nexus_inference_silent_outage` | No completed usage in the last 24 hours, with at least one gateway refusal in that window |
 | `nexus_availability_observed_at_seconds` | Database timestamp of the last successful snapshot |
+| `nexus_model_residency_mismatch{alias}` | 1 when a model is desired resident but not shown resident, else 0; one series per registered model |
+
+Residency mismatch uses the evidence routing uses. An Ollama model needs a
+positive `loaded` observation no older than 90 seconds; unknown, stale or future
+evidence counts as a mismatch. MLX cannot report residency, so its lifecycle
+intent stands in, as it does for routing. A desired model whose weights are gone
+is a mismatch even though the reconciler skips it: that is the case nobody else
+reports. It is published whether or not the reconciler is enabled, so with the
+flag off it shows exactly which wanted models a runtime restart has dropped.
+
+The reconciler, which runs in the same process, also publishes
+`nexus_residency_reconcile_total{outcome}`: one increment per node per pass, by
+result (`idle`, `restored`, `failed`, `backing_off`, `blocked`, `busy`,
+`unhealthy`, `suspended`, `gave_up`), plus `error` for a pass that raised before
+judging any node. Every outcome is exported at zero when the loop starts. It is
+absent while the flag is off.
 
 Silent-outage status uses durable rows, so restarting gateway counters does not
 erase a refusal or a success. Interrupted usage does not count as a success;
@@ -198,6 +213,12 @@ read-only Compose mount. Rules select `job="admin-tailnet"`, the periodic owner:
 - Any unresolved operation, immediately.
 - Silent inference outage, immediately.
 - Observer older than 90 seconds or absent, for two minutes.
+- A model desired resident but not shown resident, for ten minutes. A reload,
+  which briefly empties the set, stays inside that window.
+- The reconciler gave up on a node, immediately. After a give-up each later pass
+  reports `gave_up` again, so the alert holds until intent changes or the set is
+  resident. The mismatch alert would also fire, but this one says the automatic
+  path has stopped and an operator must act.
 
 The existing host health job reads firing `ALERTS` and feeds them into its Tier 1
 failure signature. This reuses its configured recipients, change notifications,
@@ -233,6 +254,5 @@ colima VM restart. Record results and restore the production model set before
 an authenticated gateway smoke test. The local container check does not claim
 that host-specific acceptance.
 
-The remainder of #50 also needs #49's `desired_resident` and reconciler outcomes
-before residency-mismatch metrics/alerts and reconcile counters can be added.
-Those signals must not be synthesized from lifecycle `state`.
+Residency mismatch is read from `desired_resident`, never from lifecycle
+`state`, which records the last operation rather than what is wanted.

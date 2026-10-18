@@ -11,6 +11,7 @@ from app.domain.services.residency_reconciliation import (
     backoff_seconds,
     charges_memory,
     observed_absent,
+    residency_mismatch,
     restorable,
     restore_order,
 )
@@ -93,3 +94,25 @@ def test_missing_weights_are_not_restorable():
     assert not restorable(gone, NOW)
     assert restorable(_seen(ModelState.DOWNLOADED, desired_resident=True), NOW)
     assert not restorable(_seen(ModelState.DOWNLOADED, desired_resident=False), NOW)
+
+
+def test_mismatch_needs_fresh_positive_residency_for_a_desired_ollama_model():
+    assert not residency_mismatch(_seen(ModelState.LOADED, desired_resident=True), NOW)
+    for model in (
+        _seen(ModelState.DOWNLOADED, desired_resident=True),
+        _seen(ModelState.NOT_DOWNLOADED, desired_resident=True),
+        _seen(ModelState.LOADED, seconds_ago=91, desired_resident=True),
+        _seen(ModelState.LOADED, seconds_ago=-1, desired_resident=True),
+        _seen(None, state=ModelState.LOADED, desired_resident=True),
+    ):
+        assert residency_mismatch(model, NOW)
+    # Not wanted: never a mismatch, whatever the runtime says.
+    assert not residency_mismatch(_seen(ModelState.DOWNLOADED, desired_resident=False), NOW)
+    assert not residency_mismatch(_seen(None, desired_resident=False), NOW)
+
+
+def test_mlx_mismatch_follows_intent_as_routing_does():
+    loaded = _seen(None, runtime=RuntimeKind.MLX, state=ModelState.LOADED, desired_resident=True)
+    absent = replace(loaded, state=ModelState.DOWNLOADED)
+    assert not residency_mismatch(loaded, NOW)
+    assert residency_mismatch(absent, NOW)

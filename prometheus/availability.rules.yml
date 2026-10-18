@@ -30,3 +30,18 @@ groups:
           severity: critical
         annotations:
           summary: Availability is unknown because its observer is absent or stale.
+      - alert: NexusModelResidencyMismatch
+        expr: nexus_model_residency_mismatch{job="admin-tailnet"} == 1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: A model wanted resident has not been shown resident for 10 minutes.
+      # A give-up is reported on every later pass until intent changes or the
+      # set is resident, so the counter keeps rising for as long as it holds.
+      - alert: NexusResidencyReconcilerGaveUp
+        expr: increase(nexus_residency_reconcile_total{job="admin-tailnet",outcome="gave_up"}[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: The residency reconciler stopped restoring a node; an operator must act.
