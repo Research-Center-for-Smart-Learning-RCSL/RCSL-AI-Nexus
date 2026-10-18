@@ -62,6 +62,23 @@ async def test_residency_loss_unknown_staleness_and_recovery(snapshot_db):
         assert chat.reasons == (() if reason is None else (reason,))
 
 
+async def test_residency_mismatch_reads_committed_intent_and_fresh_evidence(snapshot_db):
+    session = snapshot_db
+    assert (await read(session)).residency_mismatch == {"primary": False}
+    for statement, mismatched in [
+        # Wanted and freshly resident.
+        ("desired_resident = true", False),
+        ("observed_state = 'downloaded'", True),
+        ("observed_state = 'loaded', observed_at = now() - interval '91 seconds'", True),
+        ("observed_state = 'loaded', observed_at = now()", False),
+        # No longer wanted: absent weights are nobody's concern.
+        ("desired_resident = false, observed_state = 'downloaded'", False),
+    ]:
+        await session.execute(text("UPDATE models SET " + statement))  # noqa: S608 - constants above
+        await session.commit()
+        assert (await read(session)).residency_mismatch == {"primary": mismatched}
+
+
 async def test_request_transaction_does_not_make_a_new_heartbeat_look_future(snapshot_db):
     session = snapshot_db
     transaction_start = (await session.execute(text("SELECT now()"))).scalar_one()

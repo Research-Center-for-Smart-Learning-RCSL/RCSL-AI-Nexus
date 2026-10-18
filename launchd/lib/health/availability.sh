@@ -2,7 +2,7 @@
 # Collapse instance labels to stable alert names so a process restart does not
 # create notification churn. A query failure is itself a Tier 1 failure.
 if [ "$PROM_OK" -eq 1 ]; then
-  AVAILABILITY_ALERTS="$(prom_get pairs 'count by (alertname) (ALERTS{alertstate="firing",alertname=~"NexusCapabilityUnavailable|NexusNodeOperationUnresolved|NexusSilentInferenceOutage|NexusAvailabilityObserverStale"})' alertname)"
+  AVAILABILITY_ALERTS="$(prom_get pairs 'count by (alertname) (ALERTS{alertstate="firing",alertname=~"NexusCapabilityUnavailable|NexusNodeOperationUnresolved|NexusSilentInferenceOutage|NexusAvailabilityObserverStale|NexusModelResidencyMismatch|NexusResidencyReconcilerGaveUp"})' alertname)"
   if [ $? -ne 0 ]; then
     fail "availability-query" "Could not read inference availability alerts from Prometheus."
   elif [ -n "$AVAILABILITY_ALERTS" ]; then
