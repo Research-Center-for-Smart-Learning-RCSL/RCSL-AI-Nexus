@@ -18,7 +18,6 @@ from app.domain.exceptions import (
     NotAuthorizedError,
 )
 from app.domain.services.memory_budget_service import MemoryBudgetService
-from app.shared.clock import FixedClock
 from tests.unit.fakes import FakeRuntime, FakeStateCommitter
 from tests.unit.manage_models_fixtures import ADMIN, READER, Harness, make_model
 
@@ -130,6 +129,10 @@ async def test_a_release_unloads_without_writing_intent() -> None:
     assert harness.models.rows["m1"].desired_version == 3
 
 
+async def _at_now() -> datetime:
+    return NOW
+
+
 def _budgeted(harness: Harness, *, frees: bool) -> ManageModels:
     return ManageModels(
         models=harness.models,
@@ -141,7 +144,7 @@ def _budgeted(harness: Harness, *, frees: bool) -> ManageModels:
         authz=RoleAuthorization(),
         audit=harness.audit,
         observed_absence_frees_memory=frees,
-        clock=FixedClock(NOW),
+        observation_clock=_at_now,
     )
 
 

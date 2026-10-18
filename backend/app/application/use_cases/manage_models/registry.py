@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from datetime import datetime
 
 from app.application.use_cases.reconcile_residency import NodeSerialisationPort
 from app.domain.entities.actor import Actor, Scope
@@ -27,11 +29,15 @@ from app.domain.ports.repositories import (
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
 from app.domain.ports.token_counter_port import TokenCounterPort
 from app.domain.services.memory_budget_service import MemoryBudgetService
-from app.shared.clock import Clock, SystemClock
+from app.shared.clock import SystemClock
 
 from .state import DELETABLE_STATES, ModelStateCommitterPort
 
 logger = logging.getLogger("app.application.use_cases.manage_models")
+
+
+async def _system_now() -> datetime:
+    return SystemClock().now()
 
 
 class ModelRegistryMixin:
@@ -49,7 +55,7 @@ class ModelRegistryMixin:
         metrics: MetricsPort | None = None,
         *,
         observed_absence_frees_memory: bool = False,
-        clock: Clock | None = None,
+        observation_clock: Callable[[], Awaitable[datetime]] | None = None,
         node_lock: NodeSerialisationPort | None = None,
     ) -> None:
         self._models = models
@@ -66,7 +72,14 @@ class ModelRegistryMixin:
         # RESIDENCY_RECONCILER_ENABLED, so turning the reconciler on is also
         # what changes how a load is budgeted; off, the budget is as before.
         self._observed_absence_frees_memory = observed_absence_frees_memory
-        self._clock = clock or SystemClock()
+        # The clock that stamps `observed_at`, which is the database's, as in
+        # the reconciler and the availability reader. Freshness rejects a
+        # stamp from the future, so judging a database stamp by this
+        # process's clock refuses a fresh observation whenever the database
+        # runs ahead: a Postgres inside a VM ran 66 ms ahead of the host
+        # (2026-10-18), and a load just after a heartbeat was charged for
+        # every model the runtime had just reported absent.
+        self._observation_clock = observation_clock or _system_now
         # None only where nothing else can load concurrently: unit tests.
         self._node_lock = node_lock
 
