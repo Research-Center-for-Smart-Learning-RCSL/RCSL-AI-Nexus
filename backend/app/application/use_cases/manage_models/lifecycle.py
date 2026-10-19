@@ -153,7 +153,7 @@ class ModelLifecycleMixin(ModelRegistryMixin):
         # in this same count rather than a budget that ignores it.
         occupying = await self._models.list_occupying_memory(node.id)
         if self._observed_absence_frees_memory:
-            now = self._clock.now()
+            now = await self._observation_clock()
             occupying = [m for m in occupying if charges_memory(m, now)]
         self._budget.assert_can_load(model, node, occupying, live_free_gb=live_free_gb)
 
