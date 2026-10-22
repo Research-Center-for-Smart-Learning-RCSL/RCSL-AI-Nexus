@@ -199,7 +199,12 @@ async def test_a_binding_whose_forward_was_lost_moves_only_after_a_tombstone(
     stack: dict[str, Any],
 ) -> None:
     """Design R6: bound, absent at the agent. The retry cancels the old op id
-    first, so the late original can only observe the tombstone."""
+    first, so the late original can only observe the tombstone.
+
+    The same path runs for a concurrent duplicate whose original is bound but
+    not yet forwarded: the agent cannot tell a lost forward from a slow one.
+    The original then fails rather than sharing the result, which #68 §1
+    accepted, because nothing runs or is billed twice."""
     lost = str(uuid.uuid4())
     await stack["bindings"].create(
         tenant_id=DEFAULT_TENANT_ID,

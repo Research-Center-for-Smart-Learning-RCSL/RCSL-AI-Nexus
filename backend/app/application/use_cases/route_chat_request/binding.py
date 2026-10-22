@@ -12,6 +12,12 @@ records, and with direct runtimes there is nothing to look a repeat up in.
   unfinished or unknown attempt is a 409, and so is a failure or an expired
   result. Only an attempt that provably never ran (`cancelled_unsent`) may be
   replaced by a new one.
+- **A repeat cannot tell a lost forward from a slow one** (#68 §1, accepted).
+  A copy that arrives after the original is bound but before its forward
+  reaches the agent finds no attempt there, tombstones the bound one and takes
+  the request over. The original's late forward only observes the tombstone,
+  so its caller gets an error rather than the shared result. Nothing runs or
+  is billed twice, which is the property this module exists for.
 - **The hash** identifies what the client sent, before any server-side step,
   and is compared using the version the binding was made with.
 """
@@ -141,11 +147,13 @@ class RequestBinder:
             op_id=op_id,
         )
         if bound.op_id != op_id:
-            # Another copy of this keyed request bound first. Its attempt is
-            # never cancelled from here: it may be on its way to the agent
-            # right now, and a concurrent duplicate converges on it instead.
-            # A binding left by a forward that was lost is cancelled by
-            # `repeat`, which every keyed request passes first.
+            # Another copy of this keyed request bound first, between this
+            # copy's `repeat` and here. Its attempt is never cancelled from
+            # here: it may be on its way to the agent right now. This copy
+            # answers from it, or is refused while it is unsent. Only
+            # `repeat`, which every keyed request passes first, tombstones a
+            # bound attempt the agent has not seen; that includes one whose
+            # forward is merely late (see the module docstring).
             self._check_hash(bound, identity)
             existing = await self._existing(bound, may_cancel=False)
             if existing is not None:
@@ -154,7 +162,7 @@ class RequestBinder:
                 bound, node_id=node_id, op_id=op_id, billing=billing
             )
             if bound.op_id != op_id:
-                # Lost the rebind as well; converge on the winner the same way.
+                # Lost the rebind as well; answer from the winner the same way.
                 existing = await self._existing(bound, may_cancel=False)
                 if existing is not None:
                     return existing
@@ -180,8 +188,10 @@ class RequestBinder:
             if not may_cancel:
                 raise IdempotencyInProgressError(detail=f"{binding.op_id} is bound, not yet sent")
             # Bound, but the agent never saw it: the forward was lost or has
-            # not arrived. A tombstone makes any late arrival only observe it,
-            # and only then may the request move (design R6).
+            # not arrived yet, and the two cannot be told apart from here. A
+            # tombstone makes any late arrival only observe it, and only then
+            # may the request move (design R6). A forward that was merely late
+            # fails for its caller; accepted on #68 §1.
             view = await ledger.cancel(binding.op_id, "inference")
         if view.state == "cancelled_unsent":
             return None

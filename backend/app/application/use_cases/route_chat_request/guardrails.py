@@ -140,11 +140,24 @@ class PromptGuardrailsMixin(RouteChatDependencies):
         profile = validated_profiles.is_validated(key)
         if profile is None:
             return None
-        window = target.resource_profile.context_length
-        if measured.declared_context:
-            window = (
-                min(window, measured.declared_context) if window > 0 else measured.declared_context
+        # The whole window is granted only against the capacity this same
+        # snapshot declares. Falling back to the registration would widen to
+        # a figure nothing measured, and a registration above the weights'
+        # context is clamped by the runtime (#68 §4). Without it the legacy
+        # half stands; the agent would refuse past it in any case.
+        if not measured.declared_context or measured.declared_context <= 0:
+            logger.warning(
+                "not widening %s: the measurement declared no context request_id=%s",
+                target.alias,
+                self._request_id(),
             )
+            return None
+        registered = target.resource_profile.context_length
+        window = (
+            min(registered, measured.declared_context)
+            if registered > 0
+            else measured.declared_context
+        )
         return window, int(measured.counted), profile
 
     async def _prompt_budget(
