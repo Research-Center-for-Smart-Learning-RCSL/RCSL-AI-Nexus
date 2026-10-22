@@ -28,7 +28,7 @@ seed-probe-1 complete: 6 new samples in 680s
 seed-probe-2: 2 models x 1 rounds x 3 tasks = 6 samples, 6 to go
   temperature=0.3  top_k=40  top_p=0.9  seed=2
 
-  keeping the existing snapshot (/Users/rcslmac1/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
+  keeping the existing snapshot (/Users/<operator>/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
 round 0  qwen3.8:27b-q8_0  (3 tasks)
     evicting qwen3.8:27b-q4_K_M
     loading qwen3.8:27b-q8_0 ...
@@ -52,7 +52,7 @@ seed-probe-2 complete: 6 new samples in 653s
 seed-probe-3: 2 models x 1 rounds x 3 tasks = 6 samples, 6 to go
   temperature=0.3  top_k=40  top_p=0.9  seed=3
 
-  keeping the existing snapshot (/Users/rcslmac1/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
+  keeping the existing snapshot (/Users/<operator>/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
 round 0  qwen3.8:27b-q8_0  (3 tasks)
     evicting qwen3.8:27b-q4_K_M
     loading qwen3.8:27b-q8_0 ...
@@ -76,7 +76,7 @@ seed-probe-3 complete: 6 new samples in 588s
 seed-probe-4: 2 models x 1 rounds x 3 tasks = 6 samples, 6 to go
   temperature=0.3  top_k=40  top_p=0.9  seed=4
 
-  keeping the existing snapshot (/Users/rcslmac1/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
+  keeping the existing snapshot (/Users/<operator>/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
 round 0  qwen3.8:27b-q8_0  (3 tasks)
     evicting qwen3.8:27b-q4_K_M
     loading qwen3.8:27b-q8_0 ...
@@ -100,7 +100,7 @@ seed-probe-4 complete: 6 new samples in 608s
 seed-probe-5: 2 models x 1 rounds x 3 tasks = 6 samples, 6 to go
   temperature=0.3  top_k=40  top_p=0.9  seed=5
 
-  keeping the existing snapshot (/Users/rcslmac1/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
+  keeping the existing snapshot (/Users/<operator>/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
 round 0  qwen3.8:27b-q8_0  (3 tasks)
     evicting qwen3.8:27b-q4_K_M
     loading qwen3.8:27b-q8_0 ...

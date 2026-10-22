@@ -406,7 +406,7 @@ LaunchDaemon 放在一起——它要跑得起來，得先有 repo、有 `secret
 
 - [ ] 確認 Ollama 的模型倉庫位置。**這台是 `/Users/Shared/ollama/models`，不是任何人的
   家目錄底下**——2026-08-18 把 runtime 移到專用服務帳號 `_rcslollama` 時一起搬的，因為
-  `/Users/rcslmac1` 是 750，服務帳號連進都進不去（見上面 §3 的服務帳號那一步）。全新安裝
+  `/Users/<operator>` 是 750，服務帳號連進都進不去（見上面 §3 的服務帳號那一步）。全新安裝
   若還沒做那一步，位置是執行 Ollama 那個帳號的 `~/.ollama/models`。
 - [ ] 在 `.env` 設 `OLLAMA_MODELS_HOST_PATH=/Users/Shared/ollama/models`。
   compose 會把它**唯讀**掛成容器裡的 `/ollama-models`。唯讀是有原因的：那個目錄的擁有者
@@ -689,7 +689,7 @@ docstring 裡，那是估算器本身所在的地方。
   curl -s http://127.0.0.1:9101/host    # 應該回一段 JSON
   ```
 
-  plist 裡的路徑寫死成 `/Users/rcslmac1/dev/RCSL-AI-Nexus/launchd/host-metrics.py`，
+  plist 裡的路徑寫死成 `/Users/<operator>/dev/RCSL-AI-Nexus/launchd/host-metrics.py`，
   repo 放在別的地方就要改；`UserName` 跟另外三個主機側 job 一樣是操作者帳號（只有 ollama 那個是 `_rcslollama`），因為 `vm_stat`、
   `sysctl`、`statfs` 誰都讀得到，不需要 root。
 

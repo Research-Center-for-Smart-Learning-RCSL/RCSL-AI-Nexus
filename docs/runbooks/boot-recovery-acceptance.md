@@ -187,7 +187,7 @@ Ollama 只 LISTEN 在 `127.0.0.1:11434`。**這次多證明了一件事：監測
 **實測記錄（2026-07-26，第四次開機）：這一次是第二輪，macOS 26.5.2 更新，而它失敗了。**
 `/Library/Receipts/InstallHistory.plist` 記著 `macOS 26.5.2` 於 19:09:47 裝完，機器
 19:08:46 開機——19:04:18 關機的那次就是更新重開。**第二輪的兩個額外檢查都過了**：
-`autoLoginUser` 還是 `rcslmac1`，`pmset autorestart` 還是 1，更新沒有重置它們。
+`autoLoginUser` 還是 `<operator>`，`pmset autorestart` 還是 1，更新沒有重置它們。
 `tailscaled` 也贏得乾淨俐落（見下面那張表），Ollama 正常——然後 `docker compose ps`
 是空的。**十個容器一個都沒起來。**
 
@@ -367,7 +367,7 @@ sudo ls -l /Library/Tailscale/          # 那個目錄 root only
 21:51:30 `load netmap from cache: netmap cache is not available`，**這個模型連續第五次預測命中**
 （「讀了不重寫」本身仍然是四次觀察——21:51 是 miss，不是 load，它驗的是那四次推出來的預測）。
 **位址 9 秒這一半沒中，實際是 11 秒**——`tailscaled` 21:51:30 起、
-`peerapi: serving on http://100.108.250.62` 在 21:51:41。
+`peerapi: serving on http://<tailnet-ip>` 在 21:51:41。
 
 **reconcile log 上那個 15 秒不是這個數字。** 它每 5 秒取樣一次，位址在第 11 秒上來、它在第
 15 秒才看到。**要量位址就讀 `tailscaled` 的 log，不要讀 reconciler 的**——這和 §1.1a 那個
@@ -754,7 +754,7 @@ plist 已經自刪、reconciler 的 plist 在，而且**最後那一項讀對了
 | 21:50:38 | 九個服務停掉，讀回確認 |
 | 21:51:23 | 開機（`kern.boottime`） |
 | 21:51:30 | `reconcile starting`——開機後 7 秒，和 §1.1a 一樣 |
-| 21:51:41 | 位址真的上線（`tailscaled` 的 log：`peerapi` 綁在 100.108.250.62 上）——**+11 秒** |
+| 21:51:41 | 位址真的上線（`tailscaled` 的 log：`peerapi` 綁在 <tailnet-ip> 上）——**+11 秒** |
 | 21:51:45 | reconciler 看到位址（它每 5 秒取樣，所以它記的是 15 秒，不是 11 秒） |
 | 21:51:46 | `docker daemon responding` |
 | **21:52:01** | **`not running:` 九個 → `docker did not restore the stack; bringing it up`** |

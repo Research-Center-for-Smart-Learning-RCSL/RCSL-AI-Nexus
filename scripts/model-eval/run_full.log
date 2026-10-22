@@ -232,7 +232,7 @@ the 4.4 replacement test needs the other candidates on the bench.
 hard-full-3: 4 models x 5 rounds x 21 tasks = 420 samples, 420 to go
   temperature=0.3  top_k=40  top_p=0.9  seed=42
 
-  keeping the existing snapshot (/Users/rcslmac1/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
+  keeping the existing snapshot (/Users/<operator>/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
 round 0  gemma4:31b-it-q8_0  (21 tasks)
    search_last_rotated       1.00   1194tok depth=  127   87.2s
    range_sum_updates         1.00    296tok depth=  175   22.8s
@@ -859,7 +859,7 @@ carries signal: vm_implement, duration_grammar, visible_suffix, text_wrap_exact,
 tutor-full: 4 models x 5 rounds x 4 tasks = 80 samples, 80 to go
   temperature=0.3  top_k=40  top_p=0.9  seed=42
 
-  keeping the existing snapshot (/Users/rcslmac1/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
+  keeping the existing snapshot (/Users/<operator>/dev/RCSL-AI-Nexus/scripts/model-eval/deployment-snapshot.json)
 round 0  gemma4:31b-it-q8_0  (4 tasks)
     evicting qwen3.8:27b-mlx
     loading gemma4:31b-it-q8_0 ...

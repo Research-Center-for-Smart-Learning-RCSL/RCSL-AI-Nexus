@@ -189,7 +189,7 @@ metadata 解得開、index 裡沒有缺少的 pack。**它不會把資料讀回�
 
   ```sh
   export RESTIC_REPOSITORY=/Users/Shared/nexus-backup/restic
-  export RESTIC_PASSWORD_FILE=/Users/rcslmac1/dev/RCSL-AI-Nexus/secrets/restic_password
+  export RESTIC_PASSWORD_FILE="$PWD/secrets/restic_password"    # 在 repo 根目錄執行
 
   restic snapshots --tag database          # 挑一個，或用 latest
   restic dump --tag database latest /nexus.sql > /tmp/rehearsal.sql
@@ -255,7 +255,7 @@ metadata 解得開、index 裡沒有缺少的 pack。**它不會把資料讀回�
 - [ ] 確認 secrets 也回得來，而且內容是對的：
 
   ```sh
-  restic dump --tag secrets latest /Users/rcslmac1/dev/RCSL-AI-Nexus/secrets/api_key_pepper \
+  restic dump --tag secrets latest "$PWD/secrets/api_key_pepper" \
     | diff - secrets/api_key_pepper && echo "pepper 相同"
   ```
 
@@ -285,7 +285,7 @@ metadata 解得開、index 裡沒有缺少的 pack。**它不會把資料讀回�
   export RESTIC_PASSWORD_FILE=<你手上那份密碼>
   restic dump --tag manifest latest /manifest.txt     # 先讀它，決定要拉哪些模型
   restic restore --tag secrets latest --target /tmp/restored
-  cp -R /tmp/restored/Users/rcslmac1/dev/RCSL-AI-Nexus/secrets/. secrets/
+  cp -R /tmp/restored/Users/*/dev/RCSL-AI-Nexus/secrets/. secrets/   # 原主機的路徑
   chmod 600 secrets/*
   ```
 

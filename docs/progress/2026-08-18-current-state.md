@@ -470,14 +470,14 @@ it is two constants and one `restic init`.
 First backup at 21:59:59: four snapshots, 67,080 bytes of raw data. The
 LaunchDaemon was bootstrapped the same evening and `launchctl print` confirms
 what the plist intended: `type = LaunchDaemon`, calendar interval 03:30,
-`username = rcslmac1` (which it needs for the docker socket and for `secrets/`),
+`username = <operator>` (which it needs for the docker socket and for `secrets/`),
 the working directory and both log paths, `nice = 5`, and `state = not running`
 because `RunAtLoad` is false on purpose.
 
 **Then it was kickstarted, because "works by hand, fails as a daemon" is the
 shape of most of the eight defects 2026-07-26 found**, and both successful runs
 up to that point had been from an interactive shell. Under launchd — root
-starting it, dropping to `rcslmac1`, launchd's own environment, no terminal —
+starting it, dropping to `<operator>`, launchd's own environment, no terminal —
 `runs = 1`, `last exit code = 0`, every stage logged, and the state file written
 `ok` at 22:10:51. That run also produced the first evidence that `forget` is
 actually working the way the grouping was designed for: it added four snapshots

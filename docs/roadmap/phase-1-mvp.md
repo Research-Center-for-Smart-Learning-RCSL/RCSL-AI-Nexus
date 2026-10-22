@@ -103,7 +103,7 @@ The live map from a thing to the code that implements it is
 - [x] Segmented networks; no service publishes on `0.0.0.0`. **This line named `app` and `data` until 2026-08-18 and neither has ever existed** — the sketch was replaced by a per-tier split before the first deploy and the line was never brought forward. Ten as of that date: `gateway-egress` and `gateway-data` for the data plane, `control-tailnet` and `control-public` carrying one entrance each, the shared `admin-data`, the internal `parser-net`, `metrics-gateway`/`metrics-admin`/`metrics-viz` for scraping, and `viz-ingress` so that Grafana alone pays for a published port (§6). Six of the ten are `internal: true`; the exceptions are `gateway-egress`, the two control networks and `viz-ingress`, each for a reason recorded beside it in the file
 - [x] `migrate` as a one-shot service; all applications gate on `service_completed_successfully`
 - [x] `tailscale serve` for the tailnet entrance. Configured and serving:
-      `https://rcslmac1demac-studio.tail68e30b.ts.net` proxies to `127.0.0.1:3000`, port 443
+      `https://<host>.<tailnet>.ts.net` proxies to `127.0.0.1:3000`, port 443
       listening on the tailnet address, 200 over it. **Confirmed end to end from another
       tailnet device on 2026-08-02** — the administrator's enrolment was carried out
       entirely through it, which is the confirmation that counts and the one this bullet

@@ -95,9 +95,9 @@ volume；[`first-deploy.md`](./first-deploy.md) 是從零開始安裝，這份�
 **launchd 從來沒有 spawn 過這兩個 job，所以那些程序一開始就不是它的子程序。**
 
 `launchd` 是以 job 的 `UserName` 身分去開 `StandardOutPath`，不是以 root。這兩個
-plist 把日誌寫在 `/var/log`（`root:wheel drwxr-xr-x`）而 `UserName` 是 `rcslmac1`，
+plist 把日誌寫在 `/var/log`（`root:wheel drwxr-xr-x`）而 `UserName` 是 `<operator>`，
 建檔會拿到 `EACCES`，spawn 在程式執行之前就失敗了。六個 daemon 裡只有這兩個是這個
-組合——其餘都寫在 `/opt/homebrew/var/log`，那裡 `rcslmac1` 寫得進去——而它們正好就是
+組合——其餘都寫在 `/opt/homebrew/var/log`，那裡 `<operator>` 寫得進去——而它們正好就是
 `bootout` 停不掉的那兩個。兩個缺陷同時在 `106c412`（Replace Docker Desktop with
 Colima）進來。
 
@@ -248,7 +248,7 @@ ps -Ao pid,command | grep -E 'limactl|socat|host-metrics|ollama serve' | grep -v
 
 ```sh
 lsof -nP -iTCP -sTCP:LISTEN | grep -E ':(8000|8001|8002|3000|3001|3002|5432|6379|9090|11434) '
-lsof -nP -iTCP@100.108.250.62 -sTCP:LISTEN         # tailnet 位址，期望無輸出
+lsof -nP -iTCP@"$(tailscale ip -4)" -sTCP:LISTEN  # tailnet 位址，期望無輸出
 ```
 
 兩個都應該沒有輸出。
@@ -332,10 +332,10 @@ enable 它是無害的，但會讓下一個讀日誌的人以為當初 disable �
   > **這個等待迴圈一定要用操作者的身分跑。** `colima start` 會建立並切換到
   > `colima` 這個 docker context（endpoint 是 `~/.colima/default/docker.sock`），
   > 而 context 的選擇存在 `$HOME/.docker`。在 root 的 shell 裡用
-  > `sudo -u rcslmac1 docker info` 檢查會拿到 root 的 `$HOME`，於是落回 `default`
+  > `sudo -u <operator> docker info` 檢查會拿到 root 的 `$HOME`，於是落回 `default`
   > context 的 `/var/run/docker.sock`——那個 symlink 指向 Docker Desktop 時代的
   > `~/.docker/run/docker.sock`，早就不存在了。結果是 VM 明明起來了，檢查卻永遠
-  > 判失敗。要 `sudo -u rcslmac1 -H`，或直接用 rcslmac1 的 shell 跑。
+  > 判失敗。要 `sudo -u <operator> -H`，或直接用 <operator> 的 shell 跑。
   > 2026-09-09 復機時第一支腳本就是這樣白等了 180 秒。
 
 - [ ] **起其餘的主機層 daemon**
@@ -346,7 +346,7 @@ enable 它是無害的，但會讓下一個讀日誌的人以為當初 disable �
   done
   ```
 
-  > `socat-forwards` 需要 tailnet 位址 `100.108.250.62` 已經起來，它自己會等，
+  > `socat-forwards` 需要 tailnet 位址 `<tailnet-ip>` 已經起來，它自己會等，
   > 上限 120 秒。`tailscaled` 沒回來的話它會放棄——第 7 節有對應的症狀。
 
   > `reconcile-port-bindings` 是 `RunAtLoad`，bootstrap 的當下它就會跑一次，
@@ -383,7 +383,7 @@ cd ~/dev/RCSL-AI-Nexus
 docker compose ps --services --status running | wc -l    # 期望：11
 colima status                                            # 期望：is running
 curl -s -m 3 http://127.0.0.1:11434/api/tags >/dev/null && echo ollama OK
-lsof -nP -iTCP@100.108.250.62 -sTCP:LISTEN               # 期望：8000、8002、3001 三行
+lsof -nP -iTCP@"$(tailscale ip -4)" -sTCP:LISTEN        # 期望：8000、8002、3001 三行
 ```
 
 11 個服務是：`postgres redis prometheus grafana gateway admin-public admin-tailnet
@@ -393,7 +393,8 @@ frontend-public frontend-tailnet parser qdrant`。`migrate` 不算在內，它�
 最後兩項是端到端，前面都過了才有意義：
 
 ```sh
-curl -s -o /dev/null -w '%{http_code}\n' https://rcslmac1demac-studio.tail68e30b.ts.net/    # 期望 200
+HOST="$(tailscale status --json | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')"
+curl -s -o /dev/null -w '%{http_code}\n' "https://$HOST/"    # 期望 200
 tail -20 /opt/homebrew/var/log/nexus-health.log          # 期望：下一次執行回報健康
 ```
 
@@ -412,7 +413,7 @@ tail -20 /opt/homebrew/var/log/nexus-health.log          # 期望：下一次執
 | `bootstrap` 回報 `Bootstrap failed: 5: Input/output error` | 該 job 已經載入 | 先 `bootout` 再 `bootstrap`，不要重複 bootstrap |
 | `bootstrap` 沒有效果、job 沒起來 | 停機時 `disable` 過 | 先 `enable`（第 5 節），再 bootstrap |
 | `bootstrap` 回傳 0，但程序始終不出現、日誌檔連建都沒建 | launchd spawn 不起來，最常見是 `StandardOutPath` 的目錄該 job 的 `UserName` 不能寫 | `sudo launchctl print system/<label>` 看 `active count = 0` / `state = spawn scheduled`，再查日誌路徑的權限（第 2 節） |
-| 等 docker 就緒的迴圈永遠不過，但 `colima status` 說在跑 | 檢查是在 root 的 `$HOME` 下跑的，docker context 落回 `default` | 用 `sudo -u rcslmac1 -H`（第 6 節的註） |
+| 等 docker 就緒的迴圈永遠不過，但 `colima status` 說在跑 | 檢查是在 root 的 `$HOME` 下跑的，docker context 落回 `default` | 用 `sudo -u <operator> -H`（第 6 節的註） |
 | 服務起來了但少幾個 | compose 檔或映像有變 | 讀 `migrate` 的日誌，不要讀應用的日誌——應用會在 migrate 上 gate（README「Running the stack」） |
 | 什麼都不想修，只想回到線上 | — | `sudo reboot`。第 5 節說明了為什麼這會讓平台自己回來，前提是沒有 `disable` 過 |
 
