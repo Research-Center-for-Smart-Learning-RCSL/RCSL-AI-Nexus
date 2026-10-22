@@ -103,6 +103,20 @@ leaves `state = error` and the intent set, and the reconciler retries it within
 its backoff. An Unload the runtime fails leaves the model `loaded` and the
 intent withdrawn.
 
+**A timeout is recorded as a failure, but the agent may still finish** (#68
+§2). If the admin's call to the agent times out after the request was sent, a
+Load is recorded as `error` and an Unload goes back to `loaded`. The agent
+keeps its own operation and may complete it. The registry's `state` is then
+wrong until the next heartbeat, which records the real `observed_state`, within
+`NODE_HEARTBEAT_INTERVAL_SECONDS`.
+
+- Routing and the availability gauges use only fresh observations, so they
+  follow the runtime, not the stale `state`.
+- With the reconciler on, a desired model that is already resident is left
+  alone.
+- Before retrying a Load that timed out, check the model's observed state, or
+  `/api/ps` on the host.
+
 `RESIDENCY_RECONCILER_ENABLED` (default `false`) starts a loop in the tailnet
 admin, beside the heartbeat. It stays idle unless `NODE_AGENT_ENABLED` is on
 and the heartbeat interval is positive. For each Ollama node it:
