@@ -36,6 +36,9 @@ separately at the end, marked as superseded.
 
 ### October 2026
 
+**[2026-10-22](./progress/2026-10-22.md)**
+- Colima VM back under launchd at 4 GiB with the repository plists installed; platform restarted on `7a2da06` and gemma4 and the embedder reloaded
+
 **[2026-10-18](./progress/2026-10-18.md)**
 - #50: residency-mismatch gauge and alert, reconciler outcome counter and give-up alert, delivered through the health job
 
