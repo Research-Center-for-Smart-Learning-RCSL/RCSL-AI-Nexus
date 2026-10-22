@@ -88,18 +88,21 @@ VALIDATED: tuple[ValidatedProfile, ...] = (
     # tools. Its encoder gives the runtime's own token ids on 3,036 random
     # texts and 203 recorded goldens (`qwen_tokenizer_goldens`), and its GGUF
     # template renders tool-less prompts as the runtime does: U − P = 0 on
-    # every case below. With tools it is not validated (#27).
+    # every case below. With tools it is not validated (#27). Measured on
+    # 0.33.2; re-measured on 0.40.8 on 2026-10-22 with identical runtime counts.
+    # Byte for byte the counter's rendering is one trailing blank line longer
+    # than the runtime's (`render_diff`), which can only count high.
     ValidatedProfile(
         ref="qwen2.5:7b",
         node_id="local",
         runtime="ollama",
-        runtime_version="0.33.2",
+        runtime_version="0.40.8",
         manifest="845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
         encoders=frozenset({"native:7b26ae0075c9cf07", "python:0ca0ada64166ed40"}),
         renderer="jinja:2c9abc88aee670e3",
         tools=False,
         thinking=frozenset({"false", "omitted"}),
-        measured_on="2026-10-09",
+        measured_on="2026-10-22",
         cases=(
             "system_multiturn",
             "thinking_gateway",

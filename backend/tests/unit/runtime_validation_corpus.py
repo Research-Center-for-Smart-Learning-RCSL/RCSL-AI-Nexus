@@ -131,9 +131,11 @@ CASES: dict[str, Case] = {
     "near_boundary_qwen_16k": Case((Message(U, _CODE * 320),), only=("qwen2.5:7b",)),
 }
 
-# Recorded 2026-10-08 on the production host (Ollama 0.33.2). Every count was
-# requested with `truncate: false`, which the runtime refuses rather than
-# shortening, so each is a count of the whole payload.
+# Recorded 2026-10-08 on the production host (Ollama 0.33.2), and re-recorded
+# 2026-10-22 on 0.40.8 after the upgrade: every count and payload hash came
+# back identical, for both models. Every count was requested with
+# `truncate: false`, which the runtime refuses rather than shortening, so each
+# is a count of the whole payload.
 RECORDED: dict[str, dict[str, object]] = {
     "2bada8a74506": {
         "cases": {
@@ -236,7 +238,7 @@ RECORDED: dict[str, dict[str, object]] = {
         },
         "manifest": "845dbda0ea48",
         "num_ctx": 32768,
-        "ollama": "0.33.2",
+        "ollama": "0.40.8",
         "ref": "qwen2.5:7b",
     },
     "a0feadb736f5": {
@@ -334,7 +336,7 @@ RECORDED: dict[str, dict[str, object]] = {
         },
         "manifest": "53dd8459790f",
         "num_ctx": 262144,
-        "ollama": "0.33.2",
+        "ollama": "0.40.8",
         "ref": "gemma4:31b-it-q8_0",
     },
 }
