@@ -37,9 +37,12 @@ PROFILE = ValidatedProfile(
 
 
 class MeasuringCounter(FakeCounter):
-    def __init__(self, total: int, *, renderer: str | None = "jinja:r") -> None:
+    def __init__(
+        self, total: int, *, renderer: str | None = "jinja:r", declared: int | None = 32768
+    ) -> None:
         super().__init__(total=total, declared=32768)
         self.renderer = renderer
+        self.declared_in_measurement = declared
         self.measured = 0
 
     async def measure(self, ref, messages, tools) -> Measurement:
@@ -47,7 +50,7 @@ class MeasuringCounter(FakeCounter):
         return Measurement(
             identity="m" * 64,
             counted=self._total,
-            declared_context=32768,
+            declared_context=self.declared_in_measurement,
             encoder="native:e",
             renderer=self.renderer,
         )
@@ -115,6 +118,8 @@ async def test_an_ordinary_request_never_asks_for_the_fingerprint() -> None:
         (MeasuringCounter(total=20000), timedelta(minutes=10)),  # stale version
         (MeasuringCounter(total=20000), None),  # never observed
         (MeasuringCounter(total=20000, renderer=None), timedelta(minutes=1)),  # ChatML guess
+        # Not the registration in its place (#68 §4).
+        (MeasuringCounter(total=20000, declared=None), timedelta(minutes=1)),  # no capacity
         (FakeCounter(total=20000, declared=32768), timedelta(minutes=1)),  # cannot measure
     ],
 )

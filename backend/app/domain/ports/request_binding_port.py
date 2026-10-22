@@ -2,8 +2,10 @@
 
 Final spec §5 and design R6/S6 on #24. A binding ties `(tenant, request id)`
 to the one attempt that may run for it, `(node, op id)`, and is committed
-before anything is forwarded, so two copies of one keyed request converge on
-one attempt rather than each running its own.
+before anything is forwarded, so two copies of one keyed request never each
+run their own attempt. They do not always share one result: a copy that
+arrives before the original's forward reaches the agent takes the request
+over, and the original's caller gets an error (#68 §1).
 """
 
 from __future__ import annotations
