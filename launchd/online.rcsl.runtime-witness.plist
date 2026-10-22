@@ -15,13 +15,13 @@
 	<array>
 		<string>/usr/bin/python3</string>
 		<string>-I</string>
-		<string>/Users/<operator>/dev/RCSL-AI-Nexus/scripts/host/runtime_witness.py</string>
+		<string>@REPO@/scripts/host/runtime_witness.py</string>
 		<string>--endpoint</string>
 		<string>http://127.0.0.1:11434</string>
 		<string>--out</string>
-		<string>/Users/<operator>/dev/RCSL-AI-Nexus/data/runtime-witness/out</string>
+		<string>@REPO@/data/runtime-witness/out</string>
 		<string>--challenge</string>
-		<string>/Users/<operator>/dev/RCSL-AI-Nexus/data/runtime-witness/challenge</string>
+		<string>@REPO@/data/runtime-witness/challenge</string>
 	</array>
 
 	<!-- Root, unlike the other host jobs here, because it is evidence rather
@@ -47,6 +47,6 @@
 	<key>StandardErrorPath</key>
 	<string>/opt/homebrew/var/log/nexus-runtime-witness.log</string>
 	<key>WorkingDirectory</key>
-	<string>/Users/<operator>/dev/RCSL-AI-Nexus/data/runtime-witness</string>
+	<string>@REPO@/data/runtime-witness</string>
 </dict>
 </plist>

@@ -11,7 +11,12 @@
 
 set -eu
 
-TAILNET_IP="<tailnet-ip>"
+# The node's own tailnet address, asked of Tailscale rather than written here:
+# the repository is public. `.env`'s TAILNET_IP is not it under Colima, where
+# containers bind loopback and that variable is 127.0.0.1. An explicit
+# TAILNET_IP in the job's environment still wins.
+TAILNET_IP="${TAILNET_IP:-}"
+TAILSCALE="/opt/homebrew/bin/tailscale"
 SOCAT="/opt/homebrew/bin/socat"
 
 # gateway :8000, admin-public :8002, frontend-public :3001
@@ -19,11 +24,19 @@ FORWARDS="8000:8000 8002:8002 3001:3001"
 
 log() { printf '%s socat-forwards: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1"; }
 
-# Wait for the tailnet address, same as the reconciler.
+# Wait for the tailnet address, same as the reconciler. At boot `tailscale ip`
+# fails until tailscaled is up, and the address reaches an interface later
+# still, so both are inside the same 120-second wait.
 waited=0
-while ! /sbin/ifconfig 2>/dev/null | grep -q "inet ${TAILNET_IP} "; do
+while :; do
+    ip="$TAILNET_IP"
+    [ -n "$ip" ] || ip="$("$TAILSCALE" ip -4 2>/dev/null | head -1)" || ip=""
+    if [ -n "$ip" ] && /sbin/ifconfig 2>/dev/null | grep -q "inet ${ip} "; then
+        TAILNET_IP="$ip"
+        break
+    fi
     if [ "$waited" -ge 120 ]; then
-        log "FATAL: ${TAILNET_IP} not on any interface after 120s"
+        log "FATAL: tailnet address ${ip:-unknown} not on any interface after 120s"
         exit 1
     fi
     sleep 2

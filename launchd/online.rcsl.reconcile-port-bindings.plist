@@ -12,7 +12,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>/Users/<operator>/dev/RCSL-AI-Nexus/launchd/reconcile-port-bindings.sh</string>
+		<string>@REPO@/launchd/reconcile-port-bindings.sh</string>
 	</array>
 
 	<!-- The docker socket is the user's
@@ -20,7 +20,7 @@
 	     context, so root would be the wrong identity here even though this is
 	     a daemon. Same arrangement as online.rcsl.ollama. -->
 	<key>UserName</key>
-	<string><operator></string>
+	<string>@OPERATOR@</string>
 
 	<!-- Once per boot, not KeepAlive. The script is a single reconcile pass
 	     that exits non-zero when a binding is beyond repair; under KeepAlive
@@ -41,6 +41,6 @@
 	<key>StandardErrorPath</key>
 	<string>/opt/homebrew/var/log/nexus-reconcile.log</string>
 	<key>WorkingDirectory</key>
-	<string>/Users/<operator>/dev/RCSL-AI-Nexus</string>
+	<string>@REPO@</string>
 </dict>
 </plist>

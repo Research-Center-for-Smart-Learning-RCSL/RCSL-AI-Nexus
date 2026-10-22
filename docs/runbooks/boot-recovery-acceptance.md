@@ -519,8 +519,7 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/homebrew.mxcl.tailscale.p
 
 ```sh
 cd ~/dev/RCSL-AI-Nexus
-sudo install -o root -g wheel -m 644 \
-  launchd/online.rcsl.delay-tailscaled-once.plist /Library/LaunchDaemons/
+sudo launchd/install-daemons.sh delay-tailscaled-once   # renders the template for this host
 sudo reboot
 ```
 

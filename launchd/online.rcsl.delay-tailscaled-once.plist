@@ -17,7 +17,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>/Users/<operator>/dev/RCSL-AI-Nexus/launchd/delay-tailscaled-once.sh</string>
+		<string>@REPO@/launchd/delay-tailscaled-once.sh</string>
 	</array>
 
 	<!-- root, unlike the other three daemons here. Those run as the operator

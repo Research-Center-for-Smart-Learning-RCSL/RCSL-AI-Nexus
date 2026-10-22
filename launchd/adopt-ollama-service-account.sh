@@ -18,7 +18,7 @@
 # gateway answers 503 `no_available_model` for that window rather than hanging.
 #
 # **The directory move is a rename, not a copy.** /Users/Shared and
-# /Users/<operator> are on the same volume (verified: both /dev/disk3s5), so the
+# the operator's home are on the same volume (verified: both /dev/disk3s5), so the
 # 214 GB in there moves instantly. If that ever stops being true this script
 # will take minutes rather than a second, and the bootout above it means those
 # minutes are downtime.
@@ -33,10 +33,12 @@ SERVICE_GROUP="_rcslollama"
 SERVICE_ID=470
 REAL_NAME="RCSL Ollama Runtime"
 
-OPERATOR_HOME="/Users/<operator>/.ollama"
 SERVICE_HOME="/Users/Shared/ollama"
 
-REPO="/Users/<operator>/dev/RCSL-AI-Nexus"
+REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
+# OPERATOR and OPERATOR_HOME: the checkout's owner, not root (lib/operator.sh).
+. "$REPO/launchd/lib/operator.sh"
+OPERATOR_OLLAMA="$OPERATOR_HOME/.ollama"
 PLIST_SRC="$REPO/launchd/online.rcsl.ollama.plist"
 PLIST_DST="/Library/LaunchDaemons/online.rcsl.ollama.plist"
 LABEL="online.rcsl.ollama"
@@ -56,16 +58,16 @@ if [ "${1:-}" = "--rollback" ]; then
   log "rolling back to the operator's login"
   launchctl bootout "system/$LABEL" 2>/dev/null || true
   sleep 2
-  if [ -d "$SERVICE_HOME" ] && [ ! -d "$OPERATOR_HOME" ]; then
-    mv "$SERVICE_HOME" "$OPERATOR_HOME"
-    chown -R <operator>:staff "$OPERATOR_HOME"
+  if [ -d "$SERVICE_HOME" ] && [ ! -d "$OPERATOR_OLLAMA" ]; then
+    mv "$SERVICE_HOME" "$OPERATOR_OLLAMA"
+    chown -R "$OPERATOR":staff "$OPERATOR_OLLAMA"
   fi
-  chown <operator>:admin "$LOG" 2>/dev/null || true
+  chown "$OPERATOR":admin "$LOG" 2>/dev/null || true
   # The plist in the repository is the new one; git is where the old one is.
   log "now restore the plist and load it:"
   log "  cd $REPO && git show HEAD~1:launchd/online.rcsl.ollama.plist > /tmp/ollama.plist"
   log "  sudo cp /tmp/ollama.plist $PLIST_DST && sudo launchctl bootstrap system $PLIST_DST"
-  log "and put OLLAMA_MODELS_HOST_PATH back to $OPERATOR_HOME/models in .env,"
+  log "and put OLLAMA_MODELS_HOST_PATH back to $OPERATOR_OLLAMA/models in .env,"
   log "then: docker compose up -d --force-recreate gateway admin-tailnet admin-public"
   exit 0
 fi
@@ -80,8 +82,8 @@ if [ -d "$SERVICE_HOME" ]; then
   else owns that path. Check it by hand rather than letting this merge two trees."
 fi
 
-[ -d "$OPERATOR_HOME" ] || refuse "$OPERATOR_HOME does not exist; nothing to move"
-[ -d "$OPERATOR_HOME/models" ] || refuse "$OPERATOR_HOME/models does not exist; this is not an ollama home"
+[ -d "$OPERATOR_OLLAMA" ] || refuse "$OPERATOR_OLLAMA does not exist; nothing to move"
+[ -d "$OPERATOR_OLLAMA/models" ] || refuse "$OPERATOR_OLLAMA/models does not exist; this is not an ollama home"
 
 if dscl . -read "/Users/$SERVICE_USER" >/dev/null 2>&1; then
   refuse "$SERVICE_USER already exists. Remove it first, or edit SERVICE_USER here."
@@ -93,9 +95,9 @@ taken="$(dscl . -search /Groups PrimaryGroupID "$SERVICE_ID" 2>/dev/null | head 
 [ -z "$taken" ] || refuse "gid $SERVICE_ID is taken by: $taken"
 
 # Same volume, or the move below is a 214 GB copy inside a service outage.
-src_vol="$(df -P "$OPERATOR_HOME" | awk 'NR==2 {print $1}')"
+src_vol="$(df -P "$OPERATOR_OLLAMA" | awk 'NR==2 {print $1}')"
 dst_vol="$(df -P /Users/Shared | awk 'NR==2 {print $1}')"
-[ "$src_vol" = "$dst_vol" ] || refuse "$OPERATOR_HOME ($src_vol) and /Users/Shared ($dst_vol)
+[ "$src_vol" = "$dst_vol" ] || refuse "$OPERATOR_OLLAMA ($src_vol) and /Users/Shared ($dst_vol)
   are on different volumes, so the move is a copy of 214 GB with inference down
   for the whole of it. Do this during a window you have chosen, not this script's."
 
@@ -135,8 +137,8 @@ while pgrep -f 'ollama serve' >/dev/null 2>&1; do
 done
 log "  stopped after ${waited}s"
 
-log "moving $OPERATOR_HOME -> $SERVICE_HOME"
-mv "$OPERATOR_HOME" "$SERVICE_HOME"
+log "moving $OPERATOR_OLLAMA -> $SERVICE_HOME"
+mv "$OPERATOR_OLLAMA" "$SERVICE_HOME"
 
 # Group `staff`, not the service group: the Docker daemon (Colima) shares this
 # path as the operator, and the gateway bind-mounts it read-only for the

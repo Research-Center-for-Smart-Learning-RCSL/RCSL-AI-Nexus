@@ -43,11 +43,11 @@
 	     point: this process loads weights downloaded from the internet, and
 	     the format rule on that download was only enforced the same day.
 
-	     It ran as `<operator>` until then — an admin login — because a daemon
+	     It ran as the operator until then — an admin login — because a daemon
 	     defaults to root, root looks for models in /var/root/.ollama and finds
 	     none, and running as the operator was the change that avoided root
 	     without moving the model directory. Moving the directory is what
-	     unblocked it: /Users/<operator> is mode 750, so no account outside
+	     unblocked it: the operator's home is mode 750, so no account outside
 	     `staff` can traverse into it, and the weights had to leave the home
 	     directory before any service account could read them. They now live in
 	     /Users/Shared/ollama, owned by this account and group-readable by

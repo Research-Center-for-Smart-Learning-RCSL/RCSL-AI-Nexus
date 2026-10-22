@@ -604,8 +604,7 @@ docstring 裡，那是估算器本身所在的地方。
   必須在容器之前起來。這個 daemon 用 `--foreground` 讓 launchd 管理它的生命週期。
 
   ```sh
-  sudo install -o root -g wheel -m 644 \
-    launchd/online.rcsl.colima.plist /Library/LaunchDaemons/
+  sudo launchd/install-daemons.sh colima   # renders the template for this host
   sudo launchctl load -w /Library/LaunchDaemons/online.rcsl.colima.plist
   ```
 
@@ -614,8 +613,7 @@ docstring 裡，那是估算器本身所在的地方。
   proxy-facing 的 port 從 tailnet IP forward 到 localhost。
 
   ```sh
-  sudo install -o root -g wheel -m 644 \
-    launchd/online.rcsl.socat-forwards.plist /Library/LaunchDaemons/
+  sudo launchd/install-daemons.sh socat-forwards   # renders the template for this host
   sudo launchctl load -w /Library/LaunchDaemons/online.rcsl.socat-forwards.plist
   ```
 
@@ -631,8 +629,7 @@ docstring 裡，那是估算器本身所在的地方。
   確認預期的服務全部在跑，缺的就 `docker compose up -d` 拉起來。
 
   ```sh
-  sudo install -o root -g wheel -m 644 \
-    launchd/online.rcsl.reconcile-port-bindings.plist /Library/LaunchDaemons/
+  sudo launchd/install-daemons.sh reconcile-port-bindings   # renders the template for this host
   sudo launchctl load -w /Library/LaunchDaemons/online.rcsl.reconcile-port-bindings.plist
   ```
 
@@ -664,8 +661,7 @@ docstring 裡，那是估算器本身所在的地方。
   版時它會說 `database unchanged upstream` 然後什麼都不做。
 
   ```sh
-  sudo install -o root -g wheel -m 644 \
-    launchd/online.rcsl.refresh-geolite2.plist /Library/LaunchDaemons/
+  sudo launchd/install-daemons.sh refresh-geolite2   # renders the template for this host
   sudo launchctl load -w /Library/LaunchDaemons/online.rcsl.refresh-geolite2.plist
   ```
 
@@ -683,14 +679,13 @@ docstring 裡，那是估算器本身所在的地方。
   `host.docker.internal:9101/host` 讀它（`host_metrics_url`）。
 
   ```sh
-  sudo install -o root -g wheel -m 644 \
-    launchd/online.rcsl.host-metrics.plist /Library/LaunchDaemons/
+  sudo launchd/install-daemons.sh host-metrics   # renders the template for this host
   sudo launchctl bootstrap system /Library/LaunchDaemons/online.rcsl.host-metrics.plist
   curl -s http://127.0.0.1:9101/host    # 應該回一段 JSON
   ```
 
-  plist 裡的路徑寫死成 `/Users/<operator>/dev/RCSL-AI-Nexus/launchd/host-metrics.py`，
-  repo 放在別的地方就要改；`UserName` 跟另外三個主機側 job 一樣是操作者帳號（只有 ollama 那個是 `_rcslollama`），因為 `vm_stat`、
+  plist 裡的路徑和帳號在安裝時由 `install-daemons.sh` 依 checkout 的位置和擁有者代入，
+  repo 放在別的地方不用改檔；`UserName` 跟另外三個主機側 job 一樣是操作者帳號（只有 ollama 那個是 `_rcslollama`），因為 `vm_stat`、
   `sysctl`、`statfs` 誰都讀得到，不需要 root。
 
   **這一步在 2026-08-18 之前不在這份清單裡，而下一步裝的健康監測會因為它而失敗。**
@@ -707,8 +702,7 @@ docstring 裡，那是估算器本身所在的地方。
 
   ```sh
   mkdir -p data/runtime-witness/out data/runtime-witness/challenge
-  sudo install -o root -g wheel -m 644 \
-    launchd/online.rcsl.runtime-witness.plist /Library/LaunchDaemons/
+  sudo launchd/install-daemons.sh runtime-witness   # renders the template for this host
   sudo launchctl bootstrap system /Library/LaunchDaemons/online.rcsl.runtime-witness.plist
   cat data/runtime-witness/out/attestation.json   # status 應是 observed，seq 每 2 秒加一
   ```
@@ -789,8 +783,7 @@ docstring 裡，那是估算器本身所在的地方。
   ```
 
   ```sh
-  sudo install -o root -g wheel -m 644 \
-    launchd/online.rcsl.health-check.plist /Library/LaunchDaemons/
+  sudo launchd/install-daemons.sh health-check   # renders the template for this host
   sudo launchctl load -w /Library/LaunchDaemons/online.rcsl.health-check.plist
   ```
 
@@ -813,20 +806,17 @@ docstring 裡，那是估算器本身所在的地方。
   裡的 `.sh`，所以腳本一存檔下次執行就是新的；但 `/Library/LaunchDaemons/` 裡那份 plist 是
   **複本**，repo 裡改了不會自動生效。這八個 daemon 都一樣（colima、socat-forwards、ollama、
   reconcile-port-bindings、health-check、refresh-geolite2、host-metrics、backup）。
-  確認的方式是比對，不是相信：
+  確認的方式是比對，不是相信。repo 裡的 plist 是**範本**（`@OPERATOR@`、`@REPO@` 由安裝
+  腳本代入這台主機的帳號和 checkout 路徑），所以要比的是代入後的內容：
 
   ```sh
-  diff <(plutil -p /Library/LaunchDaemons/online.rcsl.health-check.plist) \
-       <(plutil -p launchd/online.rcsl.health-check.plist)
+  launchd/install-daemons.sh --check     # 不用 sudo；內容不同就 exit 1，只差註解不算
   ```
 
   重裝並重載：
 
   ```sh
-  sudo install -o root -g wheel -m 644 \
-    launchd/online.rcsl.health-check.plist /Library/LaunchDaemons/
-  sudo launchctl bootout system/online.rcsl.health-check 2>/dev/null
-  sudo launchctl bootstrap system /Library/LaunchDaemons/online.rcsl.health-check.plist
+  sudo launchd/install-daemons.sh --reload health-check
   ```
 
   **這份 repo 裡還有兩個故障注入工具，都不是平台的一部分，不要當成部署步驟。**

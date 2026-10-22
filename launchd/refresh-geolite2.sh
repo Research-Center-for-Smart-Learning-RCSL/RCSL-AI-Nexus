@@ -36,8 +36,8 @@
 
 set -uo pipefail
 
-REPO="/Users/<operator>/dev/RCSL-AI-Nexus"
-export DOCKER_HOST="unix:///Users/<operator>/.colima/default/docker.sock"
+REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
+. "$REPO/launchd/lib/operator.sh"
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 EDITION="GeoLite2-Country"

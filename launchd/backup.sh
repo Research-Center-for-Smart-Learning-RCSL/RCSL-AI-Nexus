@@ -96,8 +96,8 @@
 
 set -uo pipefail
 
-REPO="/Users/<operator>/dev/RCSL-AI-Nexus"
-export DOCKER_HOST="unix:///Users/<operator>/.colima/default/docker.sock"
+REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
+. "$REPO/launchd/lib/operator.sh"
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # Where the backup goes. A reviewable constant rather than an untracked file,
