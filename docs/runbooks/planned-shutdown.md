@@ -248,7 +248,7 @@ ps -Ao pid,command | grep -E 'limactl|socat|host-metrics|ollama serve' | grep -v
 
 ```sh
 lsof -nP -iTCP -sTCP:LISTEN | grep -E ':(8000|8001|8002|3000|3001|3002|5432|6379|9090|11434) '
-lsof -nP -iTCP@<tailnet-ip> -sTCP:LISTEN         # tailnet 位址，期望無輸出
+lsof -nP -iTCP@"$(tailscale ip -4)" -sTCP:LISTEN  # tailnet 位址，期望無輸出
 ```
 
 兩個都應該沒有輸出。
@@ -383,7 +383,7 @@ cd ~/dev/RCSL-AI-Nexus
 docker compose ps --services --status running | wc -l    # 期望：11
 colima status                                            # 期望：is running
 curl -s -m 3 http://127.0.0.1:11434/api/tags >/dev/null && echo ollama OK
-lsof -nP -iTCP@<tailnet-ip> -sTCP:LISTEN               # 期望：8000、8002、3001 三行
+lsof -nP -iTCP@"$(tailscale ip -4)" -sTCP:LISTEN        # 期望：8000、8002、3001 三行
 ```
 
 11 個服務是：`postgres redis prometheus grafana gateway admin-public admin-tailnet
@@ -393,7 +393,8 @@ frontend-public frontend-tailnet parser qdrant`。`migrate` 不算在內，它�
 最後兩項是端到端，前面都過了才有意義：
 
 ```sh
-curl -s -o /dev/null -w '%{http_code}\n' https://<host>.<tailnet>.ts.net/    # 期望 200
+HOST="$(tailscale status --json | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')"
+curl -s -o /dev/null -w '%{http_code}\n' "https://$HOST/"    # 期望 200
 tail -20 /opt/homebrew/var/log/nexus-health.log          # 期望：下一次執行回報健康
 ```
 
