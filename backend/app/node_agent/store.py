@@ -37,10 +37,12 @@ DISPATCH_NAMESPACE = 0x4E58_0002
 """First key of the transaction advisory lock that orders dispatch decisions."""
 
 
-LIFECYCLE_KINDS = frozenset({"load", "unload", "pull"})
-"""Operations that change what the runtime holds rather than produce output
-anyone is billed or answered with (PR4b). Exclusive with dispatch on the node;
-an uncertain one blocks until verified resolution (#49, `Dispatcher.exclusive`)."""
+LIFECYCLE_KINDS = frozenset({"load", "unload", "pull", "repin"})
+"""Operations that change what the runtime holds, or what the node will accept
+from it, rather than produce output anyone is billed or answered with (PR4b).
+Exclusive with dispatch on the node; an uncertain one blocks until verified
+resolution (#49, `Dispatcher.exclusive`). `repin` is an operator's retry of the
+weights pin a pull could not set (#68 §3)."""
 
 
 class NotOwner(Exception):  # noqa: N818 - a state, not a failure
@@ -421,9 +423,10 @@ class OperationStore:
     async def repin(self, op_id: str, runtime: str, ref: str, digest: str) -> int:
         """Set the weights pin of this node's models on `ref` (design S5).
 
-        Only the agent's own completed pull calls this, before its node
-        resumes, so nothing is dispatched between the new weights arriving
-        and the pin naming them. Fenced like every other write.
+        The agent's own completed pull calls this before its node resumes, so
+        nothing is dispatched between the new weights arriving and the pin
+        naming them. An operator's repin calls it inside its own exclusive
+        operation, for the same reason (#68 §3). Fenced like every other write.
         """
         async with self._owned(dispatch=True, action="repin", op_id=op_id) as conn:
             moved = await conn.fetchval(

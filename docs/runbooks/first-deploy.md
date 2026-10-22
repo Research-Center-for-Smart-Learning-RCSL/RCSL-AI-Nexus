@@ -753,6 +753,11 @@ docstring 裡，那是估算器本身所在的地方。
   - **下載會佔住整個節點。** pull 和 load、unload 一樣是獨佔操作（設計 S5）：開始前先排空
     節點上的生成，進行中新請求一律 503（`node_draining`，Retry-After 30），完成並更新
     `models.manifest_digest` 之後才恢復。大模型的下載可能要好幾分鐘，排在離峰時段。
+  - **下載後沒能更新 pin，該模型會一直被拒絕**（`revision_mismatch`），這是刻意的
+    fail-closed。確認 runtime 現在提供的權重是你要的之後，用
+    `POST /admin/models/{id}/repin` 帶 `{"manifest_digest": "<64 位 hex>"}` 重試（#68 §3）：
+    只有 runtime 正好提供這個 digest 時才會寫入，不符時回 409，`details.served` 會寫出
+    目前提供的 digest。細節見 `docs/runbooks/capability-availability.md`。
   - **節點被封鎖時不能 load、unload 或下載**，要先照上面的步驟解除；residency 仍照常回報。
 
   要關回去：從 `.env` 拿掉那一行，再 `docker compose up -d`。

@@ -50,6 +50,28 @@ class ModelStateConflictError(StateConflictError):
     public_message = "The model is not in a state that allows this operation."
 
 
+class ManifestPinRefusedError(ModelStateConflictError):
+    """The node agent would not pin the weights an operator approved (#68 §3).
+
+    Its figures leave the process, unlike `detail`: an operator told only that
+    the repin was refused cannot tell a typo from weights that changed again,
+    and the digest the runtime now serves is what they would approve next.
+    Weights digests are not secrets, and only a caller with model write scope
+    reaches this.
+    """
+
+    code = "manifest_pin_refused"
+    public_message = "The node did not pin these weights: they are not what its runtime serves."
+
+    def __init__(
+        self, *, reason: str, served: str | None, measured: str | None, detail: str | None = None
+    ) -> None:
+        super().__init__(detail or f"reason={reason} served={served} measured={measured}")
+        self.reason = reason
+        self.served = served
+        self.measured = measured
+
+
 class InsufficientMemoryError(DomainError):
     code = "insufficient_memory"
     public_message = "Loading this model would exceed the node's memory budget."

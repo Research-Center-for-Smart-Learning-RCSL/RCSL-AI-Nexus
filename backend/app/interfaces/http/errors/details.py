@@ -10,6 +10,7 @@ from app.domain.exceptions import (
     ContextTooLongError,
     DomainError,
     InsufficientMemoryError,
+    ManifestPinRefusedError,
     QuotaExceededError,
     RateLimitedError,
     ServerOverloadedError,
@@ -120,6 +121,10 @@ def public_details(exc: DomainError) -> dict[str, object]:
     """
     if isinstance(exc, InsufficientMemoryError):
         return {"required_gb": exc.required_gb, "available_gb": exc.available_gb}
+    if isinstance(exc, ManifestPinRefusedError):
+        # What the runtime serves is the digest an operator would approve next
+        # (#68 §3); without it a refused repin is a dead end.
+        return {"reason": exc.reason, "served": exc.served, "measured": exc.measured}
     if isinstance(exc, ApiKeyLifetimeError):
         # A field as well as a sentence, and it was only a sentence until
         # 2026-08-18. This is the refusal that cost an operator an evening: they
