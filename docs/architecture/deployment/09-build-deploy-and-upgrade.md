@@ -116,15 +116,29 @@ After any `up -d` that recreates containers, also confirm the published ports ar
 **Upgrading the Ollama runtime is not part of any of the above, and it has a step no container upgrade has.** The runtime is a Homebrew formula behind a LaunchDaemon, not a container: `online.rcsl.ollama.plist` runs `/opt/homebrew/opt/ollama/bin/ollama serve`, where `opt/ollama` is the symlink Homebrew repoints on upgrade. So `brew upgrade ollama` changes what the *next* launch will run and nothing about the process currently running.
 
 ```bash
-HOMEBREW_NO_AUTO_UPDATE=1 brew upgrade ollama
+HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade ollama        # keeps the previous Cellar
 sudo launchctl kickstart -k system/online.rcsl.ollama    # the daemon runs as _rcslollama
 ```
 
+**Keep the previous version, which is what makes a rollback local.** With `HOMEBREW_NO_INSTALL_CLEANUP=1` the old Cellar stays. Rolling back is then repointing `opt/ollama` and restarting:
+
+```bash
+ln -sfn ../Cellar/ollama/<previous> /opt/homebrew/opt/ollama
+sudo launchctl kickstart -k system/online.rcsl.ollama
+```
+
+This was the procedure on 2026-10-22 (0.33.2 to 0.40.8). Before the upgrade, save `/api/tags`, `/api/show` for each production model, and a copy of `$OLLAMA_MODELS/manifests`. Two cautions apply:
+
+- **Ollama 0.40.0–0.40.2 migrated legacy GGUF manifests in the background.** A migrated model must be re-pulled after a downgrade below 0.40. 0.40.3 turned the migration off, and on 0.40.8 the legacy manifests stayed byte-identical and `manifests-v2/` stayed empty. Check both after any 0.40.x upgrade, because a rewritten manifest changes the digest a model is pinned to.
+- **The formula's dependencies are upgraded too.** On 2026-10-22 this relinked `/opt/homebrew/bin/python3` to 3.15. This repository's launchd jobs use `/usr/bin/python3` and were unaffected; anything else on the host that uses Homebrew's `python3` was not.
+
 **The window between those two commands is the part worth knowing about.** Homebrew's automatic cleanup removes the previous version's Cellar as part of the upgrade, and the running server loads its inference workers from a path inside it — `Cellar/<version>/libexec/lib/ollama/llama-server`. The already-running workers hold open inodes and keep serving, so `/api/ps` still answers and resident models still generate; a model that has to be *loaded* has nowhere to load from. The failure is therefore invisible to a health check that asks whether the runtime answers, and it lasts until the daemon is restarted. Do the two commands together.
 
-**That same cleanup is why this is the one upgrade on this host with no local rollback.** §9's rollback is a git checkout and a rebuild; here the previous binary is deleted from the machine by the upgrade itself, so going back means recovering an old formula from `homebrew-core`'s history and building it. Measured 2026-09-02: after `0.32.4 → 0.33.2` the Cellar held `0.33.2` alone. Nothing warns about this, and `brew services` is not the manager here — `brew services list` reports `ollama` as `none`, because the daemon is this repository's plist rather than the formula's.
+**That same cleanup is why an upgrade without `HOMEBREW_NO_INSTALL_CLEANUP` has no local rollback.** §9's rollback is a git checkout and a rebuild; here the previous binary is deleted from the machine by the upgrade itself, so going back means recovering an old formula from `homebrew-core`'s history and building it. Measured 2026-09-02: after `0.32.4 → 0.33.2` the Cellar held `0.33.2` alone. Nothing warns about this, and `brew services` is not the manager here — `brew services list` reports `ollama` as `none`, because the daemon is this repository's plist rather than the formula's.
 
-**A restart unloads every resident model and nothing brings them back.** The registry's `state` column still says `loaded`, which is what an operator asked for and remains true as an intent; `observed_state` follows the heartbeat within its 30-second interval and reports the truth on its own. What no component does is re-warm them. They have to be loaded by hand, largest first, at the `context_length` the `models` row carries — Ollama keys a runner by its options, so a model warmed at a different context is resident and wrong, and the first real request pays a reload to correct it:
+**[Updated 2026-10-22] With `RESIDENCY_RECONCILER_ENABLED` on, as in production, the reconciler restores the desired set by itself after the restart**, in about 90 seconds ([capability-availability runbook](../../runbooks/capability-availability.md)). The manual procedure below is for a deployment with the flag off.
+
+**A restart unloads every resident model and, with the reconciler off, nothing brings them back.** The registry's `state` column still says `loaded`, which is what an operator asked for and remains true as an intent; `observed_state` follows the heartbeat within its 30-second interval and reports the truth on its own. What no component does is re-warm them. They have to be loaded by hand, largest first, at the `context_length` the `models` row carries — Ollama keys a runner by its options, so a model warmed at a different context is resident and wrong, and the first real request pays a reload to correct it:
 
 ```bash
 # Registry context_length, which is what ManageModels sends. Ollama clamps each
