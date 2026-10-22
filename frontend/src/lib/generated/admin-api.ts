@@ -799,6 +799,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/models/{model_id}/repin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Repin Model
+         * @description Approve the weights a pull left unpinned (#68 §3).
+         *
+         *     409 `manifest_pin_refused` when the node's runtime does not serve exactly
+         *     `manifest_digest`; its `details` carry the digest that is served, which is
+         *     what to approve if those weights are the intended ones.
+         */
+        post: operations["repin_model_admin_models__model_id__repin_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/models/{model_id}/residency-intent": {
         parameters: {
             query?: never;
@@ -2317,6 +2341,8 @@ export interface components {
             desired_version: number;
             /** Id */
             id: string;
+            /** Manifest Digest */
+            manifest_digest: string | null;
             /** Node Id */
             node_id: string;
             /** Observed At */
@@ -2532,6 +2558,11 @@ export interface components {
             status: number;
             /** Surface */
             surface: string;
+        };
+        /** RepinRequest */
+        RepinRequest: {
+            /** Manifest Digest */
+            manifest_digest: string;
         };
         /** RequirementBody */
         RequirementBody: {
@@ -4347,6 +4378,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    repin_model_admin_models__model_id__repin_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepinRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

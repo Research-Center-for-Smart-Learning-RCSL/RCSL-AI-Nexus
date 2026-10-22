@@ -82,6 +82,10 @@ class AuditAction(StrEnum):
     Recorded as `accepted`: nothing has been loaded or unloaded yet. What the
     reconciler then does is audited as its own `model.loaded` or
     `model.unloaded`, under the reconciler's subject."""
+    MODEL_REPINNED = "model.repinned"
+    """An operator approved the weights a pull left unpinned (#68 §3). The
+    detail names the digest; a refusal is recorded `failed` with the digest the
+    runtime served instead."""
 
     NODE_REGISTERED = "node.registered"
     NODE_UPDATED = "node.updated"

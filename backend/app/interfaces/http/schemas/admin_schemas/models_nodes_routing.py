@@ -61,6 +61,10 @@ class ModelResponse(BaseModel):
     from `state`, which a failed load sets to `error`."""
     desired_version: int
 
+    manifest_digest: str | None
+    """The weights pin: the only weights the node's agent will load or serve
+    for this model. Null until the agent's first pull sets it."""
+
     @classmethod
     def of(cls, model: Model) -> ModelResponse:
         return cls(
@@ -83,11 +87,17 @@ class ModelResponse(BaseModel):
             capacity_validated=model.capacity_validated,
             desired_resident=model.desired_resident,
             desired_version=model.desired_version,
+            manifest_digest=model.manifest_digest,
         )
 
 
 class ResidencyIntentRequest(BaseModel):
     desired_resident: bool
+
+
+class RepinRequest(BaseModel):
+    manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    """The weights the operator approves, as the runtime lists them."""
 
 
 class CreateModelRequest(BaseModel):

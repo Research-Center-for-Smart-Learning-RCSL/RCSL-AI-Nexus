@@ -12,6 +12,7 @@ a default: a default here would be a request the caller did not send.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -55,7 +56,8 @@ class EmbeddingRequest:
 
 @dataclass(frozen=True, slots=True)
 class LifecycleRequest:
-    """`load`, `unload` or `pull` of one reference on the agent's node (PR4b).
+    """`load`, `unload`, `pull` or `repin` of one reference on the agent's node
+    (PR4b, #68 §3).
 
     No request id or payload hash: nothing binds a lifecycle call to a client
     request, and the op id alone makes a resend idempotent."""
@@ -65,6 +67,9 @@ class LifecycleRequest:
     context_length: int | None
     """For `load` only, and then the registered figure: the load is where the
     runtime sizes its runner."""
+    manifest_digest: str | None = None
+    """For `repin` only: the weights the operator approves. The agent pins
+    them only if they are exactly what the runtime now serves."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +135,7 @@ def encode_lifecycle(request: LifecycleRequest) -> dict[str, Any]:
         "op_id": request.op_id,
         "ref": request.ref,
         "context_length": request.context_length,
+        **({"manifest_digest": request.manifest_digest} if request.manifest_digest else {}),
     }
 
 
@@ -197,13 +203,19 @@ def decode_lifecycle(body: Any) -> LifecycleRequest:
         op_id=_str(data, "op_id"),
         ref=_str(data, "ref"),
         context_length=_optional_int(data, "context_length"),
+        manifest_digest=_optional_str(data, "manifest_digest"),
     )
     if len(request.op_id) > _MAX_LENGTHS["op_id"]:
         raise WireError(f"op_id is longer than {_MAX_LENGTHS['op_id']} characters")
     if request.context_length is not None and request.context_length <= 0:
         raise WireError("context_length must be positive or null")
+    if request.manifest_digest is not None and not _DIGEST.fullmatch(request.manifest_digest):
+        raise WireError("manifest_digest must be 64 lowercase hex characters or null")
     return request
 
+
+_DIGEST = re.compile(r"[0-9a-f]{64}")
+"""A weights pin as the runtime lists it and `models.manifest_digest` holds it."""
 
 # The column widths these land in (`node_operations`); longer is a 400 here,
 # not a database error later (review on #33).
