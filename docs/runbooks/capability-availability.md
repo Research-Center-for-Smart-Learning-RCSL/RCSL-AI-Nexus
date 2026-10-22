@@ -164,10 +164,32 @@ meant to. Until then, disable the flag and restart `admin-tailnet` to stop it.
 
 **Not yet done.** The admin "reset runtime" action is not built. The witness
 CLI resolution remains the only path, because the agent cannot restart the
-host runtime and resolves one operation per witnessed restart. Host acceptance has not been
-run: restart Ollama with no traffic in an operator-owned window, observe
-gemma4, then qwen2.5:7b, then nomic-embed-text restored, and gate on an
-authenticated gateway request, plus the five #23 gates.
+host runtime and resolves one operation per witnessed restart.
+
+**Host acceptance (2026-10-22).** The flag is on in production, and the desired
+set is `gemma4-31b-q8` and `embedder`; `qwen7b` is not kept resident at 4 GiB
+(2026-10-17). Ollama was restarted with no traffic, and the reconciler:
+
+- restored gemma4 at 262144, then the embedder at 2048, both with
+  `keep_alive: -1`, about 90 seconds after the restart;
+- left two `model.loaded` audit rows under the reconciler subject.
+
+Every capability was available again about 2.5 minutes after the restart. An
+authenticated chat request through the public entrance then answered 200.
+
+The five #23 gates were not rehearsed on the host. They are covered by tests,
+in `tests/unit/test_reconcile_residency.py` unless noted:
+
+- (a) cancellation: `test_cancellation_before_the_load_is_honoured` and
+  `..._during_the_load_unloads_the_fresh_weights`;
+- (b) a lost observation: `test_a_lost_observation_between_answers_restarts_the_count`
+  and `test_unknown_residency_is_never_evidence`;
+- (c) retry after `ERROR`: `test_retry_after_error_once_evidence_returns`;
+- (d) sibling eviction: `test_an_evicted_sibling_is_requeued_in_a_repair_round`;
+- (e) two workers: `test_a_second_reconciler_is_kept_off_the_node`, against real
+  PostgreSQL in `tests/integration/test_residency_reconciler.py`.
+
+The record is in `docs/progress/2026-10-22.md`.
 
 ## Metrics and delivery
 
