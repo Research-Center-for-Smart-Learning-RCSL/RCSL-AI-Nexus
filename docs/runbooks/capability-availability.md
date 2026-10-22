@@ -94,6 +94,28 @@ cancellation that works after a restart, when the model is observed
 model; use Unload for that. `desired_version` versions intent only; the weights
 pin remains `manifest_digest`.
 
+**The weights pin** (`manifest_digest`, shown on each model in
+`GET /admin/models`) names the only weights the node's agent will load or
+serve. A pull sets it before the node serves again. If that step fails, for
+example because the runtime does not list the tag after the pull, the old pin
+stays, and every Load and request is refused as `revision_mismatch`. The
+agent logs `pulled ... but the runtime does not list it; pin unchanged`.
+
+Retry it with `POST /admin/models/{id}/repin` and the body
+`{"manifest_digest": "<64 hex>"}` (`model:write`, audited as `model.repinned`,
+#68 §3):
+
+- The agent pins the digest only if the runtime's listing and the model store
+  both report exactly that digest. It reads both inside an operation exclusive
+  with dispatch, like a pull.
+- Otherwise it answers `409 manifest_pin_refused`, and the pin is unchanged.
+  `details.served` names the digest the runtime lists, which is the one to
+  approve if those are the intended weights. A refusal does not block the node.
+- The pin belongs to the weights, so every model on that node with the same
+  `ref` moves with it.
+
+There is no button yet; call the endpoint as an administrator.
+
 Load and Unload commit the intent in their own transaction, once the request's
 checks pass and before the runtime is called, never through the request
 transaction (that held the row lock while a second connection wrote the same

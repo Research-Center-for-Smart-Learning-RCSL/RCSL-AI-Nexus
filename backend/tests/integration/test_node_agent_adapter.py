@@ -6,6 +6,7 @@ wire, the agent's checks and the adapter's decoding together.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -24,6 +25,7 @@ from app.domain.entities.chat import CompletionChunk, Message, MessageRole
 from app.domain.entities.model import RuntimeKind
 from app.domain.entities.routing_policy import RoutingCandidate, RoutingPolicy
 from app.domain.exceptions import (
+    ManifestPinRefusedError,
     NoAvailableModelError,
     RuntimeCapabilityError,
     ServerOverloadedError,
@@ -185,6 +187,73 @@ async def test_a_pull_streams_progress_and_repins_before_serving(agent: dict[str
     audit = await _rows(agent, "SELECT event FROM node_operation_audit WHERE event = 'repin'")
     assert audit == [("repin",)]
     assert await agent["runtime"].health() is True, "the node serves again"
+
+
+async def _serving(runtime: NodeAgentRuntime) -> bool:
+    """The gate reopens as the operation's task ends, just after its answer."""
+    for _ in range(50):
+        if await runtime.health():
+            return True
+        await asyncio.sleep(0.1)
+    return False
+
+
+async def _stranded_pin(agent: dict[str, Any]) -> None:
+    """The state a pull leaves when its own re-pin did not happen (#68 §3):
+    new weights served, the old pin standing."""
+    conn = await asyncpg.connect(agent["dsn"])
+    try:
+        await conn.execute(
+            "UPDATE models SET manifest_digest = $1 WHERE ref = 'qwen2.5:7b'", "a" * 64
+        )
+    finally:
+        await conn.close()
+    agent["ollama"].digest = "b" * 64
+
+
+async def test_an_operator_repin_unstrands_a_model_its_pull_left_refused(
+    agent: dict[str, Any],
+) -> None:
+    runtime = agent["runtime"]
+    await _stranded_pin(agent)
+    with pytest.raises(RuntimeCapabilityError):
+        await runtime.load("qwen2.5:7b", context_length=32768)
+
+    await runtime.repin("qwen2.5:7b", "b" * 64)
+
+    pin = await _rows(agent, "SELECT manifest_digest FROM models WHERE ref = 'qwen2.5:7b'")
+    assert pin == [("b" * 64,)]
+    ops = await _rows(agent, "SELECT kind, state FROM node_operations WHERE kind = 'repin'")
+    assert ops == [("repin", "completed")]
+    audit = await _rows(
+        agent, "SELECT detail->>'by' FROM node_operation_audit WHERE event = 'repin'"
+    )
+    assert audit == [("operator",)]
+    await runtime.load("qwen2.5:7b", context_length=32768)
+
+
+async def test_a_repin_of_weights_that_are_not_served_changes_nothing(
+    agent: dict[str, Any],
+) -> None:
+    runtime = agent["runtime"]
+    await _stranded_pin(agent)
+
+    with pytest.raises(ManifestPinRefusedError) as refused:
+        await runtime.repin("qwen2.5:7b", "c" * 64)
+
+    assert (refused.value.reason, refused.value.served) == ("digest_mismatch", "b" * 64)
+    pin = await _rows(agent, "SELECT manifest_digest FROM models WHERE ref = 'qwen2.5:7b'")
+    assert pin == [("a" * 64,)], "the old pin stands: closed, as after the failed pull"
+    ops = await _rows(agent, "SELECT state, reason FROM node_operations WHERE kind = 'repin'")
+    assert ops == [("failed", "digest_mismatch")]
+    assert await _serving(runtime), "a refused repin does not block the node"
+    assert agent["ollama"].lifecycle == [], "nothing was sent to the runtime"
+
+
+async def test_a_repin_of_a_model_not_on_this_node_is_refused(agent: dict[str, Any]) -> None:
+    with pytest.raises(RuntimeCapabilityError):
+        await agent["runtime"].repin("gemma4:31b-it-q8_0", "b" * 64)
+    assert await _rows(agent, "SELECT kind FROM node_operations") == []
 
 
 async def test_residency_is_read_through_the_agent(agent: dict[str, Any]) -> None:

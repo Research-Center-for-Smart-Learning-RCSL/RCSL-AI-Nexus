@@ -20,11 +20,14 @@ from app.node_agent.wire import (
     EmbeddingRequest,
     Envelope,
     GenerationRequest,
+    LifecycleRequest,
     WireError,
     decode_embedding,
     decode_generation,
+    decode_lifecycle,
     encode_embedding,
     encode_generation,
+    encode_lifecycle,
 )
 
 ENVELOPE = Envelope(op_id="op-1", request_id="req-1", payload_hash="v1:abc", store_output=True)
@@ -89,3 +92,21 @@ def _with(**changes: Any) -> dict[str, Any]:
 def test_anything_malformed_is_refused_not_defaulted(body: Any) -> None:
     with pytest.raises(WireError):
         decode_generation(body)
+
+
+def test_a_repin_carries_the_approved_digest_and_nothing_else_does() -> None:
+    """#68 §3: only a repin names weights; a load body is unchanged by it."""
+    repin = LifecycleRequest(
+        op_id="op-1", ref="qwen2.5:7b", context_length=None, manifest_digest="b" * 64
+    )
+    assert decode_lifecycle(json.loads(json.dumps(encode_lifecycle(repin)))) == repin
+    load = LifecycleRequest(op_id="op-2", ref="qwen2.5:7b", context_length=32768)
+    assert "manifest_digest" not in encode_lifecycle(load)
+    assert decode_lifecycle(encode_lifecycle(load)) == load
+
+
+@pytest.mark.parametrize("digest", ["B" * 64, "b" * 63, "sha256:" + "b" * 64, 7])
+def test_a_malformed_digest_is_refused(digest: Any) -> None:
+    body = encode_lifecycle(LifecycleRequest(op_id="op-1", ref="r", context_length=None))
+    with pytest.raises(WireError):
+        decode_lifecycle({**body, "manifest_digest": digest})

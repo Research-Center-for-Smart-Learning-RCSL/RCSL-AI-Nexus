@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Mapping, Sequence
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from app.domain.entities.chat import (
     CompletionChunk,
@@ -152,6 +152,23 @@ class ModelRuntimePort(Protocol):
         the pre-observation behaviour. An empty `RuntimeResidency` by contrast
         is a positive claim that nothing is loaded.
         """
+        ...
+
+
+@runtime_checkable
+class ManifestPinPort(Protocol):
+    """A runtime whose node holds a weights pin (`models.manifest_digest`).
+
+    Only a node agent has one: it sets the pin after its own pull and refuses
+    dispatch against any other weights. A direct adapter has no pin to set,
+    which is why this is a separate port rather than a method every runtime
+    would have to refuse.
+    """
+
+    async def repin(self, ref: str, manifest_digest: str) -> None:
+        """Pin `manifest_digest` if it is exactly what the runtime serves.
+
+        Raises `ManifestPinRefusedError` when it is not, leaving the old pin."""
         ...
 
 

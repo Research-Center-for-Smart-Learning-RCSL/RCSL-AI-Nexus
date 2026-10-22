@@ -27,6 +27,7 @@ from app.interfaces.http.schemas.admin_schemas import (
     DownloadJobResponse,
     ModelReferenceResponse,
     ModelResponse,
+    RepinRequest,
     ResidencyIntentRequest,
     UpdateModelRequest,
 )
@@ -167,6 +168,22 @@ async def set_residency_intent(
     return ModelResponse.of(
         await models.set_desired_residency(actor, model_id, payload.desired_resident)
     )
+
+
+@router.post("/models/{model_id}/repin")
+async def repin_model(
+    model_id: str,
+    payload: RepinRequest,
+    actor: Annotated[Actor, Depends(current_actor)],
+    models: Annotated[ManageModels, Depends(build_manage_models)],
+) -> ModelResponse:
+    """Approve the weights a pull left unpinned (#68 §3).
+
+    409 `manifest_pin_refused` when the node's runtime does not serve exactly
+    `manifest_digest`; its `details` carry the digest that is served, which is
+    what to approve if those weights are the intended ones.
+    """
+    return ModelResponse.of(await models.repin(actor, model_id, payload.manifest_digest))
 
 
 @router.post("/models/{model_id}/download", status_code=202)

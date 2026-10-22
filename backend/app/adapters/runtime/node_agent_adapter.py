@@ -54,6 +54,7 @@ from app.domain.entities.chat import (
 from app.domain.entities.embedding import current_embedding_manifest
 from app.domain.entities.model import PullProgress, RuntimeResidency
 from app.domain.exceptions import (
+    ManifestPinRefusedError,
     ModelNotFoundError,
     NoAvailableModelError,
     RuntimeCapabilityError,
@@ -549,6 +550,34 @@ class NodeAgentRuntime:
 
     async def unload(self, ref: str) -> None:
         await self._lifecycle("unload", ref, None)
+
+    async def repin(self, ref: str, manifest_digest: str) -> None:
+        """Pin `manifest_digest` for `ref` on this node, an operator's retry
+        of the pin a pull could not set (#68 §3). The agent refuses unless
+        the runtime serves exactly those weights; that refusal is a 409 that
+        says what is served, so the operator can see what they would approve."""
+        self.validate_ref(ref)
+        self._invalidate_capacities()
+        op_id = str(uuid.uuid4())
+        body = encode_lifecycle(
+            LifecycleRequest(
+                op_id=op_id, ref=ref, context_length=None, manifest_digest=manifest_digest
+            )
+        )
+        async with self._client() as client:
+            response = await self._send_lifecycle(client, "repin", body, op_id, stream=False)
+            await response.aread()
+        described = response.json()
+        if isinstance(described, dict) and described.get("state") == "failed":
+            terminal = described.get("terminal") or {}
+            served, measured = terminal.get("served"), terminal.get("measured")
+            raise ManifestPinRefusedError(
+                reason=str(described.get("reason")),
+                served=served if isinstance(served, str) else None,
+                measured=measured if isinstance(measured, str) else None,
+                detail=f"repin {op_id} of {ref} to {manifest_digest}: {described}",
+            )
+        self._lifecycle_outcome("repin", ref, op_id, described)
 
     async def residency(self) -> RuntimeResidency | None:
         """None when the agent or its runtime cannot be asked, never "empty"."""

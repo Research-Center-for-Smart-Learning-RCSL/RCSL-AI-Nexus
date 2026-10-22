@@ -11,10 +11,11 @@ from app.domain.entities.actor import Actor, Scope
 from app.domain.entities.audit import AuditAction
 from app.domain.entities.model import Model, ModelState
 from app.domain.exceptions import (
+    ManifestPinRefusedError,
     ModelNotFoundError,
     ModelStateConflictError,
 )
-from app.domain.ports.model_runtime_port import declared_context_for
+from app.domain.ports.model_runtime_port import ManifestPinPort, declared_context_for
 from app.domain.services.residency_reconciliation import charges_memory
 
 from .registry import ModelRegistryMixin
@@ -74,6 +75,66 @@ class ModelLifecycleMixin(ModelRegistryMixin):
         """Unload weights the reconciler restored after their intent was
         withdrawn. Like `restore`, it leaves the intent alone."""
         return await self._unload(reconciler_subject(), model_id)
+
+    async def repin(self, actor: Actor, model_id: str, manifest_digest: str) -> Model:
+        """Approve the weights a pull left unpinned (#68 §3).
+
+        A pull re-pins its model before the node serves again. When that
+        step fails (the runtime does not list the tag, or the write does not
+        land), the old pin stays and every load and dispatch is refused as a
+        revision mismatch, closed rather than open. This is the operator's way
+        out: they name the digest, and the node's agent pins it only if its
+        runtime serves exactly that, inside an operation exclusive with
+        dispatch. A refusal leaves the pin as it was and says what is served.
+
+        It sets the pin of every model on this node with the same `ref`,
+        because the pin belongs to the weights, not to the registration.
+        Serialised with loads by the node's lock, like an operator's Load.
+        """
+        self._authz.require(actor, Scope.MODEL_WRITE)
+        model = await self._require(model_id)
+        node = await self._require_node(model.node_id)
+        runtime = self._runtime_on(node, model.runtime)
+        if not isinstance(runtime, ManifestPinPort):
+            raise ModelStateConflictError(
+                detail=f"{model.runtime} on node {node.id} has no weights pin to set"
+            )
+        async with self._hold_node(model.node_id) as held:
+            if not held:
+                raise ModelStateConflictError(
+                    detail=f"another load is in progress on node {model.node_id}; retry shortly"
+                )
+            try:
+                await runtime.repin(model.ref, manifest_digest)
+            except ManifestPinRefusedError as exc:
+                await self._audit.record(
+                    actor,
+                    AuditAction.MODEL_REPINNED,
+                    target=model.id,
+                    outcome="failed",
+                    detail={
+                        "manifest_digest": manifest_digest,
+                        "reason": exc.reason,
+                        "served": exc.served or "",
+                    },
+                )
+                raise
+            except Exception:
+                await self._audit.record(
+                    actor,
+                    AuditAction.MODEL_REPINNED,
+                    target=model.id,
+                    outcome="failed",
+                    detail={"manifest_digest": manifest_digest},
+                )
+                raise
+        await self._audit.record(
+            actor,
+            AuditAction.MODEL_REPINNED,
+            target=model.id,
+            detail={"manifest_digest": manifest_digest},
+        )
+        return await self._require(model.id)
 
     async def set_desired_residency(self, actor: Actor, model_id: str, desired: bool) -> Model:
         """Change residency intent without touching the runtime (#49 §3).

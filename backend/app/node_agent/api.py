@@ -34,7 +34,16 @@ from app.application.use_cases.route_chat_request.compaction_tier2 import (
     SummaryTooLongError,
     build_summary_prompt,
 )
-from app.node_agent.dispatch import Attempt, Completed, Existing, Outcome, Refused
+from app.node_agent.dispatch import (
+    Attempt,
+    Completed,
+    Existing,
+    Outcome,
+    Refused,
+    Relay,
+    RuntimeRefused,
+    Sink,
+)
 from app.node_agent.guard import GuardRefusal, check_generation, check_pin, registration
 from app.node_agent.relay import SUMMARY_IDLE_SECONDS
 from app.node_agent.resolution import ResolutionRefused
@@ -421,10 +430,11 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
 
     @app.post("/v1/lifecycle/{action}", dependencies=authorised, response_model=None)
     async def lifecycle(request: Request, action: str) -> StreamingResponse | JSONResponse:
-        """`load`, `unload` or `pull`, with the node to itself (PR4b).
+        """`load`, `unload`, `pull` or `repin`, with the node to itself (PR4b).
 
         A pull streams `accepted`, its progress and one `terminal` event, as
-        an inference does; a load or unload answers once it has settled.
+        an inference does; the others answer once they have settled. A repin
+        is an operator's retry of the pin a pull could not set (#68 §3).
         """
         if action not in LIFECYCLE_KINDS:
             raise HTTPException(status_code=404, detail=f"no lifecycle action {action}")
@@ -441,6 +451,10 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
         if registered is None:
             return _guard_refused(
                 GuardRefusal("model_not_on_node", f"{wanted.ref} is not registered on this node")
+            )
+        if action == "repin" and wanted.manifest_digest is None:
+            raise HTTPException(
+                status_code=400, detail="a repin names the approved manifest_digest"
             )
         context_length = None
         if action == "load":
@@ -471,6 +485,8 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             )
         elif action == "unload":
             relay = agent.relay.unload(wanted.ref)
+        elif action == "repin":
+            relay = _operator_repin(agent, wanted)
         else:
             relay = agent.relay.pull(wanted.ref)
         submitted = await agent.dispatcher.exclusive(
@@ -480,7 +496,7 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             provenance={"ref": wanted.ref, "context_length": context_length},
             after=_repin(agent, wanted)
             if action == "pull"
-            else (_record_capacity(agent, wanted.ref) if action == "load" else None),
+            else (_record_capacity(agent, wanted.ref) if action in ("load", "repin") else None),
         )
         if isinstance(submitted, Existing):
             return await _existing_lifecycle(agent, submitted.operation, action)
@@ -592,7 +608,8 @@ def _repin(agent: Agent, wanted: LifecycleRequest) -> Callable[[Outcome], Awaita
     """After a completed pull and before the node serves again, pin what the
     runtime now serves for the tag (design S5). If the runtime cannot say,
     the old pin stays, and dispatch against the new weights is refused as a
-    revision mismatch until an operator re-pins: closed, not open."""
+    revision mismatch until an operator re-pins (`_operator_repin`, #68 §3):
+    closed, not open."""
 
     async def after(outcome: Outcome) -> None:
         if not isinstance(outcome, Completed):
@@ -608,6 +625,52 @@ def _repin(agent: Agent, wanted: LifecycleRequest) -> Callable[[Outcome], Awaita
         await _record_capacity(agent, wanted.ref)(outcome)
 
     return after
+
+
+def _operator_repin(agent: Agent, wanted: LifecycleRequest) -> Relay:
+    """Pin the weights an operator approved, if they are what is served (#68 §3).
+
+    The retry for a pull whose own re-pin did not happen, which otherwise
+    leaves every load and dispatch refused as a revision mismatch. The
+    operator names the digest; the agent pins it only when the runtime's
+    listing and the model store both report exactly that digest, read inside
+    the exclusive operation so nothing is dispatched against weights that
+    changed in between. Anything less is refused and the pin stays as it was:
+    closed, as after the failed pull. Nothing is sent to the runtime, so no
+    outcome here is uncertain.
+    """
+    approved = wanted.manifest_digest
+
+    async def run(sink: Sink) -> Outcome:
+        evidence: dict[str, Any] = {"approved": approved}
+        try:
+            served = await agent.relay.served_digest(wanted.ref)
+        except Exception as exc:  # noqa: BLE001 - cannot confirm is a refusal, not a match
+            return RuntimeRefused(
+                terminal=evidence, reason=f"revision_unconfirmed:{type(exc).__name__}"
+            )
+        measured = await _measure(agent, wanted.ref)
+        evidence |= {"served": served, "measured": measured.identity}
+        if served is None:
+            return RuntimeRefused(terminal=evidence, reason="not_listed")
+        if approved is None or served != approved or measured.identity != approved:
+            return RuntimeRefused(terminal=evidence, reason="digest_mismatch")
+        try:
+            moved = await agent.store.repin(wanted.op_id, RUNTIME, wanted.ref, approved)
+        except Exception:  # noqa: BLE001 - the pin stays; the operator may retry
+            logger.exception("could not write the approved pin for %s", wanted.ref)
+            return RuntimeRefused(terminal=evidence, reason="pin_not_written")
+        try:
+            await agent.store.audit(
+                "repin",
+                wanted.op_id,
+                {"ref": wanted.ref, "digest": approved, "models": moved, "by": "operator"},
+            )
+        except Exception:  # noqa: BLE001 - the admin's audit row still records it
+            logger.exception("could not record the operator's repin of %s", wanted.ref)
+        return Completed(terminal=evidence | {"models": moved})
+
+    return run
 
 
 def _record_capacity(agent: Agent, ref: str) -> Callable[[Outcome], Awaitable[None]]:
