@@ -69,13 +69,13 @@ instead of counting it, announcing this once per model load at INFO.
 Adding an entry to that list makes it the whole list. Mounting the model store
 alone un-mounted `$HOME` and the next `docker compose up` failed on
 `bind source path does not exist: .../secrets/redis_password`, with
-`/Users/<operator>` still present inside the VM as an empty stub. Both paths must
+the operator's home directory still present inside the VM as an empty stub. Both paths must
 be listed, and Colima rewrites this file on start, so the reason belongs in a
 comment beside them:
 
 ```yaml
 mounts:
-  - location: /Users/<operator>
+  - location: /Users/<operator>    # the account that runs Colima; its $HOME
     writable: true
   - location: /Users/Shared/ollama/models
     writable: false
