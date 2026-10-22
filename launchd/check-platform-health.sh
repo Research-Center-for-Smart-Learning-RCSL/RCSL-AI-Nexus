@@ -49,11 +49,24 @@ REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
 . "$REPO/launchd/lib/operator.sh"
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-# Where the alerts go. Not a secret; kept here so it is reviewable in git rather
-# than sitting in an untracked file nobody reads. Space-separated: each address
-# gets its own envelope recipient, and the To: header is built from the same list
-# below so what the mail says and what the envelope does cannot drift apart.
-ALERT_TO="<maintainer-email> <member-email>"
+# Where the alerts go: `secrets/alert_to`, whitespace-separated addresses. Each
+# address gets its own envelope recipient, and the To: header is built from the
+# same list (lib/health/mail.sh) so what the mail says and what the envelope
+# does cannot drift apart. It lived here as a constant, reviewable in git,
+# until the repository went public; a mailbox is a person's, not the code's.
+#
+# Missing or empty stops the run before any check or any state is written. This
+# script is the thing that tells anyone something broke, so an empty list would
+# be a silent failure of the alarm itself; failing here leaves the ERROR in the
+# log and, because the state is untouched, the next run after the file is fixed
+# still sees every change. The daily digest not arriving is the other signal.
+ALERT_TO_FILE="$REPO/secrets/alert_to"
+ALERT_TO="$({ tr -s '[:space:]' ' ' < "$ALERT_TO_FILE"; } 2>/dev/null | sed 's/^ //; s/ $//')"
+if [ -z "$ALERT_TO" ]; then
+  printf '%s ERROR: no recipients — %s is missing, unreadable or empty; nothing can be mailed\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$ALERT_TO_FILE"
+  exit 1
+fi
 
 # The sending account and its app password. Two files, following the one-file-per
 # -credential convention in secrets/README.md. Gmail requires the envelope sender
@@ -75,7 +88,7 @@ SMTP_URL="smtps://smtp.gmail.com:465"
 # Line 2 held a Unix timestamp before 2026-08-04, when the digest was a rolling
 # 24-hour heartbeat. A leftover timestamp does not parse as a date and is read as
 # "no digest yet", which sends one at the next run — that is the intended
-# upgrade path and it doubles as proof the new mail reaches both recipients.
+# upgrade path and it doubles as proof the new mail reaches every recipient.
 STATE_FILE="/opt/homebrew/var/nexus-health.state"
 
 HEALTH_LOG="/opt/homebrew/var/log/nexus-health.log"

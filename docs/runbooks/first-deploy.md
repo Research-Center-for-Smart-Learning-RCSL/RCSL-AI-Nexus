@@ -764,8 +764,9 @@ docstring 裡，那是估算器本身所在的地方。
   先準備寄件帳號。**建議另開一個專用 Gmail 帳號當寄件者，不要用你自己的那個。** app
   password 會以明文放在 `secrets/` 底下，而這台機器的 FileVault 是關的（security.md
   §15.6）；用自己的帳號等於把「收所有服務密碼重設信」的信箱鑰匙放進去，而
-  `<maintainer-email>` 同時還是平台的第一個管理員。專用帳號被拿走，最多是有人能冒名
-  寄信。收件位址不是 secret，寫在腳本的 `ALERT_TO`，放著讓人 review。
+  維護者自己的信箱同時還是平台的第一個管理員。專用帳號被拿走，最多是有人能冒名
+  寄信。收件位址不是 secret，但 repo 是公開的，所以放在 `secrets/alert_to`；檔案不在或是
+  空的，健康檢查會記一行 ERROR 然後直接結束，不會假裝寄出。
 
   在**寄件**帳號上：Google 帳號 → 安全性 → 兩步驟驗證（必須先開）→ 應用程式密碼，產生
   一組 16 碼。然後：
@@ -773,7 +774,8 @@ docstring 裡，那是估算器本身所在的地方。
   ```sh
   printf '%s' 'nexus-alerts@gmail.com' > secrets/alert_smtp_account
   printf '%s' 'xxxxxxxxxxxxxxxx'       > secrets/alert_smtp_password
-  chmod 600 secrets/alert_smtp_account secrets/alert_smtp_password
+  printf '%s\n' 'you@example.com'      > secrets/alert_to   # 收件人，空白分隔
+  chmod 600 secrets/alert_smtp_account secrets/alert_smtp_password secrets/alert_to
 
   # 先空跑：每一項檢查都會跑，但信只印在終端機、不寄出，state 檔也不寫。
   # 兩者都重要——空跑如果寫了 state，就會把當天的摘要日期用掉，真正的那次反而不寄了。

@@ -4,7 +4,8 @@
 lints with `plutil`, which CI's Linux runner does not have; this renders the
 same way in Python so a broken template fails here rather than on the host.
 It also holds the reason they are templates: the repository is public, so no
-file under `launchd/` may name a home directory other than `/Users/Shared`.
+file under `launchd/` may name a home directory other than `/Users/Shared`,
+nor a mailbox: the health check's recipients are read from `secrets/alert_to`.
 """
 
 import plistlib
@@ -17,6 +18,7 @@ LAUNCHD = Path(__file__).resolve().parents[3] / "launchd"
 TEMPLATES = sorted(LAUNCHD.glob("online.rcsl.*.plist"))
 PLACEHOLDER = re.compile(r"@[A-Z_]+@")
 HOME_PATH = re.compile(r"/Users/(?!Shared\b)[A-Za-z0-9_.-]+")
+MAILBOX = re.compile(r"[A-Za-z0-9._%+-]+@(?!example\.(?:com|org)\b)[A-Za-z0-9-]+\.[A-Za-z0-9.-]+")
 
 
 def _render(text: str) -> str:
@@ -50,5 +52,15 @@ def test_nothing_under_launchd_names_a_home_directory() -> None:
         for p in sorted(LAUNCHD.rglob("*"))
         if p.is_file() and p.suffix in {".plist", ".sh", ".py"}
         for m in HOME_PATH.findall(p.read_text(encoding="utf-8"))
+    ]
+    assert not found, found
+
+
+def test_nothing_under_launchd_names_a_mailbox() -> None:
+    found = [
+        f"{p.relative_to(LAUNCHD)}: {m}"
+        for p in sorted(LAUNCHD.rglob("*"))
+        if p.is_file() and p.suffix in {".plist", ".sh", ".py"}
+        for m in MAILBOX.findall(p.read_text(encoding="utf-8"))
     ]
     assert not found, found

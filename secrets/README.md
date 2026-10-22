@@ -74,6 +74,7 @@ openssl rand -base64 32        # for each password and each of the four below
 | `qdrant_read_only_api_key` | A **different** value from the one above. The gateway mounts this one (at the target name `qdrant_api_key`) so that retrieving a passage to answer a request cannot become writing one, the same least-privilege split its database account has. Generate it separately; reusing the full key silently removes the split |
 | `alert_smtp_account` | the Gmail address `check-platform-health.sh` sends alerts *from*; not itself a secret, but kept beside the password because Gmail requires the envelope sender to be the account that authenticates |
 | `alert_smtp_password` | a Google app password for that account, not the account password. Needs 2-Step Verification enabled on it first |
+| `alert_to` | who `check-platform-health.sh` mails, whitespace-separated addresses. Not a secret, but a person's mailbox and the repository is public. Missing or empty, the health check logs an ERROR and exits before checking anything |
 | `maxmind_license_key` | the MaxMind account's permanent licence key, read by `launchd/refresh-geolite2.sh` on the host — no container mounts it. The long-lived credential, unlike the throwaway tokens the first download used; without it the country database rots in place (the script's header explains). Not needed if the refresh job is not installed |
 | `restic_password` | the passphrase for the backup repository, read by `launchd/backup.sh`; no container mounts it. **This is the one file in this directory whose only copy must not be on this machine.** The repository holds `secrets/` — it has to, or a restore produces a database whose TOTP secrets cannot be decrypted and whose API keys cannot be verified — so this passphrase plus read access to the repository is the whole platform, and a passphrase stored only on the disk being backed up protects nothing against the disk being lost. Keep a copy in a password manager or on paper, off site. Losing it makes every existing snapshot permanently unreadable; there is no recovery path, by design. Not needed if the backup daemon is not installed |
 
@@ -83,8 +84,7 @@ in plaintext on a host whose FileVault is off ([security.md](../docs/architectur
 the disk. A throwaway account that only sends mail loses nothing; the operator's
 own mailbox is where every password-reset link for every other service arrives,
 and on this deployment it is also the platform's first administrator. The
-recipient address is not a secret and lives in the script, where it is
-reviewable. Neither file is needed if the health-check daemon is not installed.
+recipients are in `alert_to`. None of the three is needed if the health-check daemon is not installed.
 
 **The backup repository contains this directory.** That is a deliberate
 decision recorded at the top of [`launchd/backup.sh`](../launchd/backup.sh)

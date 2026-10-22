@@ -100,9 +100,8 @@ REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
 . "$REPO/launchd/lib/operator.sh"
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-# Where the backup goes. A reviewable constant rather than an untracked file,
-# for the same reason ALERT_TO is one in check-platform-health.sh: a change to
-# it should show up in a diff.
+# Where the backup goes. A reviewable constant rather than an untracked file:
+# a change to it should show up in a diff.
 #
 # This is one repository, which is one leg of the 3-2-1 section 9.4 asks for.
 # The second leg is offsite, and it is not written here because it is blocked on
