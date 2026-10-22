@@ -11,7 +11,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>/Users/rcslmac1/dev/RCSL-AI-Nexus/launchd/check-platform-health.sh</string>
+		<string>@REPO@/launchd/check-platform-health.sh</string>
 	</array>
 
 	<!-- Same identity as the reconciler and for the same reason: the docker
@@ -19,7 +19,7 @@
 	     in the user's context, so root would be the wrong identity even though
 	     this is a daemon. It also needs to read secrets/. -->
 	<key>UserName</key>
-	<string>rcslmac1</string>
+	<string>@OPERATOR@</string>
 
 	<!-- Every five minutes, and also once at load. The load-time run does not
 	     check anything: launchd starts this before Colima, tailscaled or
@@ -55,6 +55,6 @@
 	<key>StandardErrorPath</key>
 	<string>/opt/homebrew/var/log/nexus-health.log</string>
 	<key>WorkingDirectory</key>
-	<string>/Users/rcslmac1/dev/RCSL-AI-Nexus</string>
+	<string>@REPO@</string>
 </dict>
 </plist>

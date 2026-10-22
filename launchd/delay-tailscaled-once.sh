@@ -98,7 +98,8 @@ fi
 # reports on cannot drift from the one they use. Read before the trap is armed:
 # the release path below refers to it, and a trap that fires on an unset variable
 # under `set -u` would be a recovery path that fails while recovering.
-TAILNET_IP="$(sed -n 's/^TAILNET_IP=//p' /Users/rcslmac1/dev/RCSL-AI-Nexus/.env 2>/dev/null | head -1 | tr -d '"'\''[:space:]')"
+REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
+TAILNET_IP="$(sed -n 's/^TAILNET_IP=//p' "$REPO/.env" 2>/dev/null | head -1 | tr -d '"'\''[:space:]')"
 if [ -z "$TAILNET_IP" ]; then
   log "FATAL: TAILNET_IP is not set; not injecting a fault I cannot describe"
   exit 1

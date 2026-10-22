@@ -11,7 +11,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/usr/bin/python3</string>
-		<string>/Users/rcslmac1/dev/RCSL-AI-Nexus/launchd/host-metrics.py</string>
+		<string>@REPO@/launchd/host-metrics.py</string>
 	</array>
 
 	<!-- /usr/bin/python3, not the project's venv: a launchd job that depends
@@ -24,7 +24,7 @@
 	     thermal readings — `powermetrics` needs root, and running as root to
 	     draw a chart is a trade to make deliberately, not here. -->
 	<key>UserName</key>
-	<string>rcslmac1</string>
+	<string>@OPERATOR@</string>
 
 	<key>RunAtLoad</key>
 	<true/>
@@ -42,6 +42,6 @@
 	<key>StandardErrorPath</key>
 	<string>/opt/homebrew/var/log/nexus-host-metrics.log</string>
 	<key>WorkingDirectory</key>
-	<string>/Users/rcslmac1/dev/RCSL-AI-Nexus</string>
+	<string>@REPO@</string>
 </dict>
 </plist>

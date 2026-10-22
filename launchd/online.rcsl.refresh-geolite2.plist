@@ -11,13 +11,13 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>/Users/rcslmac1/dev/RCSL-AI-Nexus/launchd/refresh-geolite2.sh</string>
+		<string>@REPO@/launchd/refresh-geolite2.sh</string>
 	</array>
 
 	<!-- The docker socket is the user's, same arrangement as the
 	     reconciler and online.rcsl.ollama. -->
 	<key>UserName</key>
-	<string>rcslmac1</string>
+	<string>@OPERATOR@</string>
 
 	<!-- Weekly, Wednesday 05:30. MaxMind publishes Tuesdays and Fridays;
 	     the day after a publish day, at an hour nobody is using the
@@ -42,6 +42,6 @@
 	<key>StandardErrorPath</key>
 	<string>/opt/homebrew/var/log/nexus-geolite2.log</string>
 	<key>WorkingDirectory</key>
-	<string>/Users/rcslmac1/dev/RCSL-AI-Nexus</string>
+	<string>@REPO@</string>
 </dict>
 </plist>

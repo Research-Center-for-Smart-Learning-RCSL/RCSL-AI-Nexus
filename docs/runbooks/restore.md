@@ -124,9 +124,7 @@ security.md §9.4 有一句話值得先讀：**沒有驗證過的備份不是備
 - [ ] 安裝 launchd job
 
   ```sh
-  sudo cp launchd/online.rcsl.backup.plist /Library/LaunchDaemons/
-  sudo chown root:wheel /Library/LaunchDaemons/online.rcsl.backup.plist
-  sudo chmod 644 /Library/LaunchDaemons/online.rcsl.backup.plist
+  sudo launchd/install-daemons.sh backup   # renders the template for this host
   sudo launchctl bootstrap system /Library/LaunchDaemons/online.rcsl.backup.plist
   sudo launchctl print system/online.rcsl.backup | head -20
   ```
