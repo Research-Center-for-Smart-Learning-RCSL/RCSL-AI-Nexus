@@ -39,6 +39,7 @@ separately at the end, marked as superseded.
 **[2026-10-22](./progress/2026-10-22.md)**
 - Colima VM back under launchd at 4 GiB with the repository plists installed; platform restarted on `7a2da06` and gemma4 and the embedder reloaded
 - #49/#23 host acceptance: reconciler on in production; after an Ollama restart it restored gemma4 then the embedder unattended in about 90 s, confirmed by an authenticated gateway request
+- Ollama 0.33.2 → 0.40.8: no manifest migration, digests unchanged, both models on llama.cpp, counter equal to the runtime; restored unattended by the reconciler
 
 **[2026-10-18](./progress/2026-10-18.md)**
 - #50: residency-mismatch gauge and alert, reconciler outcome counter and give-up alert, delivered through the health job
