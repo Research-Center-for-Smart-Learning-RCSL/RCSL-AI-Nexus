@@ -38,7 +38,9 @@ overrides:
   # so `isPrivate()`-style SSRF guards can misclassify an internal address as
   # public. Development-only dependency (shadcn CLI), never reaches the build
   # output, but the fix is a one-line floor and there is no reason to carry it.
-  ip-address: '>=10.5.1'
+  # Raised to 10.7.4 on 2026-10-23 for GHSA-rxp7-6hxx-x8q5, quadratic matching
+  # of an `Address6` zone identifier; same dev-only path.
+  ip-address: '>=10.7.4'
   # GHSA-4cwx-7wf7-3272 (CVE-2026-13697): undici's cache interceptor can leak
   # a private response into the shared cache, or crash, on malformed
   # `Cache-Control: private` directives. Dev-only (jsdom, shadcn, dotenvx pull
