@@ -30,6 +30,23 @@ docker compose up -d          # migrate runs first, then services restart
 docker compose ps             # confirm migrate exited 0 and services are healthy
 ```
 
+**A merged dependency bump is not deployed until the images are rebuilt, and nothing rebuilds them on merge.** #72 (certifi 2026.10.19, pypdf 6.21.1, for a critical and six lower alerts) merged on 2026-10-22; on 2026-10-23 the gateway, both admin entrances and the node agent were still running certifi 2026.7.22 and pypdf 6.19.0. `parser` had been recreated in between and was current, so one service reading right says nothing about the others built from the same `rcsl-ai-nexus:latest`: a container runs the image it was created from, not the tag's current target. The alert list is no check either, because Dependabot reads the lockfile on `main` and says nothing about what is running.
+
+So after merging anything that touches `backend/uv.lock` or `frontend/pnpm-lock.yaml`, whoever merged it or a bot, run the routine upgrade above, then read the version from inside each running container rather than from the lock:
+
+```bash
+for s in gateway admin-public admin-tailnet node-agent parser; do
+  printf '%s: ' "$s"
+  docker compose exec -T "$s" python -c 'import importlib.metadata as m; print(m.version("certifi"))'
+done
+for s in frontend-public frontend-tailnet; do
+  printf '%s: ' "$s"
+  docker compose exec -T "$s" node -e 'console.log(require("next/package.json").version)'
+done
+```
+
+Substitute the package the bump was for. **Run the two scanners CI's `audit` job runs at the same time, because the alert list is not complete:** `pnpm audit --prod` in `frontend/`, and in `backend/` `uv export --frozen --no-dev --format requirements-txt > /tmp/requirements.txt && uv tool run pip-audit --requirement /tmp/requirements.txt --strict`. The same day, Next.js 15.5.27's unauthenticated RCE in the image optimiser (GHSA-2464-fhr4-w9xw) was in `pnpm audit` and in no Dependabot alert, on the public entrance that serves `next/image`.
+
 **Check the built image before recreating anything.** Two questions, and the
 second was added on 2026-08-20 because a deploy that answered the first
 correctly still took the platform down for four minutes:
