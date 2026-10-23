@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import zipfile
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 
 from fastapi.testclient import TestClient
@@ -10,6 +11,10 @@ from tests.integration.admin_api_end_to_end_fixtures import (
 )
 
 pytest_plugins = ("tests.integration.admin_api_end_to_end_fixtures",)
+
+# A valid expiry, relative to the run rather than written as a date: a literal
+# turns a test red on the day it passes, as `2026-10-23` did on that day.
+A_YEAR_OUT = (datetime.now(UTC) + timedelta(days=365)).isoformat()
 
 
 def test_the_configured_node_exists_without_anyone_registering_it(admin: TestClient) -> None:
@@ -59,7 +64,7 @@ def test_a_capability_can_be_configured_and_the_dashboard_reflects_it(
             "rate_limit_rpm": 60,
             "quota_tokens_per_day": 100000,
             "allowed_cidrs": ["10.0.0.0/8"],
-            "expires_at": "2027-01-01T00:00:00Z",
+            "expires_at": A_YEAR_OUT,
         },
     )
     assert key.status_code == 201, key.text
@@ -121,6 +126,7 @@ def test_a_date_only_expiry_is_accepted(admin: TestClient) -> None:
     to an aware `now` raised `TypeError` — not a `DomainError`, so it escaped
     the handler as a bare 500 and no key could be issued from the UI at all.
     """
+    expiry = (datetime.now(UTC) + timedelta(days=30)).date().isoformat()
     users = admin.get("/admin/users").json()
     issued = admin.post(
         "/admin/api-keys",
@@ -131,7 +137,7 @@ def test_a_date_only_expiry_is_accepted(admin: TestClient) -> None:
             "rate_limit_rpm": 60,
             "quota_tokens_per_day": 1000,
             "allowed_cidrs": [],
-            "expires_at": "2026-10-23",
+            "expires_at": expiry,
         },
     )
 
@@ -166,7 +172,7 @@ def test_a_created_resource_carries_the_timestamp_the_client_requires(
             "rate_limit_rpm": 60,
             "quota_tokens_per_day": 1000,
             "allowed_cidrs": [],
-            "expires_at": "2027-01-01T00:00:00Z",
+            "expires_at": A_YEAR_OUT,
         },
     )
     assert issued.status_code == 201, issued.text
@@ -187,7 +193,7 @@ def test_an_unmetered_key_cannot_be_issued(admin: TestClient) -> None:
         "rate_limit_rpm": 0,
         "quota_tokens_per_day": 0,
         "allowed_cidrs": [],
-        "expires_at": "2027-01-01T00:00:00Z",
+        "expires_at": A_YEAR_OUT,
     }
 
     assert admin.post("/admin/api-keys", json=body).status_code == 422
