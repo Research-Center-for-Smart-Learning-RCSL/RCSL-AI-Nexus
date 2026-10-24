@@ -62,6 +62,7 @@ from app.interfaces.http.routers import (
     invitations,
     knowledge,
     logs,
+    maintenance,
     me,
     metrics,
     models,
@@ -220,6 +221,9 @@ def mount_admin_routers(app: FastAPI) -> None:
 
     for router in (
         me.router,
+        # Beside `me` because the frontend asks both before it decides what to
+        # render: whether the platform is closed comes before who is asking.
+        maintenance.router,
         roles.router,
         users.router,
         invitations.router,

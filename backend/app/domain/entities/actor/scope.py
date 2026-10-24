@@ -83,6 +83,16 @@ class Scope(StrEnum):
     them.
     """
 
+    MAINTENANCE_READ = "maintenance:read"
+    """See the maintenance hold in full: who closed the platform, when, and
+    the message shown to everyone else. The coarse public state (closed or
+    not, the message) needs no scope at all; it is what the maintenance page
+    shows a visitor. Admin-only, see `ADMIN_ONLY_SCOPES`."""
+
+    MAINTENANCE_WRITE = "maintenance:write"
+    """Close or reopen the whole platform (#61). Admin-only, see
+    `ADMIN_ONLY_SCOPES`."""
+
     KNOWLEDGE_READ = "knowledge:read"
     KNOWLEDGE_WRITE = "knowledge:write"
 

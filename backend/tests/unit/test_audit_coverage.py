@@ -26,7 +26,7 @@ from app.infrastructure.config import get_settings
 from app.interfaces.http.errors import install_error_handlers
 from app.interfaces.http.middleware.identity import resolve_tailnet_actor
 from app.interfaces.http.request_actor import actor_from_request, remember_actor
-from tests.unit.fakes import FakeAudit, FakeUsers
+from tests.unit.fakes import FakeAudit, FakeMaintenance, FakeUsers
 
 ACTOR = Actor(
     id="u1",
@@ -145,6 +145,7 @@ async def test_the_tailnet_resolver_leaves_the_actor_where_the_handler_looks(
         users=FakeUsers([user]),
         bootstrap=_NoBootstrap(),
         authz=RoleAuthorization(),
+        maintenance=FakeMaintenance(),  # type: ignore[arg-type]
     )
 
     assert actor_from_request(request) is resolved

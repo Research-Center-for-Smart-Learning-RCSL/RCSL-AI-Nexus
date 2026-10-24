@@ -20,6 +20,7 @@ from app.adapters.crypto.zxcvbn_policy import ZxcvbnPasswordPolicy
 from app.adapters.persistence.repositories import (
     PostgresApiKeyRepository,
     PostgresInvitationRepository,
+    PostgresMaintenanceRepository,
     PostgresModelRepository,
     PostgresNodeRepository,
     PostgresRefusalWriter,
@@ -318,3 +319,11 @@ def get_model_repository(session: SessionDep) -> PostgresModelRepository:
 
 def get_node_repository(session: SessionDep) -> PostgresNodeRepository:
     return PostgresNodeRepository(session)
+
+
+def get_maintenance_repository(session: SessionDep) -> PostgresMaintenanceRepository:
+    """Read on every request that could spend the runtime and on every local
+    session resolution, from the request's own session: the hold is one
+    primary-key row, and reading it where it is decided is what lets every
+    process agree without a cache that could disagree (#61)."""
+    return PostgresMaintenanceRepository(session)

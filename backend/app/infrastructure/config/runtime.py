@@ -120,6 +120,14 @@ class RuntimeSettings(BaseSettings):
     needs `node_agent_enabled` and the heartbeat, and stays idle without them.
     Resolve every model left in `error`, `loading` or `unloading` first."""
 
+    maintenance_enabled: bool = False
+    """Whether a platform administrator may close the platform (#61).
+
+    Off until #61's forced interruption and verified restoration exist and
+    have passed on the host. With it off, entering maintenance is refused;
+    reopening never is, so a hold can always be lifted. Every process honours
+    a hold whatever this says: the flag governs the button, not the gate."""
+
     residency_reconciler_interval_seconds: int = Field(default=30, gt=0)
     """How often the reconciler reads the latest observations. Two distinct
     heartbeat answers are needed before it acts, so it cannot act faster than
