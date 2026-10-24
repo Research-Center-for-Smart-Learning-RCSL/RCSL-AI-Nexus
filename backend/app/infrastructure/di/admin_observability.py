@@ -13,6 +13,7 @@ from app.adapters.persistence.repositories import (
     PostgresAuditLogRepository,
     PostgresEvaluationRepository,
     PostgresInvitationRepository,
+    PostgresMaintenanceRepository,
     PostgresModelRepository,
     PostgresNodeRepository,
     PostgresPromptLogRepository,
@@ -32,6 +33,7 @@ from app.adapters.persistence.sqlalchemy_models import (
 from app.application.use_cases.issue_invitation import IssueInvitation
 from app.application.use_cases.manage_api_keys import ManageApiKeys
 from app.application.use_cases.manage_evaluations import ManageEvaluations
+from app.application.use_cases.manage_maintenance import ManageMaintenance
 from app.application.use_cases.manage_nodes import ManageNodes
 from app.application.use_cases.manage_retention import ManageRetention
 from app.application.use_cases.manage_tenants import ManageTenants
@@ -256,4 +258,15 @@ def build_read_host_status(request: Request, settings: SettingsDep) -> ReadHostS
     return ReadHostStatus(
         host=HttpHostStatus(settings.host_metrics_url),
         authz=request.app.state.authz,
+    )
+
+
+def build_manage_maintenance(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> ManageMaintenance:
+    return ManageMaintenance(
+        maintenance=PostgresMaintenanceRepository(session),
+        authz=request.app.state.authz,
+        audit=request.app.state.audit,
+        enabled=settings.maintenance_enabled,
     )

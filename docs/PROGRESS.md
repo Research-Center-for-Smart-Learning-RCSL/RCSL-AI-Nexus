@@ -36,6 +36,9 @@ separately at the end, marked as superseded.
 
 ### October 2026
 
+**[2026-10-24](./progress/2026-10-24.md)**
+- #61 first package: a platform-wide maintenance hold that closes every entrance to all but platform administrators, revokes non-admin sessions for good and suspends the reconciler; entering stays disabled until forced interruption and verified restore exist
+
 **[2026-10-22](./progress/2026-10-22.md)**
 - Colima VM back under launchd at 4 GiB with the repository plists installed; platform restarted on `7a2da06` and gemma4 and the embedder reloaded
 - #49/#23 host acceptance: reconciler on in production; after an Ollama restart it restored gemma4 then the embedder unattended in about 90 s, confirmed by an authenticated gateway request

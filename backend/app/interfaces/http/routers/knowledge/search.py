@@ -12,6 +12,7 @@ from app.infrastructure.di import (
     build_search_knowledge,
 )
 from app.interfaces.http.middleware.identity import current_actor
+from app.interfaces.http.middleware.maintenance import SERVING
 from app.interfaces.http.schemas.admin_schemas import (
     KnowledgeSearchRequest,
     KnowledgeSearchResponse,
@@ -21,7 +22,7 @@ from app.interfaces.http.schemas.admin_schemas import (
 from .base import router
 
 
-@router.post("/knowledge/search")
+@router.post("/knowledge/search", dependencies=SERVING)
 async def search_knowledge(
     payload: KnowledgeSearchRequest,
     actor: Annotated[Actor, Depends(current_actor)],

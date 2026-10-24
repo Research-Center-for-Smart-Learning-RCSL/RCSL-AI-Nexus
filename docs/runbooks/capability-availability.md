@@ -195,8 +195,10 @@ deploy-time provisioning moves it to `error`, which is retried on fresh
 evidence.
 
 **Suspension.** The loop takes a `suspended` hook that is checked before each
-pass and before each load. Nothing supplies it yet; maintenance mode (#61) is
-meant to. Until then, disable the flag and restart `admin-tailnet` to stop it.
+pass and before each load. Since 2026-10-24 it is the maintenance hold (#61):
+while the platform is closed the reconciler loads and releases nothing, and the
+desired set is left as it was. Outside maintenance, disable the flag and
+restart `admin-tailnet` to stop it.
 
 **Not yet done.** The admin "reset runtime" action is not built. The witness
 CLI resolution remains the only path, because the agent cannot restart the

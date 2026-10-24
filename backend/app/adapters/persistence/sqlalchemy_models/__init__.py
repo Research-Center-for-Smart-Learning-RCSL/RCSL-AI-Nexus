@@ -20,6 +20,7 @@ from .knowledge import (
     KnowledgeDocumentRow,
     KnowledgeTenantEpochRow,
 )
+from .maintenance import MaintenanceControlRow
 from .observability_retention import (
     AuditLogRow,
     PromptLogRow,
@@ -37,6 +38,7 @@ from .platform_runtime import (
 
 __all__ = [
     "Base",
+    "MaintenanceControlRow",
     "TenantRow",
     "NodeRow",
     "ModelRow",

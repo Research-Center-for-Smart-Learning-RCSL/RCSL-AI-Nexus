@@ -19,12 +19,15 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
-from app.adapters.persistence.repositories import PostgresUserRepository
+from app.adapters.persistence.repositories import (
+    PostgresMaintenanceRepository,
+    PostgresUserRepository,
+)
 from app.adapters.session.session_store import SessionData, SessionStore
 from app.application.use_cases.bootstrap_first_admin import BootstrapFirstAdmin
-from app.domain.entities.actor import Actor
+from app.domain.entities.actor import Actor, Role
 from app.domain.entities.user import User
-from app.domain.exceptions import CsrfValidationError, NotAuthenticatedError
+from app.domain.exceptions import CsrfValidationError, MaintenanceError, NotAuthenticatedError
 from app.domain.ports.security_ports import AuthorizationPort
 from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.di import (
@@ -32,6 +35,7 @@ from app.infrastructure.di import (
     current_actor,
     current_session,
     get_authorization,
+    get_maintenance_repository,
     get_session_store,
     get_user_repository,
 )
@@ -64,6 +68,7 @@ async def resolve_tailnet_actor(
     users: Annotated[PostgresUserRepository, Depends(get_user_repository)],
     bootstrap: Annotated[BootstrapFirstAdmin, Depends(build_bootstrap_first_admin)],
     authz: Annotated[AuthorizationPort, Depends(get_authorization)],
+    maintenance: Annotated[PostgresMaintenanceRepository, Depends(get_maintenance_repository)],
 ) -> Actor:
     """Identity from the header `tailscale serve` injects.
 
@@ -91,6 +96,14 @@ async def resolve_tailnet_actor(
     if user is None:
         raise NotAuthenticatedError(detail=f"tailnet login {login} has no account")
 
+    # Per request, because the tailnet has no session to revoke: refusing the
+    # identity each time is the whole of the restriction, and the Tailscale
+    # account itself is never touched (#61). After the account lookup, so a
+    # login with no account is still told it has none.
+    state = await maintenance.read()
+    if state.admission_closed and user.role is not Role.ADMIN:
+        raise MaintenanceError(detail=f"tailnet user {user.id} during epoch {state.epoch}")
+
     return remember_actor(
         request,
         _actor_for(user, source="dev" if settings.auth_mode == "dev" else "tailnet", authz=authz),
@@ -102,6 +115,7 @@ async def resolve_session_actor(
     users: Annotated[PostgresUserRepository, Depends(get_user_repository)],
     sessions: Annotated[SessionStore, Depends(get_session_store)],
     authz: Annotated[AuthorizationPort, Depends(get_authorization)],
+    maintenance: Annotated[PostgresMaintenanceRepository, Depends(get_maintenance_repository)],
 ) -> Actor:
     """Identity from a server-side session, established by password and TOTP."""
     settings = get_settings()
@@ -121,6 +135,21 @@ async def resolve_session_actor(
         # account stops costing a lookup on every retry.
         await sessions.destroy(session_id)
         raise NotAuthenticatedError(detail=f"session for unusable user {data.user_id}")
+
+    # The live role, not the one at login: a role change already kills every
+    # session (`ManageUsers.update`), so the two cannot disagree for long, and
+    # reading it here is what keeps a demoted administrator out of a hold.
+    state = await maintenance.read()
+    platform_admin = user.role is Role.ADMIN
+    if not state.session_valid(data.maintenance_epoch, platform_admin=platform_admin):
+        # Issued before the latest entry. Dropped for good, so reopening the
+        # platform does not bring it back (#61): the user signs in again.
+        await sessions.destroy(session_id)
+        if state.admission_closed:
+            raise MaintenanceError(detail=f"session predates maintenance epoch {state.epoch}")
+        raise NotAuthenticatedError(detail=f"session predates maintenance epoch {state.epoch}")
+    if state.admission_closed and not platform_admin:
+        raise MaintenanceError(detail=f"user {user.id} during epoch {state.epoch}")
 
     _assert_csrf_bound_to_session(request, data, settings)
 

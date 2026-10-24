@@ -73,6 +73,12 @@ from .knowledge import (
     UploadRejectedError,
     VectorStoreError,
 )
+from .maintenance import (
+    MAINTENANCE_RETRY_AFTER_SECONDS,
+    MaintenanceDisabledError,
+    MaintenanceError,
+    MaintenanceStateConflictError,
+)
 from .retention_evaluations import (
     EvaluationRunNotFoundError,
     PromptLogNotFoundError,
@@ -148,4 +154,8 @@ __all__ = [
     "RetentionWindowTooLongError",
     "PromptLogNotFoundError",
     "EvaluationRunNotFoundError",
+    "MAINTENANCE_RETRY_AFTER_SECONDS",
+    "MaintenanceError",
+    "MaintenanceStateConflictError",
+    "MaintenanceDisabledError",
 ]

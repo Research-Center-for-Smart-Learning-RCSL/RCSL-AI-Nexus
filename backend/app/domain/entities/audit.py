@@ -87,6 +87,13 @@ class AuditAction(StrEnum):
     detail names the digest; a refusal is recorded `failed` with the digest the
     runtime served instead."""
 
+    MAINTENANCE_ENTERED = "maintenance.entered"
+    """A platform administrator closed the platform (#61). The detail carries
+    the epoch the entry opened, which is what the sessions it revoked are
+    measured against."""
+    MAINTENANCE_REOPENED = "maintenance.reopened"
+    MAINTENANCE_MESSAGE_SET = "maintenance.message_set"
+
     NODE_REGISTERED = "node.registered"
     NODE_UPDATED = "node.updated"
     NODE_REMOVED = "node.removed"

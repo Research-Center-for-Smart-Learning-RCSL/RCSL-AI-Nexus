@@ -143,7 +143,15 @@ _BY_ROLE: dict[Role, frozenset[Scope]] = {
     Role.SERVICE: _SERVICE_SCOPES,
 }
 
-ADMIN_ONLY_SCOPES = frozenset({Scope.TENANT_WRITE, Scope.RETENTION_WRITE, Scope.PROMPT_LOG_READ})
+ADMIN_ONLY_SCOPES = frozenset(
+    {
+        Scope.TENANT_WRITE,
+        Scope.RETENTION_WRITE,
+        Scope.PROMPT_LOG_READ,
+        Scope.MAINTENANCE_READ,
+        Scope.MAINTENANCE_WRITE,
+    }
+)
 """Scopes no role but `admin` holds — listed, rather than left to be discovered.
 
 Creating a tenant is the one operation with no smaller holder, because a tenant
@@ -177,7 +185,16 @@ working exactly as designed, on a placement that had not been thought through.
 The tightest answer turned out to also be the one that leaves every other role
 usable. The cost is that a transcript has one reader, which is acceptable here:
 the read is itself audited (`prompt_log.read`), so the reader is recorded even
-though they are the platform administrator."""
+though they are the platform administrator.
+
+`maintenance:read` and `maintenance:write` joined on 2026-10-24 (#61), and the
+reason is what maintenance does rather than who might want to see it. Closing
+the platform logs out every account that is not a platform administrator, and
+keeps out every role below `admin` until it reopens, a `tenant_admin`
+included. A hold that a held-out role could lift is not a hold, and one it
+could impose would let a tenant's administrator lock every other tenant out.
+Reading the private half goes with writing it: it names who closed the
+platform, which only the people who can reopen it need."""
 
 ROLE_SCOPES: Mapping[Role, frozenset[Scope]] = MappingProxyType(_BY_ROLE)
 """Read-only view for callers that describe the model rather than enforce it —

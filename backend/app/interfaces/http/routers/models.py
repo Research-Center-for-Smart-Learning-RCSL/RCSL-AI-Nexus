@@ -22,6 +22,7 @@ from app.infrastructure.di import (
 )
 from app.infrastructure.jobs import schedule_download
 from app.interfaces.http.middleware.identity import current_actor
+from app.interfaces.http.middleware.maintenance import SERVING
 from app.interfaces.http.schemas.admin_schemas import (
     CreateModelRequest,
     DownloadJobResponse,
@@ -130,7 +131,7 @@ async def delete_model(
     return Response(status_code=204)
 
 
-@router.post("/models/{model_id}/load")
+@router.post("/models/{model_id}/load", dependencies=SERVING)
 async def load_model(
     model_id: str,
     actor: Annotated[Actor, Depends(current_actor)],
@@ -142,7 +143,7 @@ async def load_model(
     return ModelResponse.of(await models.load(actor, model_id))
 
 
-@router.post("/models/{model_id}/unload")
+@router.post("/models/{model_id}/unload", dependencies=SERVING)
 async def unload_model(
     model_id: str,
     actor: Annotated[Actor, Depends(current_actor)],
@@ -151,7 +152,7 @@ async def unload_model(
     return ModelResponse.of(await models.unload(actor, model_id))
 
 
-@router.put("/models/{model_id}/residency-intent", status_code=202)
+@router.put("/models/{model_id}/residency-intent", status_code=202, dependencies=SERVING)
 async def set_residency_intent(
     model_id: str,
     payload: ResidencyIntentRequest,
@@ -170,7 +171,7 @@ async def set_residency_intent(
     )
 
 
-@router.post("/models/{model_id}/repin")
+@router.post("/models/{model_id}/repin", dependencies=SERVING)
 async def repin_model(
     model_id: str,
     payload: RepinRequest,
@@ -186,7 +187,7 @@ async def repin_model(
     return ModelResponse.of(await models.repin(actor, model_id, payload.manifest_digest))
 
 
-@router.post("/models/{model_id}/download", status_code=202)
+@router.post("/models/{model_id}/download", status_code=202, dependencies=SERVING)
 async def start_download(
     model_id: str,
     request: Request,

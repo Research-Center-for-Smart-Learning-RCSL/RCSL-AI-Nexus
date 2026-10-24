@@ -26,6 +26,8 @@ export const SCOPE_NAMES = [
   'knowledge:read',
   'knowledge:write',
   'logs:read',
+  'maintenance:read',
+  'maintenance:write',
   'model:read',
   'model:write',
   'node:read',
@@ -76,6 +78,8 @@ export const ROLE_SCOPES: Record<GeneratedRole, readonly KnownScope[]> = {
     'knowledge:read',
     'knowledge:write',
     'logs:read',
+    'maintenance:read',
+    'maintenance:write',
     'model:read',
     'model:write',
     'node:read',
@@ -179,6 +183,8 @@ export const ROLE_SCOPES: Record<GeneratedRole, readonly KnownScope[]> = {
 
 /** Held by `admin` and no other role. */
 export const ADMIN_ONLY_SCOPES = [
+  'maintenance:read',
+  'maintenance:write',
   'prompt_log:read',
   'retention:write',
   'tenant:write',

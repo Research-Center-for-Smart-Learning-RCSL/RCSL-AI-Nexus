@@ -62,6 +62,12 @@ from .logs_usage_refusals import (
     UsageRecordListResponse,
     UsageRecordResponse,
 )
+from .maintenance import (
+    EnterMaintenanceRequest,
+    MaintenanceMessageRequest,
+    MaintenanceStatusResponse,
+    PublicMaintenanceStatusResponse,
+)
 from .models_nodes_routing import (
     CreateModelRequest,
     CreateNodeRequest,
@@ -106,6 +112,10 @@ from .users_tenants import (
 )
 
 __all__ = [
+    "EnterMaintenanceRequest",
+    "MaintenanceMessageRequest",
+    "MaintenanceStatusResponse",
+    "PublicMaintenanceStatusResponse",
     "MeResponse",
     "LoginRequest",
     "LoginChallengeResponse",

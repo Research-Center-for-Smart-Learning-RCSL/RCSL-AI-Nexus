@@ -84,6 +84,11 @@ async def test_gateway_account_is_denied_writes_outside_usage_records(database_u
         async with gateway.connect() as conn:
             await conn.execute(text("SELECT 1 FROM api_keys LIMIT 1"))
             await conn.execute(text("SELECT 1 FROM routing_policies LIMIT 1"))
+            # The maintenance hold (#61): every request reads it...
+            await conn.execute(text("SELECT admission_closed FROM maintenance_control"))
+
+        # ...and no gateway may lift it, or impose one.
+        await _denied(gateway, "UPDATE maintenance_control SET admission_closed = false")
 
         # The one write it must have. `tenant_id` is supplied because the
         # multi-tenancy migration made it NOT NULL on this table; the row only

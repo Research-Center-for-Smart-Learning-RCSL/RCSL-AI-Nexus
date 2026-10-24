@@ -37,9 +37,11 @@ from app.adapters.http.parser_client import HttpDocumentParser
 from app.adapters.persistence.document_state import DocumentStateCommitter
 from app.adapters.persistence.knowledge_epochs import PostgresKnowledgeEpochs
 from app.adapters.persistence.model_state import ModelStateCommitter
+from app.adapters.persistence.repositories import PostgresMaintenanceRepository
 from app.adapters.storage.filesystem_documents import FilesystemDocumentStorage
 from app.application.use_cases.download_model import DownloadModel
 from app.application.use_cases.ingest_document import IngestDocument
+from app.application.use_cases.manage_maintenance import assert_serving
 from app.domain.entities.model import Model, RuntimeKind
 from app.domain.ports.model_runtime_port import ModelRuntimePort
 from app.domain.ports.repositories import ModelRepositoryPort
@@ -144,6 +146,12 @@ class _DetachedEmbedder:
             target, runtime = await self.resolve()
             ref = target.ref
         async with session_scope() as session:
+            # Before every batch, not once per job: a document that started
+            # indexing before the platform closed stops at its next batch
+            # rather than running to the end around the hold (#61). The
+            # failure leaves the extracted text stored, so a reindex after
+            # reopening picks it up without parsing it again.
+            await assert_serving(PostgresMaintenanceRepository(session))
             return await build_embed_texts(self._runtimes, session).embed_with(
                 runtime, texts, ref, expected_identity=expected_identity
             )

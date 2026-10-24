@@ -22,7 +22,11 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from app.adapters.persistence.node_serialisation import PostgresNodeSerialisation
-from app.adapters.persistence.repositories import PostgresModelRepository, PostgresNodeRepository
+from app.adapters.persistence.repositories import (
+    PostgresMaintenanceRepository,
+    PostgresModelRepository,
+    PostgresNodeRepository,
+)
 from app.application.use_cases.reconcile_residency import (
     PassResult,
     ReconcileResidency,
@@ -92,9 +96,17 @@ class ManageModelsRestorer:
             return await manage_models_for(self._app, session, self._settings).release(model_id)
 
 
-async def _not_suspended() -> bool:
-    # Maintenance mode (#61) replaces this. Until then the flag is the switch.
-    return False
+async def maintenance_hold() -> bool:
+    """Suspended while the platform is closed for maintenance (#61).
+
+    Read before each node's pass and again before each load, from the same row
+    every entrance reads, so a hold landing mid-pass stops the next load. The
+    desired set is left alone: maintenance suspends the reconciler, it does not
+    rewrite what operators asked to keep resident.
+    """
+    async with session_scope() as session:
+        state = await PostgresMaintenanceRepository(session).read()
+    return state.admission_closed
 
 
 def reconciler_should_run(app: FastAPI, settings: Settings) -> bool:
@@ -116,7 +128,7 @@ def reconciler_should_run(app: FastAPI, settings: Settings) -> bool:
 
 
 async def run_residency_reconciler(
-    app: FastAPI, settings: Settings, *, suspended: Suspension = _not_suspended
+    app: FastAPI, settings: Settings, *, suspended: Suspension = maintenance_hold
 ) -> None:
     reconciler = ReconcileResidency(
         PostgresReconcilerState(),

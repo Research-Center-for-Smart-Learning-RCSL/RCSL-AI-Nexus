@@ -10,6 +10,7 @@ from app.domain.exceptions import (
     ContextTooLongError,
     DomainError,
     InsufficientMemoryError,
+    MaintenanceError,
     ManifestPinRefusedError,
     QuotaExceededError,
     RateLimitedError,
@@ -57,6 +58,8 @@ def error_response(
         if exc.retry_after_seconds is not None:
             headers["Retry-After"] = str(exc.retry_after_seconds)
     elif isinstance(exc, ServerOverloadedError):
+        headers["Retry-After"] = str(exc.retry_after_seconds)
+    elif isinstance(exc, MaintenanceError):
         headers["Retry-After"] = str(exc.retry_after_seconds)
 
     request_id = current_request_id()

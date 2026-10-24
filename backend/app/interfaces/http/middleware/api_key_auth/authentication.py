@@ -9,8 +9,10 @@ from fastapi import Depends, Request
 
 from app.adapters.persistence.repositories import (
     PostgresApiKeyRepository,
+    PostgresMaintenanceRepository,
     PostgresUsageRepository,
 )
+from app.application.use_cases.manage_maintenance import assert_serving
 from app.domain.entities.actor import Actor
 from app.domain.exceptions import NotAuthenticatedError
 from app.domain.ports.infrastructure_ports import CachePort
@@ -19,6 +21,7 @@ from app.infrastructure.di import (
     get_api_key_repository,
     get_api_key_service,
     get_cache,
+    get_maintenance_repository,
     get_usage_repository,
 )
 from app.interfaces.http.middleware.client_ip import resolve_client_ip
@@ -37,6 +40,7 @@ async def _authenticate(
     keys: PostgresApiKeyRepository,
     usage: PostgresUsageRepository,
     cache: CachePort,
+    maintenance: PostgresMaintenanceRepository,
     *,
     enforce_quota: bool,
 ) -> Actor:
@@ -86,6 +90,12 @@ async def _authenticate(
     # gateway, not by a test.
     actor = remember_actor(request, _actor_for_key(key))
 
+    # Every key, an administrator's included, and the model list as well as
+    # generation (#61). After the actor is remembered, so the refusal is
+    # stored against the key like any other; the key itself is untouched and
+    # works again the moment the platform reopens.
+    await assert_serving(maintenance)
+
     # Evaluated unconditionally, and deliberately not folded into the branch
     # below. Making this conditional on `key.allowed_cidrs` reads as an obvious
     # optimisation and would stop the proxy-secret check running at all.
@@ -107,9 +117,12 @@ async def authenticate_api_key(
     keys: Annotated[PostgresApiKeyRepository, Depends(get_api_key_repository)],
     usage: Annotated[PostgresUsageRepository, Depends(get_usage_repository)],
     cache: Annotated[CachePort, Depends(get_cache)],
+    maintenance: Annotated[PostgresMaintenanceRepository, Depends(get_maintenance_repository)],
 ) -> Actor:
     """Every check, for every endpoint that spends the hardware."""
-    return await _authenticate(request, service, keys, usage, cache, enforce_quota=True)
+    return await _authenticate(
+        request, service, keys, usage, cache, maintenance, enforce_quota=True
+    )
 
 
 async def authenticate_api_key_without_quota(
@@ -118,6 +131,7 @@ async def authenticate_api_key_without_quota(
     keys: Annotated[PostgresApiKeyRepository, Depends(get_api_key_repository)],
     usage: Annotated[PostgresUsageRepository, Depends(get_usage_repository)],
     cache: Annotated[CachePort, Depends(get_cache)],
+    maintenance: Annotated[PostgresMaintenanceRepository, Depends(get_maintenance_repository)],
 ) -> Actor:
     """The same checks minus the token budget, for endpoints that spend none.
 
@@ -132,4 +146,6 @@ async def authenticate_api_key_without_quota(
     active, within its per-minute rate limit, and from a permitted address and
     country. Only the budget that this call cannot consume is skipped.
     """
-    return await _authenticate(request, service, keys, usage, cache, enforce_quota=False)
+    return await _authenticate(
+        request, service, keys, usage, cache, maintenance, enforce_quota=False
+    )
