@@ -15,6 +15,7 @@
  * it describes and where its tests live; the assistant imports it.
  */
 
+import { MAINTENANCE_CODE, notifyMaintenance } from '@/lib/api-client';
 import {
   frameFinishReason,
   frameReasoning,
@@ -68,6 +69,13 @@ export type StreamHandlers = {
 const extractDelta = frameText;
 
 function extractError(frame: StreamFrame): string | null {
+  if (
+    frame.error &&
+    typeof frame.error === 'object' &&
+    frame.error.code === MAINTENANCE_CODE
+  ) {
+    notifyMaintenance();
+  }
   if (frame.type === 'error') {
     if (typeof frame.error === 'string') return frame.error;
     return frame.error?.message ?? 'The model stopped unexpectedly.';
