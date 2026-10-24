@@ -33,6 +33,16 @@ export const CSRF_HEADER =
 /** Broadcast on every 401 so the session layer can branch without polling. */
 export const UNAUTHORIZED_EVENT = 'nexus:unauthorized';
 
+/**
+ * Broadcast on every 503 `maintenance` (#61), so the maintenance status is
+ * re-read the moment any request learns the platform closed, rather than at
+ * the next poll.
+ */
+export const MAINTENANCE_EVENT = 'nexus:maintenance';
+
+/** The code every entrance answers with while the platform is closed. */
+export const MAINTENANCE_CODE = 'maintenance';
+
 export type ApiErrorBody = {
   code?: string;
   message?: string;
@@ -80,6 +90,16 @@ export class NetworkError extends Error {
 
 export function isUnauthorized(error: unknown): error is UnauthorizedError {
   return error instanceof UnauthorizedError;
+}
+
+/** The platform is closed for maintenance: nothing to retry until it reopens. */
+export function isMaintenance(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.code === MAINTENANCE_CODE;
+}
+
+export function notifyMaintenance(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(MAINTENANCE_EVENT));
 }
 
 export function readCookie(name: string): string | null {
@@ -213,7 +233,9 @@ export async function apiRequest(
     notifyUnauthorized(error);
     throw error;
   }
-  throw new ApiError(response.status, messageFor(response.status, body), body);
+  const error = new ApiError(response.status, messageFor(response.status, body), body);
+  if (isMaintenance(error)) notifyMaintenance();
+  throw error;
 }
 
 /** Performs the request and decodes a JSON response. `204` yields `undefined`. */

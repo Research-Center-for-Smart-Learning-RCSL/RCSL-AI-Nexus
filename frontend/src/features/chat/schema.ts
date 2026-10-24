@@ -87,7 +87,15 @@ export const streamFrameSchema = z.object({
   delta: z.string().optional(),
   content: z.string().optional(),
   finish_reason: z.string().nullish(),
-  error: z.union([z.string(), z.object({ message: z.string().optional() })]).optional(),
+  // `code` kept, not stripped: a stream cut by a maintenance hold (#61) says
+  // so with `maintenance`, and that is what tells the page to re-read the
+  // platform's status rather than report a broken model.
+  error: z
+    .union([
+      z.string(),
+      z.object({ message: z.string().optional(), code: z.string().optional() }),
+    ])
+    .optional(),
   type: z.string().optional(),
   usage: z
     .object({

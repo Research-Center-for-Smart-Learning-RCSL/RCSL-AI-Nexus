@@ -65,7 +65,7 @@ const session = {
     auth_mode: 'local' as const,
     login: 'someone@example.test',
     display_name: 'Someone',
-    role: 'user' as const,
+    role: 'user' as 'admin' | 'user',
     scopes: [] as ScopeName[] | undefined,
     session_expires_at: null,
   },
@@ -85,6 +85,40 @@ vi.mock('@/lib/session', async (importOriginal) => {
     useSessionExpiry: () => ({ msRemaining: null, shouldWarn: false }),
   };
 });
+
+/** The maintenance hold (#61), open unless a test closes it. */
+export const maintenanceState = {
+  status: null as null | {
+    closed: boolean;
+    phase: string;
+    message: string | null;
+    expected_return_at: string | null;
+    revision: number;
+  },
+  closed: false,
+  unavailable: false,
+  refresh: vi.fn(),
+};
+
+vi.mock('@/lib/maintenance', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/maintenance')>();
+  return { ...actual, useMaintenance: () => maintenanceState };
+});
+
+export function closeForMaintenance(message: string | null = 'Upgrading the runtime') {
+  maintenanceState.closed = true;
+  maintenanceState.status = {
+    closed: true,
+    phase: 'maintenance',
+    message,
+    expected_return_at: null,
+    revision: 1,
+  };
+}
+
+export function signedInAs(role: 'admin' | 'user') {
+  session.me.role = role;
+}
 
 /** Every scope the backend defines, so `admin` is expressed as "all of them". */
 // The role map comes from the backend now, not from a copy kept here.
@@ -124,6 +158,9 @@ beforeEach(() => {
   signedInWith(SCOPES.user);
   assistantState.isOpen = false;
   assistantState.setOpen.mockClear();
+  maintenanceState.closed = false;
+  maintenanceState.status = null;
+  session.me.role = 'user';
 });
 
 export function TestAppShell({ children }: { children: ReactNode }) {

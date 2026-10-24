@@ -2,6 +2,7 @@ import Link from 'next/link';
 
 import { Logo } from '@/components/composed/logo';
 import { ThemeToggle } from '@/components/composed/theme-toggle';
+import { MaintenanceNotice } from '@/features/maintenance/components/maintenance-notice';
 
 /**
  * Layout for screens that must render before anyone is authenticated.
@@ -32,6 +33,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
           <h1 className="mt-4 text-xl font-semibold tracking-tight">RCSL AI Nexus</h1>
           <p className="text-sm text-muted-foreground">Management</p>
         </Link>
+        <MaintenanceNotice />
         {children}
       </div>
     </div>
