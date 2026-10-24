@@ -20,6 +20,14 @@ export const CREDENTIALS_REJECTED =
 export const SECOND_FACTOR_REJECTED =
   'That verification code was not accepted.';
 
+/**
+ * The second step refused because the platform is closed for maintenance and
+ * this account is not a platform administrator (#61). Safe to say: reaching
+ * the second step already proved the password, so it names nothing new.
+ */
+export const MAINTENANCE_SIGN_IN_CLOSED =
+  'The platform is closed for maintenance. Only platform administrators can sign in until it reopens.';
+
 export const RATE_LIMITED =
   'Too many attempts. Wait a moment before trying again.';
 

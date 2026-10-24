@@ -3,7 +3,7 @@ import {
   ActivityIcon, BookOpenIcon, BoxIcon, GaugeIcon, KeyIcon, FileTextIcon,
   FlaskConicalIcon, LibraryIcon, MessageSquareIcon, MessagesSquareIcon,
   Building2Icon, RouteIcon, ScrollTextIcon, ShieldAlertIcon, Trash2Icon,
-  ServerIcon, TerminalIcon, UsersIcon,
+  ServerIcon, TerminalIcon, UsersIcon, WrenchIcon,
 } from 'lucide-react';
 
 import type { KnownScope } from '@/lib/generated/role-scopes';
@@ -248,6 +248,14 @@ export const NAV_GROUPS: NavGroup[] = [
         // tenant administrator who could purge could erase the record of what
         // they did inside the tenant they administer.
         requires: 'retention:write',
+      },
+      {
+        href: '/maintenance',
+        label: 'Maintenance',
+        icon: <WrenchIcon className="size-4" />,
+        // Admin-only, like retention: closing the platform holds out every
+        // role below `admin`, so no role it holds out may lift it (#61).
+        requires: 'maintenance:read',
       },
     ],
   },
