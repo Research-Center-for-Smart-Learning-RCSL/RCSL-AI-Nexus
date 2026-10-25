@@ -24,6 +24,10 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "host" / "runtime_supervisor.py"
 UID = 251
 LABEL = "online.rcsl.ollama"
+# As `ps -o comm=` shows them on the host: Ollama 0.40 runs each model in a
+# `llama-server`, so a scan by the daemon's name alone would miss every runner.
+DAEMON = "/opt/homebrew/opt/ollama/bin/ollama"
+RUNNER = "/opt/homebrew/Cellar/ollama/0.40.8/libexec/lib/ollama/llama-server"
 
 
 @pytest.fixture(scope="module")
@@ -49,10 +53,11 @@ class FakeHost:
         self.runners_ignore_bootout = False
         self.daemon_ignores_term = False
         self.bootstrap_fails = False
-        self.spawn("/opt/homebrew/opt/ollama/bin/ollama", daemon=True)
-        self.spawn("/opt/homebrew/Cellar/ollama/0.40.8/bin/ollama", parent=self.daemon)
+        self.spawn(DAEMON, daemon=True)
+        self.spawn(RUNNER, parent=self.daemon)
         self.spawn("/usr/sbin/syslogd", uid=0)
         self.spawn("/bin/zsh", uid=UID)
+        self.spawn("/usr/sbin/cfprefsd", uid=UID)
 
     def spawn(
         self, command: str, *, uid: int = UID, parent: int | None = 1, daemon: bool = False
@@ -87,7 +92,9 @@ class FakeHost:
                 self.daemon = None
             if not self.runners_ignore_bootout:
                 for pid in [
-                    p for p, d in self.procs.items() if d["uid"] == UID and "ollama" in d["command"]
+                    p
+                    for p, d in self.procs.items()
+                    if d["uid"] == UID and d["command"] in (DAEMON, RUNNER)
                 ]:
                     self.procs.pop(pid)
             return 0, ""
@@ -95,7 +102,7 @@ class FakeHost:
             if self.bootstrap_fails:
                 return 5, "Bootstrap failed: 5: Input/output error"
             self.loaded = True
-            self.spawn("/opt/homebrew/opt/ollama/bin/ollama", daemon=True)
+            self.spawn(DAEMON, daemon=True)
             return 0, ""
         raise AssertionError(f"unexpected command {argv}")
 
@@ -116,7 +123,10 @@ class FakeHost:
 
 def host_for(sv: ModuleType, fake: FakeHost) -> Any:
     config = sv.Config(
-        label=LABEL, plist=Path(f"/Library/LaunchDaemons/{LABEL}.plist"), uid=UID, process="ollama"
+        label=LABEL,
+        plist=Path(f"/Library/LaunchDaemons/{LABEL}.plist"),
+        uid=UID,
+        processes=("ollama", "llama-server"),
     )
     return sv.Host(config, runner=fake.runner, kill=fake.kill, sleep=fake.sleep, clock=fake.now)
 
@@ -134,14 +144,15 @@ def receipt(sv: ModuleType, action: str) -> Any:
 
 def runtime_pids(fake: FakeHost) -> set[int]:
     return {
-        p for p, d in fake.procs.items() if d["uid"] == UID and d["command"].endswith("/ollama")
+        p for p, d in fake.procs.items() if d["uid"] == UID and d["command"] in (DAEMON, RUNNER)
     }
 
 
 def test_only_the_runtime_accounts_named_processes_are_in_scope(sv: ModuleType) -> None:
     fake = FakeHost()
     found = {p.pid for p in host_for(sv, fake).processes()}
-    # The daemon and its runner; not root's syslogd, not the account's shell.
+    # The daemon and its runner; not root's syslogd, not the account's shell
+    # or the system agents macOS runs under it.
     assert found == runtime_pids(fake)
     assert len(found) == 2
 

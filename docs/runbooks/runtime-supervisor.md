@@ -13,7 +13,8 @@ it, checking it and taking it out.
   - the job `online.rcsl.ollama`;
   - its plist in `/Library/LaunchDaemons`;
   - the `_rcslollama` account;
-  - the process name `ollama`.
+  - the process names `ollama`, for the daemon, and `llama-server`, for the
+    model runners Ollama 0.40 starts.
 - **Stop.**
   1. Unloads the job with `launchctl bootout`, so `KeepAlive` cannot respawn it.
   2. Waits for the daemon and every model runner to exit.

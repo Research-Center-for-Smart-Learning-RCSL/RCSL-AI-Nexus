@@ -3,7 +3,7 @@
 
     sudo /usr/bin/python3 -I scripts/host/runtime_supervisor.py \
         --label online.rcsl.ollama --plist /Library/LaunchDaemons/online.rcsl.ollama.plist \
-        --user _rcslollama --process ollama \
+        --user _rcslollama --process ollama --process llama-server \
         --requests <dir> --receipts <dir>
 
 Run by a root-owned launchd job on the runtime host (P3 on #61, chosen by the
@@ -15,13 +15,13 @@ runtime witness for an observation. It has no network access.
 **What it will do is fixed here and on its command line, never by a request.**
 A request names one of three actions, `stop`, `start` or `restart`, and a
 request id; the launchd label, the plist, the runtime's account and the
-process name come from the arguments launchd starts it with. There is no
+process names come from the arguments launchd starts it with. There is no
 shell, no caller-supplied PID, path or label, and nothing a request says is
 executed or interpreted beyond those fields.
 
 `stop` unloads the job with `launchctl bootout`, so launchd's `KeepAlive`
 cannot respawn it during cleanup, then waits for every process the runtime's
-account runs under the process name, the daemon and its model runners alike,
+account runs under those names, the daemon and its model runners alike,
 to exit. One that outlives the wait is sent SIGTERM and then SIGKILL, each
 only after its birth identity (PID and start time) is read again and found
 unchanged, so a reused PID is never signalled. The stop succeeds only on a
@@ -83,7 +83,7 @@ class Config:
     label: str
     plist: Path
     uid: int
-    process: str
+    processes: tuple[str, ...]
     unload_timeout_s: float = 30.0
     exit_timeout_s: float = 20.0
     signal_timeout_s: float = 10.0
@@ -143,14 +143,14 @@ class Host:
         self.clock = clock
 
     def processes(self) -> list[Proc]:
-        """The runtime's processes: the configured account and process name."""
+        """The runtime's processes: the configured account and process names."""
         code, output = self._run(["/bin/ps", "-axww", "-o", "pid=,ppid=,uid=,lstart=,comm="])
         if code != 0:
             raise SupervisorError(f"ps failed ({code}): {output.strip()[:200]}")
         return [
             p
             for p in parse_ps(output)
-            if p.uid == self.config.uid and os.path.basename(p.command) == self.config.process
+            if p.uid == self.config.uid and os.path.basename(p.command) in self.config.processes
         ]
 
     def job(self) -> dict[str, Any]:
@@ -383,7 +383,9 @@ def main() -> int:
     parser.add_argument("--label", required=True)
     parser.add_argument("--plist", type=Path, required=True)
     parser.add_argument("--user", required=True)
-    parser.add_argument("--process", required=True)
+    # Repeated: the daemon and its model runners need not share a name. Ollama
+    # 0.40 runs each model in a `llama-server`, not in another `ollama`.
+    parser.add_argument("--process", action="append", required=True)
     parser.add_argument("--requests", type=Path, required=True)
     parser.add_argument("--receipts", type=Path, required=True)
     parser.add_argument("--interval", type=float, default=1.0)
@@ -403,7 +405,7 @@ def main() -> int:
     if uid == 0:
         print("the runtime's account must not be root", file=sys.stderr)
         return 1
-    host = Host(Config(label=args.label, plist=args.plist, uid=uid, process=args.process))
+    host = Host(Config(label=args.label, plist=args.plist, uid=uid, processes=tuple(args.process)))
 
     incarnation = secrets.token_hex(16)
     while True:

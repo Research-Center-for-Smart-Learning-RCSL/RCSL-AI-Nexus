@@ -10,7 +10,7 @@
 	     processes, so a maintenance entry or a reset writes a request file and
 	     this job carries it out. Everything it may act on is fixed below, not
 	     in the request: the job label, its plist, the runtime's account and
-	     the process name. The reasoning is at the top of
+	     the process names. The reasoning is at the top of
 	     runtime_supervisor.py. -->
 	<key>ProgramArguments</key>
 	<array>
@@ -25,6 +25,8 @@
 		<string>_rcslollama</string>
 		<string>--process</string>
 		<string>ollama</string>
+		<string>--process</string>
+		<string>llama-server</string>
 		<string>--requests</string>
 		<string>@REPO@/data/runtime-supervisor/requests</string>
 		<string>--receipts</string>
