@@ -161,3 +161,15 @@ def restore_order(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Largest first, as the reconciler restores (#49): the large model is the
     one that cannot fit once the small ones are placed."""
     return sorted(snapshot, key=lambda m: (-int(m.get("size") or 0), str(m.get("name"))))
+
+
+@dataclass(frozen=True, slots=True)
+class UnknownOperation:
+    """An attempt the node cannot account for: sent, with no terminal evidence.
+    It blocks the node until a supervised reset proves its runtime gone."""
+
+    node_id: str
+    op_id: str
+    kind: str
+    reason: str | None
+    submitted_at: datetime | None

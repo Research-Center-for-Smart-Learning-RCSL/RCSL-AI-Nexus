@@ -57,3 +57,8 @@ class NodeControlPort(Protocol):
         agent's description of the operation; repeating `op_id` returns the
         same one."""
         ...
+
+    async def resolve_by_reset(self, op_id: str, *, operator: str, evidence: str) -> dict[str, Any]:
+        """Clear one `outcome_unknown` operation by a supervised restart
+        (#49 §5): witness baseline, restart, second answer, resolution."""
+        ...

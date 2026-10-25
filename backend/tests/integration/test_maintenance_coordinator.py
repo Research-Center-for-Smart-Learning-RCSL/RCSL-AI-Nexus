@@ -312,3 +312,50 @@ async def test_a_restore_load_is_refused_once_the_hold_is_lifted(world: dict[str
         "/v1/maintenance/restore", json={"epoch": epoch}, headers=_data()
     )
     assert data.status_code == 401, "the data token cannot restore"
+
+
+async def test_an_administrator_clears_an_unknown_operation_by_a_supervised_reset(
+    world: dict[str, Any],
+) -> None:
+    """The console's reset (#49 §5, #61): witness baseline, supervisor restart,
+    second answer, resolution; the node serves again."""
+    from app.adapters.persistence.repositories import PostgresUnknownOperations
+    from app.application.use_cases.reset_node_runtime import ResetNodeRuntime
+
+    agent = world["agent"]
+    await agent.pool.execute(
+        "INSERT INTO node_operations (node_id, op_id, kind, state, origin_generation, "
+        "origin_boot_id, owner_generation, submitted_at) VALUES "
+        "($1, 'orphan', 'inference', 'outcome_unknown', 1, 'an-earlier-boot', $2, now())",
+        NODE,
+        agent.store.ownership.generation,
+    )
+    await agent.dispatcher.reopen()
+    assert (await world["http"].get("/v1/status", headers=_data())).json()["gate"] == "blocked"
+
+    answering = asyncio.create_task(supervisor(world))
+    async with session_scope() as session:
+        resets = ResetNodeRuntime(
+            PostgresUnknownOperations(session),
+            RoleAuthorization(),
+            build_audit(),
+            control_for=world["controls"],
+        )
+        assert [u.op_id for u in await resets.list(ADMIN)] == ["orphan"]
+        outcome = await resets.reset(
+            ADMIN, node_id=NODE, op_id="orphan", evidence="host acceptance"
+        )
+    await answering
+
+    assert outcome.cleared, outcome.detail
+    orphan = await agent.store.observe("orphan")
+    assert orphan is not None and orphan.state == "failed"
+    assert orphan.reason == "resolved_by_reset"
+    assert (await world["http"].get("/v1/status", headers=_data())).json()["gate"] == "serving"
+    assert "node.runtime_reset" in [a for a in await _all_actions()]
+
+
+async def _all_actions() -> list[str]:
+    async with session_scope() as session:
+        rows = await session.execute(text("SELECT action FROM audit_log ORDER BY at"))
+        return [r[0] for r in rows]

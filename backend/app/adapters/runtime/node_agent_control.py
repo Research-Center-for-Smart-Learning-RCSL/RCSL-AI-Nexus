@@ -90,6 +90,14 @@ class NodeAgentControl:
             RESTORE_TIMEOUT_S,
         )
 
+    async def resolve_by_reset(self, op_id: str, *, operator: str, evidence: str) -> dict[str, Any]:
+        return await self._call(
+            "POST",
+            "/v1/maintenance/resets",
+            {"op_id": op_id, "operator": operator, "evidence": evidence},
+            RESET_TIMEOUT_S,
+        )
+
     async def _call(
         self, method: str, path: str, body: dict[str, Any] | None, timeout_s: float
     ) -> dict[str, Any]:

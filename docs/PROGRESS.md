@@ -42,7 +42,8 @@ separately at the end, marked as superseded.
 - #61 fourth package: the maintenance coordinator interrupts, snapshots, resets and verifies every runtime empty on entry, durable and lease-fenced, with retry
 - #61 fifth package: restore loads each snapshot back largest first under the hold, probes every model, and reopens only in one all-node serving commit
 - #61 sixth package: the maintenance console shows access, release and restore apart, each node's progress, and offers restore, retry and reopen-without-restoring
-- #61 host acceptance: a running generation was cut off and the runtime released in 8.7 s (host memory 51 → 16 GB used); the snapshot was restored, probed and reopened in 17.3 s
+- #61 host acceptance: a running generation was cut off and the runtime released in 8.7 s (host memory 51 → 16 GB used); the snapshot was restored, probed and reopened in 17.3 s; `MAINTENANCE_ENABLED` turned on
+- #61 follow-ups: a stream an entry interrupts now ends with the typed `maintenance` error, and the console can clear an unknown operation by a supervised runtime reset
 
 **[2026-10-24](./progress/2026-10-24.md)**
 - #61 first package: a platform-wide maintenance hold that closes every entrance to all but platform administrators, revokes non-admin sessions for good and suspends the reconciler; entering stays disabled until forced interruption and verified restore exist

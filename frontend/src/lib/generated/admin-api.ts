@@ -685,6 +685,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/maintenance/resets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Runtime
+         * @description Restart the node's runtime under witness evidence and clear the
+         *     operation. Answered with what the agent said, cleared or not: a refusal
+         *     (no witness, the supervisor failed) is the administrator's to read, not an
+         *     error page. The restart unloads every model on the node; the residency
+         *     reconciler loads the resident set back.
+         */
+        post: operations["reset_runtime_admin_maintenance_resets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/maintenance/restore": {
         parameters: {
             query?: never;
@@ -740,6 +764,27 @@ export interface paths {
         };
         /** Public Maintenance Status */
         get: operations["public_maintenance_status_admin_maintenance_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/maintenance/unknown-operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Unknown Operations
+         * @description Operations each node sent and cannot account for. Each blocks its node
+         *     until a supervised reset proves the runtime that may have them gone.
+         */
+        get: operations["unknown_operations_admin_maintenance_unknown_operations_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2957,6 +3002,26 @@ export interface components {
          * @enum {string}
          */
         RuntimeKind: "ollama" | "mlx" | "vllm" | "llamacpp";
+        /** RuntimeResetRequest */
+        RuntimeResetRequest: {
+            /** Evidence */
+            evidence: string;
+            /** Node Id */
+            node_id: string;
+            /** Op Id */
+            op_id: string;
+        };
+        /** RuntimeResetResponse */
+        RuntimeResetResponse: {
+            /** Cleared */
+            cleared: boolean;
+            /** Detail */
+            detail: string;
+            /** Node Id */
+            node_id: string;
+            /** Op Id */
+            op_id: string;
+        };
         /** SaveRoutingPolicyRequest */
         SaveRoutingPolicyRequest: {
             /** Candidates */
@@ -2989,6 +3054,30 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+        };
+        /** UnknownOperationView */
+        UnknownOperationView: {
+            /** Kind */
+            kind: string;
+            /** Node Id */
+            node_id: string;
+            /** Op Id */
+            op_id: string;
+            /** Reason */
+            reason: string | null;
+            /** Submitted At */
+            submitted_at: string | null;
+        };
+        /**
+         * UnknownOperationsResponse
+         * @description Operations whose outcome is unknown, each blocking its node, and
+         *     whether this entrance can clear them (only the tailnet admin can).
+         */
+        UnknownOperationsResponse: {
+            /** Operations */
+            operations: components["schemas"]["UnknownOperationView"][];
+            /** Reset Available */
+            reset_available: boolean;
         };
         /** UpdateApiKeyRequest */
         UpdateApiKeyRequest: {
@@ -4373,6 +4462,39 @@ export interface operations {
             };
         };
     };
+    reset_runtime_admin_maintenance_resets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuntimeResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeResetResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
     restore_after_maintenance_admin_maintenance_restore_post: {
         parameters: {
             query?: never;
@@ -4447,6 +4569,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicMaintenanceStatusResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    unknown_operations_admin_maintenance_unknown_operations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnknownOperationsResponse"];
                 };
             };
             /** @description Unprocessable Entity */

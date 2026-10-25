@@ -39,6 +39,26 @@ maintainer's call.
 - the attempts the entry interrupted;
 - whether the node's unknown operations were resolved.
 
+## A node blocked by an unknown operation
+
+The **Operations with an unknown outcome** card on the same page lists every
+operation a node sent without terminal evidence. Each one blocks its node.
+
+To clear one:
+
+1. Press **Reset runtime**.
+2. Say what you relied on.
+3. Confirm.
+
+The node agent takes the witness's baseline, has the supervisor restart the
+runtime, and needs a second answer showing a new instance before it marks the
+operation failed. If anything is missing, it refuses and says why. The restart
+unloads every model on the node, and the reconciler loads the resident set
+back.
+
+This works from the tailnet admin entrance only. The CLI equivalent is
+`resolve reset` in [runtime-supervisor.md](./runtime-supervisor.md).
+
 ## Prerequisites
 
 - **Node agents.** `NODE_AGENT_ENABLED` must be on and every node needs an
