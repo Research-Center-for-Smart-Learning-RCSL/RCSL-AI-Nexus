@@ -25,6 +25,10 @@ from app.node_agent.settings import AgentSettings
 NODE = "33333333-3333-3333-3333-333333333333"
 TOKEN = "t" * 40
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+CONTROL_TOKEN = "c" * 40
+CONTROL = {"Authorization": f"Bearer {CONTROL_TOKEN}"}
+"""The control token (P3 on #61): drain, resume, resolution, interrupt and
+runtime control take it, and the data token above is refused there."""
 
 
 class FakeOllama:
@@ -136,6 +140,10 @@ async def running_agent(
         NODE_AGENT_NODE_ID=NODE,
         agent_database_url=database_url,
         node_agent_token=TOKEN,
+        node_agent_control_token=CONTROL_TOKEN,
+        NODE_AGENT_SUPERVISOR_REQUESTS=tmp_path / "supervisor" / "requests",
+        NODE_AGENT_SUPERVISOR_RECEIPTS=tmp_path / "supervisor" / "receipts",
+        NODE_AGENT_SUPERVISOR_TIMEOUT=2,
         NODE_AGENT_RUNTIME_URL="http://runtime",
         NODE_AGENT_LOCK_DIR=tmp_path / "lock",
         NODE_AGENT_WATCHDOG_SECONDS=0.05,
@@ -145,6 +153,8 @@ async def running_agent(
         OLLAMA_MODELS_PATH=None,
     )
     (tmp_path / "lock").mkdir()
+    (tmp_path / "supervisor" / "requests").mkdir(parents=True)
+    (tmp_path / "supervisor" / "receipts").mkdir()
     app = create_app(settings)
     async with app.router.lifespan_context(app):
         agent = app.state.agent
@@ -175,4 +185,5 @@ async def running_agent(
                 "agent": agent,
                 "terminated": terminated,
                 "dsn": dsn,
+                "supervisor": tmp_path / "supervisor",
             }

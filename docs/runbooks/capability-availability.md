@@ -200,9 +200,12 @@ while the platform is closed the reconciler loads and releases nothing, and the
 desired set is left as it was. Outside maintenance, disable the flag and
 restart `admin-tailnet` to stop it.
 
-**Not yet done.** The admin "reset runtime" action is not built. The witness
-CLI resolution remains the only path, because the agent cannot restart the
-host runtime and resolves one operation per witnessed restart.
+**Not yet done.** The admin "reset runtime" action is not built. Since P3 of
+#61 the agent can restart the host runtime itself, through the root supervisor
+in [runtime-supervisor.md](./runtime-supervisor.md), and `resolve reset`
+clears one block with the same ordered witness evidence plus the supervisor's
+receipt. It still resolves one operation per witnessed restart, and nothing in
+the admin UI calls it yet.
 
 **Host acceptance (2026-10-22).** The flag is on in production, and the desired
 set is `gemma4-31b-q8` and `embedder`; `qwen7b` is not kept resident at 4 GiB

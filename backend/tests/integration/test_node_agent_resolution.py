@@ -219,3 +219,67 @@ async def test_without_a_witness_answer_nothing_is_cleared(agent: dict[str, Any]
 async def test_a_resolution_needs_an_operator_and_a_statement(agent: dict[str, Any]) -> None:
     with pytest.raises(ResolutionRefused, match="operator"):
         await agent["resolutions"].start("orphan", evidence=" ", operator="ops")
+
+
+class FakeSupervisor:
+    """The host supervisor's restart, as the witness then observes it."""
+
+    def __init__(self, witness: FakeWitness, *, result: str = "ok") -> None:
+        self.witness = witness
+        self.result = result
+        self.actions: list[str] = []
+
+    async def run(self, action: str, reason: str) -> dict[str, Any]:
+        self.actions.append(action)
+        if self.result == "ok":
+            self.witness.instance = (400, "Thu Oct  8 11:00:00 2026")
+        return {
+            "request_id": "a" * 32,
+            "action": action,
+            "result": self.result,
+            "error": None if self.result == "ok" else "runtime processes survived the stop: [812]",
+            "before": [{"pid": 100}],
+            "after": [{"pid": 400}] if self.result == "ok" else [{"pid": 812}],
+        }
+
+
+async def test_a_supervised_reset_clears_the_block_with_the_receipt_as_evidence(
+    agent: dict[str, Any],
+) -> None:
+    """#49 §5: the same ordered evidence, with the supervisor restarting the
+    runtime between the two witness answers instead of an operator."""
+    supervisor = FakeSupervisor(agent["witness"])
+
+    done = await agent["resolutions"].reset(
+        "orphan", evidence="maintenance reset", operator="ops", supervisor=supervisor
+    )
+
+    assert done["state"] == "failed"
+    assert supervisor.actions == ["restart"]
+    row = await agent["pool"].fetchrow(
+        "SELECT detail FROM node_operation_audit "
+        "WHERE op_id = 'orphan' AND event = 'resolved_by_reset'"
+    )
+    evidence = json.loads(row["detail"])
+    assert evidence["supervisor_receipt"]["result"] == "ok"
+    assert evidence["baseline"]["pid"] == 100 and evidence["after"]["pid"] == 400
+    events = [
+        r["event"]
+        for r in await agent["pool"].fetch(
+            "SELECT event FROM node_operation_audit WHERE op_id = 'orphan' ORDER BY id"
+        )
+    ]
+    assert events == ["resolution_baseline", "resolution_restart", "resolved_by_reset"]
+
+
+async def test_a_failed_supervised_restart_keeps_the_block(agent: dict[str, Any]) -> None:
+    supervisor = FakeSupervisor(agent["witness"], result="failed")
+
+    with pytest.raises(ResolutionRefused, match="could not restart"):
+        await agent["resolutions"].reset(
+            "orphan", evidence="maintenance reset", operator="ops", supervisor=supervisor
+        )
+
+    op = await agent["store"].observe("orphan")
+    assert op is not None and op.state == "outcome_unknown"
+    assert agent["dispatcher"].state is not GateState.SERVING

@@ -1,0 +1,102 @@
+"""The agent's side of the runtime supervisor (P3 on #61).
+
+A request written, its receipt read and checked; a request the supervisor never
+took is withdrawn on timeout, and one it took is reported as one that may still
+run, never as withdrawn.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+
+import pytest
+
+from app.node_agent.supervisor import Supervisor, SupervisorRefused
+
+
+@pytest.fixture
+def dirs(tmp_path: Path) -> tuple[Path, Path]:
+    requests, receipts = tmp_path / "requests", tmp_path / "receipts"
+    requests.mkdir()
+    receipts.mkdir()
+    return requests, receipts
+
+
+async def answer_once(requests: Path, receipts: Path, **overrides: object) -> None:
+    """The supervisor's part: claim the first request, write its receipt."""
+    while True:
+        found = [p for p in requests.iterdir() if p.name.endswith(".json")]
+        if found:
+            request = json.loads(found[0].read_text())
+            found[0].rename(requests / f".{request['request_id']}.claimed")
+            receipt = {"request_id": request["request_id"], "action": request["action"]}
+            receipt |= {"result": "ok"} | overrides
+            (receipts / found[0].name).write_text(json.dumps(receipt))
+            return
+        await asyncio.sleep(0.01)
+
+
+async def test_a_request_is_answered_by_its_own_receipt(dirs: tuple[Path, Path]) -> None:
+    requests, receipts = dirs
+    supervisor = Supervisor(requests, receipts, timeout_s=2, poll_s=0.01)
+    answering = asyncio.create_task(answer_once(requests, receipts))
+
+    receipt = await supervisor.run("restart", "reset")
+    await answering
+
+    assert receipt["result"] == "ok"
+    assert receipt["action"] == "restart"
+    assert supervisor.receipt(receipt["request_id"]) == receipt
+
+
+async def test_a_receipt_for_another_action_is_refused(dirs: tuple[Path, Path]) -> None:
+    requests, receipts = dirs
+    supervisor = Supervisor(requests, receipts, timeout_s=2, poll_s=0.01)
+    answering = asyncio.create_task(answer_once(requests, receipts, action="stop"))
+
+    with pytest.raises(SupervisorRefused, match="does not answer"):
+        await supervisor.run("restart", "reset")
+    await answering
+
+
+async def test_an_untaken_request_is_withdrawn_on_timeout(dirs: tuple[Path, Path]) -> None:
+    requests, receipts = dirs
+    supervisor = Supervisor(requests, receipts, timeout_s=0.05, poll_s=0.01)
+
+    with pytest.raises(SupervisorRefused, match="withdrawn") as refused:
+        await supervisor.run("stop", "maintenance")
+
+    assert refused.value.request_id is not None
+    assert list(requests.iterdir()) == []
+
+
+async def test_a_taken_request_without_a_receipt_may_still_run(dirs: tuple[Path, Path]) -> None:
+    requests, receipts = dirs
+    supervisor = Supervisor(requests, receipts, timeout_s=0.2, poll_s=0.01)
+
+    async def claim_and_stall() -> None:
+        while True:
+            for path in requests.iterdir():
+                if path.name.endswith(".json"):
+                    path.rename(requests / f".{path.stem}.claimed")
+                    return
+            await asyncio.sleep(0.01)
+
+    claiming = asyncio.create_task(claim_and_stall())
+    with pytest.raises(SupervisorRefused, match="may still run"):
+        await supervisor.run("stop", "maintenance")
+    await claiming
+
+
+async def test_only_the_three_fixed_actions_exist(dirs: tuple[Path, Path]) -> None:
+    with pytest.raises(ValueError):
+        await Supervisor(*dirs).run("exec", "anything")
+
+
+async def test_without_its_directories_the_supervisor_is_unavailable(tmp_path: Path) -> None:
+    supervisor = Supervisor(tmp_path / "absent", tmp_path / "absent-too")
+    assert not supervisor.available
+    with pytest.raises(SupervisorRefused, match="not mounted"):
+        await supervisor.run("restart", "reset")

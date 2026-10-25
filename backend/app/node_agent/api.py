@@ -4,6 +4,13 @@ Every route but `/healthz` needs the shared agent token, compared in constant
 time; the agent will be reached over the tailnet once a second node exists, so
 network isolation alone is not the boundary (design revision 1 §2 on #24).
 
+The routes that change what the node will do rather than ask it for work,
+draining, resuming, resolving a block, interrupting senders and stopping or
+restarting the runtime, need a second token instead (P3 on #61). The gateway
+holds only the first, so nothing it can be made to send reaches them; the data
+token is refused there, and the control token everywhere else but the
+read-only `/v1/status`.
+
 `/v1/inference` streams NDJSON: `accepted`, then the runtime's lines as the
 agent reads them, then one `terminal` event. The terminal event is sent only
 after the attempt's terminal state is committed, so a caller that saw it can
@@ -38,6 +45,7 @@ from app.node_agent.dispatch import (
     Attempt,
     Completed,
     Existing,
+    GateState,
     Outcome,
     Refused,
     Relay,
@@ -50,6 +58,8 @@ from app.node_agent.resolution import ResolutionRefused
 from app.node_agent.settings import AgentSettings
 from app.node_agent.store import LIFECYCLE_KINDS, NotOwner, Operation
 from app.node_agent.summary import bounded_summary
+from app.node_agent.supervisor import ACTIONS as SUPERVISOR_ACTIONS
+from app.node_agent.supervisor import SupervisorRefused
 from app.node_agent.wire import (
     Envelope,
     LifecycleRequest,
@@ -74,12 +84,42 @@ def _agent(request: Request) -> Agent:
     return agent
 
 
+def _bearer(request: Request) -> str | None:
+    scheme, _, presented = request.headers.get("authorization", "").partition(" ")
+    return presented if scheme.lower() == "bearer" else None
+
+
 async def _authorised(request: Request) -> None:
     expected = _agent(request).settings.token
-    header = request.headers.get("authorization", "")
-    scheme, _, presented = header.partition(" ")
-    if scheme.lower() != "bearer" or not hmac.compare_digest(presented.encode(), expected.encode()):
+    presented = _bearer(request)
+    if presented is None or not hmac.compare_digest(presented.encode(), expected.encode()):
         raise HTTPException(status_code=401, detail="agent token required")
+
+
+async def _controller(request: Request) -> None:
+    expected = _agent(request).settings.control_token
+    if expected is None:
+        raise HTTPException(status_code=503, detail="no control token is configured")
+    presented = _bearer(request)
+    if presented is None or not hmac.compare_digest(presented.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="agent control token required")
+
+
+async def _observer(request: Request) -> None:
+    """Either token: `/v1/status` only reads, and the resolve CLI holds only
+    the control token."""
+    settings = _agent(request).settings
+    presented = (_bearer(request) or "").encode()
+    tokens = [settings.token] + ([settings.control_token] if settings.control_token else [])
+    if not any(hmac.compare_digest(presented, token.encode()) for token in tokens):
+        raise HTTPException(status_code=401, detail="agent token required")
+
+
+def _text(body: Any, key: str, *, limit: int = 500) -> str:
+    value = body.get(key) if isinstance(body, dict) else None
+    if not isinstance(value, str) or not value.strip() or len(value) > limit:
+        raise HTTPException(status_code=400, detail=f"{key} must be text of at most {limit}")
+    return value.strip()
 
 
 async def _body(request: Request, *, max_bytes: int = MAX_BODY_BYTES) -> Any:
@@ -181,12 +221,13 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     authorised = [Depends(_authorised)]
+    controlled = [Depends(_controller)]
 
     @app.get("/healthz")
     async def healthz(request: Request) -> dict[str, str]:
         return {"status": "ok", "gate": _agent(request).dispatcher.state.value}
 
-    @app.get("/v1/status", dependencies=authorised)
+    @app.get("/v1/status", dependencies=[Depends(_observer)])
     async def status(request: Request) -> dict[str, Any]:
         agent = _agent(request)
         return {
@@ -197,6 +238,9 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             "host_lock_held": agent.host_lock.still_held(),
             "gate": agent.dispatcher.state.value,
             "admitted": agent.dispatcher.admitted,
+            "quiescent": agent.dispatcher.quiescent,
+            "maintenance_epoch": agent.dispatcher.frozen_epoch,
+            "supervisor_available": agent.supervisor.available,
             "unknown": await agent.store.any_unknown(),
             "runtime_version": (version := await agent.relay.version()),
             "runtime_reachable": version is not None,
@@ -557,18 +601,18 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=500, detail="cancellation left no row")
         return JSONResponse(await _describe(agent, operation))
 
-    @app.post("/v1/drain", dependencies=authorised)
+    @app.post("/v1/drain", dependencies=controlled)
     async def drain(request: Request) -> dict[str, Any]:
         agent = _agent(request)
         await agent.dispatcher.drain()
         return {"gate": agent.dispatcher.state.value, "admitted": agent.dispatcher.admitted}
 
-    @app.post("/v1/resume", dependencies=authorised)
+    @app.post("/v1/resume", dependencies=controlled)
     async def resume(request: Request) -> dict[str, Any]:
         state = await _agent(request).dispatcher.reopen()
         return {"gate": state.value}
 
-    @app.post("/v1/maintenance/resolutions", dependencies=authorised)
+    @app.post("/v1/maintenance/resolutions", dependencies=controlled)
     async def start_resolution(request: Request) -> JSONResponse:
         body = await _body(request)
         if not isinstance(body, dict):
@@ -583,13 +627,120 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             return JSONResponse(status_code=409, content={"refused": str(exc)})
         return JSONResponse(started)
 
-    @app.post("/v1/maintenance/resolutions/{resolution_id}/complete", dependencies=authorised)
+    @app.post("/v1/maintenance/resolutions/{resolution_id}/complete", dependencies=controlled)
     async def complete_resolution(request: Request, resolution_id: str) -> JSONResponse:
         try:
             done = await _agent(request).resolutions.complete(resolution_id)
         except ResolutionRefused as exc:
             return JSONResponse(status_code=409, content={"refused": str(exc)})
         return JSONResponse(done)
+
+    @app.post("/v1/maintenance/resets", dependencies=controlled)
+    async def reset(request: Request) -> JSONResponse:
+        """Clear one block by a supervised restart (#49 §5): the resolution
+        above, with the supervisor restarting the runtime between its two
+        witness answers instead of an operator."""
+        agent = _agent(request)
+        body = await _body(request)
+        op_id, operator = _text(body, "op_id", limit=128), _text(body, "operator", limit=128)
+        evidence = _text(body, "evidence")
+        try:
+            done = await agent.resolutions.reset(
+                op_id, evidence=evidence, operator=operator, supervisor=agent.supervisor
+            )
+        except ResolutionRefused as exc:
+            return JSONResponse(status_code=409, content={"refused": str(exc)})
+        return JSONResponse(done)
+
+    @app.post("/v1/maintenance/interrupt", dependencies=controlled)
+    async def interrupt(request: Request) -> JSONResponse:
+        """Cancel every sender on this node for a closed maintenance hold (#61).
+
+        Only for the hold the database says is closed, at the epoch named: an
+        interrupt meant for one entry cannot land on the node after it reopened
+        or during the next one. Cancelled attempts become `outcome_unknown` and
+        block the node; a supervised restart is what can resolve them.
+        """
+        agent = _agent(request)
+        body = await _body(request)
+        epoch = body.get("epoch") if isinstance(body, dict) else None
+        if not isinstance(epoch, int) or isinstance(epoch, bool):
+            raise HTTPException(status_code=400, detail="epoch must be an integer")
+        closed, current = await agent.store.maintenance_hold()
+        if not closed or current != epoch:
+            return JSONResponse(
+                status_code=409,
+                content={"refused": "hold_not_closed_at_epoch", "closed": closed, "epoch": current},
+            )
+        await agent.dispatcher.freeze(epoch)
+        report = await agent.dispatcher.interrupt(deadline_s=agent.settings.interrupt_deadline_s)
+        await agent.store.audit("maintenance_interrupt", None, report)
+        return JSONResponse(report | {"gate": agent.dispatcher.state.value})
+
+    @app.post("/v1/maintenance/runtime/{action}", dependencies=controlled)
+    async def runtime_control(request: Request, action: str) -> JSONResponse:
+        """Stop, start or restart the host runtime through the supervisor.
+
+        Refused while the node serves or while any sender is still talking to
+        the runtime: a restart under live traffic would only make unknowns.
+        Freeze (a maintenance hold) or drain first. The receipt is the answer,
+        and is recorded in the node's audit whether it says the action worked
+        or not.
+        """
+        agent = _agent(request)
+        if action not in SUPERVISOR_ACTIONS:
+            raise HTTPException(
+                status_code=404, detail=f"action must be one of {SUPERVISOR_ACTIONS}"
+            )
+        body = await _body(request)
+        operator, reason = _text(body, "operator", limit=128), _text(body, "reason", limit=200)
+        gate = agent.dispatcher.state
+        if gate in (GateState.SERVING, GateState.LOST) or not agent.dispatcher.quiescent:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "refused": "node_not_quiescent",
+                    "gate": gate.value,
+                    "quiescent": agent.dispatcher.quiescent,
+                },
+            )
+        await agent.store.audit(
+            "runtime_control_requested",
+            None,
+            {"action": action, "operator": operator, "reason": reason},
+        )
+        try:
+            receipt = await agent.supervisor.run(action, f"{operator}: {reason}")
+        except SupervisorRefused as exc:
+            await agent.store.audit(
+                "runtime_control_unanswered",
+                None,
+                {
+                    "action": action,
+                    "operator": operator,
+                    "error": str(exc),
+                    "request_id": exc.request_id,
+                },
+            )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "refused": "supervisor_unanswered",
+                    "detail": str(exc),
+                    "request_id": exc.request_id,
+                },
+            )
+        await agent.store.audit("runtime_control_receipt", None, receipt)
+        return JSONResponse(
+            status_code=200 if receipt.get("result") == "ok" else 502, content=receipt
+        )
+
+    @app.get("/v1/maintenance/runtime/receipts/{request_id}", dependencies=controlled)
+    async def runtime_receipt(request: Request, request_id: str) -> JSONResponse:
+        receipt = _agent(request).supervisor.receipt(request_id)
+        if receipt is None:
+            return JSONResponse(status_code=404, content={"request_id": request_id})
+        return JSONResponse(receipt)
 
     return app
 

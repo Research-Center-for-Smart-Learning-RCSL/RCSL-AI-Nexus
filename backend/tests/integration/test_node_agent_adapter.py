@@ -25,6 +25,7 @@ from app.domain.entities.chat import CompletionChunk, Message, MessageRole
 from app.domain.entities.model import RuntimeKind
 from app.domain.entities.routing_policy import RoutingCandidate, RoutingPolicy
 from app.domain.exceptions import (
+    MaintenanceError,
     ManifestPinRefusedError,
     NoAvailableModelError,
     RuntimeCapabilityError,
@@ -130,6 +131,27 @@ async def test_an_uncertain_outcome_interrupts_and_then_blocks(agent: dict[str, 
     with pytest.raises(ServerOverloadedError):
         await agent["runtime"].embed("nomic-embed-text", ["a"])
     assert agent["ollama"].chats == 1 and agent["ollama"].embeds == 0
+
+
+async def test_a_node_refusing_under_the_hold_is_maintenance_not_overload(
+    agent: dict[str, Any],
+) -> None:
+    """P3 on #61: the node read the hold at promotion. The caller is told the
+    platform is closed, the code the entrances use, not that it is busy."""
+    conn = await asyncpg.connect(agent["dsn"])
+    try:
+        await conn.execute(
+            "UPDATE maintenance_control SET admission_closed = true, phase = 'maintenance', "
+            "epoch = epoch + 1 WHERE id = 1"
+        )
+    finally:
+        await conn.close()
+
+    with pytest.raises(MaintenanceError):
+        await _generate(agent["runtime"])
+    with pytest.raises(MaintenanceError):
+        await agent["runtime"].embed("nomic-embed-text", ["a"])
+    assert agent["ollama"].chats == 0 and agent["ollama"].embeds == 0
 
 
 async def test_embeddings_return_vectors(agent: dict[str, Any]) -> None:
