@@ -40,6 +40,10 @@ from app.infrastructure.di import (
     build_totp,
 )
 from app.infrastructure.heartbeat import run_heartbeat
+from app.infrastructure.maintenance_coordinator import (
+    coordinator_should_run,
+    run_maintenance_coordinator,
+)
 from app.infrastructure.residency_reconciler import (
     reconciler_should_run,
     run_residency_reconciler,
@@ -183,10 +187,25 @@ async def admin_lifespan(app: FastAPI, *, run_node_heartbeat: bool = True) -> As
     if run_node_heartbeat and reconciler_should_run(app, settings):
         reconciler = asyncio.create_task(run_residency_reconciler(app, settings))
 
+    # Carries a maintenance entry out on every node (P4 on #61): here, beside
+    # the heartbeat, because this is the process that holds the agents'
+    # control token. Idle unless an entry has recorded an operation.
+    coordinator: asyncio.Task[None] | None = None
+    if run_node_heartbeat and coordinator_should_run(app, settings):
+        coordinator = asyncio.create_task(run_maintenance_coordinator(app, settings))
+
     try:
         yield
     finally:
-        for task in (heartbeat, availability, retention, snapshot, usage_sweeper, reconciler):
+        for task in (
+            heartbeat,
+            availability,
+            retention,
+            snapshot,
+            usage_sweeper,
+            reconciler,
+            coordinator,
+        ):
             if task is None:
                 continue
             task.cancel()

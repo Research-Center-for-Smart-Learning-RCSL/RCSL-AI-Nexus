@@ -50,21 +50,35 @@ class Supervisor:
     def available(self) -> bool:
         return self._requests.is_dir() and self._receipts.is_dir()
 
-    async def run(self, action: str, reason: str) -> dict[str, Any]:
-        """The supervisor's receipt for `action`, or `SupervisorRefused`."""
+    async def run(
+        self, action: str, reason: str, *, request_id: str | None = None
+    ) -> dict[str, Any]:
+        """The supervisor's receipt for `action`, or `SupervisorRefused`.
+
+        A caller that names the request (the maintenance coordinator, P4 on
+        #61) can ask again after a timeout or a restart and get the same
+        request's answer: an existing receipt is returned, and a request the
+        supervisor already holds is waited for rather than written twice.
+        """
         if action not in ACTIONS:
             raise ValueError(f"action must be one of {ACTIONS}")
+        if request_id is not None and not _ID.fullmatch(request_id):
+            raise ValueError("request_id must be 32 lowercase hex characters")
         if not self.available:
             raise SupervisorRefused("the runtime supervisor's directories are not mounted")
-        request_id = secrets.token_hex(16)
-        document = {"request_id": request_id, "action": action, "reason": reason[:200]}
+        request_id = request_id or secrets.token_hex(16)
         request = self._requests / f"{request_id}.json"
-        staging = self._requests / f".{request_id}.tmp"
-        try:
-            staging.write_text(json.dumps(document))
-            os.replace(staging, request)
-        except OSError as exc:
-            raise SupervisorRefused(f"cannot write a supervisor request: {exc}") from exc
+        existing = self.receipt(request_id)
+        if existing is not None:
+            return self._checked(existing, request_id, action)
+        if not request.exists() and not (self._requests / f".{request_id}.claimed").exists():
+            document = {"request_id": request_id, "action": action, "reason": reason[:200]}
+            staging = self._requests / f".{request_id}.tmp"
+            try:
+                staging.write_text(json.dumps(document))
+                os.replace(staging, request)
+            except OSError as exc:
+                raise SupervisorRefused(f"cannot write a supervisor request: {exc}") from exc
         deadline = time.monotonic() + self._timeout
         while time.monotonic() < deadline:
             receipt = self.receipt(request_id)

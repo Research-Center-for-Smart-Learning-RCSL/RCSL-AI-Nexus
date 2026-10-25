@@ -24,6 +24,7 @@ import asyncio
 import hmac
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -54,7 +55,7 @@ from app.node_agent.dispatch import (
 )
 from app.node_agent.guard import GuardRefusal, check_generation, check_pin, registration
 from app.node_agent.relay import SUMMARY_IDLE_SECONDS
-from app.node_agent.resolution import ResolutionRefused
+from app.node_agent.resolution import ResetFailed, ResolutionRefused
 from app.node_agent.settings import AgentSettings
 from app.node_agent.store import LIFECYCLE_KINDS, NotOwner, Operation
 from app.node_agent.summary import bounded_summary
@@ -77,6 +78,7 @@ if TYPE_CHECKING:
 MAX_BODY_BYTES = 64 * 1024 * 1024
 RUNTIME = "ollama"
 CANCELLABLE_KINDS = ("inference", "embedding_batch", "summary")
+RESET_ID = re.compile(r"[0-9a-f]{32}")
 
 
 def _agent(request: Request) -> Agent:
@@ -556,10 +558,11 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=500, detail="operation vanished")
         return await _existing_lifecycle(agent, operation, action)
 
-    @app.get("/v1/residency", dependencies=authorised)
+    @app.get("/v1/residency", dependencies=[Depends(_observer)])
     async def residency(request: Request) -> JSONResponse:
         """What the runtime holds and has on disk, read-only. Observing changes
-        nothing, so it is answered whatever the gate says."""
+        nothing, so it is answered whatever the gate says, and to either token:
+        the maintenance coordinator snapshots and verifies with it (P4 on #61)."""
         observed = await _agent(request).relay.residency()
         if observed is None:
             return JSONResponse(status_code=503, content={"refused": "runtime_unobserved"})
@@ -675,6 +678,58 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
         await agent.dispatcher.freeze(epoch)
         report = await agent.dispatcher.interrupt(deadline_s=agent.settings.interrupt_deadline_s)
         await agent.store.audit("maintenance_interrupt", None, report)
+        return JSONResponse(report | {"gate": agent.dispatcher.state.value})
+
+    @app.post("/v1/maintenance/reset", dependencies=controlled)
+    async def maintenance_reset(request: Request) -> JSONResponse:
+        """Restart the runtime empty for a maintenance entry, and clear the
+        unknowns the restart proves gone (P4 on #61).
+
+        For the hold the database says is closed, at the epoch named, and only
+        once no sender is left: the coordinator interrupts first. `reset_id`
+        is the caller's and names the supervisor request too, so the same call
+        repeated returns the same reset instead of restarting again.
+        """
+        agent = _agent(request)
+        body = await _body(request)
+        epoch = body.get("epoch") if isinstance(body, dict) else None
+        if not isinstance(epoch, int) or isinstance(epoch, bool):
+            raise HTTPException(status_code=400, detail="epoch must be an integer")
+        reset_id = _text(body, "reset_id", limit=32)
+        if not RESET_ID.fullmatch(reset_id):
+            raise HTTPException(status_code=400, detail="reset_id must be 32 lowercase hex")
+        operator = _text(body, "operator", limit=128)
+        closed, current = await agent.store.maintenance_hold()
+        if not closed or current != epoch:
+            return JSONResponse(
+                status_code=409,
+                content={"refused": "hold_not_closed_at_epoch", "closed": closed, "epoch": current},
+            )
+        await agent.dispatcher.freeze(epoch)
+        if not agent.dispatcher.quiescent:
+            return JSONResponse(status_code=409, content={"refused": "node_not_quiescent"})
+        try:
+            report = await agent.resolutions.maintenance_reset(
+                epoch=epoch, reset_id=reset_id, operator=operator, supervisor=agent.supervisor
+            )
+        except SupervisorRefused as exc:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "refused": "supervisor_unanswered",
+                    "detail": str(exc),
+                    "request_id": exc.request_id,
+                },
+            )
+        except ResetFailed as exc:
+            return JSONResponse(
+                status_code=502,
+                content={"refused": "restart_failed", "supervisor_receipt": exc.receipt},
+            )
+        except ResolutionRefused as exc:
+            return JSONResponse(
+                status_code=409, content={"refused": "hold_not_closed_at_epoch", "detail": str(exc)}
+            )
         return JSONResponse(report | {"gate": agent.dispatcher.state.value})
 
     @app.post("/v1/maintenance/runtime/{action}", dependencies=controlled)

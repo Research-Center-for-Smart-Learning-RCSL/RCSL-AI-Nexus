@@ -14,12 +14,21 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import replace
 from datetime import datetime
 from ipaddress import ip_network
+from typing import Any
 
 from app.domain.entities.actor import Actor, Role
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.invitation import Invitation, InvitationPurpose, RecoveryCode
 from app.domain.entities.knowledge import DocumentChunk, DocumentStatus, RetrievedPassage
 from app.domain.entities.maintenance import NORMAL, MaintenancePhase, MaintenanceState
+from app.domain.entities.maintenance_operation import (
+    MaintenanceOperation,
+    NodeStep,
+    OperationKind,
+    OperationStatus,
+    StepPhase,
+    StepStatus,
+)
 from app.domain.entities.model import (
     Model,
     ModelState,
@@ -1015,3 +1024,171 @@ class FakeMaintenance:
             return None
         self.state = replace(self.state, message=message, revision=self.state.revision + 1)
         return self.state
+
+
+class FakeMaintenanceOperations:
+    """Entries and their node steps in memory, with the SQL repository's
+    rules: writes fenced on the owner, the first snapshot kept, attempts
+    counted to a failure. `now` is a clock tests advance to expire a lease."""
+
+    def __init__(self) -> None:
+        self.operations: dict[str, MaintenanceOperation] = {}
+        self.now = 0.0
+        self.leases: dict[str, float] = {}
+        self._seq = 0
+
+    def _put(self, operation: MaintenanceOperation) -> None:
+        self.operations[operation.id] = operation
+
+    def _owned(self, operation_id: str, owner: str) -> MaintenanceOperation | None:
+        operation = self.operations.get(operation_id)
+        if operation is None or operation.owner != owner:
+            return None
+        return operation if operation.status is OperationStatus.RUNNING else None
+
+    def _replace_step(self, step: NodeStep) -> None:
+        operation = self.operations[step.operation_id]
+        self._put(
+            replace(
+                operation,
+                steps=tuple(step if s.node_id == step.node_id else s for s in operation.steps),
+            )
+        )
+
+    def _step(self, operation_id: str, node_id: str) -> NodeStep:
+        return next(s for s in self.operations[operation_id].steps if s.node_id == node_id)
+
+    async def create_entry(
+        self, *, epoch: int, requested_by: str, node_ids: list[str]
+    ) -> MaintenanceOperation:
+        if any(o.epoch == epoch for o in self.operations.values()):
+            raise ValueError("one entry per epoch")
+        self._seq += 1
+        operation_id = f"op{self._seq:030d}"
+        operation = MaintenanceOperation(
+            id=operation_id,
+            kind=OperationKind.ENTER,
+            epoch=epoch,
+            status=OperationStatus.RUNNING,
+            requested_by=requested_by,
+            steps=tuple(
+                NodeStep(operation_id, n, StepPhase.PENDING, StepStatus.RUNNING)
+                for n in sorted(node_ids)
+            ),
+        )
+        self._put(operation)
+        return operation
+
+    async def get(self, operation_id: str) -> MaintenanceOperation | None:
+        return self.operations.get(operation_id)
+
+    async def latest(self) -> MaintenanceOperation | None:
+        return list(self.operations.values())[-1] if self.operations else None
+
+    async def claim(self, *, owner: str, lease_s: float) -> MaintenanceOperation | None:
+        for operation in self.operations.values():
+            if operation.status is not OperationStatus.RUNNING:
+                continue
+            free = operation.owner in (None, owner) or self.leases[operation.id] < self.now
+            if free:
+                self.leases[operation.id] = self.now + lease_s
+                self._put(replace(operation, owner=owner))
+                return self.operations[operation.id]
+        return None
+
+    async def renew(self, operation_id: str, *, owner: str, lease_s: float) -> bool:
+        if self._owned(operation_id, owner) is None:
+            return False
+        self.leases[operation_id] = self.now + lease_s
+        return True
+
+    async def advance(self, step: NodeStep, *, owner: str, phase: StepPhase, **values: Any) -> bool:
+        if self._owned(step.operation_id, owner) is None:
+            return False
+        current = self._step(step.operation_id, step.node_id)
+        if current.status is not StepStatus.RUNNING:
+            return False
+        changes: dict[str, Any] = {"phase": phase, "attempts": 0, "error": None}
+        if phase is StepPhase.VERIFIED:
+            changes["status"] = StepStatus.DONE
+        for column in ("interrupt", "reset", "verification", "accounting"):
+            if values.get(column) is not None:
+                changes[column] = values[column]
+        if not current.snapshot_taken and (
+            "snapshot" in values or values.get("snapshot_error") is not None
+        ):
+            changes["snapshot"] = values.get("snapshot")
+            changes["snapshot_error"] = values.get("snapshot_error")
+        self._replace_step(replace(current, **changes))
+        return True
+
+    async def set_reset_id(self, step: NodeStep, *, owner: str, reset_id: str) -> bool:
+        current = self._step(step.operation_id, step.node_id)
+        if self._owned(step.operation_id, owner) is None or current.reset_id is not None:
+            return False
+        self._replace_step(replace(current, reset_id=reset_id))
+        return True
+
+    async def attempt_failed(
+        self,
+        step: NodeStep,
+        *,
+        owner: str,
+        error: str,
+        max_attempts: int,
+        clear_reset_id: bool = False,
+        final: bool = False,
+    ) -> NodeStep | None:
+        current = self._step(step.operation_id, step.node_id)
+        if (
+            self._owned(step.operation_id, owner) is None
+            or current.status is not StepStatus.RUNNING
+        ):
+            return None
+        attempts = current.attempts + 1
+        updated = replace(
+            current,
+            attempts=attempts,
+            error=error,
+            reset_id=None if clear_reset_id else current.reset_id,
+            status=StepStatus.FAILED if final or attempts >= max_attempts else current.status,
+        )
+        self._replace_step(updated)
+        return updated
+
+    async def finish(
+        self, operation_id: str, *, owner: str, status: OperationStatus, error: str | None = None
+    ) -> bool:
+        operation = self._owned(operation_id, owner)
+        if operation is None:
+            return False
+        self._put(replace(operation, status=status, error=error, owner=None))
+        return True
+
+    async def retry(self, operation_id: str) -> bool:
+        operation = self.operations.get(operation_id)
+        if operation is None or operation.status is not OperationStatus.FAILED:
+            return False
+        self._put(
+            replace(
+                operation,
+                status=OperationStatus.RUNNING,
+                error=None,
+                owner=None,
+                steps=tuple(
+                    replace(s, status=StepStatus.RUNNING, attempts=0)
+                    if s.status is StepStatus.FAILED
+                    else s
+                    for s in operation.steps
+                ),
+            )
+        )
+        return True
+
+    async def abandon_running(self, reason: str) -> list[str]:
+        ended = [o.id for o in self.operations.values() if o.status is OperationStatus.RUNNING]
+        for operation_id in ended:
+            operation = self.operations[operation_id]
+            ended_now = replace(operation, status=OperationStatus.ABANDONED, owner=None)
+            self._put(replace(ended_now, error=reason))
+        return ended

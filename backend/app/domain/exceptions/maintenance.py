@@ -50,3 +50,16 @@ class MaintenanceDisabledError(StateConflictError):
 
     code = "maintenance_disabled"
     public_message = "Maintenance mode is not enabled on this deployment."
+
+
+class MaintenanceUnsupportedError(StateConflictError):
+    """This deployment cannot carry an entry out on every runtime (P4 on #61).
+
+    An entry has to interrupt and release every runtime, and only a node
+    agent with the control token can do that. A node reached directly, or a
+    tailnet admin without the token, would be closed to users while its
+    runtime kept working, so the entry is refused before anything closes.
+    """
+
+    code = "maintenance_unsupported"
+    public_message = "This deployment cannot carry out a maintenance entry on every node."

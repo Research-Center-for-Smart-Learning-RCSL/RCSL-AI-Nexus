@@ -90,7 +90,15 @@ GATEWAY_WRITABLE_TABLES: tuple[str, ...] = ("usage_records", "prompt_logs", "ref
 # output for requests that carried an idempotency key, which is the same kind
 # of content as `prompt_logs`. The gateway receives results from the agent over
 # its API and never reads them here.
-GATEWAY_DENIED_READ_TABLES: tuple[str, ...] = ("prompt_logs", "refusals", "attempt_results")
+GATEWAY_DENIED_READ_TABLES: tuple[str, ...] = (
+    "prompt_logs",
+    "refusals",
+    "attempt_results",
+    # A maintenance entry's snapshots, reset evidence and errors (P4 on #61).
+    # The gateway reads the hold in `maintenance_control`, and nothing more.
+    "maintenance_operations",
+    "maintenance_node_steps",
+)
 
 # What the gateway may change in the request bindings (PR4a-2 on #24), column
 # by column: it binds a request to an attempt and moves the binding only to a

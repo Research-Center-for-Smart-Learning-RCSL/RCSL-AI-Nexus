@@ -41,7 +41,9 @@ async def maintenance_status(
     actor: ActorDep, maintenance: ManageDep, settings: SettingsDep
 ) -> MaintenanceStatusResponse:
     state = await maintenance.status(actor)
-    return MaintenanceStatusResponse.of(state, enabled=settings.maintenance_enabled)
+    return MaintenanceStatusResponse.of(
+        state, enabled=settings.maintenance_enabled, operation=await maintenance.operation(actor)
+    )
 
 
 @router.post("/enter")
@@ -52,12 +54,29 @@ async def enter_maintenance(
     settings: SettingsDep,
 ) -> MaintenanceStatusResponse:
     """Closes every entrance to everyone but platform administrators and signs
-    every other local account out, immediately. Pressing it again while the
-    platform is closed changes nothing and returns the current state."""
+    every other local account out, immediately, and records the entry the
+    maintenance coordinator then carries out on every node. Pressing it again
+    while the platform is closed changes nothing and returns the current
+    state."""
     state = await maintenance.enter(
         actor, message=payload.message, expected_return_at=payload.expected_return_at
     )
-    return MaintenanceStatusResponse.of(state, enabled=settings.maintenance_enabled)
+    return MaintenanceStatusResponse.of(
+        state, enabled=settings.maintenance_enabled, operation=await maintenance.operation(actor)
+    )
+
+
+@router.post("/retry")
+async def retry_maintenance_entry(
+    actor: ActorDep, maintenance: ManageDep, settings: SettingsDep
+) -> MaintenanceStatusResponse:
+    """Runs a failed entry's failed nodes again from the phase each reached.
+    The snapshot each node saved is kept; the platform stays closed."""
+    operation = await maintenance.retry(actor)
+    state = await maintenance.status(actor)
+    return MaintenanceStatusResponse.of(
+        state, enabled=settings.maintenance_enabled, operation=operation
+    )
 
 
 @router.post("/reopen")

@@ -31,3 +31,9 @@ class SecretsSettings(BaseSettings):
     """The bearer token the node agents require, shared with them as a Docker
     secret. Read only when `node_agent_enabled`, and then at least 32
     characters, or the process does not start."""
+
+    node_agent_control_token: str = Field(default="")
+    """The node agents' control token (P3 on #61), mounted only into the
+    tailnet admin, whose maintenance coordinator interrupts and resets
+    runtimes with it (P4). Empty everywhere else, which is what keeps the
+    gateway and the public admin from ever reaching those routes."""

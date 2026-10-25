@@ -11,7 +11,7 @@ from .identity import (
 from .knowledge import (
     KnowledgeRepositoryPort,
 )
-from .maintenance import MaintenanceRepositoryPort
+from .maintenance import MaintenanceOperationsPort, MaintenanceRepositoryPort
 from .observability import (
     AuditLogRepositoryPort,
     PromptLogRepositoryPort,
@@ -33,6 +33,7 @@ from .retention_templates import (
 )
 
 __all__ = [
+    "MaintenanceOperationsPort",
     "MaintenanceRepositoryPort",
     "TenantRepositoryPort",
     "ModelRepositoryPort",

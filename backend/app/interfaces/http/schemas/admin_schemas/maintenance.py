@@ -4,10 +4,12 @@ administrator sees."""
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 from app.domain.entities.maintenance import MAX_MESSAGE_LENGTH, MaintenanceState
+from app.domain.entities.maintenance_operation import MaintenanceOperation, NodeStep
 
 
 class PublicMaintenanceStatusResponse(BaseModel):
@@ -34,6 +36,68 @@ class PublicMaintenanceStatusResponse(BaseModel):
         )
 
 
+class MaintenanceNodeStepView(BaseModel):
+    """One node's progress through an entry. Administrators only: it names
+    the models the node held and the evidence its reset left."""
+
+    node_id: str
+    phase: str
+    status: str
+    attempts: int
+    error: str | None
+    snapshot: list[dict[str, Any]] | None
+    snapshot_at: datetime | None
+    snapshot_error: str | None
+    interrupted: list[str]
+    accounting: str | None
+    reset: dict[str, Any] | None
+    updated_at: datetime | None
+
+    @classmethod
+    def of(cls, step: NodeStep) -> MaintenanceNodeStepView:
+        interrupted = (step.interrupt or {}).get("interrupted") or []
+        return cls(
+            node_id=step.node_id,
+            phase=step.phase.value,
+            status=step.status.value,
+            attempts=step.attempts,
+            error=step.error,
+            snapshot=step.snapshot,
+            snapshot_at=step.snapshot_at,
+            snapshot_error=step.snapshot_error,
+            interrupted=[str(op) for op in interrupted],
+            accounting=step.accounting,
+            reset=step.reset,
+            updated_at=step.updated_at,
+        )
+
+
+class MaintenanceOperationView(BaseModel):
+    id: str
+    kind: str
+    epoch: int
+    status: str
+    requested_by: str
+    error: str | None
+    created_at: datetime | None
+    finished_at: datetime | None
+    nodes: list[MaintenanceNodeStepView]
+
+    @classmethod
+    def of(cls, operation: MaintenanceOperation) -> MaintenanceOperationView:
+        return cls(
+            id=operation.id,
+            kind=operation.kind.value,
+            epoch=operation.epoch,
+            status=operation.status.value,
+            requested_by=operation.requested_by,
+            error=operation.error,
+            created_at=operation.created_at,
+            finished_at=operation.finished_at,
+            nodes=[MaintenanceNodeStepView.of(step) for step in operation.steps],
+        )
+
+
 class MaintenanceStatusResponse(BaseModel):
     closed: bool
     phase: str
@@ -46,9 +110,18 @@ class MaintenanceStatusResponse(BaseModel):
     enabled: bool
     """Whether this deployment lets an administrator enter maintenance. Reopen
     is offered whatever this says."""
+    operation: MaintenanceOperationView | None = None
+    """The latest entry and each node's progress through it: access closes
+    at once, the runtimes are released after, and this is the second part."""
 
     @classmethod
-    def of(cls, state: MaintenanceState, *, enabled: bool) -> MaintenanceStatusResponse:
+    def of(
+        cls,
+        state: MaintenanceState,
+        *,
+        enabled: bool,
+        operation: MaintenanceOperation | None = None,
+    ) -> MaintenanceStatusResponse:
         return cls(
             closed=state.admission_closed,
             phase=state.phase.value,
@@ -59,6 +132,7 @@ class MaintenanceStatusResponse(BaseModel):
             changed_by=state.changed_by,
             changed_at=state.changed_at,
             enabled=enabled,
+            operation=MaintenanceOperationView.of(operation) if operation else None,
         )
 
 

@@ -12,6 +12,7 @@ from .knowledge import (
     PostgresKnowledgeRepository,
 )
 from .maintenance import PostgresMaintenanceRepository
+from .maintenance_operations import PostgresMaintenanceOperations
 from .platform_runtime import (
     PostgresModelRepository,
     PostgresNodeRepository,
@@ -39,6 +40,7 @@ from .usage_settlement import PostgresUsageSettlement
 from .users import PostgresUserRepository
 
 __all__ = [
+    "PostgresMaintenanceOperations",
     "PostgresMaintenanceRepository",
     "PostgresTenantRepository",
     "PostgresNodeRepository",

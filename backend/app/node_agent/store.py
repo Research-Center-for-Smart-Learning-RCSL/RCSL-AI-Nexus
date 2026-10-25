@@ -222,6 +222,31 @@ class OperationStore:
             )
         )
 
+    async def unknown_ops(self) -> list[str]:
+        rows = await self._pool.fetch(
+            "SELECT op_id FROM node_operations "
+            "WHERE node_id = $1 AND state = 'outcome_unknown' ORDER BY op_id",
+            self.node_id,
+        )
+        return [str(r["op_id"]) for r in rows]
+
+    async def audited(self, event: str, reset_id: str) -> dict[str, Any] | None:
+        """The latest audit detail of `event` for a maintenance reset, so a
+        reset asked again after an agent restart resumes from its evidence
+        rather than starting over (P4 on #61)."""
+        value = await self._pool.fetchval(
+            "SELECT detail FROM node_operation_audit "
+            "WHERE node_id = $1 AND event = $2 AND detail->>'reset_id' = $3 "
+            "ORDER BY id DESC LIMIT 1",
+            self.node_id,
+            event,
+            reset_id,
+        )
+        if value is None:
+            return None
+        decoded = json.loads(value) if isinstance(value, str) else value
+        return decoded if isinstance(decoded, dict) else None
+
     # -- writes ------------------------------------------------------------
 
     async def insert_accepted(

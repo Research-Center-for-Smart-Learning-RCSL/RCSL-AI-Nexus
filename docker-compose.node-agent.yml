@@ -15,10 +15,12 @@
 #                                 gateway and admin entrances below
 #   - secrets/node_agent_control_token
 #                                 at least 32 characters and different from
-#                                 the token above; the agent's alone for now
-#                                 (P3 on #61). Drain, resume, resolution,
-#                                 interrupt and runtime control need it, and
-#                                 the gateway must never hold it.
+#                                 the token above (P3 on #61). Drain, resume,
+#                                 resolution, interrupt, reset and runtime
+#                                 control need it. The agent and admin-tailnet,
+#                                 whose maintenance coordinator calls those
+#                                 routes (P4), hold it; the gateway and
+#                                 admin-public never do.
 #   - NODE_AGENT_NODE_ID in .env  this host's row in `nodes`
 #   - the host runtime witness    scripts/host/runtime_witness.py under a root
 #                                 launchd job, writing RUNTIME_WITNESS_HOST_DIR
@@ -91,6 +93,9 @@ services:
     networks: [agent-control]
     secrets:
       - node_agent_token
+      # The maintenance coordinator's (P4 on #61). This entrance only: the
+      # public admin submits an entry, and this one carries it out.
+      - node_agent_control_token
 
   admin-public:
     networks: [agent-control]
