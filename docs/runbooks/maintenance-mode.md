@@ -6,17 +6,31 @@ The design is on the issue; the code is `manage_maintenance.py`,
 `maintenance_coordinator.py` and the node agent's `/v1/maintenance/*` routes.
 
 **Status.** Entering is behind `MAINTENANCE_ENABLED`, which is off in
-production. It stays off until the console shows the progress below (P6) and
-the host acceptance at the end of this page has passed.
+production. The host acceptance at the end of this page passed on 2026-10-25:
+the entry took 8.7 s, and the restore and reopen took 17.3 s (see
+[the progress entry](../progress/2026-10-25.md)). Turning the flag on is the
+maintainer's call.
+
+**The console** (Dashboard → Maintenance) is where all of this is done:
+
+- **Three milestones, shown apart:** access closed, runtimes released, models
+  restored.
+- **Each node's progress:** its phase, its snapshot, the requests that were
+  interrupted, and any error.
+- **Buttons:**
+  - **Restore and reopen.** Disabled, with the reason, until a restore could
+    put everything back.
+  - **Retry.** Shown when a step has failed.
+  - **Reopen without restoring.**
 
 ## What each button does
 
-| Call | Effect |
+| Console button and call | Effect |
 | --- | --- |
-| `POST /admin/maintenance/enter` | Closes access at once and signs out every account that is not a platform administrator. It also records an entry, which the coordinator carries out on each node: interrupt, snapshot, reset and verify empty. |
-| `POST /admin/maintenance/restore` | Loads each node's snapshot back, checks each model answers, and reopens the platform only once every node verifies. Allowed only after the entry has succeeded. |
-| `POST /admin/maintenance/retry` | Runs the failed nodes of a failed entry or restore again, each from the phase it reached. The snapshot is kept. |
-| `POST /admin/maintenance/reopen` | Reopens without restoring. Never refused. Any entry or restore still running is abandoned. |
+| **Close for maintenance**, `POST /admin/maintenance/enter` | Closes access at once and signs out every account that is not a platform administrator. It also records an entry, which the coordinator carries out on each node: interrupt, snapshot, reset and verify empty. |
+| **Restore and reopen**, `POST /admin/maintenance/restore` | Loads each node's snapshot back, checks each model answers, and reopens the platform only once every node verifies. Allowed only after the entry has succeeded. |
+| **Retry**, `POST /admin/maintenance/retry` | Runs the failed nodes of a failed entry or restore again, each from the phase it reached. The snapshot is kept. |
+| **Reopen without restoring**, `POST /admin/maintenance/reopen` | Reopens without restoring. Never refused. Any entry or restore still running is abandoned. |
 
 `GET /admin/maintenance` shows the latest operation. For each node it gives:
 
