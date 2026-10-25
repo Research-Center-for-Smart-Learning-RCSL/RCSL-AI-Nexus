@@ -6,8 +6,10 @@ The design is on the issue; the code is `manage_maintenance.py`,
 `maintenance_coordinator.py` and the node agent's `/v1/maintenance/*` routes.
 
 **Status.** Entering is behind `MAINTENANCE_ENABLED`, which is off in
-production. It stays off until the host acceptance at the end of this page has
-passed.
+production. The host acceptance at the end of this page passed on 2026-10-25:
+the entry took 8.7 s, and the restore and reopen took 17.3 s (see
+[the progress entry](../progress/2026-10-25.md)). Turning the flag on is the
+maintainer's call.
 
 **The console** (Dashboard → Maintenance) is where all of this is done:
 
