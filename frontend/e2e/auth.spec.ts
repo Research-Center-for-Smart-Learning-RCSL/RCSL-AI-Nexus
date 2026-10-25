@@ -1,5 +1,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 
+import { fulfillOpenMaintenance } from './support/maintenance';
+
 const JSON_HEADERS = { 'content-type': 'application/json' };
 const CSRF_TOKEN = 'csrf-e2e-auth';
 
@@ -48,6 +50,7 @@ function authenticated(route: Route) {
 async function mockAdmin(page: Page, handler: (route: Route, url: URL) => Promise<void>) {
   await page.route('**/admin/**', async (route) => {
     const url = new URL(route.request().url());
+    if (await fulfillOpenMaintenance(route, url)) return;
     await handler(route, url);
   });
 }

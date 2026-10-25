@@ -1,5 +1,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 
+import { fulfillOpenMaintenance } from './support/maintenance';
+
 import type { ApiKey } from '../src/features/api-keys/schema';
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
@@ -44,6 +46,7 @@ async function installAdminApi(page: Page) {
   await page.route('**/admin/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (await fulfillOpenMaintenance(route, url)) return;
 
     if (url.pathname === '/admin/me' && request.method() === 'GET') {
       await json(

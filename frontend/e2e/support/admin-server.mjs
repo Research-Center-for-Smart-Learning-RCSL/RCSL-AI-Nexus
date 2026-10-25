@@ -52,6 +52,19 @@ export async function startAdminTestServer() {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
 
+    // The public maintenance status (#61): the shell renders nothing
+    // protected until it has been read once. Mirrors support/maintenance.ts.
+    if (url.pathname === '/admin/maintenance/status' && request.method === 'GET') {
+      sendJson(response, 200, {
+        closed: false,
+        phase: 'normal',
+        message: null,
+        expected_return_at: null,
+        revision: 0,
+      });
+      return;
+    }
+
     if (url.pathname === '/admin/me' && request.method === 'GET') {
       sendJson(
         response,
