@@ -65,7 +65,7 @@ _ID = re.compile(r"[0-9a-f]{32}")
 _JOB_PID = re.compile(r"^\s*pid = (\d+)\s*$", re.MULTILINE)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Proc:
     pid: int
     ppid: int
@@ -78,7 +78,7 @@ class Proc:
         return (self.pid, self.started)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Config:
     label: str
     plist: Path

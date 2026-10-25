@@ -316,6 +316,38 @@ jobs:
       - name: Documentation links
         run: python3 scripts/check-doc-links.py
 
+  host-python:
+    runs-on: ubuntu-latest
+    # The LaunchDaemons run their Python scripts with /usr/bin/python3, which on
+    # the Mac Studio is the Command Line Tools' 3.9, not the backend's version.
+    # The runtime supervisor shipped with `@dataclass(slots=True)`, which 3.9
+    # does not have: the backend job passed its tests on 3.12 while the deployed
+    # daemon crashed on import (2026-10-25). So these scripts are imported and
+    # tested here on 3.9, the version that actually runs them.
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Import every script a LaunchDaemon runs with /usr/bin/python3
+        run: |
+          for script in launchd/*.py scripts/host/*.py; do
+            uv run -q --no-project --python 3.9 python -I -c \
+              'import runpy, sys; runpy.run_path(sys.argv[1], run_name="host_check")' "$script"
+            echo "imports on 3.9: $script"
+          done
+
+      - name: Host script tests, on Python 3.9
+        # Without the backend's conftest and config: these tests load the
+        # scripts by path and need nothing from the app.
+        run: |
+          uv run --no-project --python 3.9 --with pytest pytest -q --noconftest \
+            -p no:cacheprovider -c /dev/null --rootdir . \
+            backend/tests/unit/test_runtime_supervisor.py \
+            backend/tests/unit/test_runtime_witness.py
+
   windows-client-tools:
     runs-on: windows-latest
     # Every other job here runs on Linux, which is right for the platform and
