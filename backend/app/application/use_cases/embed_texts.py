@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Protocol
 
 from app.domain.entities.embedding import current_embedding_manifest
@@ -155,10 +155,15 @@ class EmbedTexts:
         ref: str | None = None,
         *,
         expected_identity: str | None = None,
+        before_batch: Callable[[], Awaitable[None]] | None = None,
     ) -> list[list[float]]:
         """Batched embedding against an already-resolved runtime, so a caller
         that ingests a whole document resolves the policy once rather than once
-        per batch."""
+        per batch.
+
+        `before_batch` runs before every call to the runtime, so a caller that
+        must stop between batches (the maintenance hold, #61) can raise there;
+        the batches already embedded are discarded with the failure."""
         if ref is None:
             target, runtime = await self.resolve()
             ref = target.ref
@@ -188,6 +193,8 @@ class EmbedTexts:
         vectors: list[list[float]] = []
         for start in range(0, len(texts), MAX_BATCH):
             batch = texts[start : start + MAX_BATCH]
+            if before_batch is not None:
+                await before_batch()
             # Scoped to this async task and reset even on failure/cancellation.
             # The agent receives the expected manifest on every batch, so a
             # mutable tag repinned after resolve cannot silently switch spaces.

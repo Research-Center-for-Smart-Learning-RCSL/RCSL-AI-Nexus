@@ -146,19 +146,29 @@ class _DetachedEmbedder:
             target, runtime = await self.resolve()
             ref = target.ref
         async with session_scope() as session:
-            # Before every batch, not once per job: a document that started
-            # indexing before the platform closed stops at its next batch
-            # rather than running to the end around the hold (#61). The
-            # failure leaves the extracted text stored, so a reindex after
-            # reopening picks it up without parsing it again.
-            await assert_serving(PostgresMaintenanceRepository(session))
             return await build_embed_texts(self._runtimes, session).embed_with(
-                runtime, texts, ref, expected_identity=expected_identity
+                runtime,
+                texts,
+                ref,
+                expected_identity=expected_identity,
+                before_batch=_assert_serving,
             )
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         target, runtime = await self.resolve()
         return await self.embed_with(runtime, texts, target.ref)
+
+
+async def _assert_serving() -> None:
+    """Before every runtime batch, not once per call: ingestion hands a whole
+    document's passages to `embed_with` at once, and `EmbedTexts` splits them
+    into batches, so a check per call would let a document that began before
+    the platform closed send every later batch around the hold (#61). A fresh
+    short transaction each time, so no connection is held between batches. The
+    failure leaves the extracted text stored, so a reindex after reopening picks
+    it up without parsing it again."""
+    async with session_scope() as session:
+        await assert_serving(PostgresMaintenanceRepository(session))
 
 
 def _detached_ingest(app: FastAPI, tenant_id: str) -> IngestDocument:
