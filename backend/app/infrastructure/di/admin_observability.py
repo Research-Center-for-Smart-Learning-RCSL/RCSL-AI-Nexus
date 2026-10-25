@@ -13,6 +13,7 @@ from app.adapters.persistence.repositories import (
     PostgresAuditLogRepository,
     PostgresEvaluationRepository,
     PostgresInvitationRepository,
+    PostgresMaintenanceOperations,
     PostgresMaintenanceRepository,
     PostgresModelRepository,
     PostgresNodeRepository,
@@ -269,4 +270,7 @@ def build_manage_maintenance(
         authz=request.app.state.authz,
         audit=request.app.state.audit,
         enabled=settings.maintenance_enabled,
+        operations=PostgresMaintenanceOperations(session),
+        nodes=PostgresNodeRepository(session),
+        agents_enabled=bool(getattr(request.app.state.runtimes, "agents_enabled", False)),
     )

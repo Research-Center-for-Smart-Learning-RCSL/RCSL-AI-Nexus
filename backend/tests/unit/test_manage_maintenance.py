@@ -10,13 +10,16 @@ from app.adapters.authz.role_authorization import RoleAuthorization
 from app.application.use_cases.manage_maintenance import ManageMaintenance, assert_serving
 from app.domain.entities.actor import ADMIN_ONLY_SCOPES, ROLE_SCOPES, Actor, Role, Scope
 from app.domain.entities.maintenance import NORMAL
+from app.domain.entities.maintenance_operation import OperationStatus, StepPhase, StepStatus
+from app.domain.entities.node import Node, NodeStatus
 from app.domain.exceptions import (
     MaintenanceDisabledError,
     MaintenanceError,
     MaintenanceStateConflictError,
+    MaintenanceUnsupportedError,
     NotAuthorizedError,
 )
-from tests.unit.fakes import FakeAudit, FakeMaintenance
+from tests.unit.fakes import FakeAudit, FakeMaintenance, FakeMaintenanceOperations, FakeNodes
 
 ADMIN = Actor(
     id="admin-1", display="admin", role=Role.ADMIN, source="tailnet", scopes=frozenset(Scope)
@@ -35,10 +38,35 @@ FORGED = Actor(
 check is what refuses it."""
 
 
-def build(*, enabled: bool = True) -> tuple[ManageMaintenance, FakeMaintenance, FakeAudit]:
+def node(node_id: str, *, agent: bool = True) -> Node:
+    return Node(
+        id=node_id,
+        name=f"node-{node_id}",
+        address="100.64.0.9",
+        status=NodeStatus.ONLINE,
+        total_memory_gb=64,
+        agent_url=f"http://agent-{node_id}:8100" if agent else None,
+    )
+
+
+def build(
+    *,
+    enabled: bool = True,
+    nodes: tuple[Node, ...] = (node("n1"),),
+    agents_enabled: bool = True,
+) -> tuple[ManageMaintenance, FakeMaintenance, FakeAudit]:
     repo = FakeMaintenance()
     audit = FakeAudit()
-    return ManageMaintenance(repo, RoleAuthorization(), audit, enabled=enabled), repo, audit
+    use_case = ManageMaintenance(
+        repo,
+        RoleAuthorization(),
+        audit,
+        enabled=enabled,
+        operations=FakeMaintenanceOperations(),
+        nodes=FakeNodes(nodes),
+        agents_enabled=agents_enabled,
+    )
+    return use_case, repo, audit
 
 
 def test_only_platform_admins_hold_the_maintenance_scopes() -> None:
@@ -106,3 +134,74 @@ def test_only_an_admin_session_survives_an_entry() -> None:
     assert closed.session_valid(4, platform_admin=False)
     reopened = replace(closed, admission_closed=False)
     assert not reopened.session_valid(3, platform_admin=False), "revoked stays revoked"
+
+
+async def test_an_entry_records_one_step_per_node_for_the_coordinator() -> None:
+    use_case, _, audit = build(nodes=(node("n1"), node("n2")))
+    entered = await use_case.enter(ADMIN, message=None, expected_return_at=None)
+    again = await use_case.enter(ADMIN, message=None, expected_return_at=None)
+
+    operation = await use_case.operation(ADMIN)
+    assert operation is not None and again.epoch == entered.epoch
+    assert operation.epoch == entered.epoch
+    assert operation.status is OperationStatus.RUNNING
+    assert [(s.node_id, s.phase, s.status) for s in operation.steps] == [
+        ("n1", StepPhase.PENDING, StepStatus.RUNNING),
+        ("n2", StepPhase.PENDING, StepStatus.RUNNING),
+    ]
+    assert audit.entries[0][0] == "maintenance.entered"
+    with pytest.raises(NotAuthorizedError):
+        await use_case.operation(TENANT_ADMIN)
+
+
+@pytest.mark.parametrize(
+    ("nodes", "agents_enabled"),
+    [((node("n1"), node("direct", agent=False)), True), ((node("n1"),), False)],
+)
+async def test_an_entry_that_could_not_release_every_runtime_closes_nothing(
+    nodes: tuple[Node, ...], agents_enabled: bool
+) -> None:
+    use_case, repo, audit = build(nodes=nodes, agents_enabled=agents_enabled)
+    with pytest.raises(MaintenanceUnsupportedError):
+        await use_case.enter(ADMIN, message=None, expected_return_at=None)
+    assert repo.state.admission_closed is False
+    assert audit.entries == []
+
+
+async def test_only_a_failed_entry_under_its_own_hold_is_retried() -> None:
+    use_case, repo, audit = build()
+    with pytest.raises(MaintenanceStateConflictError):
+        await use_case.retry(ADMIN)
+
+    await use_case.enter(ADMIN, message=None, expected_return_at=None)
+    operations = use_case._operations
+    assert isinstance(operations, FakeMaintenanceOperations)
+    operation = await operations.latest()
+    assert operation is not None
+    with pytest.raises(MaintenanceStateConflictError):
+        await use_case.retry(ADMIN)  # still running
+
+    operations._put(replace(operation, status=OperationStatus.FAILED))
+    step = operation.steps[0]
+    operations._replace_step(replace(step, status=StepStatus.FAILED, attempts=5, error="x"))
+    retried = await use_case.retry(ADMIN)
+    assert retried.status is OperationStatus.RUNNING
+    assert retried.steps[0].status is StepStatus.RUNNING and retried.steps[0].attempts == 0
+    assert audit.entries[-1][0] == "maintenance.retried"
+
+    operations._put(replace(retried, status=OperationStatus.FAILED))
+    await use_case.reopen(ADMIN)
+    with pytest.raises(MaintenanceStateConflictError, match="not current"):
+        await use_case.retry(ADMIN)
+    assert repo.state.admission_closed is False
+
+
+async def test_reopening_ends_an_entry_still_releasing_runtimes() -> None:
+    use_case, _, audit = build()
+    await use_case.enter(ADMIN, message=None, expected_return_at=None)
+
+    await use_case.reopen(ADMIN)
+
+    operation = await use_case.operation(ADMIN)
+    assert operation is not None and operation.status is OperationStatus.ABANDONED
+    assert audit.entries[-1][0] == "maintenance.reopened"

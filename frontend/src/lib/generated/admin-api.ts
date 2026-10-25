@@ -635,8 +635,10 @@ export interface paths {
         /**
          * Enter Maintenance
          * @description Closes every entrance to everyone but platform administrators and signs
-         *     every other local account out, immediately. Pressing it again while the
-         *     platform is closed changes nothing and returns the current state.
+         *     every other local account out, immediately, and records the entry the
+         *     maintenance coordinator then carries out on every node. Pressing it again
+         *     while the platform is closed changes nothing and returns the current
+         *     state.
          */
         post: operations["enter_maintenance_admin_maintenance_enter_post"];
         delete?: never;
@@ -677,6 +679,27 @@ export interface paths {
          *     API keys work again unchanged.
          */
         post: operations["reopen_after_maintenance_admin_maintenance_reopen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/maintenance/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Maintenance Entry
+         * @description Runs a failed entry's failed nodes again from the phase each reached.
+         *     The snapshot each node saved is kept; the platform stays closed.
+         */
+        post: operations["retry_maintenance_entry_admin_maintenance_retry_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2401,6 +2424,62 @@ export interface components {
             /** Message */
             message?: string | null;
         };
+        /**
+         * MaintenanceNodeStepView
+         * @description One node's progress through an entry. Administrators only: it names
+         *     the models the node held and the evidence its reset left.
+         */
+        MaintenanceNodeStepView: {
+            /** Accounting */
+            accounting: string | null;
+            /** Attempts */
+            attempts: number;
+            /** Error */
+            error: string | null;
+            /** Interrupted */
+            interrupted: string[];
+            /** Node Id */
+            node_id: string;
+            /** Phase */
+            phase: string;
+            /** Reset */
+            reset: {
+                [key: string]: unknown;
+            } | null;
+            /** Snapshot */
+            snapshot: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Snapshot At */
+            snapshot_at: string | null;
+            /** Snapshot Error */
+            snapshot_error: string | null;
+            /** Status */
+            status: string;
+            /** Updated At */
+            updated_at: string | null;
+        };
+        /** MaintenanceOperationView */
+        MaintenanceOperationView: {
+            /** Created At */
+            created_at: string | null;
+            /** Epoch */
+            epoch: number;
+            /** Error */
+            error: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Nodes */
+            nodes: components["schemas"]["MaintenanceNodeStepView"][];
+            /** Requested By */
+            requested_by: string;
+            /** Status */
+            status: string;
+        };
         /** MaintenanceStatusResponse */
         MaintenanceStatusResponse: {
             /** Changed At */
@@ -2417,6 +2496,7 @@ export interface components {
             expected_return_at: string | null;
             /** Message */
             message: string | null;
+            operation?: components["schemas"]["MaintenanceOperationView"] | null;
             /** Phase */
             phase: string;
             /** Revision */
@@ -4240,6 +4320,35 @@ export interface operations {
         };
     };
     reopen_after_maintenance_admin_maintenance_reopen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceStatusResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    retry_maintenance_entry_admin_maintenance_retry_post: {
         parameters: {
             query?: never;
             header?: never;

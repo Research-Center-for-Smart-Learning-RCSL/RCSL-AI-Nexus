@@ -176,9 +176,18 @@ def test_closing_the_platform_signs_users_out_for_good(deployment: None) -> None
         assert public.get("/admin/me").status_code == 200
 
 
+def _agents_enabled() -> None:
+    """An entry needs node agents to release the runtimes with (P4 on #61).
+    No node is registered here, so the entry it records has no steps."""
+    os.environ["NODE_AGENT_ENABLED"] = "true"
+    os.environ["NODE_AGENT_TOKEN"] = "t" * 40
+    get_settings.cache_clear()
+
+
 def test_an_administrator_closes_keeps_management_and_loses_the_models(
     deployment: None,
 ) -> None:
+    _agents_enabled()
     with tailnet_client() as tailnet:
         entered = post(
             tailnet,
@@ -198,7 +207,10 @@ def test_an_administrator_closes_keeps_management_and_loses_the_models(
         # The administrator keeps the management screens...
         assert tailnet.get("/admin/me").status_code == 200
         assert tailnet.get("/admin/users").status_code == 200
-        assert tailnet.get("/admin/maintenance").json()["changed_by"] is not None
+        status = tailnet.get("/admin/maintenance").json()
+        assert status["changed_by"] is not None
+        assert status["operation"]["epoch"] == 1
+        assert status["operation"]["kind"] == "enter"
         # ...and loses the models, like everybody else.
         chat = post(
             tailnet,
@@ -227,6 +239,14 @@ def test_an_administrator_closes_keeps_management_and_loses_the_models(
         actions = [entry["action"] for entry in entries]
         assert "maintenance.entered" in actions
         assert "maintenance.reopened" in actions
+
+
+def test_entering_is_refused_without_node_agents_and_nothing_closes(deployment: None) -> None:
+    with tailnet_client() as tailnet:
+        refused = post(tailnet, "/admin/maintenance/enter", json={})
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["code"] == "maintenance_unsupported"
+        assert tailnet.get("/admin/maintenance").json()["closed"] is False
 
 
 def test_entering_is_refused_while_the_feature_is_off(deployment: None) -> None:

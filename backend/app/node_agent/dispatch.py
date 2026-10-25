@@ -301,6 +301,10 @@ class Dispatcher:
         return len(self._admitted)
 
     @property
+    def admitted_ops(self) -> list[str]:
+        return sorted(self._admitted)
+
+    @property
     def frozen_epoch(self) -> int | None:
         return self._frozen_epoch
 

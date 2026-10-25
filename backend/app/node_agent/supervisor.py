@@ -50,26 +50,52 @@ class Supervisor:
     def available(self) -> bool:
         return self._requests.is_dir() and self._receipts.is_dir()
 
-    async def run(self, action: str, reason: str) -> dict[str, Any]:
-        """The supervisor's receipt for `action`, or `SupervisorRefused`."""
+    async def run(
+        self, action: str, reason: str, *, request_id: str | None = None
+    ) -> dict[str, Any]:
+        """The supervisor's receipt for `action`, or `SupervisorRefused`.
+
+        A caller that names the request (the maintenance coordinator, P4 on
+        #61) can ask again after a timeout or a restart and get the same
+        request's answer: an existing receipt is returned, and a request the
+        supervisor already holds is waited for rather than written twice.
+        """
         if action not in ACTIONS:
             raise ValueError(f"action must be one of {ACTIONS}")
+        if request_id is not None and not _ID.fullmatch(request_id):
+            raise ValueError("request_id must be 32 lowercase hex characters")
         if not self.available:
             raise SupervisorRefused("the runtime supervisor's directories are not mounted")
-        request_id = secrets.token_hex(16)
-        document = {"request_id": request_id, "action": action, "reason": reason[:200]}
+        request_id = request_id or secrets.token_hex(16)
         request = self._requests / f"{request_id}.json"
-        staging = self._requests / f".{request_id}.tmp"
-        try:
-            staging.write_text(json.dumps(document))
-            os.replace(staging, request)
-        except OSError as exc:
-            raise SupervisorRefused(f"cannot write a supervisor request: {exc}") from exc
+        existing = self.receipt(request_id)
+        if existing is not None:
+            return self._checked(existing, request_id, action)
+        if not request.exists() and not (self._requests / f".{request_id}.claimed").exists():
+            document = {"request_id": request_id, "action": action, "reason": reason[:200]}
+            staging = self._requests / f".{request_id}.tmp"
+            try:
+                staging.write_text(json.dumps(document))
+                os.replace(staging, request)
+            except OSError as exc:
+                raise SupervisorRefused(f"cannot write a supervisor request: {exc}") from exc
+        claimed = self._requests / f".{request_id}.claimed"
         deadline = time.monotonic() + self._timeout
         while time.monotonic() < deadline:
             receipt = self.receipt(request_id)
             if receipt is not None:
                 return self._checked(receipt, request_id, action)
+            if not request.exists() and not claimed.exists():
+                # The supervisor renames before it runs and removes the claim
+                # only after the receipt, so neither file and no receipt means
+                # the agent withdrew it (`withdraw`): it will never run.
+                receipt = self.receipt(request_id)
+                if receipt is not None:
+                    return self._checked(receipt, request_id, action)
+                raise SupervisorRefused(
+                    f"request {request_id} was withdrawn before the supervisor took it",
+                    request_id=request_id,
+                )
             await asyncio.sleep(self._poll)
         try:
             request.unlink()
@@ -85,6 +111,33 @@ class Supervisor:
             f"the runtime supervisor did not answer; request {request_id} was withdrawn",
             request_id=request_id,
         )
+
+    def outstanding(self) -> tuple[list[str], list[str]]:
+        """Requests not yet answered: those the supervisor has not taken, and
+        those it has taken and may be running now (review of #80)."""
+        if not self.available:
+            return [], []
+        waiting, running = [], []
+        for path in self._requests.iterdir():
+            name = path.name
+            if name.endswith(".json") and _ID.fullmatch(name.removesuffix(".json")):
+                waiting.append(name.removesuffix(".json"))
+            elif name.startswith(".") and name.endswith(".claimed"):
+                request_id = name[1:].removesuffix(".claimed")
+                if _ID.fullmatch(request_id) and self.receipt(request_id) is None:
+                    running.append(request_id)
+        return sorted(waiting), sorted(running)
+
+    def withdraw(self, request_id: str) -> bool:
+        """Remove a request the supervisor has not taken. False if it already
+        has, in which case it may be running."""
+        if not _ID.fullmatch(request_id):
+            return False
+        try:
+            (self._requests / f"{request_id}.json").unlink()
+        except FileNotFoundError:
+            return False
+        return True
 
     def receipt(self, request_id: str) -> dict[str, Any] | None:
         if not _ID.fullmatch(request_id):

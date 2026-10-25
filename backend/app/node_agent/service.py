@@ -91,8 +91,31 @@ class Agent:
         if closed and (not self.dispatcher.frozen or self.dispatcher.frozen_epoch != epoch):
             await self.dispatcher.freeze(epoch)
         elif not closed and self.dispatcher.frozen:
+            if not await self.runtime_quiet_for_serving():
+                return
             state = await self.dispatcher.thaw()
             logger.info("maintenance hold lifted; gate %s", state.value)
+
+    async def runtime_quiet_for_serving(self) -> bool:
+        """Whether no runtime stop or restart can still happen (review of #80).
+
+        A request the supervisor has not taken is withdrawn, so it never runs.
+        One it has taken may be stopping the runtime now: the node is not
+        served until its receipt is written, however the hold or an operator
+        asks, because traffic sent meanwhile would be cut off.
+        """
+        waiting, _ = self.supervisor.outstanding()
+        for request_id in waiting:
+            if self.supervisor.withdraw(request_id):
+                logger.warning("withdrew runtime request %s before serving", request_id)
+                await self.store.audit(
+                    "runtime_control_withdrawn", None, {"request_id": request_id}
+                )
+        _, running = self.supervisor.outstanding()
+        if running:
+            logger.warning("not serving until runtime request(s) %s finish", running)
+            return False
+        return True
 
     async def _recheck_drain(self) -> None:
         # Apart from the lock checks: a database error here is the reason a

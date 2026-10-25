@@ -283,3 +283,229 @@ async def test_a_failed_supervised_restart_keeps_the_block(agent: dict[str, Any]
     op = await agent["store"].observe("orphan")
     assert op is not None and op.state == "outcome_unknown"
     assert agent["dispatcher"].state is not GateState.SERVING
+
+
+# -- the maintenance reset (P4 on #61) ----------------------------------------
+
+
+def _supervisor(tmp_path: Path, *, timeout_s: float = 2.0) -> Any:
+    from app.node_agent.supervisor import Supervisor
+
+    requests, receipts = tmp_path / "sv-requests", tmp_path / "sv-receipts"
+    requests.mkdir(exist_ok=True)
+    receipts.mkdir(exist_ok=True)
+    return Supervisor(requests, receipts, timeout_s=timeout_s, poll_s=0.01)
+
+
+async def _restarting_supervisor(
+    tmp_path: Path, witness: FakeWitness, *, answers: int = 1
+) -> list[str]:
+    """The host supervisor: claim each request, restart (a new runtime
+    instance the witness then reports), write the receipt."""
+    requests, receipts = tmp_path / "sv-requests", tmp_path / "sv-receipts"
+    seen: list[str] = []
+    while len(seen) < answers:
+        for path in list(requests.iterdir()):
+            if path.name.endswith(".json"):
+                request = json.loads(path.read_text())
+                path.rename(requests / f".{request['request_id']}.claimed")
+                witness.instance = (witness.instance[0] + 100, f"restart {len(seen)}")
+                receipt = {**request, "result": "ok", "error": None, "steps": []}
+                (receipts / path.name).write_text(json.dumps(receipt))
+                seen.append(request["request_id"])
+        await asyncio.sleep(0.01)
+    return seen
+
+
+async def _close_hold(pool: asyncpg.Pool, epoch: int) -> None:
+    await pool.execute(
+        "UPDATE maintenance_control SET admission_closed = true, phase = 'maintenance', "
+        "epoch = $1 WHERE id = 1",
+        epoch,
+    )
+
+
+async def _events(pool: asyncpg.Pool, event: str) -> int:
+    count: int = await pool.fetchval(
+        "SELECT count(*) FROM node_operation_audit WHERE event = $1", event
+    )
+    return count
+
+
+async def test_a_maintenance_reset_resolves_the_unknowns_and_does_not_reopen(
+    agent: dict[str, Any], tmp_path: Path
+) -> None:
+    supervisor = _supervisor(tmp_path)
+    await _close_hold(agent["pool"], 7)
+    await agent["dispatcher"].freeze(7)
+    answering = asyncio.create_task(_restarting_supervisor(tmp_path, agent["witness"]))
+    reset_id = "a" * 32
+
+    report = await agent["resolutions"].maintenance_reset(
+        epoch=7,
+        reset_id=reset_id,
+        operator="maintenance coordinator",
+        supervisor=supervisor,
+        settle_s=2,
+        retry_s=0.05,
+    )
+    await answering
+
+    assert report["accounting"] == "resolved"
+    assert report["resolved"] == ["orphan"] and report["remaining_unknown"] == []
+    assert report["baseline"]["pid"] != report["after"]["pid"]
+    orphan = await agent["store"].observe("orphan")
+    assert orphan is not None and orphan.state == "failed"
+    assert agent["dispatcher"].state is GateState.MAINTENANCE, "frozen, not reopened"
+
+    again = await agent["resolutions"].maintenance_reset(
+        epoch=7,
+        reset_id=reset_id,
+        operator="maintenance coordinator",
+        supervisor=supervisor,
+        settle_s=2,
+        retry_s=0.05,
+    )
+    assert again == report
+    assert await _events(agent["pool"], "maintenance_reset_receipt") == 1, "one restart"
+
+
+async def test_without_a_witness_the_runtime_is_released_and_the_unknown_kept(
+    agent: dict[str, Any], tmp_path: Path
+) -> None:
+    supervisor = _supervisor(tmp_path)
+    agent["witness"].answering = False
+    await _close_hold(agent["pool"], 7)
+    await agent["dispatcher"].freeze(7)
+    answering = asyncio.create_task(_restarting_supervisor(tmp_path, agent["witness"]))
+
+    report = await agent["resolutions"].maintenance_reset(
+        epoch=7,
+        reset_id="b" * 32,
+        operator="c",
+        supervisor=supervisor,
+        settle_s=0.2,
+        retry_s=0.05,
+    )
+    await answering
+
+    assert report["supervisor_receipt"]["result"] == "ok"
+    assert report["accounting"] == "unresolved"
+    assert report["remaining_unknown"] == ["orphan"]
+    assert "witness" in (report["accounting_error"] or "")
+    orphan = await agent["store"].observe("orphan")
+    assert orphan is not None and orphan.state == "outcome_unknown"
+
+
+async def test_a_reset_resumes_from_its_recorded_baseline_after_an_agent_restart(
+    agent: dict[str, Any], tmp_path: Path
+) -> None:
+    """The first call recorded its baseline and then lost the supervisor; a
+    later agent asked again with the same id restarts once, against that
+    baseline, rather than taking a new one."""
+    from app.node_agent.supervisor import SupervisorRefused
+
+    await _close_hold(agent["pool"], 7)
+    await agent["dispatcher"].freeze(7)
+    reset_id = "c" * 32
+    with pytest.raises(SupervisorRefused):
+        await agent["resolutions"].maintenance_reset(
+            epoch=7,
+            reset_id=reset_id,
+            operator="c",
+            supervisor=_supervisor(tmp_path, timeout_s=0.1),
+            settle_s=1,
+            retry_s=0.05,
+        )
+    assert await _events(agent["pool"], "maintenance_reset_baseline") == 1
+
+    restarted = Resolutions(agent["dispatcher"], agent["store"], agent["resolutions"]._witness)
+    answering = asyncio.create_task(_restarting_supervisor(tmp_path, agent["witness"]))
+    report = await restarted.maintenance_reset(
+        epoch=7,
+        reset_id=reset_id,
+        operator="c",
+        supervisor=_supervisor(tmp_path),
+        settle_s=2,
+        retry_s=0.05,
+    )
+    assert await answering == [reset_id]
+
+    assert report["accounting"] == "resolved"
+    assert await _events(agent["pool"], "maintenance_reset_baseline") == 1
+
+
+async def test_a_reset_for_a_hold_reopened_meanwhile_restarts_nothing(
+    agent: dict[str, Any], tmp_path: Path
+) -> None:
+    supervisor = _supervisor(tmp_path)
+    await agent["dispatcher"].freeze(7)  # the hold itself is open
+
+    with pytest.raises(ResolutionRefused, match="no longer closed"):
+        await agent["resolutions"].maintenance_reset(
+            epoch=7, reset_id="d" * 32, operator="c", supervisor=supervisor
+        )
+    assert list((tmp_path / "sv-requests").iterdir()) == []
+
+
+async def test_an_unknown_sent_after_the_baseline_is_not_resolved_by_it(
+    agent: dict[str, Any], tmp_path: Path
+) -> None:
+    """Review of #80: work admitted after a reopen can be unknown by the time
+    the restart is attested. The restart says nothing about the runtime it
+    reached, so only the baseline's cohort is resolved."""
+    supervisor = _supervisor(tmp_path)
+    await _close_hold(agent["pool"], 7)
+    await agent["dispatcher"].freeze(7)
+    store = agent["store"]
+
+    async def later_unknown_then_restart() -> None:
+        requests = tmp_path / "sv-requests"
+        while not any(p.name.endswith(".json") for p in requests.iterdir()):
+            await asyncio.sleep(0.01)
+        await agent["pool"].execute(
+            "INSERT INTO node_operations (node_id, op_id, kind, state, origin_generation, "
+            "origin_boot_id, owner_generation, submitted_at) VALUES "
+            "($1, 'later', 'inference', 'outcome_unknown', $2, 'a-later-boot', $2, now())",
+            NODE,
+            store.ownership.generation,
+        )
+        await _restarting_supervisor(tmp_path, agent["witness"])
+
+    answering = asyncio.create_task(later_unknown_then_restart())
+    report = await agent["resolutions"].maintenance_reset(
+        epoch=7, reset_id="e" * 32, operator="c", supervisor=supervisor, settle_s=2, retry_s=0.05
+    )
+    await answering
+
+    assert report["resolved"] == ["orphan"]
+    assert report["remaining_unknown"] == ["later"]
+    assert report["accounting"] == "unresolved"
+    later = await store.observe("later")
+    assert later is not None and later.state == "outcome_unknown"
+
+
+async def test_a_hold_lifted_during_the_reset_resolves_nothing(
+    agent: dict[str, Any], tmp_path: Path
+) -> None:
+    supervisor = _supervisor(tmp_path)
+    await _close_hold(agent["pool"], 7)
+    await agent["dispatcher"].freeze(7)
+
+    async def reopen_then_restart() -> None:
+        requests = tmp_path / "sv-requests"
+        while not any(p.name.endswith(".json") for p in requests.iterdir()):
+            await asyncio.sleep(0.01)
+        await agent["pool"].execute(
+            "UPDATE maintenance_control SET admission_closed = false WHERE id = 1"
+        )
+        await _restarting_supervisor(tmp_path, agent["witness"])
+
+    answering = asyncio.create_task(reopen_then_restart())
+    report = await agent["resolutions"].maintenance_reset(
+        epoch=7, reset_id="f" * 32, operator="c", supervisor=supervisor, settle_s=2, retry_s=0.05
+    )
+    await answering
+
+    assert report["resolved"] == [] and report["accounting"] == "unresolved"
+    assert "lifted" in (report["accounting_error"] or "")

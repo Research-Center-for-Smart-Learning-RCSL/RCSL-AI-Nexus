@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.domain.entities.maintenance import MaintenanceState
+from app.domain.entities.maintenance_operation import (
+    MaintenanceOperation,
+    NodeStep,
+    OperationStatus,
+    StepPhase,
+)
 
 
 class MaintenanceRepositoryPort(Protocol):
@@ -33,3 +39,44 @@ class MaintenanceRepositoryPort(Protocol):
     ) -> MaintenanceState | None:
         """None if the revision moved since the caller read it."""
         ...
+
+
+class MaintenanceOperationsPort(Protocol):
+    """What an entry does to each node (P4); see `maintenance_operation.py`."""
+
+    async def create_entry(
+        self, *, epoch: int, requested_by: str, node_ids: list[str]
+    ) -> MaintenanceOperation: ...
+
+    async def get(self, operation_id: str) -> MaintenanceOperation | None: ...
+
+    async def latest(self) -> MaintenanceOperation | None: ...
+
+    async def claim(self, *, owner: str, lease_s: float) -> MaintenanceOperation | None: ...
+
+    async def renew(self, operation_id: str, *, owner: str, lease_s: float) -> bool: ...
+
+    async def advance(
+        self, step: NodeStep, *, owner: str, phase: StepPhase, **values: Any
+    ) -> bool: ...
+
+    async def set_reset_id(self, step: NodeStep, *, owner: str, reset_id: str) -> bool: ...
+
+    async def attempt_failed(
+        self,
+        step: NodeStep,
+        *,
+        owner: str,
+        error: str,
+        max_attempts: int,
+        clear_reset_id: bool = False,
+        final: bool = False,
+    ) -> NodeStep | None: ...
+
+    async def finish(
+        self, operation_id: str, *, owner: str, status: OperationStatus, error: str | None = None
+    ) -> bool: ...
+
+    async def abandon_running(self, reason: str) -> list[str]: ...
+
+    async def retry(self, operation_id: str) -> bool: ...

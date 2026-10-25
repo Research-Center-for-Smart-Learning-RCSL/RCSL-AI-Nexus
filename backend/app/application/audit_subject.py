@@ -25,6 +25,9 @@ UNKNOWN_ACTOR_ID = "unknown"
 RESIDENCY_RECONCILER_ID = "residency-reconciler"
 """The control-plane loop that restores desired residency (#49). Not a uuid."""
 
+MAINTENANCE_COORDINATOR_ID = "maintenance-coordinator"
+"""The loop that carries a maintenance entry out on every node (#61). Not a uuid."""
+
 
 def subject_for(user: User) -> Actor:
     """The account holder, acting on their own account.
@@ -103,6 +106,23 @@ def reconciler_subject() -> Actor:
     return Actor(
         id=RESIDENCY_RECONCILER_ID,
         display="residency reconciler",
+        role=Role.OPERATOR,
+        source="tailnet",
+        scopes=frozenset(),
+    )
+
+
+def maintenance_coordinator_subject() -> Actor:
+    """The maintenance coordinator, for the audit rows of each node it clears.
+
+    The administrator who entered maintenance is recorded on the entry's own
+    row and on the operation; what follows is the coordinator's conduct, and
+    is attributed to it rather than to someone who did not do it. No scopes,
+    like every subject here.
+    """
+    return Actor(
+        id=MAINTENANCE_COORDINATOR_ID,
+        display="maintenance coordinator",
         role=Role.OPERATOR,
         source="tailnet",
         scopes=frozenset(),

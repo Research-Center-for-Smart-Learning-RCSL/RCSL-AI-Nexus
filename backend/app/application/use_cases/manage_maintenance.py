@@ -1,15 +1,19 @@
-"""Closing and reopening the platform (#61), the access half.
+"""Closing and reopening the platform (#61).
 
-What this closes today: every entrance refuses everyone except platform
+What an entry closes at once: every entrance refuses everyone except platform
 administrators, every non-admin local session dies, API keys and every
 inference path (administrators' included) answer 503 `maintenance`, and the
-residency reconciler stands down. What it does not yet do is stop work that
-was already running in the runtime when the hold landed, or release and later
-restore the resident models; those are the coordinator and host supervisor
-of #61's later packages. That gap is why entering is behind
-`maintenance_enabled`, which is off until they exist and have passed on the
-host: a hold that cannot interrupt is not the maintenance #61 asks for, and
-must not be offered as one.
+residency reconciler stands down. In the same transaction it records an
+operation with one step per node, which the maintenance coordinator in the
+tailnet admin then carries out: interrupt, snapshot, reset and verify every
+runtime empty (P4, `maintenance_coordinator.py`). Restoring the snapshot
+before reopening is P5, and until it exists and has passed on the host,
+entering stays behind `maintenance_enabled`: a hold that cannot bring the
+models back is not the maintenance #61 asks for.
+
+An entry is refused before anything closes if any node is reached without an
+agent: that runtime could not be interrupted or released, and the platform
+would be closed to users while it kept working.
 
 Entering and reopening are idempotent rather than conditional on a revision.
 A second press of either button, from the same administrator or another, finds
@@ -24,13 +28,19 @@ from datetime import datetime
 from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.entities.audit import AuditAction
 from app.domain.entities.maintenance import MAX_MESSAGE_LENGTH, MaintenanceState
+from app.domain.entities.maintenance_operation import MaintenanceOperation, OperationStatus
 from app.domain.exceptions import (
     MaintenanceDisabledError,
     MaintenanceError,
     MaintenanceStateConflictError,
+    MaintenanceUnsupportedError,
     NotAuthorizedError,
 )
-from app.domain.ports.repositories import MaintenanceRepositoryPort
+from app.domain.ports.repositories import (
+    MaintenanceOperationsPort,
+    MaintenanceRepositoryPort,
+    NodeRepositoryPort,
+)
 from app.domain.ports.security_ports import AuditPort, AuthorizationPort
 
 
@@ -42,11 +52,17 @@ class ManageMaintenance:
         audit: AuditPort,
         *,
         enabled: bool,
+        operations: MaintenanceOperationsPort | None = None,
+        nodes: NodeRepositoryPort | None = None,
+        agents_enabled: bool = False,
     ) -> None:
         self._maintenance = maintenance
         self._authz = authz
         self._audit = audit
         self._enabled = enabled
+        self._operations = operations
+        self._nodes = nodes
+        self._agents_enabled = agents_enabled
 
     async def public_status(self) -> MaintenanceState:
         """No actor: this is what the maintenance page polls. The router
@@ -57,12 +73,28 @@ class ManageMaintenance:
         self._require(actor, Scope.MAINTENANCE_READ)
         return await self._maintenance.read()
 
+    async def operation(self, actor: Actor) -> MaintenanceOperation | None:
+        """The latest entry and how far each node has got. Privileged: it
+        names the nodes and the models they held."""
+        self._require(actor, Scope.MAINTENANCE_READ)
+        if self._operations is None:
+            return None
+        return await self._operations.latest()
+
     async def enter(
         self, actor: Actor, *, message: str | None, expected_return_at: datetime | None
     ) -> MaintenanceState:
         self._require(actor, Scope.MAINTENANCE_WRITE)
         if not self._enabled:
             raise MaintenanceDisabledError(detail="MAINTENANCE_ENABLED is off")
+        if self._operations is None or self._nodes is None or not self._agents_enabled:
+            raise MaintenanceUnsupportedError(
+                detail="maintenance needs node agents: NODE_AGENT_ENABLED is off"
+            )
+        nodes = await self._nodes.list_all()
+        direct = sorted(n.name for n in nodes if not n.agent_url)
+        if direct:
+            raise MaintenanceUnsupportedError(detail=f"nodes without an agent: {direct}")
 
         closed = await self._maintenance.close(
             changed_by=actor.id,
@@ -72,13 +104,49 @@ class ManageMaintenance:
         if closed is None:
             return await self._maintenance.read()
 
+        operation = await self._operations.create_entry(
+            epoch=closed.epoch, requested_by=actor.id, node_ids=[n.id for n in nodes]
+        )
         await self._audit.record(
             actor,
             AuditAction.MAINTENANCE_ENTERED,
             target="platform",
-            detail={"epoch": str(closed.epoch)},
+            detail={
+                "epoch": str(closed.epoch),
+                "operation": operation.id,
+                "nodes": str(len(nodes)),
+            },
         )
         return closed
+
+    async def retry(self, actor: Actor) -> MaintenanceOperation:
+        """Run a failed entry's failed steps again from where they stopped.
+
+        Only the latest entry, and only while the hold it was made under is
+        still closed: retrying an entry for a platform since reopened would
+        release runtimes nobody asked to release.
+        """
+        self._require(actor, Scope.MAINTENANCE_WRITE)
+        operations = self._operations
+        if operations is None:
+            raise MaintenanceStateConflictError(detail="there is no failed entry to retry")
+        operation = await operations.latest()
+        if operation is None or operation.status is not OperationStatus.FAILED:
+            raise MaintenanceStateConflictError(detail="there is no failed entry to retry")
+        state = await self._maintenance.read()
+        if not state.admission_closed or state.epoch != operation.epoch:
+            raise MaintenanceStateConflictError(
+                detail=f"the entry was for epoch {operation.epoch}, and that hold is not current"
+            )
+        if not await operations.retry(operation.id):
+            raise MaintenanceStateConflictError(detail="the entry is no longer failed")
+        await self._audit.record(
+            actor,
+            AuditAction.MAINTENANCE_RETRIED,
+            target="platform",
+            detail={"epoch": str(operation.epoch), "operation": operation.id},
+        )
+        return await operations.get(operation.id) or operation
 
     async def reopen(self, actor: Actor) -> MaintenanceState:
         self._require(actor, Scope.MAINTENANCE_WRITE)
@@ -86,11 +154,19 @@ class ManageMaintenance:
         if opened is None:
             return await self._maintenance.read()
 
+        # Never refused, so a hold can always be lifted, even one whose entry
+        # never finished; but an entry still releasing runtimes must stop
+        # with it, or it could restart a runtime the platform is serving on.
+        abandoned = (
+            await self._operations.abandon_running("the platform was reopened")
+            if self._operations is not None
+            else []
+        )
         await self._audit.record(
             actor,
             AuditAction.MAINTENANCE_REOPENED,
             target="platform",
-            detail={"epoch": str(opened.epoch)},
+            detail={"epoch": str(opened.epoch), "abandoned": ",".join(abandoned)},
         )
         return opened
 

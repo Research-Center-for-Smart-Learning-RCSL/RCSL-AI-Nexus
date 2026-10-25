@@ -78,6 +78,7 @@ from .maintenance import (
     MaintenanceDisabledError,
     MaintenanceError,
     MaintenanceStateConflictError,
+    MaintenanceUnsupportedError,
 )
 from .retention_evaluations import (
     EvaluationRunNotFoundError,
@@ -158,4 +159,5 @@ __all__ = [
     "MaintenanceError",
     "MaintenanceStateConflictError",
     "MaintenanceDisabledError",
+    "MaintenanceUnsupportedError",
 ]

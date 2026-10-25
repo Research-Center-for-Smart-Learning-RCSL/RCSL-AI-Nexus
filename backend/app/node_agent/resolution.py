@@ -255,3 +255,169 @@ class Resolutions:
                     self._pending.pop(resolution_id, None)
                     raise
                 await asyncio.sleep(retry_s)
+
+    async def maintenance_reset(
+        self,
+        *,
+        epoch: int,
+        reset_id: str,
+        operator: str,
+        supervisor: Supervisor,
+        settle_s: float = 60.0,
+        retry_s: float = 2.0,
+    ) -> dict[str, Any]:
+        """Restart the runtime empty for a maintenance entry, and clear what
+        the restart proves gone (P4 on #61).
+
+        The caller has frozen the gate for `epoch` and found no sender left,
+        which is steps 1 and 2 of the ordered evidence for every operation on
+        the node at once. Then the same baseline, supervised restart and
+        second answer as `reset`, and every `outcome_unknown` whose sender is
+        gone is resolved on that evidence. The gate is not reopened: it stays
+        frozen until the platform's hold lifts.
+
+        Named by the caller and resumable. The baseline, the receipt and the
+        outcome are written to the audit under `reset_id` as they happen, and
+        the supervisor request carries the same id, so asking again after a
+        timeout or an agent restart continues from what was recorded and
+        never restarts the runtime twice. A restart the witness could not
+        attest still releases the runtime; it only leaves the unknowns, and
+        the report says `accounting: unresolved` and why.
+        """
+        done = await self._store.audited("maintenance_reset_done", reset_id)
+        if done is not None:
+            return done
+
+        recorded = await self._store.audited("maintenance_reset_baseline", reset_id)
+        baseline: Attestation | None = None
+        unwitnessed: str | None = None
+        # The operations this reset can speak for: unknown, or still settling,
+        # when the baseline was taken with no sender left. Anything sent after
+        # it reached a runtime this restart may not have ended (review of #80).
+        cohort: list[str] = []
+        if recorded is not None:
+            baseline = Attestation(**recorded["baseline"])
+            cohort = [str(op) for op in recorded.get("cohort") or []]
+        elif supervisor.receipt(reset_id) is not None:
+            unwitnessed = "the runtime restarted before a witness baseline was recorded"
+        else:
+            cohort = sorted(
+                set(await self._store.unknown_ops()) | set(self._dispatcher.admitted_ops)
+            )
+            try:
+                baseline = await self._witness.attest()
+            except ResolutionRefused as exc:
+                unwitnessed = str(exc)
+            else:
+                await self._store.audit(
+                    "maintenance_reset_baseline",
+                    None,
+                    {
+                        "reset_id": reset_id,
+                        "epoch": epoch,
+                        "operator": operator,
+                        "baseline": asdict(baseline),
+                        "cohort": cohort,
+                    },
+                )
+
+        if supervisor.receipt(reset_id) is None:
+            # Read again just before the restart: the platform may have been
+            # reopened while the baseline was taken, and a restart then would
+            # cut off work the platform is serving.
+            closed, current = await self._store.maintenance_hold()
+            if not closed or current != epoch:
+                raise ResolutionRefused(f"the hold for epoch {epoch} is no longer closed")
+        receipt = await supervisor.run(
+            "restart", f"{operator}: maintenance epoch {epoch}", request_id=reset_id
+        )
+        await self._store.audit(
+            "maintenance_reset_receipt", None, {"reset_id": reset_id, "receipt": receipt}
+        )
+        if receipt.get("result") != "ok":
+            raise ResetFailed(receipt)
+
+        after: Attestation | None = None
+        if baseline is not None:
+            after, unwitnessed = await self._after(baseline, settle_s=settle_s, retry_s=retry_s)
+
+        resolved: list[str] = []
+        if after is not None and baseline is not None:
+            closed, current = await self._store.maintenance_hold()
+            if not closed or current != epoch or self._dispatcher.frozen_epoch != epoch:
+                # Work admitted after a reopen may be unknown now too, and
+                # the cohort alone cannot tell this restart covered the
+                # runtime it reached: resolve nothing.
+                after, unwitnessed = None, "the hold was lifted during the reset"
+        if after is not None and baseline is not None:
+            unknown_now = set(await self._store.unknown_ops())
+            for op_id in [op for op in cohort if op in unknown_now]:
+                operation = await self._store.observe(op_id)
+                if operation is None or self._dispatcher.holds(op_id):
+                    continue
+                evidence = {
+                    "reset_id": reset_id,
+                    "maintenance_epoch": epoch,
+                    "operator": operator,
+                    "sender": (
+                        "earlier agent; this agent holds the host lock"
+                        if operation.origin_boot_id != self._store.ownership.boot_id
+                        else "this agent; its task for the operation has ended"
+                    ),
+                    "baseline": asdict(baseline),
+                    "after": asdict(after),
+                    "supervisor_receipt": receipt,
+                    "resolver_generation": self._store.ownership.generation,
+                    "resolver_boot_id": self._store.ownership.boot_id,
+                }
+                if await self._store.resolve_unknown(op_id, evidence):
+                    resolved.append(op_id)
+
+        remaining = await self._store.unknown_ops()
+        # Admitted work still settling is an unknown not yet committed, which
+        # the database cannot list; the node is not reconciled until it lands.
+        settling = self._dispatcher.admitted
+        report: dict[str, Any] = {
+            "reset_id": reset_id,
+            "epoch": epoch,
+            "operator": operator,
+            "supervisor_receipt": receipt,
+            "baseline": asdict(baseline) if baseline is not None else None,
+            "after": asdict(after) if after is not None else None,
+            "resolved": resolved,
+            "remaining_unknown": remaining,
+            "settling": settling,
+            "accounting": "resolved" if not remaining and not settling else "unresolved",
+            "accounting_error": unwitnessed if remaining or settling else None,
+        }
+        await self._store.audit("maintenance_reset_done", None, report)
+        return report
+
+    async def _after(
+        self, baseline: Attestation, *, settle_s: float, retry_s: float
+    ) -> tuple[Attestation | None, str | None]:
+        """The second answer, retried while the new daemon starts listening."""
+        deadline = time.monotonic() + settle_s
+        while True:
+            try:
+                after = await self._witness.attest()
+            except ResolutionRefused as exc:
+                reason = str(exc)
+            else:
+                if after.incarnation != baseline.incarnation:
+                    return None, "the witness restarted since the baseline"
+                if after.seq > baseline.seq and after.instance != baseline.instance:
+                    return after, None
+                reason = (
+                    "the witness does not see a new runtime instance "
+                    f"(pid {after.pid}, started {after.start_time})"
+                )
+            if time.monotonic() >= deadline:
+                return None, reason
+            await asyncio.sleep(retry_s)
+
+
+class ResetFailed(Exception):  # noqa: N818 - the supervisor's answer, reported as such
+    def __init__(self, receipt: dict[str, Any]) -> None:
+        super().__init__(f"the runtime supervisor could not restart: {receipt.get('error')}")
+        self.receipt = receipt

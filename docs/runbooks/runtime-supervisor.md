@@ -46,12 +46,15 @@ sudo launchd/install-daemons.sh --reload runtime-supervisor
 - **Control token.** `secrets/node_agent_control_token` is new.
   - It must be different from `secrets/node_agent_token`. The agent refuses to
     start if the two are the same.
-  - Only the agent mounts it. The gateway never does.
+  - The agent and `admin-tailnet` mount it: the tailnet admin's maintenance
+    coordinator interrupts and resets the runtime with it (P4 on #61). The
+    gateway and `admin-public` never do.
   - The `drain`, `resume` and resolution routes moved to this token, and so did
     the resolve CLI.
-- **Recreate the agent.** It reads secrets and mounts only when it is created:
+- **Recreate the agent and the tailnet admin.** Both read secrets and mounts
+  only when they are created:
   ```sh
-  docker compose up -d --no-deps node-agent
+  docker compose up -d --no-deps node-agent admin-tailnet
   ```
 
 ## Check

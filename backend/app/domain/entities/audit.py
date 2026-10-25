@@ -93,6 +93,19 @@ class AuditAction(StrEnum):
     measured against."""
     MAINTENANCE_REOPENED = "maintenance.reopened"
     MAINTENANCE_MESSAGE_SET = "maintenance.message_set"
+    MAINTENANCE_RETRIED = "maintenance.retried"
+    """An administrator retried a failed entry from the steps it reached."""
+    MAINTENANCE_NODE_CLEARED = "maintenance.node_cleared"
+    """The coordinator verified a node empty after its reset (P4 on #61). The
+    detail names the snapshot it saved and whether the node's unknowns were
+    resolved."""
+    MAINTENANCE_NODE_FAILED = "maintenance.node_failed"
+    MAINTENANCE_ENTRY_CLEARED = "maintenance.entry_cleared"
+    """Every node of an entry was interrupted, snapshotted, reset and verified
+    empty. The platform is still closed: this is the resources released, not
+    the platform reopened."""
+    MAINTENANCE_ENTRY_FAILED = "maintenance.entry_failed"
+    MAINTENANCE_ENTRY_ABANDONED = "maintenance.entry_abandoned"
 
     NODE_REGISTERED = "node.registered"
     NODE_UPDATED = "node.updated"
