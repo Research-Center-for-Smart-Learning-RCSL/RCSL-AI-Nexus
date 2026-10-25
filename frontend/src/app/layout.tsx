@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 
 import './globals.css';
+import { MaintenanceProvider } from '@/lib/maintenance';
 import { QueryProvider } from '@/lib/query-provider';
 import { SessionProvider } from '@/lib/session';
 import { ThemeProvider } from '@/lib/theme-provider';
@@ -25,7 +26,9 @@ export const metadata: Metadata = {
  * (frontend.md section 1). All data fetching happens in client components.
  *
  * SessionProvider sits here rather than in the dashboard group because the auth
- * screens also need to know when a session already exists.
+ * screens also need to know when a session already exists. MaintenanceProvider
+ * sits outside it: whether the platform is closed (#61) is answered without an
+ * identity, and decides what an identity is allowed to see.
  */
 export default function RootLayout({
   children,
@@ -39,7 +42,9 @@ export default function RootLayout({
       <body className="flex min-h-full flex-col">
         <ThemeProvider>
           <QueryProvider>
-            <SessionProvider>{children}</SessionProvider>
+            <MaintenanceProvider>
+              <SessionProvider>{children}</SessionProvider>
+            </MaintenanceProvider>
             <Toaster />
           </QueryProvider>
         </ThemeProvider>

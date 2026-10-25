@@ -9,7 +9,7 @@ import {
 } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { api, isUnauthorized } from '@/lib/api-client';
+import { api, isMaintenance, isUnauthorized } from '@/lib/api-client';
 
 import { SessionContext } from './context';
 import { fetchMe, ME_QUERY_KEY } from './query';
@@ -27,11 +27,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     queryKey: ME_QUERY_KEY,
     queryFn: fetchMe,
     retry: (failureCount, error) =>
-      !isUnauthorized(error) && failureCount < 2,
+      !isUnauthorized(error) && !isMaintenance(error) && failureCount < 2,
     staleTime: 60_000,
     refetchOnWindowFocus: true,
   });
-  const { data, error, isPending } = query;
+  const { error, isPending } = query;
+  // A `/me` refused with `maintenance` means the server no longer admits this
+  // identity under its live role (#61). TanStack Query keeps the last
+  // successful answer beside the error, so that answer is dropped here rather
+  // than left to keep an account that was an administrator in the shell.
+  const data = isMaintenance(error) ? undefined : query.data;
 
   useEffect(() => {
     if (data) rememberAuthMode(data.auth_mode);
@@ -62,7 +67,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     let status: SessionStatus;
     if (data) status = 'authenticated';
     else if (isPending) status = 'loading';
-    else if (isUnauthorized(error)) status = 'unauthenticated';
+    else if (isUnauthorized(error) || isMaintenance(error)) status = 'unauthenticated';
     else if (error) status = 'error';
     else status = 'unauthenticated';
 

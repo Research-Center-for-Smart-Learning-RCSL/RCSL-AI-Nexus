@@ -65,11 +65,11 @@ const session = {
     auth_mode: 'local' as const,
     login: 'someone@example.test',
     display_name: 'Someone',
-    role: 'user' as const,
+    role: 'user' as 'admin' | 'user',
     scopes: [] as ScopeName[] | undefined,
     session_expires_at: null,
   },
-  status: 'authenticated' as const,
+  status: 'authenticated' as 'authenticated' | 'unauthenticated',
   authMode: 'local' as const,
   can: (scope: ScopeName) => (session.me.scopes ?? []).includes(scope),
   error: null,
@@ -85,6 +85,62 @@ vi.mock('@/lib/session', async (importOriginal) => {
     useSessionExpiry: () => ({ msRemaining: null, shouldWarn: false }),
   };
 });
+
+/** The maintenance hold (#61), open unless a test closes it. */
+const OPEN = {
+  closed: false,
+  phase: 'normal',
+  message: null,
+  expected_return_at: null,
+  revision: 0,
+};
+
+export const maintenanceState = {
+  status: OPEN as null | {
+    closed: boolean;
+    phase: string;
+    message: string | null;
+    expected_return_at: string | null;
+    revision: number;
+  },
+  closed: false,
+  unavailable: false,
+  error: null as Error | null,
+  refresh: vi.fn(),
+};
+
+/** The first status read has not answered yet, or (`failed`) never will. */
+export function maintenanceUnknown(failed = false) {
+  maintenanceState.status = null;
+  maintenanceState.closed = false;
+  maintenanceState.unavailable = failed;
+  maintenanceState.error = failed ? new Error('Network unreachable') : null;
+}
+
+vi.mock('@/lib/maintenance', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/maintenance')>();
+  return { ...actual, useMaintenance: () => maintenanceState };
+});
+
+export function closeForMaintenance(message: string | null = 'Upgrading the runtime') {
+  maintenanceState.closed = true;
+  maintenanceState.status = {
+    closed: true,
+    phase: 'maintenance',
+    message,
+    expected_return_at: null,
+    revision: 1,
+  };
+}
+
+/** No session: the public entrance would send this reader to sign in. */
+export function signedOut() {
+  session.status = 'unauthenticated';
+}
+
+export function signedInAs(role: 'admin' | 'user') {
+  session.me.role = role;
+}
 
 /** Every scope the backend defines, so `admin` is expressed as "all of them". */
 // The role map comes from the backend now, not from a copy kept here.
@@ -124,6 +180,12 @@ beforeEach(() => {
   signedInWith(SCOPES.user);
   assistantState.isOpen = false;
   assistantState.setOpen.mockClear();
+  maintenanceState.closed = false;
+  maintenanceState.status = OPEN;
+  maintenanceState.unavailable = false;
+  maintenanceState.error = null;
+  session.me.role = 'user';
+  session.status = 'authenticated';
 });
 
 export function TestAppShell({ children }: { children: ReactNode }) {

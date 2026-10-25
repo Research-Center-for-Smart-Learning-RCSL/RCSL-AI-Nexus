@@ -30,6 +30,7 @@ describe('the links a role can see', () => {
       'Users',
       'Tenants',
       'Retention',
+      'Maintenance',
     ]);
   });
 

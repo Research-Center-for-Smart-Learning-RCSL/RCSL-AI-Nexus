@@ -11,7 +11,7 @@ import { useCallback, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { ApiError } from '@/lib/api-client';
+import { ApiError, isMaintenance } from '@/lib/api-client';
 import { ME_QUERY_KEY } from '@/lib/session';
 import {
   loginWithPassword,
@@ -20,6 +20,7 @@ import {
 } from '@/features/auth/api';
 import {
   CREDENTIALS_REJECTED,
+  MAINTENANCE_SIGN_IN_CLOSED,
   RATE_LIMITED,
   SECOND_FACTOR_REJECTED,
 } from '@/features/auth/messages';
@@ -54,6 +55,7 @@ export function useLogin(redirectTo = '/dashboard') {
    */
   const collapseSecondStep = useCallback((caught: unknown, fallback: string) => {
     if (caught instanceof ApiError && caught.status === 429) return RATE_LIMITED;
+    if (isMaintenance(caught)) return MAINTENANCE_SIGN_IN_CLOSED;
     return fallback;
   }, []);
 

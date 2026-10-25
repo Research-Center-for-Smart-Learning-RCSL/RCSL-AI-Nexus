@@ -1,5 +1,7 @@
 import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 
+import { fulfillOpenMaintenance } from './support/maintenance';
+
 const JSON_HEADERS = { 'content-type': 'application/json' };
 const CSRF_TOKEN = 'csrf-e2e-routing';
 
@@ -76,6 +78,7 @@ async function installAdminApi(page: Page) {
   await page.route('**/admin/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (await fulfillOpenMaintenance(route, url)) return;
 
     if (url.pathname === '/admin/me' && request.method() === 'GET') {
       await json(
