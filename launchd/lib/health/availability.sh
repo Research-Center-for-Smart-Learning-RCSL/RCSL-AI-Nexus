@@ -12,8 +12,16 @@
 # as open, so a broken admin never hides an outage.
 EXPECTED_DURING_MAINTENANCE="NexusCapabilityUnavailable NexusModelResidencyMismatch NexusSilentInferenceOutage"
 
+# A function so the stage's tests can answer for the admin, as they do for
+# Prometheus, instead of reading whatever the machine running them says.
+if ! declare -F maintenance_status_json >/dev/null; then
+  maintenance_status_json() {
+    curl -s -m 5 http://127.0.0.1:8001/admin/maintenance/status 2>/dev/null
+  }
+fi
+
 MAINTENANCE_CLOSED=0
-MAINTENANCE_STATUS="$(curl -s -m 5 http://127.0.0.1:8001/admin/maintenance/status 2>/dev/null)"
+MAINTENANCE_STATUS="$(maintenance_status_json)"
 if [ "$(printf '%s' "$MAINTENANCE_STATUS" | /usr/bin/python3 -c '
 import json, sys
 try:
