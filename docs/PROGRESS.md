@@ -40,6 +40,7 @@ separately at the end, marked as superseded.
 - #61 third package: node-agent promotion reads the maintenance hold under the entry's lock, a frozen gate, the final send barrier and interrupt, a separate control token, and a root supervisor that stops and restarts Ollama
 - Runtime supervisor installed and accepted on the host: a supervised restart ended the daemon and both `llama-server` runners in 0.71 s and started a new daemon in 0.57 s
 - #61 fourth package: the maintenance coordinator interrupts, snapshots, resets and verifies every runtime empty on entry, durable and lease-fenced, with retry
+- #61 fifth package: restore loads each snapshot back largest first under the hold, probes every model, and reopens only in one all-node serving commit
 
 **[2026-10-24](./progress/2026-10-24.md)**
 - #61 first package: a platform-wide maintenance hold that closes every entrance to all but platform administrators, revokes non-admin sessions for good and suspends the reconciler; entering stays disabled until forced interruption and verified restore exist

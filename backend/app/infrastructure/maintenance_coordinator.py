@@ -23,7 +23,10 @@ from app.adapters.persistence.repositories import (
     PostgresNodeRepository,
 )
 from app.adapters.runtime.node_agent_control import NodeAgentControl
-from app.application.audit_subject import maintenance_coordinator_subject
+from app.application.audit_subject import (
+    MAINTENANCE_COORDINATOR_ID,
+    maintenance_coordinator_subject,
+)
 from app.application.use_cases.maintenance_coordinator import MaintenanceCoordinator
 from app.domain.entities.audit import AuditAction
 from app.domain.entities.maintenance import MaintenanceState
@@ -108,6 +111,28 @@ class PostgresCoordinatorStore:
                 operation_id, owner=owner, status=status, error=error
             )
 
+    async def rewind(self, step: NodeStep, *, owner: str, phase: StepPhase) -> bool:
+        async with session_scope() as session:
+            return await PostgresMaintenanceOperations(session).rewind(
+                step, owner=owner, phase=phase
+            )
+
+    async def reopen_after(self, operation_id: str, *, owner: str, epoch: int) -> bool:
+        try:
+            async with session_scope() as session:
+                if not await PostgresMaintenanceOperations(session).finish(
+                    operation_id, owner=owner, status=OperationStatus.SUCCEEDED
+                ):
+                    raise _NotCommitted
+                opened = await PostgresMaintenanceRepository(session).reopen(
+                    changed_by=MAINTENANCE_COORDINATOR_ID
+                )
+                if opened is None or opened.epoch != epoch:
+                    raise _NotCommitted
+        except _NotCommitted:
+            return False
+        return True
+
     async def audit(
         self,
         action: AuditAction,
@@ -119,6 +144,10 @@ class PostgresCoordinatorStore:
         await self._audit.record(
             self._subject, action, target=target, outcome=outcome, detail=detail
         )
+
+
+class _NotCommitted(Exception):
+    """Rolls the serving commit back: both halves land, or neither."""
 
 
 class AgentControls:

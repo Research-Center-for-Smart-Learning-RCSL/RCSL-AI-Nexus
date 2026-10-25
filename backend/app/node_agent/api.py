@@ -57,7 +57,7 @@ from app.node_agent.guard import GuardRefusal, check_generation, check_pin, regi
 from app.node_agent.relay import SUMMARY_IDLE_SECONDS
 from app.node_agent.resolution import ResetFailed, ResolutionRefused
 from app.node_agent.settings import AgentSettings
-from app.node_agent.store import LIFECYCLE_KINDS, NotOwner, Operation
+from app.node_agent.store import LIFECYCLE_KINDS, RESTORE_KINDS, NotOwner, Operation
 from app.node_agent.summary import bounded_summary
 from app.node_agent.supervisor import ACTIONS as SUPERVISOR_ACTIONS
 from app.node_agent.supervisor import SupervisorRefused
@@ -735,6 +735,111 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
             )
         return JSONResponse(report | {"gate": agent.dispatcher.state.value})
 
+    @app.post("/v1/maintenance/restore", dependencies=controlled)
+    async def maintenance_restore(request: Request) -> JSONResponse:
+        """Load a model saved by a maintenance entry back, or probe it (P5 on #61).
+
+        The one way past a frozen gate, and only for the hold the database
+        says is closed at the epoch named. The model must be registered on
+        this node, the runtime must hold the weights the snapshot recorded,
+        and the context must be the one it was loaded with: a restore puts
+        back what was there, and refuses rather than load something else.
+        """
+        agent = _agent(request)
+        body = await _body(request)
+        epoch = body.get("epoch") if isinstance(body, dict) else None
+        if not isinstance(epoch, int) or isinstance(epoch, bool):
+            raise HTTPException(status_code=400, detail="epoch must be an integer")
+        op_id = _text(body, "op_id", limit=128)
+        action = _text(body, "action", limit=16)
+        if action not in RESTORE_KINDS:
+            raise HTTPException(status_code=400, detail=f"action must be one of {RESTORE_KINDS}")
+        name = _text(body, "name", limit=255)
+        digest = body.get("digest") if isinstance(body.get("digest"), str) else None
+        wanted_context = body.get("context_length")
+        if wanted_context is not None and (
+            not isinstance(wanted_context, int) or isinstance(wanted_context, bool)
+        ):
+            raise HTTPException(status_code=400, detail="context_length must be an integer")
+
+        closed, current = await agent.store.maintenance_hold()
+        if not closed or current != epoch:
+            return JSONResponse(
+                status_code=409,
+                content={"refused": "hold_not_closed_at_epoch", "closed": closed, "epoch": current},
+            )
+        existing = await agent.store.observe(op_id)
+        if existing is not None:
+            return await _existing_lifecycle(agent, existing, action)
+
+        ref, registered = None, None
+        for candidate in _spellings(name):
+            registered = await registration(agent.pool, agent.settings.node_id, RUNTIME, candidate)
+            if registered is not None:
+                ref = candidate
+                break
+        if registered is None or ref is None:
+            return _guard_refused(
+                GuardRefusal("model_not_on_node", f"{name} is not registered on this node")
+            )
+        measured = await _measure(agent, ref)
+        if digest is not None and measured.identity != digest:
+            return _guard_refused(
+                GuardRefusal(
+                    "revision_mismatch",
+                    f"the snapshot held {digest}, the runtime has {measured.identity}",
+                )
+            )
+        pinned = check_pin(registered, measured.identity)
+        if pinned is not None:
+            return _guard_refused(pinned)
+        context_length = registered.context_length or None
+        if measured.declared_context is not None and context_length is not None:
+            context_length = min(context_length, measured.declared_context)
+        if wanted_context is not None and context_length not in (None, wanted_context):
+            return _guard_refused(
+                GuardRefusal(
+                    "context_length_mismatch",
+                    f"the snapshot loaded {wanted_context}, the registration gives "
+                    f"{context_length}",
+                )
+            )
+        context_length = wanted_context or context_length
+
+        if action == "load":
+            relay = agent.relay.load(
+                ref, keep_alive=agent.keep_alive, context_length=context_length
+            )
+        else:
+            relay = agent.relay.probe(
+                ref,
+                embedding="embedding" in registered.capabilities,
+                keep_alive=agent.keep_alive,
+                context_length=context_length,
+            )
+        submitted = await agent.dispatcher.exclusive(
+            op_id,
+            action,
+            relay,
+            provenance={
+                "ref": ref,
+                "context_length": context_length,
+                "maintenance_epoch": epoch,
+                "restore": True,
+            },
+            after=_record_capacity(agent, ref) if action == "load" else None,
+            maintenance_epoch=epoch,
+        )
+        if isinstance(submitted, Existing):
+            return await _existing_lifecycle(agent, submitted.operation, action)
+        if isinstance(submitted, Refused):
+            return JSONResponse(status_code=409, content={"refused": submitted.reason})
+        await submitted.settled
+        operation = await agent.store.observe(op_id)
+        if operation is None:
+            raise HTTPException(status_code=500, detail="operation vanished")
+        return await _existing_lifecycle(agent, operation, action)
+
     @app.post("/v1/maintenance/runtime/{action}", dependencies=controlled)
     async def runtime_control(request: Request, action: str) -> JSONResponse:
         """Stop, start or restart the host runtime through the supervisor.
@@ -801,6 +906,16 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
         return JSONResponse(receipt)
 
     return app
+
+
+def _spellings(name: str) -> list[str]:
+    """`/api/ps` names a model with its tag; a registration may not."""
+    spellings = [name]
+    if name.endswith(":latest"):
+        spellings.append(name.removesuffix(":latest"))
+    elif ":" not in name:
+        spellings.append(f"{name}:latest")
+    return spellings
 
 
 async def _existing_lifecycle(agent: Agent, operation: Operation, action: str) -> JSONResponse:

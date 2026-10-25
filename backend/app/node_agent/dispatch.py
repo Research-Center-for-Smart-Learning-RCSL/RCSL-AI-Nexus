@@ -48,6 +48,7 @@ from typing import Any, Protocol
 
 from app.node_agent.store import (
     LIFECYCLE_KINDS,
+    RESTORE_KINDS,
     AdmissionClosed,
     NotOwner,
     Operation,
@@ -80,7 +81,9 @@ class Store(Protocol):
         payload_hash: str | None,
         store_output: bool,
     ) -> Operation | None: ...
-    async def promote(self, op_id: str, provenance: dict[str, Any]) -> bool: ...
+    async def promote(
+        self, op_id: str, provenance: dict[str, Any], *, maintenance_epoch: int | None = None
+    ) -> bool: ...
     async def cancel_accepted(self, op_id: str, reason: str, *, kind: str) -> Operation | None: ...
     async def unsent_after_promotion(self, op_id: str, reason: str) -> bool: ...
     async def mark_unknown(self, op_id: str, reason: str, observed: dict[str, Any]) -> bool: ...
@@ -277,6 +280,10 @@ class Dispatcher:
         """An operator's drain, which a lifecycle operation ending must not undo."""
         self._frozen = False
         self._frozen_epoch: int | None = None
+        self._restoring: dict[str, int] = {}
+        """Restore operations admitted under the hold (P5), with the epoch each
+        was admitted for: the only ones the final send barrier lets through
+        while frozen, and only while frozen at that same epoch."""
         """The maintenance hold this gate is frozen for (#61), if any."""
         self._sending: dict[str, asyncio.Task[Outcome]] = {}
         """Relays still talking to the runtime: a subset of `_admitted`, which
@@ -468,8 +475,15 @@ class Dispatcher:
         *,
         provenance: dict[str, Any] | None = None,
         after: Callable[[Outcome], Awaitable[None]] | None = None,
+        maintenance_epoch: int | None = None,
     ) -> Attempt | Existing | Refused:
         """Run a lifecycle operation with the node to itself (PR4b, design S5).
+
+        With `maintenance_epoch`, a restore's load or probe (P5 on #61): the
+        one exception to a frozen gate. It needs the gate frozen at that epoch
+        and the database hold closed at it, it keeps the gate frozen (nothing
+        else is admitted alongside it), and it passes the final send barrier
+        that withholds everything else.
 
         Admission closes first, as a drain: queued work is cancelled unsent as
         it reaches promotion, and admitted work is waited for to terminal
@@ -484,16 +498,23 @@ class Dispatcher:
         Residency and a weights pin describe current state; neither proves
         that a sent load, unload or pull has finished changing the scheduler.
         """
-        if kind not in LIFECYCLE_KINDS:
+        restoring = maintenance_epoch is not None
+        if kind not in (RESTORE_KINDS if restoring else LIFECYCLE_KINDS):
             raise ValueError(f"{kind} is not a lifecycle operation")
         existing = await self._store.observe(op_id)
         if existing is not None:
             return Existing(existing)
         async with self._barrier:
-            if self._state is not GateState.SERVING:
+            if maintenance_epoch is not None:
+                if not self._restorable_locked(maintenance_epoch):
+                    return Refused("not_frozen_at_epoch", retry_after=None)
+                self._exclusive = op_id
+                self._restoring[op_id] = maintenance_epoch
+            elif self._state is not GateState.SERVING:
                 return Refused(f"node_{self._state.value}", retry_after=_retry_after(self._state))
-            self._exclusive = op_id
-            self._close_locked(GateState.DRAINING)
+            else:
+                self._exclusive = op_id
+                self._close_locked(GateState.DRAINING)
         handed_off = False
         try:
             try:
@@ -519,19 +540,26 @@ class Dispatcher:
                     # Re-read: a block or a lost role may have replaced the drain
                     # while admitted work finished (mypy narrowed it above).
                     state: GateState = self._state
-                    if state is not GateState.DRAINING:
+                    if restoring and not self._restorable_locked(maintenance_epoch, op_id):
+                        refusal = "not_frozen_at_epoch"
+                    elif not restoring and state is not GateState.DRAINING:
                         refusal = f"{state.value}_before_send"
                     elif not self._host_lock_held():
                         self._state = GateState.LOST
                         refusal = "lost_before_send"
                     else:
                         try:
-                            promoted = await self._store.promote(op_id, provenance or {})
+                            promoted = await self._store.promote(
+                                op_id, provenance or {}, maintenance_epoch=maintenance_epoch
+                            )
                         except NotOwner:
                             self._state = GateState.LOST
                             promoted = False
                         except AdmissionClosed as closed:
-                            self._freeze_locked(closed.epoch)
+                            if restoring:
+                                refusal = "hold_not_closed_at_epoch"
+                            else:
+                                self._freeze_locked(closed.epoch)
                             promoted = False
                         if promoted:
                             self._idle.clear()
@@ -541,7 +569,9 @@ class Dispatcher:
                             handed_off = True
                         elif self._state is GateState.LOST:
                             refusal = "lost_before_send"
-                        elif self._frozen:
+                        elif refusal is not None:
+                            pass
+                        elif self._frozen and not restoring:
                             refusal = "maintenance_before_send"
                         else:
                             refusal = "node_blocked"
@@ -556,7 +586,18 @@ class Dispatcher:
             return await self._unsent(op_id, kind, refusal or "not_promoted")
         finally:
             if not handed_off:
+                self._restoring.pop(op_id, None)
                 await self._end_exclusive(op_id)
+
+    def _restorable_locked(self, epoch: int | None, op_id: str | None = None) -> bool:
+        """Frozen at this epoch, and the node to the restore alone."""
+        return (
+            self._state is GateState.MAINTENANCE
+            and self._frozen
+            and self._frozen_epoch == epoch
+            and self._exclusive == op_id
+            and not self._sending
+        )
 
     async def _end_exclusive(self, op_id: str) -> None:
         async with self._barrier:
@@ -780,7 +821,15 @@ class Dispatcher:
         # one synchronous step, so a freeze either lands before it, and nothing
         # is sent, or finds the sender registered and can interrupt it.
         sender: asyncio.Task[Outcome] | None = None
-        if self._frozen:
+        restore_epoch = self._restoring.get(op_id)
+        if restore_epoch is not None:
+            # A restore sends only into the hold it was admitted for: one
+            # replaced between promotion and here (reopened, then entered
+            # again) would load into another entry's runtime.
+            withhold = not (self._frozen and self._frozen_epoch == restore_epoch)
+        else:
+            withhold = self._frozen
+        if withhold:
             outcome = Withheld(reason="maintenance_before_send")
         else:
             sender = asyncio.ensure_future(relay(_AttemptSink(self, attempt)))
@@ -809,7 +858,7 @@ class Dispatcher:
                 self._sending.pop(op_id, None)
                 if not self._sending:
                     self._quiet.set()
-        lifecycle = kind in LIFECYCLE_KINDS
+        lifecycle = kind in LIFECYCLE_KINDS or op_id in self._restoring
         try:
             await self._settle(op_id, outcome)
             if after is not None:
@@ -828,6 +877,7 @@ class Dispatcher:
             if not self._admitted:
                 self._idle.set()
             if lifecycle:
+                self._restoring.pop(op_id, None)
                 await _shielded(self._end_exclusive(op_id))
         if cancelled is not None:
             raise cancelled

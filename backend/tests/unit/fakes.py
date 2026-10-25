@@ -1108,7 +1108,9 @@ class FakeMaintenanceOperations:
         current = self._step(step.operation_id, step.node_id)
         if current.status is not StepStatus.RUNNING:
             return False
-        changes: dict[str, Any] = {"phase": phase, "attempts": 0, "error": None}
+        changes: dict[str, Any] = {"phase": phase}
+        if phase is not current.phase:
+            changes |= {"attempts": 0, "error": None}
         if phase is StepPhase.VERIFIED:
             changes["status"] = StepStatus.DONE
         for column in ("interrupt", "reset", "verification", "accounting"):
@@ -1192,3 +1194,39 @@ class FakeMaintenanceOperations:
             ended_now = replace(operation, status=OperationStatus.ABANDONED, owner=None)
             self._put(replace(ended_now, error=reason))
         return ended
+
+    async def create_restore(
+        self, *, epoch: int, requested_by: str, snapshots: dict[str, list[dict[str, Any]]]
+    ) -> MaintenanceOperation:
+        self._seq += 1
+        operation_id = f"rs{self._seq:030d}"
+        operation = MaintenanceOperation(
+            id=operation_id,
+            kind=OperationKind.RESTORE,
+            epoch=epoch,
+            status=OperationStatus.RUNNING,
+            requested_by=requested_by,
+            steps=tuple(
+                NodeStep(
+                    operation_id,
+                    node_id,
+                    StepPhase.PENDING,
+                    StepStatus.RUNNING,
+                    snapshot=list(snapshot),
+                )
+                for node_id, snapshot in sorted(snapshots.items())
+            ),
+        )
+        self._put(operation)
+        return operation
+
+    async def latest_of(self, kind: OperationKind, epoch: int) -> MaintenanceOperation | None:
+        found = [o for o in self.operations.values() if o.kind is kind and o.epoch == epoch]
+        return found[-1] if found else None
+
+    async def rewind(self, step: NodeStep, *, owner: str, phase: StepPhase) -> bool:
+        current = self._step(step.operation_id, step.node_id)
+        if self._owned(step.operation_id, owner) is None or current.status is not StepStatus.DONE:
+            return False
+        self._replace_step(replace(current, status=StepStatus.RUNNING, phase=phase, attempts=0))
+        return True

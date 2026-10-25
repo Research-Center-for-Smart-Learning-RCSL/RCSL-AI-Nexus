@@ -28,7 +28,11 @@ from datetime import datetime
 from app.domain.entities.actor import Actor, Role, Scope
 from app.domain.entities.audit import AuditAction
 from app.domain.entities.maintenance import MAX_MESSAGE_LENGTH, MaintenanceState
-from app.domain.entities.maintenance_operation import MaintenanceOperation, OperationStatus
+from app.domain.entities.maintenance_operation import (
+    MaintenanceOperation,
+    OperationKind,
+    OperationStatus,
+)
 from app.domain.exceptions import (
     MaintenanceDisabledError,
     MaintenanceError,
@@ -118,6 +122,60 @@ class ManageMaintenance:
             },
         )
         return closed
+
+    async def restore(self, actor: Actor) -> MaintenanceOperation:
+        """Put back what the entry released, verify it, then reopen (P5).
+
+        Only from an entry that succeeded under the hold now closed: every
+        node released and verified empty, with a snapshot to restore and its
+        unknowns resolved. A node without a snapshot, or with unknowns left,
+        is refused here with the reason, because a restore that skipped it
+        would reopen a platform that is not what it was. Reopening without a
+        restore stays available for that case. Pressed again while a restore
+        runs, it returns that restore.
+        """
+        self._require(actor, Scope.MAINTENANCE_WRITE)
+        operations = self._operations
+        state = await self._maintenance.read()
+        if operations is None or not state.admission_closed:
+            raise MaintenanceStateConflictError(detail="the platform is not closed")
+        running = await operations.latest_of(OperationKind.RESTORE, state.epoch)
+        if running is not None:
+            if running.status is OperationStatus.RUNNING:
+                return running
+            raise MaintenanceStateConflictError(
+                detail=f"this hold's restore is {running.status.value}; retry it instead"
+            )
+        entry = await operations.latest_of(OperationKind.ENTER, state.epoch)
+        if entry is None or entry.status is not OperationStatus.SUCCEEDED:
+            raise MaintenanceStateConflictError(
+                detail="the entry has not released every runtime yet"
+                if entry is not None
+                else "this hold has no entry to restore"
+            )
+        missing = [s.node_id for s in entry.steps if s.snapshot is None]
+        if missing:
+            raise MaintenanceStateConflictError(
+                detail=f"no snapshot for {missing}: load those models by hand, "
+                "or reopen without restoring"
+            )
+        unresolved = [s.node_id for s in entry.steps if s.accounting != "resolved"]
+        if unresolved:
+            raise MaintenanceStateConflictError(
+                detail=f"unresolved unknown operations on {unresolved}: resolve them first"
+            )
+        restore = await operations.create_restore(
+            epoch=state.epoch,
+            requested_by=actor.id,
+            snapshots={s.node_id: list(s.snapshot or []) for s in entry.steps},
+        )
+        await self._audit.record(
+            actor,
+            AuditAction.MAINTENANCE_RESTORE_STARTED,
+            target="platform",
+            detail={"epoch": str(state.epoch), "operation": restore.id},
+        )
+        return restore
 
     async def retry(self, actor: Actor) -> MaintenanceOperation:
         """Run a failed entry's failed steps again from where they stopped.

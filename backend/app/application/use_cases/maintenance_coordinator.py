@@ -37,12 +37,16 @@ from app.domain.entities.maintenance import MaintenanceState
 from app.domain.entities.maintenance_operation import (
     MaintenanceOperation,
     NodeStep,
+    OperationKind,
     OperationStatus,
     StepPhase,
     StepStatus,
+    resident_matches,
+    restore_order,
     snapshot_of,
 )
 from app.domain.ports.node_control_port import NodeControlError, NodeControlPort
+from app.domain.services.residency_reconciliation import MAX_REPAIR_ROUNDS
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,9 @@ wait on it; the step records why there is no snapshot, and P5 refuses to
 restore that node automatically."""
 
 COORDINATOR = "maintenance coordinator"
+
+FINAL_REFUSALS = frozenset({"restart_failed", "repairs_exhausted", "unexpected_resident"})
+"""Refusals another attempt cannot change: they wait for an administrator."""
 
 
 class CoordinatorStore(Protocol):
@@ -91,6 +98,15 @@ class CoordinatorStore(Protocol):
     async def finish(
         self, operation_id: str, *, owner: str, status: OperationStatus, error: str | None = None
     ) -> bool: ...
+
+    async def rewind(self, step: NodeStep, *, owner: str, phase: StepPhase) -> bool:
+        """A verified restore step that no longer verifies runs again."""
+        ...
+
+    async def reopen_after(self, operation_id: str, *, owner: str, epoch: int) -> bool:
+        """The serving commit: the restore ends and the hold at `epoch`
+        lifts in one transaction, or neither happens."""
+        ...
 
     async def audit(
         self,
@@ -171,9 +187,10 @@ class MaintenanceCoordinator:
                 final=True,
             )
             return
+        advance = self._next_restore if operation.kind is OperationKind.RESTORE else self._next
         try:
             while step.status is StepStatus.RUNNING:
-                step = await self._next(operation, step, control)
+                step = await advance(operation, step, control)
         except _Lost:
             logger.warning("maintenance %s: another coordinator owns it now", operation.id)
         except _Later:
@@ -182,7 +199,10 @@ class MaintenanceCoordinator:
             await self._failed(
                 step,
                 exc,
-                final=exc.refused == "restart_failed",
+                # A guard's refusal (unregistered, other weights, other
+                # context) will not change on its own; neither will a
+                # restart the supervisor reports failed.
+                final=exc.refused in FINAL_REFUSALS or exc.status == 422,
                 clear_reset_id=exc.refused == "restart_failed",
             )
 
@@ -261,6 +281,145 @@ class MaintenanceCoordinator:
 
         raise AssertionError(f"no next phase from {step.phase}")
 
+    # -- one node, restoring (P5) -------------------------------------------
+
+    async def _next_restore(
+        self, operation: MaintenanceOperation, step: NodeStep, control: NodeControlPort
+    ) -> NodeStep:
+        snapshot = restore_order(list(step.snapshot or []))
+        progress: dict[str, Any] = dict(step.verification or {})
+        loads: list[dict[str, Any]] = list(progress.get("loads") or [])
+
+        if step.phase is StepPhase.PENDING:
+            resident = await _observe(control)
+            _no_strangers(snapshot, resident)
+            missing = [m for m in snapshot if not resident_matches(m, resident)]
+            if not missing:
+                return await self._advance(
+                    step, StepPhase.LOADED, verification=progress | {"probes": {}}
+                )
+            if len(loads) >= len(snapshot) * (1 + MAX_REPAIR_ROUNDS):
+                raise NodeControlError(
+                    f"still missing after {len(loads)} loads: {[m.get('name') for m in missing]}",
+                    refused="repairs_exhausted",
+                )
+            model = missing[0]
+            last = loads[-1] if loads else None
+            if last is not None and last.get("name") == model.get("name") and not last.get("state"):
+                op_id = str(last["op_id"])  # asked before and not answered: the same load
+            else:
+                op_id = f"restore-{operation.id[:16]}-{len(loads)}"
+                loads.append({"op_id": op_id, "name": model.get("name")})
+                step = await self._advance(step, StepPhase.PENDING, verification={"loads": loads})
+            try:
+                answer = await control.restore(
+                    operation.epoch,
+                    op_id,
+                    action="load",
+                    name=str(model.get("name")),
+                    digest=model.get("digest"),
+                    context_length=model.get("context_length"),
+                )
+            except NodeControlError as exc:
+                if exc.body.get("state") == "failed":
+                    loads[-1]["state"] = "failed"
+                    await self._advance(step, StepPhase.PENDING, verification={"loads": loads})
+                raise
+            loads[-1]["state"] = answer.get("state")
+            # Observed again on the next turn of the loop: a large load can
+            # evict a sibling restored before it.
+            return await self._advance(step, StepPhase.PENDING, verification={"loads": loads})
+
+        if step.phase is StepPhase.LOADED:
+            # Each model's probe attempt is recorded before it is asked, so a
+            # timeout asks again under the same id, and its outcome after: a
+            # probe that failed is a stored failure under its id, and the next
+            # attempt needs a new one (review of #81).
+            probes: dict[str, dict[str, Any]] = {
+                name: dict(entry)
+                for name, entry in dict(progress.get("probes") or {}).items()
+                if isinstance(entry, dict)
+            }
+            attempts = int(progress.get("probe_attempts") or 0)
+            for model in snapshot:
+                name = str(model.get("name"))
+                entry = probes.get(name)
+                if entry is not None and entry.get("state") == "completed":
+                    continue
+                if entry is None or entry.get("state") is not None:
+                    attempts += 1
+                    entry = {"op_id": f"probe-{operation.id[:16]}-{len(loads)}-{attempts}"}
+                    probes[name] = entry
+                    step = await self._advance(
+                        step,
+                        StepPhase.LOADED,
+                        verification=progress | {"probes": probes, "probe_attempts": attempts},
+                    )
+                try:
+                    answer = await control.restore(
+                        operation.epoch,
+                        str(entry["op_id"]),
+                        action="probe",
+                        name=name,
+                        digest=model.get("digest"),
+                        context_length=model.get("context_length"),
+                    )
+                except NodeControlError as exc:
+                    if exc.body.get("state") == "failed":
+                        entry["state"] = "failed"
+                        await self._advance(
+                            step,
+                            StepPhase.LOADED,
+                            verification=progress | {"probes": probes, "probe_attempts": attempts},
+                        )
+                    raise
+                entry["state"] = answer.get("state")
+                step = await self._advance(
+                    step,
+                    StepPhase.LOADED,
+                    verification=progress | {"probes": probes, "probe_attempts": attempts},
+                )
+            return await self._still_whole(
+                step, snapshot, control, StepPhase.PROBED, dict(step.verification or {})
+            )
+
+        if step.phase is StepPhase.PROBED:
+            done = await self._still_whole(step, snapshot, control, StepPhase.VERIFIED, progress)
+            if done.phase is StepPhase.VERIFIED:
+                await self._store.audit(
+                    AuditAction.MAINTENANCE_NODE_RESTORED,
+                    target=step.node_id,
+                    detail={
+                        "epoch": str(operation.epoch),
+                        "operation": operation.id,
+                        "models": ",".join(str(m.get("name")) for m in snapshot) or "none",
+                        "loads": str(len(loads)),
+                    },
+                )
+            return done
+
+        raise AssertionError(f"no next restore phase from {step.phase}")
+
+    async def _still_whole(
+        self,
+        step: NodeStep,
+        snapshot: list[dict[str, Any]],
+        control: NodeControlPort,
+        then: StepPhase,
+        progress: dict[str, Any],
+    ) -> NodeStep:
+        """Observe the whole node again: on to `then` if every saved model is
+        still resident as recorded, back to loading if one was evicted."""
+        resident = await _observe(control)
+        _no_strangers(snapshot, resident)
+        if all(resident_matches(m, resident) for m in snapshot):
+            return await self._advance(
+                step, then, verification=progress | {"resident": _names(resident)}
+            )
+        return await self._advance(
+            step, StepPhase.PENDING, verification={"loads": progress.get("loads") or []}
+        )
+
     async def _advance(self, step: NodeStep, phase: StepPhase, **values: Any) -> NodeStep:
         if not await self._store.advance(step, owner=self.owner, phase=phase, **values):
             raise _Lost
@@ -305,6 +464,9 @@ class MaintenanceCoordinator:
                 return
 
     async def _close(self, operation: MaintenanceOperation) -> None:
+        if operation.kind is OperationKind.RESTORE:
+            await self._close_restore(operation)
+            return
         failed = [s for s in operation.steps if s.status is StepStatus.FAILED]
         detail = {
             "epoch": str(operation.epoch),
@@ -334,6 +496,40 @@ class MaintenanceCoordinator:
                 detail=detail | {"accounting_unresolved": ",".join(unresolved)},
             )
 
+    async def _close_restore(self, operation: MaintenanceOperation) -> None:
+        failed = [s for s in operation.steps if s.status is StepStatus.FAILED]
+        detail = {"epoch": str(operation.epoch), "operation": operation.id}
+        if failed:
+            error = "; ".join(f"{s.node_id} at {s.phase.value}: {s.error}" for s in failed)
+            if await self._store.finish(
+                operation.id, owner=self.owner, status=OperationStatus.FAILED, error=error[:2000]
+            ):
+                await self._store.audit(
+                    AuditAction.MAINTENANCE_RESTORE_FAILED,
+                    target="platform",
+                    outcome="failed",
+                    detail=detail | {"failed": str(len(failed))},
+                )
+            return
+        # Every node verified on its own; now all of them at once, fresh,
+        # immediately before the commit, so no node reopens on an
+        # observation older than the others'.
+        for step in operation.steps:
+            control = await self._control_for(step.node_id)
+            resident = await control.residency() if control is not None else None
+            snapshot = list(step.snapshot or [])
+            whole = resident is not None and all(resident_matches(m, resident) for m in snapshot)
+            if not whole or (resident and _strangers(snapshot, resident)):
+                logger.warning("maintenance restore: %s changed before reopening", step.node_id)
+                await self._store.rewind(step, owner=self.owner, phase=StepPhase.PENDING)
+                return
+        if await self._store.reopen_after(operation.id, owner=self.owner, epoch=operation.epoch):
+            await self._store.audit(
+                AuditAction.MAINTENANCE_RESTORED,
+                target="platform",
+                detail=detail | {"nodes": str(len(operation.steps))},
+            )
+
     async def _abandon(self, operation: MaintenanceOperation, hold: MaintenanceState) -> None:
         reason = (
             "the hold was lifted before the entry finished"
@@ -349,6 +545,33 @@ class MaintenanceCoordinator:
                 outcome="failed",
                 detail={"epoch": str(operation.epoch), "operation": operation.id, "reason": reason},
             )
+
+
+async def _observe(control: NodeControlPort) -> list[dict[str, Any]]:
+    resident = await control.residency()
+    if resident is None:
+        raise NodeControlError("the runtime could not be observed")
+    return resident
+
+
+def _names(resident: list[dict[str, Any]]) -> list[str]:
+    return sorted(str(m.get("name")) for m in resident)
+
+
+def _strangers(snapshot: list[dict[str, Any]], resident: list[dict[str, Any]]) -> list[str]:
+    saved = {m.get("name") for m in snapshot}
+    return sorted(str(m.get("name")) for m in resident if m.get("name") not in saved)
+
+
+def _no_strangers(snapshot: list[dict[str, Any]], resident: list[dict[str, Any]]) -> None:
+    """Under the hold nothing loads but the restore, so a model the snapshot
+    did not hold is something this restore cannot account for."""
+    strangers = _strangers(snapshot, resident)
+    if strangers:
+        raise NodeControlError(
+            f"models the snapshot did not hold are resident: {strangers}",
+            refused="unexpected_resident",
+        )
 
 
 def _snapshot_summary(step: NodeStep) -> str:

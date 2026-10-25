@@ -40,6 +40,10 @@ DISPATCH_NAMESPACE = 0x4E58_0002
 
 
 LIFECYCLE_KINDS = frozenset({"load", "unload", "pull", "repin"})
+RESTORE_KINDS = frozenset({"load", "probe"})
+"""What a maintenance restore may send while the platform is closed (P5 on
+#61): loading a saved model back, and the bounded check that it answers.
+Nothing else passes a frozen gate."""
 """Operations that change what the runtime holds, or what the node will accept
 from it, rather than produce output anyone is billed or answered with (PR4b).
 Exclusive with dispatch on the node; an uncertain one blocks until verified
@@ -290,12 +294,19 @@ class OperationStore:
             )
         return _operation(row) if row else None
 
-    async def promote(self, op_id: str, provenance: dict[str, Any]) -> bool:
+    async def promote(
+        self, op_id: str, provenance: dict[str, Any], *, maintenance_epoch: int | None = None
+    ) -> bool:
         """Claim `accepted → running`: the authorisation point for a send.
 
         True for exactly one caller, and only while no operation on the node is
         unknown. The in-process gate is checked by the caller, under the barrier
         that block, drain and role loss also take (design S3, T2).
+
+        `maintenance_epoch` is a restore's authorisation (P5 on #61): the hold
+        must be closed **at that epoch**, the inverse of every other send. A
+        restore for a hold since lifted or replaced is refused like any send
+        under a hold, so it cannot load into a platform that is serving.
         """
         async with self._owned(dispatch=True, action="promotion", op_id=op_id) as conn:
             # The maintenance hold, read under the fence an entry takes
@@ -305,7 +316,11 @@ class OperationStore:
             hold = await conn.fetchrow(
                 "SELECT admission_closed, epoch FROM maintenance_control WHERE id = 1"
             )
-            if hold is None or hold["admission_closed"]:
+            if maintenance_epoch is not None:
+                held = hold is not None and hold["admission_closed"]
+                if not held or hold["epoch"] != maintenance_epoch:
+                    raise AdmissionClosed(hold["epoch"] if hold is not None else None)
+            elif hold is None or hold["admission_closed"]:
                 # No row is a schema the migrations have not reached: closed.
                 raise AdmissionClosed(hold["epoch"] if hold is not None else None)
             if await conn.fetchval(

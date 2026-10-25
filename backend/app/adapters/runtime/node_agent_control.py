@@ -28,6 +28,11 @@ agent waits for the new runtime to be attested, with room to spare. The call
 is idempotent on its `reset_id`, so a timeout here is retried, not repeated."""
 
 
+RESTORE_TIMEOUT_S = 900.0
+"""A load of a large model from disk, or a probe on it. The call is
+idempotent on its op id, so a timeout is asked again, not repeated."""
+
+
 class NodeAgentControl:
     def __init__(
         self,
@@ -59,6 +64,30 @@ class NodeAgentControl:
             "/v1/maintenance/reset",
             {"epoch": epoch, "reset_id": reset_id, "operator": operator},
             RESET_TIMEOUT_S,
+        )
+
+    async def restore(
+        self,
+        epoch: int,
+        op_id: str,
+        *,
+        action: str,
+        name: str,
+        digest: str | None,
+        context_length: int | None,
+    ) -> dict[str, Any]:
+        return await self._call(
+            "POST",
+            "/v1/maintenance/restore",
+            {
+                "epoch": epoch,
+                "op_id": op_id,
+                "action": action,
+                "name": name,
+                "digest": digest,
+                "context_length": context_length,
+            },
+            RESTORE_TIMEOUT_S,
         )
 
     async def _call(

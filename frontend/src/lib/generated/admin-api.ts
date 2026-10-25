@@ -685,6 +685,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/maintenance/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore After Maintenance
+         * @description Loads back every model the entry released, on the node it was on, with
+         *     the weights and context it had, checks each one answers, and reopens the
+         *     platform only once every node verifies. Until then the platform stays
+         *     closed; a failure keeps it closed and can be retried. Pressing it again
+         *     while a restore runs returns that restore.
+         */
+        post: operations["restore_after_maintenance_admin_maintenance_restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/maintenance/retry": {
         parameters: {
             query?: never;
@@ -696,8 +720,9 @@ export interface paths {
         put?: never;
         /**
          * Retry Maintenance Entry
-         * @description Runs a failed entry's failed nodes again from the phase each reached.
-         *     The snapshot each node saved is kept; the platform stays closed.
+         * @description Runs a failed entry's or restore's failed nodes again from the phase
+         *     each reached. The snapshot each node saved is kept; the platform stays
+         *     closed.
          */
         post: operations["retry_maintenance_entry_admin_maintenance_retry_post"];
         delete?: never;
@@ -4320,6 +4345,35 @@ export interface operations {
         };
     };
     reopen_after_maintenance_admin_maintenance_reopen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceStatusResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    restore_after_maintenance_admin_maintenance_restore_post: {
         parameters: {
             query?: never;
             header?: never;

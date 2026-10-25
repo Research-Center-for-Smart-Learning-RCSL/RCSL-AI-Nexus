@@ -30,8 +30,13 @@ class HoldStore(MemoryStore):
         self.epoch = 0
         self.unknown_commits_fail = False
 
-    async def promote(self, op_id: str, provenance: dict[str, Any]) -> bool:
-        if self.closed:
+    async def promote(
+        self, op_id: str, provenance: dict[str, Any], *, maintenance_epoch: int | None = None
+    ) -> bool:
+        if maintenance_epoch is not None:
+            if not self.closed or self.epoch != maintenance_epoch:
+                raise AdmissionClosed(self.epoch)
+        elif self.closed:
             raise AdmissionClosed(self.epoch)
         return await super().promote(op_id, provenance)
 
@@ -192,3 +197,103 @@ async def test_a_lifecycle_operation_reads_the_hold_too() -> None:
     assert relay.sends == 0
     assert dispatcher.state is GateState.MAINTENANCE
     assert dispatcher.frozen_epoch == 2
+
+
+# -- the restore's exception (P5) ---------------------------------------------
+
+
+async def test_a_restore_load_passes_a_gate_frozen_at_its_epoch_and_keeps_it_frozen() -> None:
+    store = HoldStore()
+    dispatcher = Dispatcher(store)
+    close(store, epoch=3)
+    await dispatcher.freeze(3)
+    relay = ScriptedRelay()
+
+    attempt = await dispatcher.exclusive("restore-1", "load", relay, maintenance_epoch=3)
+
+    assert isinstance(attempt, Attempt)
+    await asyncio.wait_for(attempt.settled, 1)
+    assert relay.sends == 1
+    assert store.ops["restore-1"].state == "completed"
+    assert dispatcher.state is GateState.MAINTENANCE
+
+
+async def test_traffic_stays_refused_while_a_restore_runs() -> None:
+    store = HoldStore()
+    dispatcher = Dispatcher(store)
+    close(store, epoch=3)
+    await dispatcher.freeze(3)
+    held = ScriptedRelay(hold=asyncio.Event())
+    attempt = await dispatcher.exclusive("restore-1", "load", held, maintenance_epoch=3)
+    assert isinstance(attempt, Attempt)
+    await held.started.wait()
+
+    inference = ScriptedRelay()
+    refused = await dispatcher.submit("x", "inference", inference)
+    second = await dispatcher.exclusive("restore-2", "probe", ScriptedRelay(), maintenance_epoch=3)
+
+    assert isinstance(refused, Refused) and inference.sends == 0
+    assert isinstance(second, Refused) and second.reason == "not_frozen_at_epoch"
+    held.hold.set()  # type: ignore[union-attr]
+    await asyncio.wait_for(attempt.settled, 1)
+
+
+@pytest.mark.parametrize(("frozen_at", "held_at", "closed"), [(2, 3, True), (3, 3, False)])
+async def test_a_restore_for_another_hold_sends_nothing(
+    frozen_at: int, held_at: int, closed: bool
+) -> None:
+    """Frozen for an older entry, or the database hold already lifted: the
+    restore's authorisation is the epoch, and it no longer matches."""
+    store = HoldStore()
+    dispatcher = Dispatcher(store)
+    store.closed, store.epoch = closed, held_at
+    await dispatcher.freeze(frozen_at)
+    relay = ScriptedRelay()
+
+    refused = await dispatcher.exclusive("restore-1", "load", relay, maintenance_epoch=3)
+
+    assert isinstance(refused, Refused)
+    assert relay.sends == 0
+    assert dispatcher.state is GateState.MAINTENANCE
+
+
+async def test_an_ordinary_lifecycle_operation_is_still_refused_while_frozen() -> None:
+    store = HoldStore()
+    dispatcher = Dispatcher(store)
+    close(store, epoch=3)
+    await dispatcher.freeze(3)
+    relay = ScriptedRelay()
+
+    refused = await dispatcher.exclusive("load-1", "load", relay)
+
+    assert isinstance(refused, Refused) and relay.sends == 0
+
+
+async def test_only_a_load_or_a_probe_may_restore() -> None:
+    dispatcher = Dispatcher(HoldStore())
+    with pytest.raises(ValueError):
+        await dispatcher.exclusive("x", "pull", ScriptedRelay(), maintenance_epoch=1)
+
+
+async def test_a_restore_admitted_for_one_hold_does_not_send_into_the_next() -> None:
+    """Review of #81: promoted at epoch 3, the hold replaced (reopened, then
+    entered again at 4) before its first step. It must be withheld, not load
+    into the new entry's runtime."""
+    store = HoldStore()
+    dispatcher = Dispatcher(store)
+    close(store, epoch=3)
+    await dispatcher.freeze(3)
+    relay = ScriptedRelay()
+
+    attempt = await dispatcher.exclusive("restore-1", "load", relay, maintenance_epoch=3)
+    assert isinstance(attempt, Attempt)
+    await dispatcher.thaw()  # before the task's first step
+    close(store, epoch=4)
+    await dispatcher.freeze(4)
+
+    outcome = await asyncio.wait_for(attempt.settled, 1)
+
+    assert isinstance(outcome, Withheld)
+    assert relay.sends == 0
+    assert store.ops["restore-1"].state == "cancelled_unsent"
+    assert dispatcher.state is GateState.MAINTENANCE and dispatcher.frozen_epoch == 4

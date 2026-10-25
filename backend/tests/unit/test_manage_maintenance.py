@@ -205,3 +205,61 @@ async def test_reopening_ends_an_entry_still_releasing_runtimes() -> None:
     operation = await use_case.operation(ADMIN)
     assert operation is not None and operation.status is OperationStatus.ABANDONED
     assert audit.entries[-1][0] == "maintenance.reopened"
+
+
+async def _entered_and_cleared(
+    *, snapshot: list | None = None, accounting: str = "resolved"
+) -> tuple[ManageMaintenance, FakeMaintenanceOperations, FakeAudit]:
+    use_case, _, audit = build()
+    await use_case.enter(ADMIN, message=None, expected_return_at=None)
+    operations = use_case._operations
+    assert isinstance(operations, FakeMaintenanceOperations)
+    entry = await operations.latest()
+    assert entry is not None
+    operations._put(replace(entry, status=OperationStatus.SUCCEEDED))
+    operations._replace_step(
+        replace(
+            entry.steps[0],
+            status=StepStatus.DONE,
+            phase=StepPhase.VERIFIED,
+            snapshot=snapshot,
+            snapshot_error=None if snapshot is not None else "unobserved",
+            accounting=accounting,
+        )
+    )
+    return use_case, operations, audit
+
+
+async def test_a_restore_starts_from_the_entrys_snapshots_once() -> None:
+    use_case, _, audit = await _entered_and_cleared(snapshot=[{"name": "m"}])
+
+    restore = await use_case.restore(ADMIN)
+    again = await use_case.restore(ADMIN)
+
+    assert restore.kind.value == "restore" and again.id == restore.id
+    assert restore.steps[0].snapshot == [{"name": "m"}]
+    assert audit.entries[-1][0] == "maintenance.restore_started"
+    with pytest.raises(NotAuthorizedError):
+        await use_case.restore(TENANT_ADMIN)
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "accounting", "reason"),
+    [(None, "resolved", "no snapshot"), ([{"name": "m"}], "unresolved", "unresolved")],
+)
+async def test_a_restore_that_could_not_put_everything_back_is_refused(
+    snapshot: list | None, accounting: str, reason: str
+) -> None:
+    use_case, operations, _ = await _entered_and_cleared(snapshot=snapshot, accounting=accounting)
+    with pytest.raises(MaintenanceStateConflictError, match=reason):
+        await use_case.restore(ADMIN)
+    assert all(o.kind.value == "enter" for o in operations.operations.values())
+
+
+async def test_no_restore_before_the_entry_has_released_everything() -> None:
+    use_case, _, _ = build()
+    with pytest.raises(MaintenanceStateConflictError, match="not closed"):
+        await use_case.restore(ADMIN)
+    await use_case.enter(ADMIN, message=None, expected_return_at=None)
+    with pytest.raises(MaintenanceStateConflictError, match="released"):
+        await use_case.restore(ADMIN)

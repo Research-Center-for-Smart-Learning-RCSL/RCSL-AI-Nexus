@@ -66,12 +66,29 @@ async def enter_maintenance(
     )
 
 
+@router.post("/restore")
+async def restore_after_maintenance(
+    actor: ActorDep, maintenance: ManageDep, settings: SettingsDep
+) -> MaintenanceStatusResponse:
+    """Loads back every model the entry released, on the node it was on, with
+    the weights and context it had, checks each one answers, and reopens the
+    platform only once every node verifies. Until then the platform stays
+    closed; a failure keeps it closed and can be retried. Pressing it again
+    while a restore runs returns that restore."""
+    operation = await maintenance.restore(actor)
+    state = await maintenance.status(actor)
+    return MaintenanceStatusResponse.of(
+        state, enabled=settings.maintenance_enabled, operation=operation
+    )
+
+
 @router.post("/retry")
 async def retry_maintenance_entry(
     actor: ActorDep, maintenance: ManageDep, settings: SettingsDep
 ) -> MaintenanceStatusResponse:
-    """Runs a failed entry's failed nodes again from the phase each reached.
-    The snapshot each node saved is kept; the platform stays closed."""
+    """Runs a failed entry's or restore's failed nodes again from the phase
+    each reached. The snapshot each node saved is kept; the platform stays
+    closed."""
     operation = await maintenance.retry(actor)
     state = await maintenance.status(actor)
     return MaintenanceStatusResponse.of(

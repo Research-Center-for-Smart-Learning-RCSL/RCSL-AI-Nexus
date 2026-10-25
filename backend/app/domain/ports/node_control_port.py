@@ -42,3 +42,18 @@ class NodeControlPort(Protocol):
         and resolve the unknowns it covers. Repeating a `reset_id` returns
         the same reset."""
         ...
+
+    async def restore(
+        self,
+        epoch: int,
+        op_id: str,
+        *,
+        action: str,
+        name: str,
+        digest: str | None,
+        context_length: int | None,
+    ) -> dict[str, Any]:
+        """Load a saved model back under the hold, or probe it (P5). The
+        agent's description of the operation; repeating `op_id` returns the
+        same one."""
+        ...

@@ -27,6 +27,21 @@ the last one stopped; the database, not a process, knows what has been done.
 A step that keeps failing stops as `failed` with its error, and the operation
 fails with it once no step is still running. The platform stays closed
 throughout; an administrator retries from the persisted step.
+
+**A restore (P5) has its own operation**, made from a succeeded entry, with
+each node's snapshot copied into its step when it is created:
+
+1. `pending`. Loading: largest first, one model at a time, and the whole node
+   observed again after every load, because a large load can evict a sibling
+   restored before it. Bounded by the reconciler's repair rounds.
+2. `loaded`. Every saved model is resident with its recorded digest and
+   context, and nothing else is.
+3. `probed`. Each model answered a bounded check: a vector from an embedding
+   model, a token from any other. Observed again after, since a check can
+   change what is resident.
+4. `verified`. Observed once more; then, when every node is verified, one
+   transaction reopens the platform and ends the restore. No node reopens on
+   its own.
 """
 
 from __future__ import annotations
@@ -39,6 +54,7 @@ from typing import Any
 
 class OperationKind(StrEnum):
     ENTER = "enter"
+    RESTORE = "restore"
 
 
 class OperationStatus(StrEnum):
@@ -55,6 +71,8 @@ class StepPhase(StrEnum):
     INTERRUPTED = "interrupted"
     SNAPSHOTTED = "snapshotted"
     RESET = "reset"
+    LOADED = "loaded"
+    PROBED = "probed"
     VERIFIED = "verified"
 
 
@@ -124,3 +142,22 @@ def snapshot_of(resident: list[Any]) -> list[dict[str, Any]]:
         for entry in resident
         if isinstance(entry, dict)
     ]
+
+
+def resident_matches(saved: dict[str, Any], resident: list[dict[str, Any]]) -> bool:
+    """Whether `resident` holds what `saved` recorded: the same model, the
+    same weights and the same loaded context, where the snapshot knew them."""
+    for entry in resident:
+        if entry.get("name") != saved.get("name"):
+            continue
+        if saved.get("digest") and entry.get("digest") != saved.get("digest"):
+            return False
+        context = saved.get("context_length")
+        return not context or entry.get("context_length") == context
+    return False
+
+
+def restore_order(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Largest first, as the reconciler restores (#49): the large model is the
+    one that cannot fit once the small ones are placed."""
+    return sorted(snapshot, key=lambda m: (-int(m.get("size") or 0), str(m.get("name"))))

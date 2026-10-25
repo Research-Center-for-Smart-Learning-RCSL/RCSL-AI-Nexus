@@ -9,6 +9,7 @@ from app.domain.entities.maintenance import MaintenanceState
 from app.domain.entities.maintenance_operation import (
     MaintenanceOperation,
     NodeStep,
+    OperationKind,
     OperationStatus,
     StepPhase,
 )
@@ -48,6 +49,12 @@ class MaintenanceOperationsPort(Protocol):
         self, *, epoch: int, requested_by: str, node_ids: list[str]
     ) -> MaintenanceOperation: ...
 
+    async def create_restore(
+        self, *, epoch: int, requested_by: str, snapshots: dict[str, list[dict[str, Any]]]
+    ) -> MaintenanceOperation: ...
+
+    async def latest_of(self, kind: OperationKind, epoch: int) -> MaintenanceOperation | None: ...
+
     async def get(self, operation_id: str) -> MaintenanceOperation | None: ...
 
     async def latest(self) -> MaintenanceOperation | None: ...
@@ -76,6 +83,8 @@ class MaintenanceOperationsPort(Protocol):
     async def finish(
         self, operation_id: str, *, owner: str, status: OperationStatus, error: str | None = None
     ) -> bool: ...
+
+    async def rewind(self, step: NodeStep, *, owner: str, phase: StepPhase) -> bool: ...
 
     async def abandon_running(self, reason: str) -> list[str]: ...
 
