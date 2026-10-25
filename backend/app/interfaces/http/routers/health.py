@@ -16,7 +16,10 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app.adapters.persistence.repositories import PostgresNodeRepository
+from app.adapters.persistence.repositories import (
+    PostgresMaintenanceRepository,
+    PostgresNodeRepository,
+)
 from app.domain.entities.model import RuntimeKind
 from app.domain.ports.model_runtime_port import ModelRuntimePort, runtime_for
 from app.infrastructure.config import get_settings
@@ -75,9 +78,34 @@ async def _probe(name: str, coro: Awaitable[object]) -> tuple[str, bool]:
         return name, False
 
 
+async def _maintenance_closed() -> bool:
+    """Whether the platform is closed for maintenance (#61). A read that fails
+    answers False, so the runtime keeps counting: an unreadable hold never
+    hides a failure."""
+    try:
+        async with asyncio.timeout(PROBE_TIMEOUT_SECONDS):
+            async with get_session_factory()() as session:
+                state = await PostgresMaintenanceRepository(session).read()
+    except Exception:  # noqa: BLE001
+        return False
+    return state.admission_closed
+
+
+def readiness(checks: Mapping[str, bool], *, maintenance: bool) -> bool:
+    """Ready when every dependency is, except that under a maintenance hold
+    the runtime does not count: the entry releases it on purpose, and the
+    entrance still serves what the hold leaves open (the maintenance page,
+    administrators' management). The runtime check is still reported."""
+    return all(ok for name, ok in checks.items() if not (maintenance and name == "runtime"))
+
+
 @router.get("/readyz")
 async def readyz(request: Request) -> JSONResponse:
     """Readiness: dependencies are actually reachable.
+
+    During a maintenance hold (#61) the runtime is released on purpose, so it
+    does not make the entrance unready; `maintenance: true` says why. The
+    database and the cache still do.
 
     This previously returned hardcoded booleans and could never report 503, so
     anything gating a rollout on it was gating on a constant.
@@ -98,10 +126,15 @@ async def readyz(request: Request) -> JSONResponse:
     if runtimes:
         probes.append(_probe("runtime", _check_runtime(runtimes)))
 
-    checks = dict(await asyncio.gather(*probes))
-    ready = all(checks.values())
+    results, maintenance = await asyncio.gather(asyncio.gather(*probes), _maintenance_closed())
+    checks = dict(results)
+    ready = readiness(checks, maintenance=maintenance)
 
     body: dict[str, object] = {"ready": ready}
+    if maintenance:
+        # Already public (`/admin/maintenance/status`); it lets a prober tell
+        # a planned hold from an outage without reading anything else.
+        body["maintenance"] = True
     # Detail only where the perimeter is not the public one. The public admin
     # and gateway entrances strip it; the tailnet entrance and local
     # development keep it, which is where an operator actually reads it.

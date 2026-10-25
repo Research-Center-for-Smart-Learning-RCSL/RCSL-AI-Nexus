@@ -25,23 +25,64 @@ STAGE = Path(__file__).resolve().parents[3] / "launchd/lib/health/availability.s
     ],
 )
 def test_firing_recovery_and_query_failure(answer, status, expected):
+    result = _stage(answer, status, maintenance='{"closed": false}')
+    assert result.returncode == 0, result.stderr
+    assert expected in result.stdout
+
+
+def _stage(answer: str, status: int, *, maintenance: str) -> subprocess.CompletedProcess[str]:
     script = """
 set -u
 PROM_OK=1
 prom_get() { printf '%s' "$TEST_ANSWER"; return "$TEST_STATUS"; }
+maintenance_status_json() { printf '%s' "$TEST_MAINTENANCE"; }
 fail() { printf 'FAIL %s\n' "$1"; }
 note() { printf 'NOTE %s\n' "$1"; }
 . "$1"
 """
-    result = subprocess.run(  # noqa: S603 - fixed local shell and reviewed stage
+    return subprocess.run(  # noqa: S603 - fixed local shell and reviewed stage
         ["/bin/bash", "-c", script, "health-test", str(STAGE)],
-        env={**os.environ, "TEST_ANSWER": answer, "TEST_STATUS": str(status)},
+        env={
+            **os.environ,
+            "TEST_ANSWER": answer,
+            "TEST_STATUS": str(status),
+            "TEST_MAINTENANCE": maintenance,
+        },
         capture_output=True,
         text=True,
         timeout=5,
     )
-    assert result.returncode == 0, result.stderr
-    assert expected in result.stdout
+
+
+@pytest.mark.parametrize(
+    "alert",
+    ["NexusCapabilityUnavailable", "NexusModelResidencyMismatch", "NexusSilentInferenceOutage"],
+)
+def test_a_maintenance_hold_reports_its_released_runtime_as_expected(alert):
+    """#61: the entry releases the runtime on purpose. The first real hold
+    mailed FAILING every five minutes until this."""
+    result = _stage(f"{alert} 2", 0, maintenance='{"closed": true, "phase": "maintenance"}')
+    assert "FAIL" not in result.stdout
+    assert f"{alert} is firing for 2 series, expected while closed" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "alert",
+    [
+        "NexusNodeOperationUnresolved",
+        "NexusAvailabilityObserverStale",
+        "NexusResidencyReconcilerGaveUp",
+    ],
+)
+def test_a_maintenance_hold_hides_no_other_failure(alert):
+    result = _stage(f"{alert} 1", 0, maintenance='{"closed": true}')
+    assert f"FAIL availability-{alert}" in result.stdout
+
+
+@pytest.mark.parametrize("maintenance", ["", "not json", '{"closed": "yes"}'])
+def test_an_unreadable_maintenance_status_counts_as_open(maintenance):
+    result = _stage("NexusCapabilityUnavailable 1", 0, maintenance=maintenance)
+    assert "FAIL availability-NexusCapabilityUnavailable" in result.stdout
 
 
 def test_every_availability_rule_is_delivered():
