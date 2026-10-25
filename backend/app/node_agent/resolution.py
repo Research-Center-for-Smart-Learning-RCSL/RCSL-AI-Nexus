@@ -39,6 +39,7 @@ from typing import Any
 
 from app.node_agent.dispatch import Dispatcher
 from app.node_agent.store import OperationStore
+from app.node_agent.supervisor import Supervisor, SupervisorRefused
 
 CHALLENGE_FILE = "challenge"
 ATTESTATION_FILE = "attestation.json"
@@ -173,7 +174,9 @@ class Resolutions:
             "next": "restart the runtime, then complete this resolution",
         }
 
-    async def complete(self, resolution_id: str) -> dict[str, Any]:
+    async def complete(
+        self, resolution_id: str, *, extra: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         pending = self._pending.get(resolution_id)
         if pending is None:
             raise ResolutionRefused(f"no resolution {resolution_id} is in progress here")
@@ -196,6 +199,7 @@ class Resolutions:
             "after": asdict(after),
             "resolver_generation": self._store.ownership.generation,
             "resolver_boot_id": self._store.ownership.boot_id,
+            **(extra or {}),
         }
         if not await self._store.resolve_unknown(pending.op_id, evidence):
             del self._pending[resolution_id]
@@ -203,3 +207,51 @@ class Resolutions:
         del self._pending[resolution_id]
         state = await self._dispatcher.reopen()
         return {"op_id": pending.op_id, "state": "failed", "gate": state.value}
+
+    async def reset(
+        self,
+        op_id: str,
+        *,
+        evidence: str,
+        operator: str,
+        supervisor: Supervisor,
+        settle_s: float = 60.0,
+        retry_s: float = 2.0,
+    ) -> dict[str, Any]:
+        """Steps 1 to 5 in one call, with the supervisor as step 4 (#49 §5, #61).
+
+        The same ordered evidence as the CLI path: the baseline is taken after
+        the sender is gone and this agent has drained, then the supervisor
+        restarts the runtime, then a second challenge must show another
+        instance. The supervisor's receipt, which proves the old daemon and
+        its runners exited, is recorded beside the witness's two answers; it
+        does not replace them. A failed restart leaves the node drained and
+        the block in place: nothing reopens on a partial reset.
+        """
+        started = await self.start(op_id, evidence=evidence, operator=operator)
+        resolution_id = started["resolution_id"]
+        try:
+            receipt = await supervisor.run("restart", f"reset for {op_id} by {operator}")
+        except SupervisorRefused as exc:
+            self._pending.pop(resolution_id, None)
+            raise ResolutionRefused(f"the runtime supervisor did not restart: {exc}") from exc
+        await self._store.audit(
+            "resolution_restart", op_id, {"resolution_id": resolution_id, "receipt": receipt}
+        )
+        if receipt.get("result") != "ok":
+            self._pending.pop(resolution_id, None)
+            raise ResolutionRefused(
+                f"the runtime supervisor could not restart the runtime: {receipt.get('error')}"
+            )
+        # The new daemon may not be listening yet, and the witness answers on
+        # its own cycle: retried while the resolution is still pending, which
+        # a witness restart (a new incarnation) ends.
+        deadline = time.monotonic() + settle_s
+        while True:
+            try:
+                return await self.complete(resolution_id, extra={"supervisor_receipt": receipt})
+            except ResolutionRefused:
+                if resolution_id not in self._pending or time.monotonic() >= deadline:
+                    self._pending.pop(resolution_id, None)
+                    raise
+                await asyncio.sleep(retry_s)

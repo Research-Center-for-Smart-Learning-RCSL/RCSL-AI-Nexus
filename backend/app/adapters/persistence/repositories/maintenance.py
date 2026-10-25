@@ -18,7 +18,7 @@ from app.adapters.persistence.sqlalchemy_models.maintenance import (
     SINGLETON_ID,
     MaintenanceControlRow,
 )
-from app.domain.entities.maintenance import MaintenancePhase, MaintenanceState
+from app.domain.entities.maintenance import FENCE_LOCK, MaintenancePhase, MaintenanceState
 
 _ROW = MaintenanceControlRow
 
@@ -42,6 +42,9 @@ class PostgresMaintenanceRepository:
     async def close(
         self, *, changed_by: str, message: str | None, expected_return_at: datetime | None
     ) -> MaintenanceState | None:
+        # Waits for promotions already reading the hold to commit, and makes
+        # every later one read it closed (`FENCE_LOCK`). Released at commit.
+        await self._session.execute(select(func.pg_advisory_xact_lock(*FENCE_LOCK)))
         return await self._change(
             _ROW.admission_closed.is_(False),
             admission_closed=True,

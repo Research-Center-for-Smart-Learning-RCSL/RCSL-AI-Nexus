@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>online.rcsl.runtime-supervisor</string>
+
+	<!-- Stops, starts and restarts the native Ollama for the node agent (P3 on
+	     #61). The agent runs in a Linux VM and cannot touch this Mac's
+	     processes, so a maintenance entry or a reset writes a request file and
+	     this job carries it out. Everything it may act on is fixed below, not
+	     in the request: the job label, its plist, the runtime's account and
+	     the process name. The reasoning is at the top of
+	     runtime_supervisor.py. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>-I</string>
+		<string>@REPO@/scripts/host/runtime_supervisor.py</string>
+		<string>--label</string>
+		<string>online.rcsl.ollama</string>
+		<string>--plist</string>
+		<string>/Library/LaunchDaemons/online.rcsl.ollama.plist</string>
+		<string>--user</string>
+		<string>_rcslollama</string>
+		<string>--process</string>
+		<string>ollama</string>
+		<string>--requests</string>
+		<string>@REPO@/data/runtime-supervisor/requests</string>
+		<string>--receipts</string>
+		<string>@REPO@/data/runtime-supervisor/receipts</string>
+	</array>
+
+	<!-- Root, because `launchctl bootout` and `bootstrap` on a system daemon
+	     and a signal to another account's process need it. It is also why the
+	     job refuses to start unless `receipts` is root's alone: the agent
+	     mounts that directory read-only, and a receipt is the evidence that a
+	     stop happened. `requests` is the one path the agent writes. No
+	     UserName key, so launchd runs it as root. -->
+
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+
+	<!-- A restart gives the supervisor a new incarnation, recorded on every
+	     receipt. A request it had claimed but not finished is never run
+	     again: it has no receipt, and the agent reports it as one that may
+	     have run, which is the safe direction. -->
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<key>StandardOutPath</key>
+	<string>/opt/homebrew/var/log/nexus-runtime-supervisor.log</string>
+	<key>StandardErrorPath</key>
+	<string>/opt/homebrew/var/log/nexus-runtime-supervisor.log</string>
+	<key>WorkingDirectory</key>
+	<string>@REPO@/data/runtime-supervisor</string>
+</dict>
+</plist>

@@ -54,6 +54,7 @@ from app.domain.entities.chat import (
 from app.domain.entities.embedding import current_embedding_manifest
 from app.domain.entities.model import PullProgress, RuntimeResidency
 from app.domain.exceptions import (
+    MaintenanceError,
     ManifestPinRefusedError,
     ModelNotFoundError,
     NoAvailableModelError,
@@ -333,6 +334,12 @@ class NodeAgentRuntime:
         except ValueError:
             content = {}
         reason = content.get("refused") or content.get("detail") or response.text[:200]
+        if response.status_code == 503 and str(reason).startswith(
+            ("maintenance", "node_maintenance")
+        ):
+            # The node read the platform's hold at promotion (#61): the same
+            # answer the entrances give, not an overloaded runtime.
+            raise MaintenanceError(detail=f"node agent refused {op_id}: {reason}")
         if response.status_code == 503:
             retry = response.headers.get("retry-after")
             raise ServerOverloadedError(

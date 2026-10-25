@@ -28,6 +28,8 @@ from typing import Any
 
 import asyncpg
 
+from app.domain.entities.maintenance import FENCE_LOCK
+
 logger = logging.getLogger(__name__)
 
 ELECTION_NAMESPACE = 0x4E58_0001
@@ -51,6 +53,14 @@ class NotOwner(Exception):  # noqa: N818 - a state, not a failure
 
 class SummaryBusy(Exception):  # noqa: N818 - an admission state
     """A summary is already outstanding on this node."""
+
+
+class AdmissionClosed(Exception):  # noqa: N818 - an admission state
+    """The platform's maintenance hold is closed (#61); nothing is promoted."""
+
+    def __init__(self, epoch: int | None) -> None:
+        super().__init__(f"maintenance hold closed (epoch {epoch})")
+        self.epoch = epoch
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +200,19 @@ class OperationStore:
             raise TypeError(f"stored result for {op_id} is not an object")
         return decoded
 
+    async def maintenance_hold(self) -> tuple[bool, int | None]:
+        """Whether the platform's hold is closed, and its epoch (#61).
+
+        For the watchdog, which mirrors the hold into the gate; promotion reads
+        it again under the fence, so a stale answer here admits nothing.
+        """
+        hold = await self._pool.fetchrow(
+            "SELECT admission_closed, epoch FROM maintenance_control WHERE id = 1"
+        )
+        if hold is None:
+            return True, None
+        return bool(hold["admission_closed"]), int(hold["epoch"])
+
     async def any_unknown(self) -> bool:
         return bool(
             await self._pool.fetchval(
@@ -250,6 +273,16 @@ class OperationStore:
         that block, drain and role loss also take (design S3, T2).
         """
         async with self._owned(dispatch=True, action="promotion", op_id=op_id) as conn:
+            # The maintenance hold, read under the fence an entry takes
+            # exclusively (`FENCE_LOCK`, #61): a promotion that commits has
+            # read the platform open after every entry that committed first.
+            await conn.execute("SELECT pg_advisory_xact_lock_shared($1, $2)", *FENCE_LOCK)
+            hold = await conn.fetchrow(
+                "SELECT admission_closed, epoch FROM maintenance_control WHERE id = 1"
+            )
+            if hold is None or hold["admission_closed"]:
+                # No row is a schema the migrations have not reached: closed.
+                raise AdmissionClosed(hold["epoch"] if hold is not None else None)
             if await conn.fetchval(
                 "SELECT EXISTS (SELECT 1 FROM node_operations "
                 "WHERE node_id = $1 AND state = 'outcome_unknown')",

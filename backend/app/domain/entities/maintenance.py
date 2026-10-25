@@ -35,6 +35,16 @@ class MaintenancePhase(StrEnum):
 
 MAX_MESSAGE_LENGTH = 500
 
+FENCE_LOCK = (0x4E58_0004, 1)
+"""The advisory lock that orders an entry against node-agent promotions.
+
+An agent's promotion (`accepted → running`, the authorisation point for a
+send) takes it shared and then reads the hold; an entry takes it exclusive
+before closing. So every promotion either committed before the entry, and is
+work the entry interrupts, or reads the closed hold and is refused: none can
+read "open" and commit after the platform closed. Transaction-scoped on both
+sides, and the agent never holds it across a runtime call."""
+
 
 @dataclass(frozen=True, slots=True)
 class MaintenanceState:

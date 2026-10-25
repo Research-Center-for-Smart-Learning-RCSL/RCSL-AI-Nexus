@@ -708,8 +708,13 @@ docstring 裡，那是估算器本身所在的地方。
   ```
 
   agent 需要 `secrets/agent_database_url`（`nexus_agent` 角色，密碼自己產生）、
-  `secrets/node_agent_token`（至少 32 字元）和 `.env` 裡的 `NODE_AGENT_NODE_ID`（這台在
-  `nodes` 的 id）。啟動後 `.env` 要固定帶上 override：
+  `secrets/node_agent_token`（至少 32 字元）、`secrets/node_agent_control_token`（至少 32
+  字元，且不能和前者相同）和 `.env` 裡的 `NODE_AGENT_NODE_ID`（這台在 `nodes` 的 id）。
+  第二個 token 只有 agent 掛載：drain、resume、解除封鎖和重啟 runtime 都要它，gateway
+  拿不到（[#61](https://github.com/Research-Center-for-Smart-Learning-RCSL/RCSL-AI-Nexus/issues/61) P3）。
+  讓 agent 能自己停止或重啟 Ollama 的 root runtime supervisor，安裝與驗收見
+  [runtime-supervisor.md](./runtime-supervisor.md)；沒裝的話 agent 照常服務，只是不能控制
+  runtime。啟動後 `.env` 要固定帶上 override：
 
   ```sh
   COMPOSE_FILE=docker-compose.yml:docker-compose.node-agent.yml

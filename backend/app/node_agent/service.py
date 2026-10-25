@@ -31,6 +31,7 @@ from app.node_agent.relay import OllamaRelay
 from app.node_agent.resolution import Resolutions, Witness
 from app.node_agent.settings import AgentSettings
 from app.node_agent.store import OperationStore
+from app.node_agent.supervisor import Supervisor
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ class Agent:
     relay: OllamaRelay
     counter: GgufTokenCounter | None
     resolutions: Resolutions
+    supervisor: Supervisor
     keep_alive: str | int
     terminate: Callable[[], None] = field(default=lambda: os.kill(os.getpid(), signal.SIGTERM))
     """How a lost role ends the process. SIGTERM to ourselves, not a fork or
@@ -65,12 +67,32 @@ class Agent:
                     await self._lost("election session lost")
                     return
                 await self._recheck_drain()
+                await self.follow_hold()
         except asyncio.CancelledError:
             raise
         except Exception:
             # An unsupervised agent is worse than a stopped one.
             logger.exception("watchdog failed; treating the role as lost")
             await self._lost("watchdog failed")
+
+    async def follow_hold(self) -> None:
+        """Mirror the platform's maintenance hold into the gate (#61).
+
+        Freezing here is a convenience, not the fence: promotion reads the hold
+        under the entry's lock whatever this last saw. Thawing is what brings
+        the node back once the hold lifts. A failed read changes nothing and
+        is retried on the next tick.
+        """
+        try:
+            closed, epoch = await self.store.maintenance_hold()
+        except Exception:  # noqa: BLE001 - retried on the next tick
+            logger.warning("could not read the maintenance hold", exc_info=True)
+            return
+        if closed and (not self.dispatcher.frozen or self.dispatcher.frozen_epoch != epoch):
+            await self.dispatcher.freeze(epoch)
+        elif not closed and self.dispatcher.frozen:
+            state = await self.dispatcher.thaw()
+            logger.info("maintenance hold lifted; gate %s", state.value)
 
     async def _recheck_drain(self) -> None:
         # Apart from the lock checks: a database error here is the reason a
@@ -148,9 +170,19 @@ async def start(settings: AgentSettings) -> Agent:
         relay=OllamaRelay(settings.runtime_base_url, timeout_s=settings.request_timeout_s),
         counter=GgufTokenCounter(settings.models_root) if settings.models_root else None,
         resolutions=Resolutions(dispatcher, store, witness),
+        supervisor=Supervisor(
+            settings.supervisor_requests,
+            settings.supervisor_receipts,
+            timeout_s=settings.supervisor_timeout_s,
+        ),
         keep_alive=_keep_alive(settings.keep_alive),
     )
+    # The hold before the gate opens: an agent started during maintenance
+    # never serves, not even until its first watchdog tick (#61).
+    await agent.follow_hold()
     state = await dispatcher.reopen()
+    if state is GateState.MAINTENANCE:
+        logger.warning("node %s starts under the maintenance hold", settings.node_id)
     if state is GateState.BLOCKED:
         logger.warning("node %s is blocked by unknown operations", settings.node_id)
     agent._watchdog = asyncio.create_task(agent.watch())

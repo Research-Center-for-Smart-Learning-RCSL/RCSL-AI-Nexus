@@ -178,6 +178,10 @@ async def test_node_agent_account_holds_its_own_tables_and_nothing_else(database
     try:
         async with agent.connect() as conn:
             await conn.execute(text("SELECT 1 FROM models LIMIT 1"))
+            # Read at every promotion, under the entry's fence (#61)...
+            await conn.execute(text("SELECT admission_closed, epoch FROM maintenance_control"))
+        # ...and never written: only an administrator closes or reopens.
+        await _denied(agent, "UPDATE maintenance_control SET admission_closed = false")
         await _allowed(agent, "UPDATE nodes SET lock_domain_id = 'd' WHERE id = :id", id=node)
         await _allowed(
             agent,

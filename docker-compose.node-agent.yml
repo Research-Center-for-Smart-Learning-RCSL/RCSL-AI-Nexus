@@ -13,17 +13,30 @@
 #   - secrets/agent_database_url  the `nexus_agent` role, provisioned by migrate
 #   - secrets/node_agent_token    at least 32 characters; shared with the
 #                                 gateway and admin entrances below
+#   - secrets/node_agent_control_token
+#                                 at least 32 characters and different from
+#                                 the token above; the agent's alone for now
+#                                 (P3 on #61). Drain, resume, resolution,
+#                                 interrupt and runtime control need it, and
+#                                 the gateway must never hold it.
 #   - NODE_AGENT_NODE_ID in .env  this host's row in `nodes`
 #   - the host runtime witness    scripts/host/runtime_witness.py under a root
 #                                 launchd job, writing RUNTIME_WITNESS_HOST_DIR
 #                                 (without it the agent runs, but no node block
 #                                 can be cleared)
+#   - the host runtime supervisor scripts/host/runtime_supervisor.py under a
+#                                 root launchd job, reading requests from and
+#                                 writing receipts to RUNTIME_SUPERVISOR_HOST_DIR
+#                                 (without it the agent runs, but cannot stop
+#                                 or restart the runtime)
 
 secrets:
   agent_database_url:
     file: ./secrets/agent_database_url
   node_agent_token:
     file: ./secrets/node_agent_token
+  node_agent_control_token:
+    file: ./secrets/node_agent_control_token
 
 networks:
   # The agent alone reaches the host runtime.
@@ -115,10 +128,15 @@ services:
       - ${RUNTIME_WITNESS_HOST_DIR:-./data/runtime-witness}/out:/run/node-agent-witness/out:ro
       # The one path the agent writes on the host: a 32-hex-character nonce.
       - ${RUNTIME_WITNESS_HOST_DIR:-./data/runtime-witness}/challenge:/run/node-agent-witness/challenge
+      # The runtime supervisor (P3 on #61): the agent writes a request naming
+      # one of three fixed actions, and reads the root-written receipt.
+      - ${RUNTIME_SUPERVISOR_HOST_DIR:-./data/runtime-supervisor}/requests:/run/node-agent-supervisor/requests
+      - ${RUNTIME_SUPERVISOR_HOST_DIR:-./data/runtime-supervisor}/receipts:/run/node-agent-supervisor/receipts:ro
     networks: [agent-egress, agent-data, agent-gateway, agent-control]
     secrets:
       - agent_database_url
       - node_agent_token
+      - node_agent_control_token
     # Stopping waits for admitted work to reach the runtime's terminal
     # evidence (design U1), and a generation may legitimately run up to the
     # request timeout. A shorter grace period would turn every stop during a

@@ -110,7 +110,9 @@ GATEWAY_BINDING_GRANTS: tuple[tuple[str, str], ...] = (
 # domain it binds on first claim, and one of `models`, the weights pin its pull
 # sets. No DELETE anywhere: an operation, a stored
 # result or an audit row is evidence, and nothing the agent does removes one.
-AGENT_READ_TABLES: tuple[str, ...] = ("nodes", "models")
+# `maintenance_control` is read at every promotion (#61) and never written:
+# only an administrator closes or reopens the platform.
+AGENT_READ_TABLES: tuple[str, ...] = ("nodes", "models", "maintenance_control")
 AGENT_WRITABLE_TABLES: tuple[str, ...] = ("node_agents", "node_operations")
 # Append-only: a stored result and an audit row are written once and never
 # changed by the account whose conduct they record (review on #33).

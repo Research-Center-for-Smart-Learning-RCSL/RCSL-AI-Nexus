@@ -21,6 +21,18 @@ The order for every attempt (design R3, T2, U1 on #24):
 
 Admitted work is in flight for every purpose (design U1): drain, exit after a
 lost role, and resolution all wait for it to reach terminal evidence.
+
+**The maintenance hold (#61) is the one exception to waiting.** Promotion
+reads the hold in the database under the fence an entry takes (`FENCE_LOCK`),
+so nothing is admitted after the platform closes, and a promotion that finds
+it closed freezes the gate. A frozen gate stays `maintenance` through every
+reopen until the hold lifts, and a task promoted just before the freeze is
+withheld at its last in-process step before the runtime sees a byte (step 6).
+Only on an explicit `interrupt` are senders already talking to the runtime
+cancelled: their attempts become `outcome_unknown`, truthfully, and block the
+node until a verified reset resolves them. Sender quiescence (no relay still
+running) is reported apart from settlement, which may retry for as long as
+the database is away.
 """
 
 from __future__ import annotations
@@ -34,7 +46,13 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from app.node_agent.store import LIFECYCLE_KINDS, NotOwner, Operation, SummaryBusy
+from app.node_agent.store import (
+    LIFECYCLE_KINDS,
+    AdmissionClosed,
+    NotOwner,
+    Operation,
+    SummaryBusy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +64,7 @@ class GateState(enum.Enum):
     SERVING = "serving"
     DRAINING = "draining"
     BLOCKED = "blocked"
+    MAINTENANCE = "maintenance"
     LOST = "lost"
 
 
@@ -117,7 +136,16 @@ class Uncertain:
     observed: dict[str, Any] = field(default_factory=dict)
 
 
-Outcome = Completed | RuntimeRefused | NotSent | Uncertain
+@dataclass(frozen=True, slots=True)
+class Withheld:
+    """Promoted, then held back at the final send barrier because the gate
+    froze for maintenance: no byte reached the runtime, and only this process
+    can know that, so the row becomes `cancelled_unsent` (#61)."""
+
+    reason: str
+
+
+Outcome = Completed | RuntimeRefused | NotSent | Uncertain | Withheld
 
 
 class Sink(Protocol):
@@ -247,6 +275,15 @@ class Dispatcher:
         """The lifecycle operation holding the node, if any (`exclusive`)."""
         self._held_by_operator = False
         """An operator's drain, which a lifecycle operation ending must not undo."""
+        self._frozen = False
+        self._frozen_epoch: int | None = None
+        """The maintenance hold this gate is frozen for (#61), if any."""
+        self._sending: dict[str, asyncio.Task[Outcome]] = {}
+        """Relays still talking to the runtime: a subset of `_admitted`, which
+        also holds attempts that are only settling."""
+        self._quiet = asyncio.Event()
+        self._quiet.set()
+        self._interrupted: set[str] = set()
         self._uncommitted_unknown: set[str] = set()
         """Operations this process knows are uncertain but has not yet
         committed as `outcome_unknown`. The database cannot see them, so
@@ -263,6 +300,14 @@ class Dispatcher:
     def admitted(self) -> int:
         return len(self._admitted)
 
+    @property
+    def frozen_epoch(self) -> int | None:
+        return self._frozen_epoch
+
+    @property
+    def frozen(self) -> bool:
+        return self._frozen
+
     async def _close(self, state: GateState) -> None:
         async with self._barrier:
             self._close_locked(state)
@@ -270,6 +315,8 @@ class Dispatcher:
     def _close_locked(self, state: GateState) -> None:
         if self._state is GateState.LOST:
             return
+        if self._frozen and state is not GateState.LOST:
+            return  # a hold outranks a block and a drain; thawing re-checks both
         if state is GateState.DRAINING and self._state is GateState.BLOCKED:
             return  # a block outranks a drain; resuming will re-check
         self._state = state
@@ -303,10 +350,89 @@ class Dispatcher:
     async def _reopen_locked(self) -> GateState:
         if self._state is GateState.LOST or self._exclusive is not None:
             return self._state
+        if self._frozen:
+            self._state = GateState.MAINTENANCE
+            return self._state
         blocked = bool(self._uncommitted_unknown) or await self._store.any_unknown()
         self._state = GateState.BLOCKED if blocked else GateState.SERVING
         self._gate_changed.set()
         return self._state
+
+    # -- maintenance (#61) --------------------------------------------------
+
+    def _freeze_locked(self, epoch: int | None) -> None:
+        if self._state is GateState.LOST:
+            return
+        if not self._frozen:
+            logger.warning("maintenance hold (epoch %s): admission frozen", epoch)
+        self._frozen = True
+        self._frozen_epoch = epoch
+        self._state = GateState.MAINTENANCE
+        self._gate_changed.set()
+
+    async def freeze(self, epoch: int | None) -> None:
+        """Admit nothing more while the platform's hold is closed.
+
+        Queued work is cancelled unsent as it reaches promotion, and anything
+        promoted but not yet sent is withheld at the final send barrier.
+        Admitted senders are not touched: that is `interrupt`.
+        """
+        async with self._barrier:
+            self._freeze_locked(epoch)
+
+    async def thaw(self) -> GateState:
+        """The hold lifted. Back to what the gate would be without it: a drain
+        still held by an operator or a lifecycle operation, a block if anything
+        is unknown, otherwise serving."""
+        async with self._barrier:
+            if not self._frozen:
+                return self._state
+            self._frozen = False
+            self._frozen_epoch = None
+            self._interrupted.clear()
+            if self._state is GateState.LOST:
+                return self._state
+            if self._exclusive is not None or self._held_by_operator:
+                self._state = GateState.DRAINING
+                self._gate_changed.set()
+                return self._state
+            return await self._reopen_locked()
+
+    async def interrupt(self, *, deadline_s: float) -> dict[str, Any]:
+        """Cancel every relay still talking to the runtime, on a frozen gate.
+
+        Does not wait for generation to finish (#61): each cancelled attempt
+        settles as `outcome_unknown`, because bytes may have reached the
+        runtime, and the node stays blocked until a verified reset resolves
+        it. Cancelling the relay closes its connection; it does not prove the
+        runtime stopped computing, which only the reset can.
+
+        Waits up to `deadline_s` for sender quiescence, never for settlement:
+        an attempt whose outcome cannot yet be committed is reported as
+        settling, and keeps its slot until it is.
+        """
+        async with self._barrier:
+            if not self._frozen:
+                raise RuntimeError("interrupt needs the gate frozen for maintenance")
+            interrupted = sorted(self._sending)
+            self._interrupted.update(interrupted)
+            for sender in self._sending.values():
+                sender.cancel()
+        with contextlib.suppress(TimeoutError):
+            async with asyncio.timeout(deadline_s):
+                await self._quiet.wait()
+        return {
+            "epoch": self._frozen_epoch,
+            "interrupted": interrupted,
+            "still_sending": sorted(self._sending),
+            "settling": sorted(set(self._admitted) - set(self._sending)),
+            "quiescent": not self._sending,
+        }
+
+    @property
+    def quiescent(self) -> bool:
+        """No relay is talking to the runtime."""
+        return not self._sending
 
     def holds(self, op_id: str) -> bool:
         """Whether this process still has a task for the operation."""
@@ -400,18 +526,21 @@ class Dispatcher:
                         except NotOwner:
                             self._state = GateState.LOST
                             promoted = False
+                        except AdmissionClosed as closed:
+                            self._freeze_locked(closed.epoch)
+                            promoted = False
                         if promoted:
                             self._idle.clear()
                             self._admitted[op_id] = asyncio.create_task(
                                 self._run(attempt, relay, kind=kind, after=after)
                             )
                             handed_off = True
+                        elif self._state is GateState.LOST:
+                            refusal = "lost_before_send"
+                        elif self._frozen:
+                            refusal = "maintenance_before_send"
                         else:
-                            refusal = (
-                                "lost_before_send"
-                                if self._state is GateState.LOST
-                                else "node_blocked"
-                            )
+                            refusal = "node_blocked"
             except BaseException:
                 if not handed_off:
                     self._slots.release()
@@ -576,6 +705,9 @@ class Dispatcher:
                     except NotOwner:
                         self._state = GateState.LOST
                         promoted = False
+                    except AdmissionClosed as closed:
+                        self._freeze_locked(closed.epoch)
+                        promoted = False
                     if promoted:
                         self._idle.clear()
                         self._admitted[op_id] = asyncio.create_task(
@@ -585,6 +717,8 @@ class Dispatcher:
                         refusal = None
                     elif self._state is GateState.LOST:
                         refusal = "lost_before_send"
+                    elif self._frozen:
+                        refusal = "maintenance_before_send"
                     else:
                         refusal = "not_promoted"
         except BaseException:
@@ -638,18 +772,39 @@ class Dispatcher:
         op_id = attempt.op_id
         outcome: Outcome
         cancelled: asyncio.CancelledError | None = None
+        # The final send barrier (#61). The check and the sender's creation are
+        # one synchronous step, so a freeze either lands before it, and nothing
+        # is sent, or finds the sender registered and can interrupt it.
+        sender: asyncio.Task[Outcome] | None = None
+        if self._frozen:
+            outcome = Withheld(reason="maintenance_before_send")
+        else:
+            sender = asyncio.ensure_future(relay(_AttemptSink(self, attempt)))
+            self._sending[op_id] = sender
+            self._quiet.clear()
         try:
-            outcome = await relay(_AttemptSink(self, attempt))
+            if sender is not None:
+                outcome = await sender
         except asyncio.CancelledError as exc:
             # Cancelled after promotion, so bytes may have gone out: unknown,
             # and settled like any other outcome before the cancellation goes
             # on, or the slot, the stream and drain would wait for ever
             # (review of #33's branch).
-            outcome = Uncertain(reason="relay_cancelled")
-            cancelled = exc
+            current = asyncio.current_task()
+            if op_id in self._interrupted and (current is None or not current.cancelling()):
+                # Only the sender was cancelled, by `interrupt`: this task goes on.
+                outcome = Uncertain(reason="maintenance_interrupted")
+            else:
+                outcome = Uncertain(reason="relay_cancelled")
+                cancelled = exc
         except Exception as exc:  # noqa: BLE001 - a relay bug is not terminal evidence
             logger.exception("relay for %s raised", op_id)
             outcome = Uncertain(reason=f"relay_error:{type(exc).__name__}")
+        finally:
+            if sender is not None:
+                self._sending.pop(op_id, None)
+                if not self._sending:
+                    self._quiet.set()
         lifecycle = kind in LIFECYCLE_KINDS
         try:
             await self._settle(op_id, outcome)
@@ -699,6 +854,8 @@ class Dispatcher:
                 await self._store.finish(op_id, "failed", outcome.terminal, reason=outcome.reason)
             elif isinstance(outcome, NotSent):
                 await self._store.finish(op_id, "failed", {}, reason=f"not_sent:{outcome.reason}")
+            elif isinstance(outcome, Withheld):
+                await self._store.unsent_after_promotion(op_id, outcome.reason)
             else:
                 await self._store.mark_unknown(op_id, outcome.reason, outcome.observed)
 
@@ -730,5 +887,6 @@ def _retry_after(state: GateState) -> int | None:
         GateState.SERVING: 1,
         GateState.DRAINING: 30,
         GateState.BLOCKED: 60,
+        GateState.MAINTENANCE: 60,
         GateState.LOST: None,
     }[state]

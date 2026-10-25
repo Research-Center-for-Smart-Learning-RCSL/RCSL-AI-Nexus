@@ -36,6 +36,9 @@ separately at the end, marked as superseded.
 
 ### October 2026
 
+**[2026-10-25](./progress/2026-10-25.md)**
+- #61 third package: node-agent promotion reads the maintenance hold under the entry's lock, a frozen gate, the final send barrier and interrupt, a separate control token, and a root supervisor that stops and restarts Ollama (not yet installed on the host)
+
 **[2026-10-24](./progress/2026-10-24.md)**
 - #61 first package: a platform-wide maintenance hold that closes every entrance to all but platform administrators, revokes non-admin sessions for good and suspends the reconciler; entering stays disabled until forced interruption and verified restore exist
 
