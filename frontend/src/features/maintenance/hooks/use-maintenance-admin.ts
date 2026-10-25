@@ -8,6 +8,8 @@ import {
   enterMaintenance,
   getMaintenance,
   reopenAfterMaintenance,
+  restoreAfterMaintenance,
+  retryMaintenance,
   setMaintenanceMessage,
   type MaintenanceNotice,
 } from '../api';
@@ -50,4 +52,14 @@ export function useSetMaintenanceMessage() {
       setMaintenanceMessage(notice),
     onSettled: invalidate,
   });
+}
+
+export function useRestoreAfterMaintenance() {
+  const invalidate = useInvalidateBoth();
+  return useMutation({ mutationFn: restoreAfterMaintenance, onSettled: invalidate });
+}
+
+export function useRetryMaintenance() {
+  const invalidate = useInvalidateBoth();
+  return useMutation({ mutationFn: retryMaintenance, onSettled: invalidate });
 }
