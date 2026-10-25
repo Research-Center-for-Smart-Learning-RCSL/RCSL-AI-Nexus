@@ -140,3 +140,31 @@ async def test_a_named_request_the_supervisor_holds_is_waited_for(dirs: tuple[Pa
 async def test_a_request_id_must_be_one_the_supervisor_accepts(dirs: tuple[Path, Path]) -> None:
     with pytest.raises(ValueError):
         await Supervisor(*dirs).run("restart", "x", request_id="../../etc")
+
+
+async def test_a_withdrawn_request_is_refused_and_never_runs(dirs: tuple[Path, Path]) -> None:
+    """Review of #80: the agent withdraws a request the supervisor has not
+    taken when the hold lifts; the call waiting on it ends at once."""
+    requests, receipts = dirs
+    supervisor = Supervisor(requests, receipts, timeout_s=5, poll_s=0.01)
+    running = asyncio.create_task(supervisor.run("restart", "maintenance", request_id="1" * 32))
+    await asyncio.sleep(0.05)
+
+    assert supervisor.outstanding() == (["1" * 32], [])
+    assert supervisor.withdraw("1" * 32)
+    with pytest.raises(SupervisorRefused, match="withdrawn"):
+        await asyncio.wait_for(running, 1)
+    assert supervisor.outstanding() == ([], [])
+
+
+async def test_a_taken_request_cannot_be_withdrawn_and_is_outstanding(
+    dirs: tuple[Path, Path],
+) -> None:
+    requests, receipts = dirs
+    (requests / f".{'2' * 32}.claimed").write_text("{}")
+    supervisor = Supervisor(requests, receipts)
+
+    assert not supervisor.withdraw("2" * 32)
+    assert supervisor.outstanding() == ([], ["2" * 32])
+    (receipts / f"{'2' * 32}.json").write_text(json.dumps({"request_id": "2" * 32}))
+    assert supervisor.outstanding() == ([], []), "answered: no longer outstanding"

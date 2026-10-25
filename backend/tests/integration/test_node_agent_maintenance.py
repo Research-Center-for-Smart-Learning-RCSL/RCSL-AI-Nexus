@@ -239,3 +239,44 @@ async def test_an_entry_waits_for_a_promotion_that_is_reading_the_hold(
     finally:
         await promotion.close()
         await engine.dispose()
+
+
+async def test_lifting_the_hold_withdraws_a_restart_the_supervisor_has_not_taken(
+    client: dict[str, Any],
+) -> None:
+    """Review of #80: a queued restart must not run after the platform reopens."""
+    await hold(client["dsn"], True)
+    await until_gate(client, "maintenance")
+    request_id = "3" * 32
+    request = client["supervisor"] / "requests" / f"{request_id}.json"
+    request.write_text(json.dumps({"request_id": request_id, "action": "restart", "reason": "r"}))
+
+    await hold(client["dsn"], False)
+    await until_gate(client, "serving")
+
+    assert not request.exists()
+    events = await client["agent"].pool.fetch(
+        "SELECT detail->>'request_id' AS id FROM node_operation_audit "
+        "WHERE event = 'runtime_control_withdrawn'"
+    )
+    assert [e["id"] for e in events] == [request_id]
+
+
+async def test_the_node_is_not_served_while_a_taken_restart_runs(client: dict[str, Any]) -> None:
+    await hold(client["dsn"], True)
+    await until_gate(client, "maintenance")
+    request_id = "4" * 32
+    requests = client["supervisor"] / "requests"
+    claimed = requests / f".{request_id}.claimed"
+    claimed.write_text("{}")
+
+    await hold(client["dsn"], False)
+    await asyncio.sleep(0.3)  # several watchdog ticks
+    assert await gate(client) == "maintenance", "a restart may be stopping the runtime"
+    resumed = await client["http"].post("/v1/resume", headers=CONTROL)
+    assert resumed.status_code == 409
+
+    receipt = {"request_id": request_id, "action": "restart", "result": "ok"}
+    (client["supervisor"] / "receipts" / f"{request_id}.json").write_text(json.dumps(receipt))
+    claimed.unlink()
+    await until_gate(client, "serving")

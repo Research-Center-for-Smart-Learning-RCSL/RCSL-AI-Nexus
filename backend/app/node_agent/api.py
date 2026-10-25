@@ -610,9 +610,12 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
         await agent.dispatcher.drain()
         return {"gate": agent.dispatcher.state.value, "admitted": agent.dispatcher.admitted}
 
-    @app.post("/v1/resume", dependencies=controlled)
-    async def resume(request: Request) -> dict[str, Any]:
-        state = await _agent(request).dispatcher.reopen()
+    @app.post("/v1/resume", dependencies=controlled, response_model=None)
+    async def resume(request: Request) -> dict[str, Any] | JSONResponse:
+        agent = _agent(request)
+        if not await agent.runtime_quiet_for_serving():
+            return JSONResponse(status_code=409, content={"refused": "runtime_request_running"})
+        state = await agent.dispatcher.reopen()
         return {"gate": state.value}
 
     @app.post("/v1/maintenance/resolutions", dependencies=controlled)

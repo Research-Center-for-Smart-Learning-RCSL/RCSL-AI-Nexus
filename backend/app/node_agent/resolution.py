@@ -291,11 +291,19 @@ class Resolutions:
         recorded = await self._store.audited("maintenance_reset_baseline", reset_id)
         baseline: Attestation | None = None
         unwitnessed: str | None = None
+        # The operations this reset can speak for: unknown, or still settling,
+        # when the baseline was taken with no sender left. Anything sent after
+        # it reached a runtime this restart may not have ended (review of #80).
+        cohort: list[str] = []
         if recorded is not None:
             baseline = Attestation(**recorded["baseline"])
+            cohort = [str(op) for op in recorded.get("cohort") or []]
         elif supervisor.receipt(reset_id) is not None:
             unwitnessed = "the runtime restarted before a witness baseline was recorded"
         else:
+            cohort = sorted(
+                set(await self._store.unknown_ops()) | set(self._dispatcher.admitted_ops)
+            )
             try:
                 baseline = await self._witness.attest()
             except ResolutionRefused as exc:
@@ -309,6 +317,7 @@ class Resolutions:
                         "epoch": epoch,
                         "operator": operator,
                         "baseline": asdict(baseline),
+                        "cohort": cohort,
                     },
                 )
 
@@ -334,7 +343,15 @@ class Resolutions:
 
         resolved: list[str] = []
         if after is not None and baseline is not None:
-            for op_id in await self._store.unknown_ops():
+            closed, current = await self._store.maintenance_hold()
+            if not closed or current != epoch or self._dispatcher.frozen_epoch != epoch:
+                # Work admitted after a reopen may be unknown now too, and
+                # the cohort alone cannot tell this restart covered the
+                # runtime it reached: resolve nothing.
+                after, unwitnessed = None, "the hold was lifted during the reset"
+        if after is not None and baseline is not None:
+            unknown_now = set(await self._store.unknown_ops())
+            for op_id in [op for op in cohort if op in unknown_now]:
                 operation = await self._store.observe(op_id)
                 if operation is None or self._dispatcher.holds(op_id):
                     continue
