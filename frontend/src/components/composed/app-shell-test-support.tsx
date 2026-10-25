@@ -69,7 +69,7 @@ const session = {
     scopes: [] as ScopeName[] | undefined,
     session_expires_at: null,
   },
-  status: 'authenticated' as const,
+  status: 'authenticated' as 'authenticated' | 'unauthenticated',
   authMode: 'local' as const,
   can: (scope: ScopeName) => (session.me.scopes ?? []).includes(scope),
   error: null,
@@ -87,8 +87,16 @@ vi.mock('@/lib/session', async (importOriginal) => {
 });
 
 /** The maintenance hold (#61), open unless a test closes it. */
+const OPEN = {
+  closed: false,
+  phase: 'normal',
+  message: null,
+  expected_return_at: null,
+  revision: 0,
+};
+
 export const maintenanceState = {
-  status: null as null | {
+  status: OPEN as null | {
     closed: boolean;
     phase: string;
     message: string | null;
@@ -97,8 +105,17 @@ export const maintenanceState = {
   },
   closed: false,
   unavailable: false,
+  error: null as Error | null,
   refresh: vi.fn(),
 };
+
+/** The first status read has not answered yet, or (`failed`) never will. */
+export function maintenanceUnknown(failed = false) {
+  maintenanceState.status = null;
+  maintenanceState.closed = false;
+  maintenanceState.unavailable = failed;
+  maintenanceState.error = failed ? new Error('Network unreachable') : null;
+}
 
 vi.mock('@/lib/maintenance', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/maintenance')>();
@@ -114,6 +131,11 @@ export function closeForMaintenance(message: string | null = 'Upgrading the runt
     expected_return_at: null,
     revision: 1,
   };
+}
+
+/** No session: the public entrance would send this reader to sign in. */
+export function signedOut() {
+  session.status = 'unauthenticated';
 }
 
 export function signedInAs(role: 'admin' | 'user') {
@@ -159,8 +181,11 @@ beforeEach(() => {
   assistantState.isOpen = false;
   assistantState.setOpen.mockClear();
   maintenanceState.closed = false;
-  maintenanceState.status = null;
+  maintenanceState.status = OPEN;
+  maintenanceState.unavailable = false;
+  maintenanceState.error = null;
   session.me.role = 'user';
+  session.status = 'authenticated';
 });
 
 export function TestAppShell({ children }: { children: ReactNode }) {

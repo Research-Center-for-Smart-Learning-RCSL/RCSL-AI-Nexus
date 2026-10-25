@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
+import { ApiError } from '@/lib/api-client';
 import { SessionProvider, useSession, type Me } from '@/lib/session';
 
 /**
@@ -105,5 +106,28 @@ describe('can', () => {
 
     expect(result.current.status).toBe('loading');
     expect(result.current.can('chat:use')).toBe(false);
+  });
+});
+
+describe('a maintenance refusal of /me (#61)', () => {
+  it('drops the last answer instead of keeping a demoted administrator in', async () => {
+    // TanStack Query keeps the last successful data beside a later error, so
+    // without this an account that was `admin` when it last asked would keep
+    // its exemption after the server refused its live role.
+    const rendered = await signedInAs(me({ role: 'admin', scopes: ['maintenance:read'] }));
+    expect(rendered.result.current.isAdmin).toBe(true);
+
+    get.mockRejectedValue(
+      new ApiError(503, 'The platform is closed for maintenance.', {
+        code: 'maintenance',
+        message: 'The platform is closed for maintenance.',
+      }),
+    );
+    await act(() => rendered.result.current.refresh());
+
+    await waitFor(() => expect(rendered.result.current.status).toBe('unauthenticated'));
+    expect(rendered.result.current.me).toBeNull();
+    expect(rendered.result.current.isAdmin).toBe(false);
+    expect(rendered.result.current.can('maintenance:read')).toBe(false);
   });
 });

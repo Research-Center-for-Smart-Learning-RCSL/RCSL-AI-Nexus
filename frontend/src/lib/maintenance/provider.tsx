@@ -30,9 +30,12 @@ export const MAINTENANCE_POLL_MS = 5_000;
 export type MaintenanceValue = {
   /** Null until the first answer. Never assumed open before it arrives. */
   status: MaintenanceStatus | null;
+  /** False until the first answer, too; read `status` to tell unknown apart. */
   closed: boolean;
   /** The status endpoint could not be read at all. */
   unavailable: boolean;
+  /** Why it could not, while `unavailable`. */
+  error: Error | null;
   refresh: () => Promise<void>;
 };
 
@@ -79,9 +82,10 @@ export function MaintenanceProvider({ children }: { children: ReactNode }) {
       status: query.data ?? null,
       closed,
       unavailable: query.data === undefined && query.isError,
+      error: query.data === undefined ? query.error : null,
       refresh,
     }),
-    [query.data, query.isError, closed, refresh],
+    [query.data, query.isError, query.error, closed, refresh],
   );
 
   return <MaintenanceContext.Provider value={value}>{children}</MaintenanceContext.Provider>;

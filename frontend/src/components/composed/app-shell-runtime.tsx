@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 
 import { cn } from '@/lib/utils';
+import { ErrorState } from '@/components/composed/error-state';
 import { useSession } from '@/lib/session';
 import { useMaintenance } from '@/lib/maintenance';
 import { MaintenanceBanner } from '@/features/maintenance/components/maintenance-banner';
@@ -78,12 +79,17 @@ export function AppShell({ children }: { children: ReactNode }) {
   // Held out by a maintenance hold (#61): everyone but a signed-in platform
   // administrator. Decided before the login redirect, because during a hold
   // "sign in again" and "Tailscale connection lost" are both wrong answers.
+  //
+  // Unknown is not open. Until the first status answer arrives nothing is
+  // rendered or redirected on the strength of `closed` being false, or a 401
+  // from `/me` that lands first would send a held-out reader to sign in.
+  const maintenanceKnown = maintenance.status !== null;
   const heldOut =
     maintenance.closed && !(status === 'authenticated' && me?.role === 'admin');
 
   // Only the public entrance has a login screen to redirect to.
   const shouldRedirectToLogin =
-    status === 'unauthenticated' && authMode !== 'tailnet' && !heldOut;
+    maintenanceKnown && status === 'unauthenticated' && authMode !== 'tailnet' && !heldOut;
 
   useEffect(() => {
     if (!shouldRedirectToLogin) return;
@@ -109,6 +115,29 @@ export function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (onForbiddenRoute) router.replace('/chat');
   }, [onForbiddenRoute, router]);
+
+  if (!maintenanceKnown) {
+    if (maintenance.unavailable) {
+      return (
+        <div className="flex flex-1 items-center justify-center p-6">
+          <ErrorState
+            title="Could not check whether the platform is open"
+            error={maintenance.error}
+            onRetry={() => void maintenance.refresh()}
+            className="max-w-md"
+          />
+        </div>
+      );
+    }
+    // The same shape as the loading branch below, so the curtain mounted here
+    // is the one that branch inherits (see the note there).
+    return (
+      <>
+        {renderSessionGate({ status: 'loading', authMode, error, refresh })}
+        <AppEntryTransition sessionSettled={false} />
+      </>
+    );
+  }
 
   if (heldOut && status !== 'loading' && maintenance.status) {
     return (

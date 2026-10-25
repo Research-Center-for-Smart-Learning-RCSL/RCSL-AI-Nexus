@@ -16,7 +16,7 @@ const maintenance = vi.hoisted(() => ({
 
 vi.mock('@/lib/maintenance', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/maintenance')>()),
-  useMaintenance: () => ({ ...maintenance, unavailable: false, refresh: vi.fn() }),
+  useMaintenance: () => ({ ...maintenance, unavailable: false, error: null, refresh: vi.fn() }),
 }));
 
 describe('the authentication layout', () => {

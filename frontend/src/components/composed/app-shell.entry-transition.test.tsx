@@ -68,7 +68,13 @@ const ME = {
 // The maintenance hold (#61) is open throughout; its own suite covers it.
 vi.mock('@/lib/maintenance', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/maintenance')>()),
-  useMaintenance: () => ({ status: null, closed: false, unavailable: false, refresh: vi.fn() }),
+  useMaintenance: () => ({
+    status: { closed: false, phase: 'normal', message: null, expected_return_at: null, revision: 0 },
+    closed: false,
+    unavailable: false,
+    error: null,
+    refresh: vi.fn(),
+  }),
 }));
 
 vi.mock('@/lib/session', async (importOriginal) => {
