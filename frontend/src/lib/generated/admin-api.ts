@@ -1639,6 +1639,10 @@ export interface paths {
          * Readyz
          * @description Readiness: dependencies are actually reachable.
          *
+         *     During a maintenance hold (#61) the runtime is released on purpose, so it
+         *     does not make the entrance unready; `maintenance: true` says why. The
+         *     database and the cache still do.
+         *
          *     This previously returned hardcoded booleans and could never report 503, so
          *     anything gating a rollout on it was gating on a constant.
          *
