@@ -78,3 +78,30 @@ async def test_a_check_that_answers_false_is_a_failure() -> None:
     assert await _probe("runtime", answers(False)) == ("runtime", False)
     assert await _probe("runtime", answers(True)) == ("runtime", True)
     assert await _probe("cache", answers(None)) == ("cache", True), "a cache miss is fine"
+
+
+def test_a_maintenance_hold_does_not_make_an_entrance_unready_for_its_runtime() -> None:
+    """#61: the entry releases the runtime on purpose. The health check mailed
+    a failure every five minutes of a planned hold until this."""
+    from app.interfaces.http.routers.health import readiness
+
+    released = {"database": True, "cache": True, "runtime": False}
+    assert readiness(released, maintenance=True)
+    assert not readiness(released, maintenance=False)
+    assert not readiness({**released, "database": False}, maintenance=True), (
+        "a hold never hides a database outage"
+    )
+
+
+async def test_an_unreadable_hold_counts_as_open() -> None:
+    from app.interfaces.http.routers import health
+
+    async def broken():  # pragma: no cover - replaced factory
+        raise RuntimeError("no database")
+
+    original = health.get_session_factory
+    health.get_session_factory = lambda: broken  # type: ignore[assignment]
+    try:
+        assert await health._maintenance_closed() is False
+    finally:
+        health.get_session_factory = original
