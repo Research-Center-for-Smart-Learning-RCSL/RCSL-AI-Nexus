@@ -467,3 +467,74 @@ async def test_an_empty_snapshot_verifies_empty_and_reopens() -> None:
     assert step(store).status is StepStatus.DONE
     assert not store.maintenance.state.admission_closed
     assert not [c for c in agent.calls if c.startswith(("load:", "probe:"))]
+
+
+class FlakyProbeAgent(RestoringAgent):
+    """The runtime refuses probes until it recovers; the agent stores each
+    refused probe as failed under its id, as the real one does."""
+
+    def __init__(self, failures: int) -> None:
+        super().__init__()
+        self.failures = failures
+        self.probe_ids: list[str] = []
+        self.runtime_probes = 0
+
+    async def restore(
+        self,
+        epoch: int,
+        op_id: str,
+        *,
+        action: str,
+        name: str,
+        digest: str | None,
+        context_length: int | None,
+    ) -> dict[str, Any]:
+        if action != "probe":
+            return await super().restore(
+                epoch,
+                op_id,
+                action=action,
+                name=name,
+                digest=digest,
+                context_length=context_length,
+            )
+        self.probe_ids.append(op_id)
+        if op_id not in self.ops:
+            self.runtime_probes += 1
+            failed = self.failures > 0
+            self.failures -= 1
+            self.ops[op_id] = {"op_id": op_id, "state": "failed" if failed else "completed"}
+        if self.ops[op_id]["state"] == "failed":
+            raise NodeControlError("probe failed", status=502, refused=None, body=self.ops[op_id])
+        return self.ops[op_id]
+
+
+async def test_a_failed_probe_is_tried_again_under_a_new_id() -> None:
+    """Review of #81: a stored failure must not be asked for ever."""
+    store = await restoring([dict(EMBEDDER)])
+    agent = FlakyProbeAgent(failures=1)
+    coord = coordinator(store, {"n1": agent})
+
+    await coord.run_once()
+    assert step(store).phase is StepPhase.LOADED and step(store).attempts == 1
+    await coord.run_once()
+
+    assert len(set(agent.probe_ids)) == 2 and agent.runtime_probes == 2
+    assert status(store) is OperationStatus.SUCCEEDED
+
+
+async def test_an_administrators_retry_probes_again_after_the_runtime_recovers() -> None:
+    store = await restoring([dict(EMBEDDER)])
+    agent = FlakyProbeAgent(failures=3)  # one per attempt: max_attempts is 3
+    coord = coordinator(store, {"n1": agent})
+    for _ in range(3):
+        await coord.run_once()
+    assert status(store) is OperationStatus.FAILED
+
+    operation = list(store.operations.values())[-1]
+    assert await store.retry(operation.id)
+    await coord.run_once()
+
+    assert agent.runtime_probes == 4
+    assert status(store) is OperationStatus.SUCCEEDED
+    assert not store.maintenance.state.admission_closed

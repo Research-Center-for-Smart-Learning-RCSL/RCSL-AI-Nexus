@@ -192,8 +192,10 @@ class PostgresMaintenanceOperations:
     # -- step writes, fenced on the owner -----------------------------------
 
     async def advance(self, step: NodeStep, *, owner: str, phase: StepPhase, **values: Any) -> bool:
-        """Move a step to `phase` with what that phase recorded, and reset its
-        attempt count. A column not given keeps its value.
+        """Move a step to `phase` with what that phase recorded. A new phase
+        starts with no failed attempts; progress recorded within the same
+        phase keeps them, so a phase that keeps failing between its records
+        still fails (review of #81). A column not given keeps its value.
 
         `snapshot` and `snapshot_error` are written only if neither was before:
         the original is what P5 restores, and a retry must never replace it
@@ -217,7 +219,10 @@ class PostgresMaintenanceOperations:
             await self._session.execute(
                 text(
                     "UPDATE maintenance_node_steps SET phase = CAST(:phase AS varchar), "
-                    "attempts = 0, error = NULL, updated_at = now(), "
+                    "attempts = CASE WHEN phase = CAST(:phase AS varchar) THEN attempts "
+                    "ELSE 0 END, "
+                    "error = CASE WHEN phase = CAST(:phase AS varchar) THEN error ELSE NULL END, "
+                    "updated_at = now(), "
                     "status = CASE WHEN CAST(:phase AS varchar) = 'verified' THEN 'done' "
                     "ELSE status END, "
                     "interrupt = COALESCE(CAST(:interrupt AS jsonb), interrupt), "

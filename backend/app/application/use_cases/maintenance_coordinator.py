@@ -331,24 +331,57 @@ class MaintenanceCoordinator:
             return await self._advance(step, StepPhase.PENDING, verification={"loads": loads})
 
         if step.phase is StepPhase.LOADED:
-            probes: dict[str, Any] = dict(progress.get("probes") or {})
-            for index, model in enumerate(snapshot):
+            # Each model's probe attempt is recorded before it is asked, so a
+            # timeout asks again under the same id, and its outcome after: a
+            # probe that failed is a stored failure under its id, and the next
+            # attempt needs a new one (review of #81).
+            probes: dict[str, dict[str, Any]] = {
+                name: dict(entry)
+                for name, entry in dict(progress.get("probes") or {}).items()
+                if isinstance(entry, dict)
+            }
+            attempts = int(progress.get("probe_attempts") or 0)
+            for model in snapshot:
                 name = str(model.get("name"))
-                if probes.get(name) == "completed":
+                entry = probes.get(name)
+                if entry is not None and entry.get("state") == "completed":
                     continue
-                answer = await control.restore(
-                    operation.epoch,
-                    f"probe-{operation.id[:16]}-{len(loads)}-{index}",
-                    action="probe",
-                    name=name,
-                    digest=model.get("digest"),
-                    context_length=model.get("context_length"),
-                )
-                probes[name] = answer.get("state")
+                if entry is None or entry.get("state") is not None:
+                    attempts += 1
+                    entry = {"op_id": f"probe-{operation.id[:16]}-{len(loads)}-{attempts}"}
+                    probes[name] = entry
+                    step = await self._advance(
+                        step,
+                        StepPhase.LOADED,
+                        verification=progress | {"probes": probes, "probe_attempts": attempts},
+                    )
+                try:
+                    answer = await control.restore(
+                        operation.epoch,
+                        str(entry["op_id"]),
+                        action="probe",
+                        name=name,
+                        digest=model.get("digest"),
+                        context_length=model.get("context_length"),
+                    )
+                except NodeControlError as exc:
+                    if exc.body.get("state") == "failed":
+                        entry["state"] = "failed"
+                        await self._advance(
+                            step,
+                            StepPhase.LOADED,
+                            verification=progress | {"probes": probes, "probe_attempts": attempts},
+                        )
+                    raise
+                entry["state"] = answer.get("state")
                 step = await self._advance(
-                    step, StepPhase.LOADED, verification=progress | {"probes": probes}
+                    step,
+                    StepPhase.LOADED,
+                    verification=progress | {"probes": probes, "probe_attempts": attempts},
                 )
-            return await self._still_whole(step, snapshot, control, StepPhase.PROBED, progress)
+            return await self._still_whole(
+                step, snapshot, control, StepPhase.PROBED, dict(step.verification or {})
+            )
 
         if step.phase is StepPhase.PROBED:
             done = await self._still_whole(step, snapshot, control, StepPhase.VERIFIED, progress)

@@ -1108,7 +1108,9 @@ class FakeMaintenanceOperations:
         current = self._step(step.operation_id, step.node_id)
         if current.status is not StepStatus.RUNNING:
             return False
-        changes: dict[str, Any] = {"phase": phase, "attempts": 0, "error": None}
+        changes: dict[str, Any] = {"phase": phase}
+        if phase is not current.phase:
+            changes |= {"attempts": 0, "error": None}
         if phase is StepPhase.VERIFIED:
             changes["status"] = StepStatus.DONE
         for column in ("interrupt", "reset", "verification", "accounting"):

@@ -280,9 +280,10 @@ class Dispatcher:
         """An operator's drain, which a lifecycle operation ending must not undo."""
         self._frozen = False
         self._frozen_epoch: int | None = None
-        self._restoring: set[str] = set()
-        """Restore operations admitted under the hold (P5): the only ones the
-        final send barrier lets through while frozen."""
+        self._restoring: dict[str, int] = {}
+        """Restore operations admitted under the hold (P5), with the epoch each
+        was admitted for: the only ones the final send barrier lets through
+        while frozen, and only while frozen at that same epoch."""
         """The maintenance hold this gate is frozen for (#61), if any."""
         self._sending: dict[str, asyncio.Task[Outcome]] = {}
         """Relays still talking to the runtime: a subset of `_admitted`, which
@@ -504,11 +505,11 @@ class Dispatcher:
         if existing is not None:
             return Existing(existing)
         async with self._barrier:
-            if restoring:
+            if maintenance_epoch is not None:
                 if not self._restorable_locked(maintenance_epoch):
                     return Refused("not_frozen_at_epoch", retry_after=None)
                 self._exclusive = op_id
-                self._restoring.add(op_id)
+                self._restoring[op_id] = maintenance_epoch
             elif self._state is not GateState.SERVING:
                 return Refused(f"node_{self._state.value}", retry_after=_retry_after(self._state))
             else:
@@ -585,7 +586,7 @@ class Dispatcher:
             return await self._unsent(op_id, kind, refusal or "not_promoted")
         finally:
             if not handed_off:
-                self._restoring.discard(op_id)
+                self._restoring.pop(op_id, None)
                 await self._end_exclusive(op_id)
 
     def _restorable_locked(self, epoch: int | None, op_id: str | None = None) -> bool:
@@ -820,7 +821,15 @@ class Dispatcher:
         # one synchronous step, so a freeze either lands before it, and nothing
         # is sent, or finds the sender registered and can interrupt it.
         sender: asyncio.Task[Outcome] | None = None
-        if self._frozen and op_id not in self._restoring:
+        restore_epoch = self._restoring.get(op_id)
+        if restore_epoch is not None:
+            # A restore sends only into the hold it was admitted for: one
+            # replaced between promotion and here (reopened, then entered
+            # again) would load into another entry's runtime.
+            withhold = not (self._frozen and self._frozen_epoch == restore_epoch)
+        else:
+            withhold = self._frozen
+        if withhold:
             outcome = Withheld(reason="maintenance_before_send")
         else:
             sender = asyncio.ensure_future(relay(_AttemptSink(self, attempt)))
@@ -868,7 +877,7 @@ class Dispatcher:
             if not self._admitted:
                 self._idle.set()
             if lifecycle:
-                self._restoring.discard(op_id)
+                self._restoring.pop(op_id, None)
                 await _shielded(self._end_exclusive(op_id))
         if cancelled is not None:
             raise cancelled

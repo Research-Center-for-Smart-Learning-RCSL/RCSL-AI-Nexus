@@ -273,3 +273,27 @@ async def test_only_a_load_or_a_probe_may_restore() -> None:
     dispatcher = Dispatcher(HoldStore())
     with pytest.raises(ValueError):
         await dispatcher.exclusive("x", "pull", ScriptedRelay(), maintenance_epoch=1)
+
+
+async def test_a_restore_admitted_for_one_hold_does_not_send_into_the_next() -> None:
+    """Review of #81: promoted at epoch 3, the hold replaced (reopened, then
+    entered again at 4) before its first step. It must be withheld, not load
+    into the new entry's runtime."""
+    store = HoldStore()
+    dispatcher = Dispatcher(store)
+    close(store, epoch=3)
+    await dispatcher.freeze(3)
+    relay = ScriptedRelay()
+
+    attempt = await dispatcher.exclusive("restore-1", "load", relay, maintenance_epoch=3)
+    assert isinstance(attempt, Attempt)
+    await dispatcher.thaw()  # before the task's first step
+    close(store, epoch=4)
+    await dispatcher.freeze(4)
+
+    outcome = await asyncio.wait_for(attempt.settled, 1)
+
+    assert isinstance(outcome, Withheld)
+    assert relay.sends == 0
+    assert store.ops["restore-1"].state == "cancelled_unsent"
+    assert dispatcher.state is GateState.MAINTENANCE and dispatcher.frozen_epoch == 4
