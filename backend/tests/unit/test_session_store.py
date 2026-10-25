@@ -8,6 +8,7 @@ consulted looks exactly like one that works.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 from app.adapters.cache.redis_adapter import InMemoryCache
@@ -110,3 +111,36 @@ async def test_a_destroyed_session_is_gone_immediately() -> None:
     await store.destroy(created.session_id)
 
     assert await store.read(created.session_id, NOW) is None
+
+
+async def test_a_session_carries_the_maintenance_epoch_it_was_issued_in() -> None:
+    """What #61's revocation is measured against; a re-stamp keeps it."""
+    store = build()
+    created = await store.create("u1", NOW, maintenance_epoch=3)
+
+    assert (await store.read(created.session_id, NOW)).maintenance_epoch == 3  # type: ignore[union-attr]
+
+    await store.invalidate_others("u1", created.session_id, NOW + timedelta(seconds=1))
+    kept = await store.read(created.session_id, NOW + timedelta(seconds=2))
+    assert kept is not None
+    assert kept.maintenance_epoch == 3
+
+
+async def test_a_session_written_before_the_epoch_existed_reads_as_epoch_zero() -> None:
+    """Zero is what the migration seeds, so deploying #61 revokes nobody."""
+    cache = InMemoryCache()
+    store = SessionStore(cache, absolute_ttl=3600, idle_ttl=600)
+    legacy = json.dumps(
+        {
+            "user_id": "u1",
+            "created_at": NOW.timestamp(),
+            "expires_at": (NOW + timedelta(hours=1)).timestamp(),
+            "csrf": "t",
+        }
+    )
+    await cache.set("session:legacy", legacy, ttl_seconds=600)
+
+    read = await store.read("legacy", NOW)
+
+    assert read is not None
+    assert read.maintenance_epoch == 0

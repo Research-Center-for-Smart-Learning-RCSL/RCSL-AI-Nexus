@@ -33,13 +33,14 @@ from app.interfaces.http.assistant_proposal import (
     ProposalCollector,
 )
 from app.interfaces.http.middleware.identity import current_actor
+from app.interfaces.http.middleware.maintenance import SERVING
 from app.interfaces.http.schemas.assistant_schemas import AssistRequest
 from app.shared.clock import SystemClock
 
 router = APIRouter(tags=["assistant"])
 
 
-@router.post("/assistant")
+@router.post("/assistant", dependencies=SERVING)
 async def assist(
     body: AssistRequest,
     actor: Annotated[Actor, Depends(current_actor)],

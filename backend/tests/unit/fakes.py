@@ -19,6 +19,7 @@ from app.domain.entities.actor import Actor, Role
 from app.domain.entities.api_key import ApiKey
 from app.domain.entities.invitation import Invitation, InvitationPurpose, RecoveryCode
 from app.domain.entities.knowledge import DocumentChunk, DocumentStatus, RetrievedPassage
+from app.domain.entities.maintenance import NORMAL, MaintenancePhase, MaintenanceState
 from app.domain.entities.model import (
     Model,
     ModelState,
@@ -964,3 +965,53 @@ class FakeEmbedder:
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         return await self.embed_with(None, texts)
+
+
+class FakeMaintenance:
+    """The hold's single row, open unless a test closes it."""
+
+    def __init__(self, state: MaintenanceState = NORMAL) -> None:
+        self.state = state
+
+    async def read(self) -> MaintenanceState:
+        return self.state
+
+    async def close(
+        self, *, changed_by: str, message: str | None, expected_return_at: datetime | None
+    ) -> MaintenanceState | None:
+        if self.state.admission_closed:
+            return None
+        self.state = replace(
+            self.state,
+            admission_closed=True,
+            phase=MaintenancePhase.MAINTENANCE,
+            epoch=self.state.epoch + 1,
+            revision=self.state.revision + 1,
+            message=message,
+            changed_by=changed_by,
+        )
+        return self.state
+
+    async def reopen(self, *, changed_by: str) -> MaintenanceState | None:
+        if not self.state.admission_closed:
+            return None
+        self.state = replace(
+            self.state,
+            admission_closed=False,
+            phase=MaintenancePhase.NORMAL,
+            revision=self.state.revision + 1,
+        )
+        return self.state
+
+    async def set_message(
+        self,
+        *,
+        changed_by: str,
+        message: str | None,
+        expected_return_at: datetime | None,
+        expected_revision: int,
+    ) -> MaintenanceState | None:
+        if expected_revision != self.state.revision:
+            return None
+        self.state = replace(self.state, message=message, revision=self.state.revision + 1)
+        return self.state

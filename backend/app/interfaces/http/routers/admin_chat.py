@@ -30,12 +30,13 @@ from app.infrastructure.di import (
 from app.interfaces.http import sse
 from app.interfaces.http.idempotency import IdempotencyKeyDep, request_identity
 from app.interfaces.http.middleware.identity import current_actor
+from app.interfaces.http.middleware.maintenance import SERVING
 from app.interfaces.http.schemas.chat_schemas import AdminChatRequest
 
 router = APIRouter(tags=["chat"])
 
 
-@router.post("/chat")
+@router.post("/chat", dependencies=SERVING)
 async def admin_chat(
     body: AdminChatRequest,
     actor: Annotated[Actor, Depends(current_actor)],

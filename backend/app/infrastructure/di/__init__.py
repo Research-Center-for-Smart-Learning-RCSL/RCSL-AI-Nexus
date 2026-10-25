@@ -3,6 +3,7 @@
 from .admin_observability import (
     build_manage_api_keys,
     build_manage_evaluations,
+    build_manage_maintenance,
     build_manage_nodes,
     build_manage_retention,
     build_manage_tenants,
@@ -83,6 +84,7 @@ from .shared import (
     get_cache,
     get_concurrency,
     get_invitation_repository,
+    get_maintenance_repository,
     get_model_repository,
     get_node_repository,
     get_runtimes,
@@ -173,5 +175,7 @@ __all__ = [
     "build_read_usage_records",
     "build_manage_retention",
     "build_manage_evaluations",
+    "build_manage_maintenance",
+    "get_maintenance_repository",
     "build_read_host_status",
 ]

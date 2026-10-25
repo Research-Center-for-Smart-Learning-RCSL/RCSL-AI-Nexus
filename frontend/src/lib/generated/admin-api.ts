@@ -606,6 +606,100 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/maintenance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Maintenance Status */
+        get: operations["maintenance_status_admin_maintenance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/maintenance/enter": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enter Maintenance
+         * @description Closes every entrance to everyone but platform administrators and signs
+         *     every other local account out, immediately. Pressing it again while the
+         *     platform is closed changes nothing and returns the current state.
+         */
+        post: operations["enter_maintenance_admin_maintenance_enter_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/maintenance/message": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Maintenance Message */
+        put: operations["set_maintenance_message_admin_maintenance_message_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/maintenance/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reopen After Maintenance
+         * @description Reopens every entrance. Accounts the hold signed out sign in again;
+         *     API keys work again unchanged.
+         */
+        post: operations["reopen_after_maintenance_admin_maintenance_reopen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/maintenance/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public Maintenance Status */
+        get: operations["public_maintenance_status_admin_maintenance_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/me": {
         parameters: {
             query?: never;
@@ -1964,6 +2058,13 @@ export interface components {
             /** Secret */
             secret: string;
         };
+        /** EnterMaintenanceRequest */
+        EnterMaintenanceRequest: {
+            /** Expected Return At */
+            expected_return_at?: string | null;
+            /** Message */
+            message?: string | null;
+        };
         /** EvaluationModelScoreResponse */
         EvaluationModelScoreResponse: {
             /** Generation Tokens Per Second */
@@ -2291,6 +2392,36 @@ export interface components {
             /** P95 Ms */
             p95_ms: number;
         };
+        /** MaintenanceMessageRequest */
+        MaintenanceMessageRequest: {
+            /** Expected Return At */
+            expected_return_at?: string | null;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Message */
+            message?: string | null;
+        };
+        /** MaintenanceStatusResponse */
+        MaintenanceStatusResponse: {
+            /** Changed At */
+            changed_at: string | null;
+            /** Changed By */
+            changed_by: string | null;
+            /** Closed */
+            closed: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /** Epoch */
+            epoch: number;
+            /** Expected Return At */
+            expected_return_at: string | null;
+            /** Message */
+            message: string | null;
+            /** Phase */
+            phase: string;
+            /** Revision */
+            revision: number;
+        };
         /** MeResponse */
         MeResponse: {
             /** Auth Mode */
@@ -2485,6 +2616,25 @@ export interface components {
             system_prompt: string;
             /** Updated At */
             updated_at: string | null;
+        };
+        /**
+         * PublicMaintenanceStatusResponse
+         * @description Answered without authentication, so it carries nothing about who closed
+         *     the platform, which models it held, or anything about the infrastructure:
+         *     whether it is closed, what the administrators chose to say, and when they
+         *     expect to be back.
+         */
+        PublicMaintenanceStatusResponse: {
+            /** Closed */
+            closed: boolean;
+            /** Expected Return At */
+            expected_return_at: string | null;
+            /** Message */
+            message: string | null;
+            /** Phase */
+            phase: string;
+            /** Revision */
+            revision: number;
         };
         /** PurgeOutcomeResponse */
         PurgeOutcomeResponse: {
@@ -3981,6 +4131,159 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditLogResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    maintenance_status_admin_maintenance_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceStatusResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    enter_maintenance_admin_maintenance_enter_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnterMaintenanceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceStatusResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    set_maintenance_message_admin_maintenance_message_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaintenanceMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceStatusResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    reopen_after_maintenance_admin_maintenance_reopen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceStatusResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorResponse"];
+                };
+            };
+        };
+    };
+    public_maintenance_status_admin_maintenance_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicMaintenanceStatusResponse"];
                 };
             };
             /** @description Unprocessable Entity */

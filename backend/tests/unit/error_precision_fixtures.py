@@ -34,7 +34,7 @@ from app.domain.exceptions import (
 from app.interfaces.http.errors import error_response, install_error_handlers
 from app.interfaces.http.middleware.identity import resolve_tailnet_actor
 from app.interfaces.http.request_context import RequestContextMiddleware
-from tests.unit.fakes import FakeUsers
+from tests.unit.fakes import FakeMaintenance, FakeUsers
 
 MESSAGES = [Message(role=MessageRole.USER, content="hi")]
 
@@ -101,6 +101,7 @@ def _resolver_app(user: User) -> FastAPI:
             users=FakeUsers([user]),  # type: ignore[arg-type]
             bootstrap=_NoBootstrap(),  # type: ignore[arg-type]
             authz=RoleAuthorization(),
+            maintenance=FakeMaintenance(),  # type: ignore[arg-type]
         )
         raise NoAvailableModelError(detail="operator-facing context")
 

@@ -23,6 +23,7 @@ from app.domain.exceptions import (
     InvalidTotpError,
     InvitationInvalidError,
     LastAdministratorError,
+    MaintenanceError,
     ModelIntegrityError,
     ModelNotFoundError,
     NoAvailableModelError,
@@ -97,6 +98,7 @@ STATUS_MAP: dict[type[DomainError], int] = {
     RuntimeCapabilityError: 400,
     VectorStoreError: 503,
     ServerOverloadedError: 503,
+    MaintenanceError: 503,
     InvalidIdempotencyKeyError: 400,
     IdempotencyKeyReusedError: 422,
     # The other idempotency refusals are StateConflictError subclasses: 409.

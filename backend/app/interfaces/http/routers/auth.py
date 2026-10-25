@@ -18,19 +18,24 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request, Response
 
 from app.adapters.audit.postgres_audit import PostgresAudit
-from app.adapters.persistence.repositories import PostgresUserRepository
+from app.adapters.persistence.repositories import (
+    PostgresMaintenanceRepository,
+    PostgresUserRepository,
+)
 from app.adapters.session.session_store import SessionStore
 from app.application.audit_subject import subject_for
 from app.application.use_cases.authenticate_local import AuthenticateLocal
+from app.domain.entities.actor import Role
 from app.domain.entities.audit import AuditAction
 from app.domain.entities.user import User
-from app.domain.exceptions import InvalidCredentialsError
+from app.domain.exceptions import InvalidCredentialsError, MaintenanceError
 from app.domain.ports.infrastructure_ports import CachePort
 from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.di import (
     build_authenticate_local,
     get_audit,
     get_cache,
+    get_maintenance_repository,
     get_session_store,
     get_user_repository,
 )
@@ -80,10 +85,11 @@ async def login_totp(
     cache: Annotated[CachePort, Depends(get_cache)],
     sessions: Annotated[SessionStore, Depends(get_session_store)],
     settings: Annotated[Settings, Depends(get_settings)],
+    maintenance: Annotated[PostgresMaintenanceRepository, Depends(get_maintenance_repository)],
 ) -> Response:
     user_id = await _consume_challenge(cache, payload.challenge)
     user = await auth.verify_totp(user_id, payload.code, client_ip=_client_ip(request))
-    return await _establish_session(user.id, sessions, settings)
+    return await _establish_session(user, sessions, settings, maintenance)
 
 
 @router.post("/login/recovery-code", status_code=204)
@@ -94,12 +100,13 @@ async def login_recovery_code(
     cache: Annotated[CachePort, Depends(get_cache)],
     sessions: Annotated[SessionStore, Depends(get_session_store)],
     settings: Annotated[Settings, Depends(get_settings)],
+    maintenance: Annotated[PostgresMaintenanceRepository, Depends(get_maintenance_repository)],
 ) -> Response:
     user_id = await _consume_challenge(cache, payload.challenge)
     user = await auth.verify_recovery_code(
         user_id, payload.recovery_code, client_ip=_client_ip(request)
     )
-    return await _establish_session(user.id, sessions, settings)
+    return await _establish_session(user, sessions, settings, maintenance)
 
 
 @router.post("/logout", status_code=204)
@@ -181,15 +188,31 @@ async def _consume_challenge(cache: CachePort, challenge: str) -> str:
     return user_id
 
 
-async def _establish_session(user_id: str, sessions: SessionStore, settings: Settings) -> Response:
+async def _establish_session(
+    user: User,
+    sessions: SessionStore,
+    settings: Settings,
+    maintenance: PostgresMaintenanceRepository,
+) -> Response:
     """Issue the session and bind CSRF to it.
 
     The identifier is new, never one the client presented, so there is nothing
     for a fixation attempt to plant beforehand. The CSRF cookie is replaced
     with the session's own token, which is what lets `identity.py` compare the
     header against a value the client was never in a position to choose.
+
+    **Refused here, at the second factor, during maintenance (#61)**, for every
+    account but a platform administrator. Not at the password step: that one
+    answers the same for every account so as not to say which exist, and a
+    maintenance refusal there would say this one does. The session carries the
+    epoch read now, so a login that raced an entry committing after this read
+    holds an epoch the entry has already superseded, and dies on first use.
     """
-    data = await sessions.create(user_id, SystemClock().now())
+    state = await maintenance.read()
+    if state.admission_closed and user.role is not Role.ADMIN:
+        raise MaintenanceError(detail=f"login by {user.id} during epoch {state.epoch}")
+
+    data = await sessions.create(user.id, SystemClock().now(), maintenance_epoch=state.epoch)
 
     response = Response(status_code=204)
     response.set_cookie(

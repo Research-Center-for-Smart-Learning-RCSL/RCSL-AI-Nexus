@@ -11,6 +11,7 @@ from .invitations import PostgresInvitationRepository
 from .knowledge import (
     PostgresKnowledgeRepository,
 )
+from .maintenance import PostgresMaintenanceRepository
 from .platform_runtime import (
     PostgresModelRepository,
     PostgresNodeRepository,
@@ -38,6 +39,7 @@ from .usage_settlement import PostgresUsageSettlement
 from .users import PostgresUserRepository
 
 __all__ = [
+    "PostgresMaintenanceRepository",
     "PostgresTenantRepository",
     "PostgresNodeRepository",
     "PostgresModelRepository",

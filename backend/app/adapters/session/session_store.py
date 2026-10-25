@@ -45,6 +45,13 @@ class SessionData:
 
     csrf_token: str
 
+    maintenance_epoch: int = 0
+    """The maintenance epoch current when this session was issued (#61). A
+    session belonging to anyone but a platform administrator dies once a later
+    entry has opened a newer one; see `MaintenanceState.session_valid`.
+    Sessions written before the field existed decode as 0, which is the epoch
+    the migration seeds, so deploying it revokes nobody."""
+
 
 class SessionStore:
     def __init__(self, cache: CachePort, *, absolute_ttl: int, idle_ttl: int) -> None:
@@ -52,7 +59,9 @@ class SessionStore:
         self._absolute_ttl = absolute_ttl
         self._idle_ttl = idle_ttl
 
-    async def create(self, user_id: str, now: datetime) -> SessionData:
+    async def create(
+        self, user_id: str, now: datetime, *, maintenance_epoch: int = 0
+    ) -> SessionData:
         """A fresh identifier every time.
 
         Sessions are only ever created here, at the end of a successful login,
@@ -65,6 +74,7 @@ class SessionStore:
             created_at=now,
             expires_at=datetime.fromtimestamp(now.timestamp() + self._absolute_ttl, UTC),
             csrf_token=secrets.token_urlsafe(CSRF_TOKEN_BYTES),
+            maintenance_epoch=maintenance_epoch,
         )
         await self._write(data, now)
         return data
@@ -133,6 +143,7 @@ class SessionStore:
                 created_at=now,
                 expires_at=kept.expires_at,
                 csrf_token=kept.csrf_token,
+                maintenance_epoch=kept.maintenance_epoch,
             ),
             now,
         )
@@ -181,6 +192,7 @@ def _encode(data: SessionData) -> str:
             "created_at": data.created_at.timestamp(),
             "expires_at": data.expires_at.timestamp(),
             "csrf": data.csrf_token,
+            "maintenance_epoch": data.maintenance_epoch,
         }
     )
 
@@ -194,6 +206,7 @@ def _decode(session_id: str, raw: str) -> SessionData | None:
             created_at=datetime.fromtimestamp(float(payload["created_at"]), UTC),
             expires_at=datetime.fromtimestamp(float(payload["expires_at"]), UTC),
             csrf_token=str(payload["csrf"]),
+            maintenance_epoch=int(payload.get("maintenance_epoch", 0)),
         )
     except (ValueError, TypeError, KeyError):
         return None

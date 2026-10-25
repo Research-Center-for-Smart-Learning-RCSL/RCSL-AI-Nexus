@@ -22,6 +22,7 @@ from app.infrastructure.di import (
 )
 from app.infrastructure.jobs import schedule_ingestion, schedule_reindex
 from app.interfaces.http.middleware.identity import current_actor
+from app.interfaces.http.middleware.maintenance import SERVING
 from app.interfaces.http.schemas.admin_schemas import (
     DocumentTextResponse,
     IngestionJobResponse,
@@ -60,7 +61,7 @@ async def read_document(
     return KnowledgeDocumentResponse.of(await knowledge.get_document(actor, document_id))
 
 
-@router.post("/knowledge/documents", status_code=202)
+@router.post("/knowledge/documents", status_code=202, dependencies=SERVING)
 async def upload_document(
     request: Request,
     actor: Annotated[Actor, Depends(current_actor)],
@@ -125,7 +126,7 @@ async def read_document_text(
     return DocumentTextResponse(document_id=document_id, text=text, truncated=truncated)
 
 
-@router.post("/knowledge/documents/{document_id}/reindex", status_code=202)
+@router.post("/knowledge/documents/{document_id}/reindex", status_code=202, dependencies=SERVING)
 async def reindex_document(
     document_id: str,
     request: Request,
