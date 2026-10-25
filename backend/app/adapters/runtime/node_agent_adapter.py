@@ -230,6 +230,7 @@ class NodeAgentRuntime:
                 text = described.get("summary") or (described.get("result") or {}).get("summary")
                 if described.get("state") == "completed" and isinstance(text, str) and text:
                     return text
+                _raise_if_maintenance(identity.op_id, described)
                 raise StreamInterruptedError(detail=f"summary {identity.op_id} is incomplete")
         raise NoAvailableModelError(detail="summary agent gave no response")
 
@@ -364,6 +365,7 @@ class NodeAgentRuntime:
         state = terminal.get("state")
         if state == "completed" and decoder.saw_done:
             return
+        _raise_if_maintenance(op_id, terminal)
         if state == "failed":
             raise NoAvailableModelError(detail=f"runtime failed {op_id}: {terminal.get('reason')}")
         raise StreamInterruptedError(
@@ -481,6 +483,7 @@ class NodeAgentRuntime:
         if vectors is None and isinstance(stored, dict):
             vectors = stored.get("embeddings")
         if described.get("state") != "completed" or not isinstance(vectors, list):
+            _raise_if_maintenance(identity.op_id, described)
             raise NoAvailableModelError(
                 detail=f"embedding {identity.op_id} is {described.get('state')} with no vectors"
             )
@@ -659,11 +662,26 @@ class NodeAgentRuntime:
         if state == "completed":
             return
         reason = described.get("reason")
+        _raise_if_maintenance(op_id, described)
         if state == "failed" and reason == "not_found":
             raise ModelNotFoundError(detail=f"{ref} is not present on this runtime")
         if state == "failed":
             raise NoAvailableModelError(detail=f"{action} of {ref} failed ({reason}), {op_id}")
         raise StreamInterruptedError(detail=f"{action} {op_id} of {ref} is {state} ({reason})")
+
+
+MAINTENANCE_REASONS = frozenset({"maintenance_interrupted", "maintenance_before_send"})
+"""What the agent records for work a maintenance entry stopped (#61): sent and
+cut off, or withheld at the final barrier. Not an outage and not a fault."""
+
+
+def _raise_if_maintenance(op_id: str, described: dict[str, Any]) -> None:
+    """A maintenance entry stopped this attempt: say so with the platform's own
+    code, as the entrances do, rather than as a broken stream. The attempt's
+    own state (unknown, or unsent) is unchanged by how it is reported."""
+    reason = described.get("reason")
+    if reason in MAINTENANCE_REASONS:
+        raise MaintenanceError(detail=f"{op_id} stopped by maintenance ({reason})")
 
 
 def _view(described: dict[str, Any]) -> AttemptView:

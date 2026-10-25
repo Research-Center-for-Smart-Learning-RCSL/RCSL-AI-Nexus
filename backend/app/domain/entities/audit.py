@@ -116,6 +116,9 @@ class AuditAction(StrEnum):
     """Every node verified and the platform reopened, in one transaction."""
     MAINTENANCE_RESTORE_FAILED = "maintenance.restore_failed"
 
+    NODE_RUNTIME_RESET = "node.runtime_reset"
+    """A platform administrator cleared an unknown operation by a supervised
+    runtime restart (#49 §5, #61). `failed` when the agent refused, with why."""
     NODE_REGISTERED = "node.registered"
     NODE_UPDATED = "node.updated"
     NODE_REMOVED = "node.removed"

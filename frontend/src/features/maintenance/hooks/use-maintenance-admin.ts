@@ -8,13 +8,18 @@ import {
   enterMaintenance,
   getMaintenance,
   reopenAfterMaintenance,
+  getUnknownOperations,
+  resetRuntime,
   restoreAfterMaintenance,
   retryMaintenance,
   setMaintenanceMessage,
   type MaintenanceNotice,
 } from '../api';
 
-export const maintenanceKeys = { admin: ['maintenance', 'admin'] as const };
+export const maintenanceKeys = {
+  admin: ['maintenance', 'admin'] as const,
+  unknown: ['maintenance', 'unknown-operations'] as const,
+};
 
 export function useMaintenanceAdmin() {
   return useQuery({
@@ -62,4 +67,20 @@ export function useRestoreAfterMaintenance() {
 export function useRetryMaintenance() {
   const invalidate = useInvalidateBoth();
   return useMutation({ mutationFn: retryMaintenance, onSettled: invalidate });
+}
+
+export function useUnknownOperations() {
+  return useQuery({
+    queryKey: maintenanceKeys.unknown,
+    queryFn: getUnknownOperations,
+    refetchInterval: 10_000,
+  });
+}
+
+export function useResetRuntime() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: resetRuntime,
+    onSettled: () => void client.invalidateQueries({ queryKey: maintenanceKeys.unknown }),
+  });
 }

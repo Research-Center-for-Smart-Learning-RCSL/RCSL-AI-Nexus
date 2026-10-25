@@ -12,6 +12,7 @@ from app.domain.entities.maintenance_operation import (
     OperationKind,
     OperationStatus,
     StepPhase,
+    UnknownOperation,
 )
 
 
@@ -89,3 +90,7 @@ class MaintenanceOperationsPort(Protocol):
     async def abandon_running(self, reason: str) -> list[str]: ...
 
     async def retry(self, operation_id: str) -> bool: ...
+
+
+class UnknownOperationsPort(Protocol):
+    async def list(self) -> list[UnknownOperation]: ...

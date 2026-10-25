@@ -22,6 +22,7 @@ from app.adapters.persistence.repositories import (
     PostgresRefusalRepository,
     PostgresRetentionPolicyRepository,
     PostgresTenantRepository,
+    PostgresUnknownOperations,
     PostgresUsageRepository,
     PostgresUserRepository,
 )
@@ -46,7 +47,9 @@ from app.application.use_cases.read_prompt_logs import ReadPromptLogs
 from app.application.use_cases.read_refusals import ReadRefusals
 from app.application.use_cases.read_usage_analytics import ReadUsageAnalytics
 from app.application.use_cases.read_usage_records import ReadUsageRecords
+from app.application.use_cases.reset_node_runtime import ResetNodeRuntime
 from app.domain.entities.retention import RetentionDataset
+from app.infrastructure.maintenance_coordinator import agent_controls
 from app.shared.clock import SystemClock
 
 from .identity_authentication import get_audit
@@ -273,4 +276,15 @@ def build_manage_maintenance(
         operations=PostgresMaintenanceOperations(session),
         nodes=PostgresNodeRepository(session),
         agents_enabled=bool(getattr(request.app.state.runtimes, "agents_enabled", False)),
+    )
+
+
+def build_reset_node_runtime(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> ResetNodeRuntime:
+    return ResetNodeRuntime(
+        PostgresUnknownOperations(session),
+        authz=request.app.state.authz,
+        audit=request.app.state.audit,
+        control_for=agent_controls(request.app, settings),
     )

@@ -13,20 +13,26 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from app.application.use_cases.manage_maintenance import ManageMaintenance
+from app.application.use_cases.reset_node_runtime import ResetNodeRuntime
 from app.domain.entities.actor import Actor
 from app.infrastructure.config import Settings, get_settings
-from app.infrastructure.di import build_manage_maintenance
+from app.infrastructure.di import build_manage_maintenance, build_reset_node_runtime
 from app.interfaces.http.middleware.identity import current_actor
 from app.interfaces.http.schemas.admin_schemas import (
     EnterMaintenanceRequest,
     MaintenanceMessageRequest,
     MaintenanceStatusResponse,
     PublicMaintenanceStatusResponse,
+    RuntimeResetRequest,
+    RuntimeResetResponse,
+    UnknownOperationsResponse,
+    UnknownOperationView,
 )
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
 
 ManageDep = Annotated[ManageMaintenance, Depends(build_manage_maintenance)]
+ResetDep = Annotated[ResetNodeRuntime, Depends(build_reset_node_runtime)]
 ActorDep = Annotated[Actor, Depends(current_actor)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
@@ -120,3 +126,39 @@ async def set_maintenance_message(
         expected_revision=payload.expected_revision,
     )
     return MaintenanceStatusResponse.of(state, enabled=settings.maintenance_enabled)
+
+
+@router.get("/unknown-operations")
+async def unknown_operations(actor: ActorDep, resets: ResetDep) -> UnknownOperationsResponse:
+    """Operations each node sent and cannot account for. Each blocks its node
+    until a supervised reset proves the runtime that may have them gone."""
+    return UnknownOperationsResponse(
+        operations=[
+            UnknownOperationView(
+                node_id=u.node_id,
+                op_id=u.op_id,
+                kind=u.kind,
+                reason=u.reason,
+                submitted_at=u.submitted_at,
+            )
+            for u in await resets.list(actor)
+        ],
+        reset_available=resets.available,
+    )
+
+
+@router.post("/resets")
+async def reset_runtime(
+    payload: RuntimeResetRequest, actor: ActorDep, resets: ResetDep
+) -> RuntimeResetResponse:
+    """Restart the node's runtime under witness evidence and clear the
+    operation. Answered with what the agent said, cleared or not: a refusal
+    (no witness, the supervisor failed) is the administrator's to read, not an
+    error page. The restart unloads every model on the node; the residency
+    reconciler loads the resident set back."""
+    outcome = await resets.reset(
+        actor, node_id=payload.node_id, op_id=payload.op_id, evidence=payload.evidence.strip()
+    )
+    return RuntimeResetResponse(
+        node_id=outcome.node_id, op_id=outcome.op_id, cleared=outcome.cleared, detail=outcome.detail
+    )

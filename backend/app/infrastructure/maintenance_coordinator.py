@@ -176,9 +176,8 @@ def coordinator_should_run(app: FastAPI, settings: Settings) -> bool:
     coordinator to carry them out rather than claiming anything was released."""
     if not getattr(app.state.runtimes, "agents_enabled", False):
         return False
-    token = settings.node_agent_control_token
-    if len(token) < MIN_AGENT_TOKEN_LENGTH or token == settings.node_agent_token:
-        if token or settings.maintenance_enabled:
+    if not control_token_usable(settings):
+        if settings.node_agent_control_token or settings.maintenance_enabled:
             logger.error(
                 "the maintenance coordinator needs node_agent_control_token: at least %d "
                 "characters and different from node_agent_token; it is not started",
@@ -186,6 +185,22 @@ def coordinator_should_run(app: FastAPI, settings: Settings) -> bool:
             )
         return False
     return True
+
+
+def control_token_usable(settings: Settings) -> bool:
+    token = settings.node_agent_control_token
+    return len(token) >= MIN_AGENT_TOKEN_LENGTH and token != settings.node_agent_token
+
+
+def agent_controls(app: FastAPI, settings: Settings) -> AgentControls | None:
+    """The control clients, where this process may use them: the tailnet
+    admin with a usable token. None elsewhere, which refuses runtime control
+    before anything is sent."""
+    if not getattr(app.state.runtimes, "agents_enabled", False):
+        return None
+    if not control_token_usable(settings):
+        return None
+    return AgentControls(settings.node_agent_control_token)
 
 
 def build_coordinator(app: FastAPI, settings: Settings) -> MaintenanceCoordinator:

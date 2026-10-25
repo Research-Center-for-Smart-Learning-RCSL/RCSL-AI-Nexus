@@ -53,6 +53,7 @@ export const AUDIT_ACTIONS = [
   'model.updated',
   'node.registered',
   'node.removed',
+  'node.runtime_reset',
   'node.updated',
   'prompt_log.read',
   'prompt_template.created',

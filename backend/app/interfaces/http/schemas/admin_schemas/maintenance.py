@@ -145,3 +145,33 @@ class MaintenanceMessageRequest(BaseModel):
     message: str | None = Field(default=None, max_length=MAX_MESSAGE_LENGTH)
     expected_return_at: datetime | None = None
     expected_revision: int = Field(ge=0)
+
+
+class UnknownOperationView(BaseModel):
+    node_id: str
+    op_id: str
+    kind: str
+    reason: str | None
+    submitted_at: datetime | None
+
+
+class UnknownOperationsResponse(BaseModel):
+    """Operations whose outcome is unknown, each blocking its node, and
+    whether this entrance can clear them (only the tailnet admin can)."""
+
+    operations: list[UnknownOperationView]
+    reset_available: bool
+
+
+class RuntimeResetRequest(BaseModel):
+    node_id: str = Field(min_length=1, max_length=36)
+    op_id: str = Field(min_length=1, max_length=128)
+    evidence: str = Field(min_length=1, max_length=500)
+    """What the administrator relied on, recorded with the resolution."""
+
+
+class RuntimeResetResponse(BaseModel):
+    node_id: str
+    op_id: str
+    cleared: bool
+    detail: str

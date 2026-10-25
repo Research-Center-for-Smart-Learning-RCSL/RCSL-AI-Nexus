@@ -33,6 +33,7 @@ from .retention_templates import (
     PostgresRecordPurge,
     PostgresRetentionPolicyRepository,
 )
+from .unknown_operations import PostgresUnknownOperations
 from .usage import (
     PostgresUsageRepository,
 )
@@ -41,6 +42,7 @@ from .users import PostgresUserRepository
 
 __all__ = [
     "PostgresMaintenanceOperations",
+    "PostgresUnknownOperations",
     "PostgresMaintenanceRepository",
     "PostgresTenantRepository",
     "PostgresNodeRepository",
