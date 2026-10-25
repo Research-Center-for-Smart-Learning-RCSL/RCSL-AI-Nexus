@@ -209,3 +209,106 @@ async def test_the_gateway_cannot_read_an_entrys_snapshots(world: dict[str, Any]
 
 def _data() -> dict[str, str]:
     return {"Authorization": f"Bearer {TOKEN}"}
+
+
+async def test_a_restore_puts_back_what_the_entry_released_and_then_reopens(
+    world: dict[str, Any],
+) -> None:
+    """The whole of #61's runtime half: the entry snapshots and releases, the
+    restore loads the snapshot back under the hold with its weights and
+    context, checks each model answers, and only then reopens."""
+    ollama = world["ollama"]
+    ollama.tracks_residency = True
+    ollama.resident = [
+        {
+            "name": "qwen2.5:7b",
+            "digest": ollama.digest,
+            "size": 5 * 1024**3,
+            "context_length": 32768,
+        },
+        {
+            "name": "nomic-embed-text:latest",
+            "digest": "c" * 64,
+            "size": 300 * 1024**2,
+            "context_length": 2048,
+        },
+    ]
+    epoch = await enter()
+    answering = asyncio.create_task(supervisor(world))
+    entry = await until_settled(coordinator(world, "c1"))
+    await answering
+    assert entry.status is OperationStatus.SUCCEEDED and ollama.resident == []
+
+    async with session_scope() as session:
+        restore = await ManageMaintenance(
+            PostgresMaintenanceRepository(session),
+            RoleAuthorization(),
+            build_audit(),
+            enabled=True,
+            operations=PostgresMaintenanceOperations(session),
+            nodes=PostgresNodeRepository(session),
+            agents_enabled=True,
+        ).restore(ADMIN)
+    assert restore.kind.value == "restore"
+
+    done = await until_settled(coordinator(world, "c1"))
+
+    assert done.status is OperationStatus.SUCCEEDED, done
+    assert sorted(m["name"] for m in ollama.resident) == [
+        "nomic-embed-text:latest",
+        "qwen2.5:7b",
+    ]
+    by_name = {m["name"]: m for m in ollama.resident}
+    assert by_name["qwen2.5:7b"]["context_length"] == 32768
+    assert by_name["nomic-embed-text:latest"]["context_length"] == 2048
+    loads = [b["model"] for b in ollama.lifecycle if not b.get("prompt")]
+    assert loads == ["qwen2.5:7b", "nomic-embed-text"], "largest first"
+    assert ollama.embeds == 1, "the embedder answered its probe"
+
+    async with session_scope() as session:
+        state = await PostgresMaintenanceRepository(session).read()
+    assert not state.admission_closed and state.epoch == epoch
+    async with asyncio.timeout(5):
+        while (await world["http"].get("/v1/status", headers=_data())).json()["gate"] != "serving":
+            await asyncio.sleep(0.05)
+    kinds = await world["agent"].pool.fetch(
+        "SELECT kind, state, provenance->>'maintenance_epoch' AS epoch FROM node_operations "
+        "WHERE provenance ? 'restore' ORDER BY submitted_at"
+    )
+    assert [(r["kind"], r["state"]) for r in kinds] == [
+        ("load", "completed"),
+        ("load", "completed"),
+        ("probe", "completed"),
+        ("probe", "completed"),
+    ]
+    assert {r["epoch"] for r in kinds} == {str(epoch)}
+    assert await actions() == [
+        "maintenance.entered",
+        "maintenance.node_cleared",
+        "maintenance.entry_cleared",
+        "maintenance.restore_started",
+        "maintenance.node_restored",
+        "maintenance.restored",
+    ]
+
+
+async def test_a_restore_load_is_refused_once_the_hold_is_lifted(world: dict[str, Any]) -> None:
+    epoch = await enter()
+    response = await world["http"].post(
+        "/v1/maintenance/restore",
+        json={
+            "epoch": epoch + 1,
+            "op_id": "restore-x",
+            "action": "load",
+            "name": "qwen2.5:7b",
+            "digest": None,
+            "context_length": None,
+        },
+        headers={"Authorization": f"Bearer {CONTROL_TOKEN}"},
+    )
+    assert response.status_code == 409
+    assert response.json()["refused"] == "hold_not_closed_at_epoch"
+    data = await world["http"].post(
+        "/v1/maintenance/restore", json={"epoch": epoch}, headers=_data()
+    )
+    assert data.status_code == 401, "the data token cannot restore"

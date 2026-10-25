@@ -41,12 +41,37 @@ class FakeOllama:
         self.digest = "a" * 64
         self.pulled_digest = "b" * 64
         self.resident: list[dict[str, Any]] = [{"name": "qwen2.5:7b", "size": 5 * 1024**3}]
+        self.tracks_residency = False
+        """Off for the tests written before the maintenance restore (P5 on
+        #61): on, a load makes its model resident with the context it was
+        sized for, and a generation with a prompt reports tokens."""
+
+    def _load(self, body: dict[str, Any]) -> None:
+        name = body["model"] if ":" in body["model"] else f"{body['model']}:latest"
+        digest = "c" * 64 if name.startswith("nomic-embed-text") else self.digest
+        self.resident = [m for m in self.resident if m["name"] != name]
+        self.resident.append(
+            {
+                "name": name,
+                "model": name,
+                "digest": digest,
+                "size": 1024**3,
+                "context_length": (body.get("options") or {}).get("num_ctx"),
+            }
+        )
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/generate":
-            self.lifecycle.append(json.loads(request.content))
+            body = json.loads(request.content)
+            self.lifecycle.append(body)
             if self.uncertain_lifecycle:
                 raise httpx.ReadError("response lost after lifecycle submission", request=request)
+            if self.tracks_residency and body.get("prompt"):
+                return httpx.Response(
+                    200, json={"done": True, "eval_count": 3, "response": "ready"}
+                )
+            if self.tracks_residency and body.get("keep_alive") != 0:
+                self._load(body)
             return httpx.Response(200, json={"done": True, "done_reason": "load"})
         if request.url.path == "/api/pull":
             self.digest = self.pulled_digest

@@ -102,6 +102,13 @@ def _tag(ref: str) -> str:
     return ref if ":" in ref.rsplit("/", 1)[-1] else f"{ref}:latest"
 
 
+PROBE_TOKENS = 16
+"""Enough for a thinking model to produce something, bounded so the check is a
+check and not a generation."""
+
+PROBE_TIMEOUT_S = 120.0
+
+
 class LifecycleRelay:
     """Lifecycle sends: the same requests the direct adapter made (PR4b).
 
@@ -150,6 +157,57 @@ class LifecycleRelay:
                 terminal["error"] = response.text[:500]
                 return RuntimeRefused(terminal=terminal, reason=f"http_{response.status_code}")
             return Completed(terminal=terminal)
+
+        return run
+
+    def probe(
+        self, ref: str, *, embedding: bool, keep_alive: str | int, context_length: int | None
+    ) -> Relay:
+        """The bounded functional check a restore runs on each model (P5 on
+        #61): a load that answered 200 says the weights moved, not that the
+        model answers. An embedding model must return a non-empty vector; any
+        other must generate at least one token. Sized with the context the
+        model was loaded with, so the check cannot itself reload it."""
+        options: dict[str, Any] = {}
+        _set_num_ctx(options, context_length)
+        body: dict[str, Any] = {"model": ref, "keep_alive": keep_alive}
+        if embedding:
+            path = "/api/embed"
+            body["input"] = ["maintenance restore probe"]
+        else:
+            path = "/api/generate"
+            options["num_predict"] = PROBE_TOKENS
+            body |= {"prompt": "Reply with the single word: ready", "stream": False}
+        if options:
+            body["options"] = options
+
+        async def run(sink: Sink) -> Outcome:
+            try:
+                response = await self._client.post(path, json=body, timeout=PROBE_TIMEOUT_S)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                return NotSent(type(exc).__name__)
+            except httpx.HTTPError as exc:
+                return Uncertain(f"transport:{type(exc).__name__}")
+            terminal: dict[str, Any] = {"status": response.status_code, "endpoint": path}
+            if response.status_code >= 400:
+                terminal["error"] = response.text[:500]
+                return RuntimeRefused(terminal=terminal, reason=f"http_{response.status_code}")
+            try:
+                answer = response.json()
+            except ValueError:
+                return RuntimeRefused(terminal=terminal, reason="probe_unreadable")
+            if not isinstance(answer, dict):
+                return RuntimeRefused(terminal=terminal, reason="probe_unreadable")
+            if embedding:
+                vectors = answer.get("embeddings")
+                width = len(vectors[0]) if isinstance(vectors, list) and vectors else 0
+                if not width:
+                    return RuntimeRefused(terminal=terminal, reason="probe_no_vector")
+                return Completed(terminal=terminal | {"dimensions": width})
+            generated = int(answer.get("eval_count") or 0)
+            if not answer.get("done") or generated <= 0:
+                return RuntimeRefused(terminal=terminal, reason="probe_no_tokens")
+            return Completed(terminal=terminal | {"eval_count": generated})
 
         return run
 

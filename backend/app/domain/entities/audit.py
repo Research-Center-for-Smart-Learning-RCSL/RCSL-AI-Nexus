@@ -106,6 +106,15 @@ class AuditAction(StrEnum):
     the platform reopened."""
     MAINTENANCE_ENTRY_FAILED = "maintenance.entry_failed"
     MAINTENANCE_ENTRY_ABANDONED = "maintenance.entry_abandoned"
+    """An entry or a restore ended because the hold it was made under was
+    lifted or replaced; the detail names which."""
+    MAINTENANCE_RESTORE_STARTED = "maintenance.restore_started"
+    MAINTENANCE_NODE_RESTORED = "maintenance.node_restored"
+    """Every model a node held before the entry is resident again with its
+    recorded weights and context, and answered its check (P5 on #61)."""
+    MAINTENANCE_RESTORED = "maintenance.restored"
+    """Every node verified and the platform reopened, in one transaction."""
+    MAINTENANCE_RESTORE_FAILED = "maintenance.restore_failed"
 
     NODE_REGISTERED = "node.registered"
     NODE_UPDATED = "node.updated"

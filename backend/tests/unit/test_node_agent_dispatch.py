@@ -74,7 +74,9 @@ class MemoryStore:
         self.ops[op_id] = replace(op, state=to, **changes)
         return True
 
-    async def promote(self, op_id: str, provenance: dict[str, Any]) -> bool:
+    async def promote(
+        self, op_id: str, provenance: dict[str, Any], *, maintenance_epoch: int | None = None
+    ) -> bool:
         self._fence()
         if await self.any_unknown():
             return False

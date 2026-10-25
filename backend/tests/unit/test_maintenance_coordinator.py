@@ -303,3 +303,167 @@ async def test_a_retried_entry_continues_from_its_recorded_phase() -> None:
     assert agent.calls[calls_before:] == ["reset:1", "residency"]
     assert len(set(agent.reset_ids)) == 2, "the failed restart is not reused"
     assert status(store) is OperationStatus.SUCCEEDED
+
+
+# -- the restore (P5) ---------------------------------------------------------
+
+EMBEDDER = {
+    "name": "nomic-embed-text:latest",
+    "digest": "e" * 64,
+    "size": 300_000_000,
+    "context_length": 2048,
+}
+SAVED = {k: v for k, v in GEMMA.items() if k != "irrelevant"}
+
+
+class RestoringAgent(Agent):
+    """An agent whose runtime starts empty and loads what it is asked to."""
+
+    def __init__(self, *, catalog: tuple[dict[str, Any], ...] = (SAVED, EMBEDDER)) -> None:
+        super().__init__()
+        self.resident = []
+        self.catalog = {m["name"]: m for m in catalog}
+        self.ops: dict[str, dict[str, Any]] = {}
+        self.evict_on_first_large_load = False
+        self.refuse: NodeControlError | None = None
+
+    async def restore(
+        self,
+        epoch: int,
+        op_id: str,
+        *,
+        action: str,
+        name: str,
+        digest: str | None,
+        context_length: int | None,
+    ) -> dict[str, Any]:
+        self.calls.append(f"{action}:{name}")
+        if self.refuse is not None:
+            raise self.refuse
+        if op_id in self.ops:
+            return self.ops[op_id]
+        assert self.resident is not None
+        if action == "load":
+            if self.evict_on_first_large_load and name == SAVED["name"]:
+                self.evict_on_first_large_load = False
+                self.resident = [m for m in self.resident if m["name"] != EMBEDDER["name"]]
+            self.resident.append(dict(self.catalog[name]))
+        self.ops[op_id] = {"op_id": op_id, "kind": action, "state": "completed"}
+        return self.ops[op_id]
+
+
+class RestoreStore(Store):
+    async def reopen_after(self, operation_id: str, *, owner: str, epoch: int) -> bool:
+        if self.maintenance.state.epoch != epoch or not self.maintenance.state.admission_closed:
+            return False
+        if not await self.finish(operation_id, owner=owner, status=OperationStatus.SUCCEEDED):
+            return False
+        await self.maintenance.reopen(changed_by="maintenance-coordinator")
+        return True
+
+
+async def restoring(snapshot: list[dict[str, Any]]) -> RestoreStore:
+    hold = FakeMaintenance()
+    state = await hold.close(changed_by="admin", message=None, expected_return_at=None)
+    assert state is not None
+    store = RestoreStore(hold)
+    await store.create_restore(epoch=state.epoch, requested_by="admin", snapshots={"n1": snapshot})
+    return store
+
+
+async def test_a_restore_loads_largest_first_checks_each_and_then_reopens() -> None:
+    store = await restoring([dict(EMBEDDER), dict(SAVED)])
+    agent = RestoringAgent()
+
+    await coordinator(store, {"n1": agent}).run_once()
+
+    loads = [c for c in agent.calls if c.startswith("load:")]
+    assert loads == [f"load:{SAVED['name']}", f"load:{EMBEDDER['name']}"]
+    assert sorted(c for c in agent.calls if c.startswith("probe:")) == [
+        f"probe:{SAVED['name']}",
+        f"probe:{EMBEDDER['name']}",
+    ]
+    done = step(store)
+    assert (done.phase, done.status) == (StepPhase.VERIFIED, StepStatus.DONE)
+    assert status(store) is OperationStatus.SUCCEEDED
+    assert not store.maintenance.state.admission_closed, "reopened by the serving commit"
+    actions = [a[0] for a in store.audited]
+    assert actions == [AuditAction.MAINTENANCE_NODE_RESTORED, AuditAction.MAINTENANCE_RESTORED]
+
+
+async def test_a_sibling_evicted_by_a_later_load_is_restored_again() -> None:
+    store = await restoring([dict(SAVED), dict(EMBEDDER)])
+    agent = RestoringAgent()
+    agent.resident = [dict(EMBEDDER)]  # already back, then evicted by the large load
+    agent.evict_on_first_large_load = True
+
+    await coordinator(store, {"n1": agent}).run_once()
+
+    loads = [c for c in agent.calls if c.startswith("load:")]
+    assert loads == [f"load:{SAVED['name']}", f"load:{EMBEDDER['name']}"]
+    assert status(store) is OperationStatus.SUCCEEDED
+
+
+async def test_a_model_the_agent_will_not_restore_keeps_the_platform_closed() -> None:
+    store = await restoring([dict(SAVED)])
+    agent = RestoringAgent()
+    agent.refuse = NodeControlError("not registered", status=422, refused="model_not_on_node")
+
+    await coordinator(store, {"n1": agent}).run_once()
+
+    failed = step(store)
+    assert failed.status is StepStatus.FAILED and "not registered" in (failed.error or "")
+    assert status(store) is OperationStatus.FAILED
+    assert store.maintenance.state.admission_closed
+    assert store.audited[-1][0] is AuditAction.MAINTENANCE_RESTORE_FAILED
+
+
+async def test_a_model_the_snapshot_did_not_hold_fails_the_restore() -> None:
+    store = await restoring([dict(EMBEDDER)])
+    agent = RestoringAgent()
+    agent.resident = [dict(SAVED)]
+
+    await coordinator(store, {"n1": agent}).run_once()
+
+    assert step(store).status is StepStatus.FAILED
+    assert "did not hold" in (step(store).error or "")
+    assert store.maintenance.state.admission_closed
+
+
+async def test_a_node_that_changed_before_the_commit_is_restored_again() -> None:
+    store = await restoring([dict(EMBEDDER)])
+    agent = RestoringAgent()
+    observed = 0
+    original = agent.residency
+
+    async def residency() -> list[dict[str, Any]] | None:
+        nonlocal observed
+        observed += 1
+        answer = await original()
+        # The commit's fresh look finds the embedder gone, once.
+        if answer and observed == 5:
+            agent.resident = []
+            return []
+        return answer
+
+    agent.residency = residency  # type: ignore[method-assign]
+    coord = coordinator(store, {"n1": agent})
+
+    await coord.run_once()
+    assert store.maintenance.state.admission_closed, "not reopened on a stale observation"
+    assert step(store).phase is StepPhase.PENDING
+
+    await coord.run_once()
+    assert not store.maintenance.state.admission_closed
+    assert [c for c in agent.calls if c.startswith("load:")] == [f"load:{EMBEDDER['name']}"] * 2
+
+
+async def test_an_empty_snapshot_verifies_empty_and_reopens() -> None:
+    store = await restoring([])
+    agent = RestoringAgent()
+
+    await coordinator(store, {"n1": agent}).run_once()
+
+    assert step(store).status is StepStatus.DONE
+    assert not store.maintenance.state.admission_closed
+    assert not [c for c in agent.calls if c.startswith(("load:", "probe:"))]

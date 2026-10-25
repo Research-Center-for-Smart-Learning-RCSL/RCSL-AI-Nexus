@@ -69,6 +69,47 @@ class PostgresMaintenanceOperations:
             raise RuntimeError(f"maintenance operation {operation_id} vanished after insert")
         return found
 
+    async def create_restore(
+        self, *, epoch: int, requested_by: str, snapshots: dict[str, list[dict[str, Any]]]
+    ) -> MaintenanceOperation:
+        """A restore of a succeeded entry, each node's snapshot copied into
+        its step: the restore works from these and they never change."""
+        operation_id = uuid.uuid4().hex
+        await self._session.execute(
+            text(
+                "INSERT INTO maintenance_operations (id, kind, epoch, status, requested_by) "
+                "VALUES (:id, 'restore', :epoch, 'running', :requested_by)"
+            ),
+            {"id": operation_id, "epoch": epoch, "requested_by": requested_by},
+        )
+        for node_id, snapshot in snapshots.items():
+            await self._session.execute(
+                text(
+                    "INSERT INTO maintenance_node_steps "
+                    "(operation_id, node_id, phase, status, snapshot, snapshot_at) "
+                    "VALUES (:operation_id, :node_id, 'pending', 'running', "
+                    "CAST(:snapshot AS jsonb), now())"
+                ),
+                {
+                    "operation_id": operation_id,
+                    "node_id": node_id,
+                    "snapshot": json.dumps(snapshot),
+                },
+            )
+        found = await self.get(operation_id)
+        if found is None:
+            raise RuntimeError(f"maintenance operation {operation_id} vanished after insert")
+        return found
+
+    async def latest_of(self, kind: OperationKind, epoch: int) -> MaintenanceOperation | None:
+        operation_id = (
+            await self._session.execute(
+                text("SELECT id FROM maintenance_operations WHERE kind = :kind AND epoch = :epoch"),
+                {"kind": kind.value, "epoch": epoch},
+            )
+        ).scalar_one_or_none()
+        return await self.get(operation_id) if operation_id is not None else None
+
     # -- reads --------------------------------------------------------------
 
     async def get(self, operation_id: str) -> MaintenanceOperation | None:
@@ -285,6 +326,29 @@ class PostgresMaintenanceOperations:
                     "owner": owner,
                     "status": status.value,
                     "error": error,
+                },
+            )
+        ).scalar_one_or_none()
+        return done is not None
+
+    async def rewind(self, step: NodeStep, *, owner: str, phase: StepPhase) -> bool:
+        """Run a done step again from `phase`: a restored node that no longer
+        verifies just before the platform reopens (P5)."""
+        done = (
+            await self._session.execute(
+                text(
+                    "UPDATE maintenance_node_steps SET status = 'running', "
+                    "phase = CAST(:phase AS varchar), attempts = 0, updated_at = now() "
+                    "WHERE operation_id = :operation_id AND node_id = :node_id "
+                    "AND status = 'done' AND EXISTS (SELECT 1 FROM maintenance_operations o "
+                    "WHERE o.id = :operation_id AND o.owner = :owner AND o.status = 'running') "
+                    "RETURNING node_id"
+                ),
+                {
+                    "operation_id": step.operation_id,
+                    "node_id": step.node_id,
+                    "owner": owner,
+                    "phase": phase.value,
                 },
             )
         ).scalar_one_or_none()
